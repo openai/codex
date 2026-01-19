@@ -532,6 +532,101 @@ fn create_wait_tool() -> ToolSpec {
     })
 }
 
+fn create_request_user_input_tool() -> ToolSpec {
+    let mut option_props = BTreeMap::new();
+    option_props.insert(
+        "value".to_string(),
+        JsonSchema::String {
+            description: Some("Machine-readable value (snake_case).".to_string()),
+        },
+    );
+    option_props.insert(
+        "label".to_string(),
+        JsonSchema::String {
+            description: Some("User-facing label (1-5 words).".to_string()),
+        },
+    );
+    option_props.insert(
+        "description".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "One short sentence explaining impact/tradeoff if selected.".to_string(),
+            ),
+        },
+    );
+
+    let options_schema = JsonSchema::Array {
+        description: Some(
+            "Optional 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Do not include an \"Other\" option."
+                .to_string(),
+        ),
+        items: Box::new(JsonSchema::Object {
+            properties: option_props,
+            required: Some(vec![
+                "value".to_string(),
+                "label".to_string(),
+                "description".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        }),
+    };
+
+    let mut question_props = BTreeMap::new();
+    question_props.insert(
+        "id".to_string(),
+        JsonSchema::String {
+            description: Some("Stable identifier for mapping answers (snake_case).".to_string()),
+        },
+    );
+    question_props.insert(
+        "header".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Short header label shown in the UI (12 or fewer chars).".to_string(),
+            ),
+        },
+    );
+    question_props.insert(
+        "question".to_string(),
+        JsonSchema::String {
+            description: Some("Single-sentence prompt shown to the user.".to_string()),
+        },
+    );
+    question_props.insert("options".to_string(), options_schema);
+
+    let questions_schema = JsonSchema::Array {
+        description: Some(
+            "Questions to show the user (1-3). Prefer 1 unless multiple independent decisions block progress."
+                .to_string(),
+        ),
+        items: Box::new(JsonSchema::Object {
+            properties: question_props,
+            required: Some(vec![
+                "id".to_string(),
+                "header".to_string(),
+                "question".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        }),
+    };
+
+    let mut properties = BTreeMap::new();
+    properties.insert("questions".to_string(), questions_schema);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "request_user_input".to_string(),
+        description:
+            "Request user input for one to three short questions and wait for the response."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["questions".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_close_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -1140,6 +1235,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
+    use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
@@ -1157,6 +1253,7 @@ pub(crate) fn build_specs(
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
+    let request_user_input_handler = Arc::new(RequestUserInputHandler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1196,6 +1293,9 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+
+    builder.push_spec(create_request_user_input_tool());
+    builder.register_handler("request_user_input", request_user_input_handler);
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
@@ -1430,6 +1530,7 @@ mod tests {
             create_list_mcp_resource_templates_tool(),
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
+            create_request_user_input_tool(),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
@@ -1546,6 +1647,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1565,6 +1667,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1585,6 +1688,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1605,6 +1709,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1624,6 +1729,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "web_search",
                 "view_image",
             ],
@@ -1642,6 +1748,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1661,6 +1768,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "web_search",
                 "view_image",
             ],
@@ -1679,6 +1787,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1699,6 +1808,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1719,6 +1829,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "web_search",
                 "view_image",
             ],
