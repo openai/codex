@@ -327,8 +327,7 @@ impl ContextManager {
             return item.clone();
         }
 
-        let id_str = Uuid::now_v7().to_string();
-        let user_message_dir = self.codex_home.join("context").join("usermsgs").join(&id_str);
+        let user_message_dir = self.codex_home.join("context").join("usermsgs");
         let Some(path) = write_message_to_user_dir(&text, &user_message_dir) else {
             return item.clone();
         };
