@@ -1390,7 +1390,9 @@ impl Session {
     }
 
     pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
-        self.services.otel_manager.counter("codex.model_warning", 1, &[]);
+        self.services
+            .otel_manager
+            .counter("codex.model_warning", 1, &[]);
         let item = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
