@@ -1,5 +1,4 @@
 use crate::client_common::tools::ToolSpec;
-use crate::config::types::Personality;
 use crate::error::Result;
 pub use codex_api::common::ResponseEvent;
 use codex_protocol::models::BaseInstructions;
@@ -36,7 +35,7 @@ pub struct Prompt {
 
     pub base_instructions: BaseInstructions,
 
-    /// Optionally specify the personality of the model
+    /// Optionally specify the personality of the model.
     pub personality: Option<Personality>,
 
     /// Optional the output schema for the model's response.
