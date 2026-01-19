@@ -122,7 +122,7 @@ fn stores_oversized_user_message_in_user_message_dir() {
     let path = placeholder
         .split("saved to ")
         .nth(1)
-        .and_then(|tail| tail.split(" (").next())
+        .and_then(|tail| tail.split(". Use").next())
         .expect("capture temp path");
     let path = PathBuf::from(path);
 
@@ -208,7 +208,7 @@ fn offloads_each_user_input_item_independently() {
     let path = placeholder
         .split("saved to ")
         .nth(1)
-        .and_then(|tail| tail.strip_suffix('.'))
+        .and_then(|tail| tail.split(". Use").next())
         .expect("capture temp path");
     let path = PathBuf::from(path);
 

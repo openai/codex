@@ -12,9 +12,13 @@ use ts_rs::TS;
 
 use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
+use crate::instruction_markers::COLLABORATION_MODE_CLOSE_TAG;
+use crate::instruction_markers::COLLABORATION_MODE_OPEN_TAG;
+use crate::instruction_markers::IMAGE_CLOSE_TAG;
+use crate::instruction_markers::IMAGE_OPEN_TAG;
+use crate::instruction_markers::LOCAL_IMAGE_OPEN_TAG_PREFIX;
+use crate::instruction_markers::LOCAL_IMAGE_OPEN_TAG_SUFFIX;
 use crate::protocol::AskForApproval;
-use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
-use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
 use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
@@ -71,11 +75,11 @@ pub enum ContentItem {
     OutputText { text: String },
 }
 
-const ENVIRONMENT_CONTEXT_PREFIX: &str = "<environment_context>";
-const USER_INSTRUCTIONS_OPEN_TAG_LEGACY: &str = "<user_instructions>";
-const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
-const SKILL_INSTRUCTIONS_PREFIX: &str = "<skill";
-const USER_SHELL_COMMAND_OPEN: &str = "<user_shell_command>";
+use crate::instruction_markers::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use crate::instruction_markers::SKILL_INSTRUCTIONS_PREFIX;
+use crate::instruction_markers::USER_INSTRUCTIONS_OPEN_TAG;
+use crate::instruction_markers::USER_INSTRUCTIONS_PREFIX;
+use crate::instruction_markers::USER_SHELL_COMMAND_OPEN;
 
 impl ContentItem {
     pub fn is_user_message_text(&self) -> bool {
@@ -97,14 +101,14 @@ impl ContentItem {
 
         let trimmed = text.trim_start();
         if trimmed.starts_with(USER_INSTRUCTIONS_PREFIX)
-            || trimmed.starts_with(USER_INSTRUCTIONS_OPEN_TAG_LEGACY)
+            || trimmed.starts_with(USER_INSTRUCTIONS_OPEN_TAG)
             || trimmed.starts_with(SKILL_INSTRUCTIONS_PREFIX)
         {
             return false;
         }
 
         let lowered = trimmed.to_ascii_lowercase();
-        if lowered.starts_with(ENVIRONMENT_CONTEXT_PREFIX)
+        if lowered.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG)
             || lowered.starts_with(USER_SHELL_COMMAND_OPEN)
         {
             return false;
@@ -406,10 +410,6 @@ fn local_image_error_placeholder(
 
 pub const VIEW_IMAGE_TOOL_NAME: &str = "view_image";
 
-const IMAGE_OPEN_TAG: &str = "<image>";
-const IMAGE_CLOSE_TAG: &str = "</image>";
-const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=";
-const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = ">";
 const LOCAL_IMAGE_CLOSE_TAG: &str = IMAGE_CLOSE_TAG;
 
 pub fn image_open_tag_text() -> String {

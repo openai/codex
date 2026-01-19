@@ -280,7 +280,7 @@ async fn oversized_user_message_is_written_to_user_message_dir() -> Result<()> {
     let path = replaced
         .split("saved to ")
         .nth(1)
-        .and_then(|tail| tail.strip_suffix('.'))
+        .and_then(|tail| tail.split(". Use").next())
         .context("extract saved path")?;
 
     let saved = fs::read_to_string(path).context("read saved user message")?;

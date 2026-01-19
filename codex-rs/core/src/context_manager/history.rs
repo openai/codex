@@ -357,7 +357,7 @@ fn process_user_text_item(
     if let Some(offloaded) = offloader.write_user_message(text) {
         vec![ContentItem::InputText {
             text: format!(
-                "User input was too large for the remaining context window and was saved to {}.",
+                "User input was too large for the remaining context window and was saved to {}. Use read_file to load it.",
                 offloaded.display()
             ),
         }]
