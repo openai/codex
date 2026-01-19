@@ -4454,6 +4454,13 @@ pub async fn run_security_review(
         );
     }
     plan_step_models.insert(
+        SecurityReviewPlanStep::DirTriage,
+        PlanStepModelInfo {
+            model: request.triage_model.clone(),
+            reasoning_effort: triage_reasoning_effort,
+        },
+    );
+    plan_step_models.insert(
         SecurityReviewPlanStep::FileTriage,
         PlanStepModelInfo {
             model: request.triage_model.clone(),
@@ -5037,9 +5044,8 @@ pub async fn run_security_review(
         .as_ref()
         .map(|prompt| prompt.trim().to_string())
         .filter(|prompt| !prompt.is_empty());
-    let mut spec_targets: Vec<PathBuf> = if !include_paths.is_empty() {
-        include_paths.clone()
-    } else {
+
+    let spec_targets_from_files = || -> Vec<PathBuf> {
         let mut unique_dirs: HashSet<PathBuf> = HashSet::new();
         for snippet in &selected_snippets {
             let absolute = repo_path.join(&snippet.relative_path);
@@ -5053,72 +5059,47 @@ pub async fn run_security_review(
         }
     };
 
-    spec_targets.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
-    if matches!(mode, SecurityReviewMode::Full) {
-        let mut directory_candidates: Vec<(PathBuf, String)> = spec_targets
-            .iter()
-            .map(|path| {
-                let label = display_path_for(path, &repo_path);
-                (path.clone(), label)
-            })
-            .collect();
-        directory_candidates.sort_by(|a, b| a.1.cmp(&b.1));
-
-        match filter_spec_directories(
-            &model_client,
-            &request.provider,
-            &request.auth,
-            request.spec_model.as_str(),
-            spec_reasoning_effort,
-            &repo_path,
-            &directory_candidates,
-            metrics.clone(),
-        )
-        .await
-        {
-            Ok(filtered) => {
-                let (preferred_dirs, dropped) = prune_low_signal_spec_dirs(&filtered);
-                for label in &dropped {
-                    record(
-                        &mut logs,
-                        format!(
-                            "Skipping specification for {label} (low-signal helper/migration dir)."
-                        ),
-                    );
-                }
-                let selected_dirs = if preferred_dirs.is_empty() {
-                    filtered
-                } else {
-                    preferred_dirs
-                };
-                let filtered_paths: Vec<PathBuf> =
-                    selected_dirs.iter().map(|(path, _)| path.clone()).collect();
-                if filtered_paths.len() < spec_targets.len() {
-                    record(
-                        &mut logs,
-                        format!(
-                            "Spec directory triage kept {}/{} directories for specification.",
-                            filtered_paths.len(),
-                            spec_targets.len()
-                        ),
-                    );
-                }
-                spec_targets = filtered_paths;
+    let mut spec_targets: Vec<PathBuf> = if !include_paths.is_empty() {
+        include_paths.clone()
+    } else if let Some(triaged_dirs) = checkpoint.triaged_dirs.as_ref()
+        && !triaged_dirs.is_empty()
+    {
+        let mut targets: Vec<PathBuf> = Vec::new();
+        for dir in triaged_dirs {
+            let path = PathBuf::from(dir);
+            if path_has_excluded_dir_component(&path) {
+                continue;
             }
-            Err(err) => {
-                for line in &err.logs {
-                    record(&mut logs, line.clone());
-                }
-                record(
-                    &mut logs,
-                    format!(
-                        "Spec directory triage failed; using all directories. {}",
-                        err.message
-                    ),
-                );
+            let abs = if path.is_absolute() {
+                path
+            } else {
+                repo_path.join(&path)
+            };
+            if abs.exists() {
+                targets.push(abs);
             }
         }
-    }
+        targets.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+        targets.dedup();
+        if targets.is_empty() {
+            spec_targets_from_files()
+        } else {
+            record(
+                &mut logs,
+                format!(
+                    "Reusing {}/{} triaged director{} for specification generation.",
+                    targets.len(),
+                    triaged_dirs.len(),
+                    if targets.len() == 1 { "y" } else { "ies" }
+                ),
+            );
+            targets
+        }
+    } else {
+        spec_targets_from_files()
+    };
+
+    spec_targets.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
 
     let mut spec_generation: Option<SpecGenerationOutcome> = checkpoint
         .spec
@@ -5394,6 +5375,15 @@ pub async fn run_security_review(
     }
 
     if !skip_bug_analysis {
+        if !matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::AnalyzeBugs),
+            Some(StepStatus::Completed | StepStatus::InProgress)
+        ) {
+            plan_tracker.start_step(SecurityReviewPlanStep::AnalyzeBugs);
+            checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+            persist_checkpoint(&mut checkpoint, &mut logs);
+        }
+
         // Run bug analysis in N full passes across all selected files.
         let total_passes = BUG_FINDING_PASSES.max(1);
         record(
@@ -5425,7 +5415,7 @@ pub async fn run_security_review(
                 ),
             );
 
-            let pass_outcome = match analyze_files_individually(
+            let mut pass_outcome = match analyze_files_individually(
                 &model_client,
                 &request.provider,
                 &request.auth,
@@ -5459,10 +5449,7 @@ pub async fn run_security_review(
                 }
             };
 
-            for line in &pass_outcome.logs {
-                record(&mut logs, line.clone());
-            }
-            aggregated_logs.extend(pass_outcome.logs.clone());
+            aggregated_logs.extend(std::mem::take(&mut pass_outcome.logs));
 
             // Offset IDs from this pass to keep them unique when aggregating.
             let id_offset = all_summaries.iter().map(|s| s.id).max().unwrap_or(0);
@@ -7947,36 +7934,64 @@ async fn generate_specs(
         directory_candidates.clone()
     };
 
+    let allow_llm_directory_filter = include_paths.is_empty();
+    let mut used_llm_filter = false;
     let mut filtered_dirs = if spec_progress_state.targets.is_empty() {
-        match filter_spec_directories(
-            client,
-            provider,
-            auth,
-            spec_model,
-            spec_reasoning_effort,
-            repo_root,
-            &heuristically_filtered,
-            metrics.clone(),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(err) => {
-                if let Some(tx) = progress_sender.as_ref() {
-                    for line in &err.logs {
-                        tx.send(AppEvent::SecurityReviewLog(line.clone()));
+        if !allow_llm_directory_filter {
+            let kept = heuristically_filtered.len();
+            let total = directory_candidates.len();
+            let message = format!(
+                "Skipping spec directory filter: using {kept}/{total} preselected director{}.",
+                if kept == 1 { "y" } else { "ies" }
+            );
+            if let Some(tx) = progress_sender.as_ref() {
+                tx.send(AppEvent::SecurityReviewLog(message.clone()));
+            }
+            logs.push(message);
+            heuristically_filtered
+        } else if heuristically_filtered.len() <= SPEC_DIR_FILTER_TARGET {
+            let kept = heuristically_filtered.len();
+            let total = directory_candidates.len();
+            let message = format!(
+                "Skipping spec directory filter: {kept}/{total} candidates already <= {SPEC_DIR_FILTER_TARGET}."
+            );
+            if let Some(tx) = progress_sender.as_ref() {
+                tx.send(AppEvent::SecurityReviewLog(message.clone()));
+            }
+            logs.push(message);
+            heuristically_filtered
+        } else {
+            used_llm_filter = true;
+            match filter_spec_directories(
+                client,
+                provider,
+                auth,
+                spec_model,
+                spec_reasoning_effort,
+                repo_root,
+                &heuristically_filtered,
+                metrics.clone(),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(err) => {
+                    if let Some(tx) = progress_sender.as_ref() {
+                        for line in &err.logs {
+                            tx.send(AppEvent::SecurityReviewLog(line.clone()));
+                        }
                     }
+                    logs.extend(err.logs);
+                    let message = format!(
+                        "Directory filter failed; using all directories. {}",
+                        err.message
+                    );
+                    if let Some(tx) = progress_sender.as_ref() {
+                        tx.send(AppEvent::SecurityReviewLog(message.clone()));
+                    }
+                    logs.push(message);
+                    directory_candidates.clone()
                 }
-                logs.extend(err.logs);
-                let message = format!(
-                    "Directory filter failed; using all directories. {}",
-                    err.message
-                );
-                if let Some(tx) = progress_sender.as_ref() {
-                    tx.send(AppEvent::SecurityReviewLog(message.clone()));
-                }
-                logs.push(message);
-                directory_candidates.clone()
             }
         }
     } else {
@@ -8013,7 +8028,11 @@ async fn generate_specs(
         let kept = spec_targets.len();
         let total = directory_candidates.len();
         let message = if spec_progress_state.targets.is_empty() {
-            format!("Spec directory filter kept {kept}/{total} directories using {spec_model}.")
+            if used_llm_filter {
+                format!("Spec directory filter kept {kept}/{total} directories using {spec_model}.")
+            } else {
+                format!("Selected {kept}/{total} directories for specification generation.")
+            }
         } else {
             format!("Resuming specification generation for {kept} directory(s).")
         };
@@ -16666,12 +16685,41 @@ fn build_single_file_context(snippet: &FileSnippet) -> String {
     )
 }
 
-fn bug_file_context_max_chars_for_model(model: &str, config: &Config) -> usize {
-    let model = model.trim();
-    let model = model
+fn looks_like_base_model_id(model: &str) -> bool {
+    let trimmed = model.trim();
+    trimmed.starts_with("gpt-")
+        || trimmed.starts_with("codex-")
+        || trimmed.starts_with("exp-")
+        || trimmed.starts_with("o3")
+        || trimmed.starts_with("o4")
+}
+
+fn model_id_for_context_window(model: &str) -> &str {
+    let trimmed = model.trim();
+    let trimmed = trimmed
         .rsplit_once('/')
         .map(|(_, model)| model)
-        .unwrap_or(model);
+        .unwrap_or(trimmed)
+        .trim();
+
+    let Some((left, right)) = trimmed.split_once(':') else {
+        return trimmed;
+    };
+
+    let left = left.trim();
+    let right = right.trim();
+    let left_is_model = looks_like_base_model_id(left);
+    let right_is_model = looks_like_base_model_id(right);
+
+    match (left_is_model, right_is_model) {
+        (false, true) => right,
+        (true, false) => left,
+        _ => trimmed,
+    }
+}
+
+fn bug_file_context_max_chars_for_model(model: &str, config: &Config) -> usize {
+    let model = model_id_for_context_window(model);
 
     let context_window = config
         .model_context_window
