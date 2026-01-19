@@ -23,6 +23,7 @@ When `tui_vi_mode` is enabled:
 
 - `Esc` switches between insert and normal mode.
 - The footer indicator shows `vi: insert` / `vi: normal`.
+- Popups (slash/file/skill) are only shown in insert mode.
 
 To avoid ambiguity, Codex’s Esc-based UI behavior only runs in vi *normal* mode:
 

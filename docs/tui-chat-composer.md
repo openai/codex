@@ -56,7 +56,8 @@ The solution is to detect paste-like _bursts_ and buffer them into a single expl
 Two beta flags extend the composer with Reedline-powered editing:
 
 - `tui_vi_mode`: use Vi keybindings in the prompt composer.
-  - `Esc` is routed to the textarea (insert ↔ normal).
+  - `Esc` is always routed to the textarea (insert → normal), even when a popup is visible.
+  - Popups are suppressed in vi normal mode so normal-mode keys aren’t hijacked.
   - To avoid ambiguity, Codex’s Esc-based UI behavior (interrupt/backtrack) only runs in vi
     *normal* mode (press `Esc` once first if you are in insert mode).
   - The footer state indicator shows `vi: insert` / `vi: normal`.

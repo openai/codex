@@ -286,6 +286,20 @@ impl ChatComposer {
         )
     }
 
+    fn handle_vi_insert_popup_esc(&mut self, key_event: KeyEvent) -> bool {
+        if self.vi_mode_enabled
+            && !self.allow_codex_esc_behavior()
+            && key_event.code == KeyCode::Esc
+        {
+            // In vi insert mode, `Esc` must always reach the textarea so it can switch to normal
+            // mode, even when a popup is visible.
+            self.textarea.input(key_event);
+            return true;
+        }
+
+        false
+    }
+
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
     }
@@ -613,6 +627,9 @@ impl ChatComposer {
 
     /// Handle key event when the slash-command popup is visible.
     fn handle_key_event_with_slash_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if self.handle_vi_insert_popup_esc(key_event) {
+            return (InputResult::None, true);
+        }
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
@@ -865,6 +882,9 @@ impl ChatComposer {
 
     /// Handle key events when file search popup is visible.
     fn handle_key_event_with_file_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if self.handle_vi_insert_popup_esc(key_event) {
+            return (InputResult::None, true);
+        }
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
@@ -985,6 +1005,9 @@ impl ChatComposer {
     }
 
     fn handle_key_event_with_skill_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if self.handle_vi_insert_popup_esc(key_event) {
+            return (InputResult::None, true);
+        }
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
@@ -1886,6 +1909,11 @@ impl ChatComposer {
     }
 
     fn sync_popups(&mut self) {
+        // In vi normal mode, popups should not steal keys from the textarea.
+        if self.vi_mode_enabled && self.allow_codex_esc_behavior() {
+            self.active_popup = ActivePopup::None;
+            return;
+        }
         let file_token = Self::current_at_token(&self.textarea);
         let browsing_history = self
             .history
@@ -4020,6 +4048,36 @@ mod tests {
         composer.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
         assert!(!composer.textarea.text().contains(&placeholder));
         assert!(composer.attached_images.is_empty());
+    }
+
+    #[test]
+    fn vi_esc_exits_insert_mode_even_with_command_popup_visible() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_vi_mode_enabled(true);
+        composer.set_text_content("/".to_string());
+
+        assert!(composer.popup_active());
+        assert_eq!(
+            composer.textarea.vi_mode_indicator(),
+            Some(ViModeIndicator::Insert)
+        );
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(
+            composer.textarea.vi_mode_indicator(),
+            Some(ViModeIndicator::Normal)
+        );
+        assert!(!composer.popup_active());
     }
 
     #[test]
