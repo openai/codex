@@ -23,7 +23,7 @@ These are entities exit on the codex backend. The intent of this section is to e
 3. `Task`
    - A `Task` is `Codex` executing work in response to user input.
    - `Session` has at most one `Task` running at a time.
-   - Receiving `Op::UserTurn` starts a `Task` (`Op::UserInput` is deprecated)
+   - Receiving `Op::UserTurn` starts a `Task` (`Op::UserInput` is legacy)
    - Consists of a series of `Turn`s
    - The `Task` executes to until:
      - The `Model` completes the task and there is no output to feed into an additional `Turn`
@@ -66,7 +66,7 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
 
 - `Op`
   - `Op::UserTurn` – Any input from the user to kick off a `Turn`
-  - `Op::UserInput` – Deprecated legacy form of user input
+  - `Op::UserInput` – Legacy form of user input
   - `Op::Interrupt` – Interrupts a running turn
   - `Op::ExecApproval` – Approve or deny code execution
   - `Op::UserInputAnswer` – Provide answers for a `request_user_input` tool call

@@ -83,10 +83,10 @@ pub enum Op {
     /// This server sends [`EventMsg::TurnAborted`] in response.
     Interrupt,
 
-    /// Input from the user
-    #[deprecated(
-        note = "Deprecated: prefer Op::UserTurn so the caller provides full turn context (cwd/approval/sandbox/model/etc.) for each turn"
-    )]
+    /// Legacy user input.
+    ///
+    /// Prefer [`Op::UserTurn`] so the caller provides full turn context
+    /// (cwd/approval/sandbox/model/etc.) for each turn.
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
@@ -134,7 +134,8 @@ pub enum Op {
     ///
     /// All fields are optional; when omitted, the existing value is preserved.
     /// This does not enqueue any input – it only updates defaults used for
-    /// future `UserInput` turns.
+    /// turns that rely on persistent session-level context (for example,
+    /// [`Op::UserInput`]).
     OverrideTurnContext {
         /// Updated `cwd` for sandbox/tool calls.
         #[serde(skip_serializing_if = "Option::is_none")]
