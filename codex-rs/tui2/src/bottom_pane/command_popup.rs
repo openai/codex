@@ -10,7 +10,6 @@ use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
-use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
@@ -20,6 +19,10 @@ fn windows_degraded_sandbox_active() -> bool {
         && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
         && codex_core::get_platform_sandbox().is_some()
         && !codex_core::is_windows_elevated_sandbox_enabled()
+}
+
+fn prefix_match_indices(prefix_len: usize) -> Vec<usize> {
+    (0..prefix_len).collect()
 }
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
@@ -119,11 +122,14 @@ impl CommandPopup {
         measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width)
     }
 
-    /// Compute fuzzy-filtered matches over built-in commands and user prompts,
-    /// paired with optional highlight indices and score. Preserves the original
+    /// Compute prefix-filtered matches over built-in commands and user prompts,
+    /// paired with optional highlight indices. Preserves the original
     /// presentation order for built-ins and prompts.
     fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>, i32)> {
         let filter = self.command_filter.trim();
+        let filter_lower = filter.to_ascii_lowercase();
+        let filter_len = filter.chars().count();
+        let prompts_prefix_len = PROMPTS_CMD_PREFIX.len() + 1;
         let mut out: Vec<(CommandItem, Option<Vec<usize>>, i32)> = Vec::new();
         if filter.is_empty() {
             // Built-ins first, in presentation order.
@@ -138,17 +144,32 @@ impl CommandPopup {
         }
 
         for (_, cmd) in self.builtins.iter() {
-            if let Some((indices, score)) = fuzzy_match(cmd.command(), filter) {
-                out.push((CommandItem::Builtin(*cmd), Some(indices), score));
+            if cmd.command().starts_with(&filter_lower) {
+                out.push((
+                    CommandItem::Builtin(*cmd),
+                    Some(prefix_match_indices(filter_len)),
+                    0,
+                ));
             }
         }
-        // Support both search styles:
-        // - Typing "name" should surface "/prompts:name" results.
-        // - Typing "prompts:name" should also work.
         for (idx, p) in self.prompts.iter().enumerate() {
             let display = format!("{PROMPTS_CMD_PREFIX}:{}", p.name);
-            if let Some((indices, score)) = fuzzy_match(&display, filter) {
-                out.push((CommandItem::UserPrompt(idx), Some(indices), score));
+            let display_lower = display.to_ascii_lowercase();
+            if display_lower.starts_with(&filter_lower) {
+                out.push((
+                    CommandItem::UserPrompt(idx),
+                    Some(prefix_match_indices(filter_len)),
+                    0,
+                ));
+                continue;
+            }
+
+            // Support "name" prefix search for "/prompts:name" results.
+            if p.name.to_ascii_lowercase().starts_with(&filter_lower) {
+                let indices = (0..filter_len)
+                    .map(|i| prompts_prefix_len + i)
+                    .collect::<Vec<usize>>();
+                out.push((CommandItem::UserPrompt(idx), Some(indices), 0));
             }
         }
         out
@@ -297,7 +318,7 @@ mod tests {
                 CommandItem::UserPrompt(_) => None,
             })
             .collect();
-        assert_eq!(cmds, vec!["model", "resume", "compact", "mention", "mcp"]);
+        assert_eq!(cmds, vec!["model", "mention", "mcp"]);
     }
 
     #[test]
@@ -393,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn fuzzy_filter_matches_subsequence_for_ac() {
+    fn prefix_filter_excludes_non_prefix_matches() {
         let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
         popup.on_composer_text_change("/ac".to_string());
 
@@ -405,10 +426,7 @@ mod tests {
                 CommandItem::UserPrompt(_) => None,
             })
             .collect();
-        assert!(
-            cmds.contains(&"compact") && cmds.contains(&"feedback"),
-            "expected fuzzy search for '/ac' to include compact and feedback, got {cmds:?}"
-        );
+        assert_eq!(cmds, Vec::<&str>::new());
     }
 
     #[test]

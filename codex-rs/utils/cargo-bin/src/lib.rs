@@ -51,12 +51,81 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
                 })
             }
         }
-        Err(err) => Err(CargoBinError::NotFound {
-            name: name.to_owned(),
-            env_keys,
-            fallback: format!("assert_cmd fallback failed: {err}"),
-        }),
+        Err(err) => {
+            let mut fallback = format!("assert_cmd fallback failed: {err}");
+            match resolve_bin_from_workspace_target_dir(name) {
+                Ok(Some(bin)) => return Ok(bin),
+                Ok(None) => {}
+                Err(workspace_err) => {
+                    fallback = format!("{fallback}; workspace fallback failed: {workspace_err}");
+                }
+            }
+
+            Err(CargoBinError::NotFound {
+                name: name.to_owned(),
+                env_keys,
+                fallback,
+            })
+        }
     }
+}
+
+fn resolve_bin_from_workspace_target_dir(name: &str) -> Result<Option<PathBuf>, String> {
+    let profile_dir = cargo_profile_dir_from_current_exe()?;
+    let Some(profile_dir) = profile_dir else {
+        return Ok(None);
+    };
+
+    let bin_path = profile_dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    if bin_path.exists() {
+        return Ok(Some(bin_path));
+    }
+
+    let workspace_root = profile_dir
+        .parent()
+        .and_then(|target_dir| target_dir.parent())
+        .ok_or_else(|| {
+            format!(
+                "could not derive workspace root from profile dir {}",
+                profile_dir.display()
+            )
+        })?;
+
+    let status = std::process::Command::new("cargo")
+        .current_dir(workspace_root)
+        .args(["build", "--bin", name])
+        .status()
+        .map_err(|err| format!("failed to run cargo build --bin {name}: {err}"))?;
+
+    if !status.success() {
+        return Err(format!("cargo build --bin {name} exited with {status}"));
+    }
+
+    if bin_path.exists() {
+        Ok(Some(bin_path))
+    } else {
+        Err(format!(
+            "cargo build succeeded but {} does not exist",
+            bin_path.display()
+        ))
+    }
+}
+
+fn cargo_profile_dir_from_current_exe() -> Result<Option<PathBuf>, String> {
+    let exe =
+        std::env::current_exe().map_err(|err| format!("failed to read current exe: {err}"))?;
+
+    // Cargo integration tests typically live under:
+    //   <workspace>/target/<profile>/deps/<test-binary>
+    // The workspace bin lives at:
+    //   <workspace>/target/<profile>/<bin-name>
+    for ancestor in exe.ancestors() {
+        if ancestor.file_name().is_some_and(|name| name == "deps") {
+            return Ok(ancestor.parent().map(PathBuf::from));
+        }
+    }
+
+    Ok(None)
 }
 
 fn cargo_bin_env_keys(name: &str) -> Vec<String> {
