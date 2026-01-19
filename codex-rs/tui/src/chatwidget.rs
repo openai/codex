@@ -180,7 +180,6 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
 use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -373,28 +372,28 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CollaborationModeSelection {
-    #[default]
-    Default,
     Plan,
     PairProgramming,
     Execute,
 }
 
 impl CollaborationModeSelection {
+    fn default() -> Self {
+        Self::PairProgramming
+    }
+
     fn next(self) -> Self {
         match self {
-            Self::Default => Self::Plan,
             Self::Plan => Self::PairProgramming,
             Self::PairProgramming => Self::Execute,
-            Self::Execute => Self::Default,
+            Self::Execute => Self::Plan,
         }
     }
 
     fn label(self) -> &'static str {
         match self {
-            Self::Default => "Default",
             Self::Plan => "Plan",
             Self::PairProgramming => "Pair Programming",
             Self::Execute => "Execute",
@@ -410,7 +409,6 @@ fn parse_collaboration_mode_selection(input: &str) -> Option<CollaborationModeSe
         .collect();
 
     match normalized.as_str() {
-        "default" | "custom" | "normal" => Some(CollaborationModeSelection::Default),
         "plan" => Some(CollaborationModeSelection::Plan),
         "pair" | "pairprogramming" | "pp" => Some(CollaborationModeSelection::PairProgramming),
         "execute" | "exec" => Some(CollaborationModeSelection::Execute),
@@ -1722,7 +1720,7 @@ impl ChatWidget {
             active_cell_revision: 0,
             config,
             model,
-            collaboration_mode: CollaborationModeSelection::Default,
+            collaboration_mode: CollaborationModeSelection::default(),
             pending_collaboration_mode: None,
             auth_manager,
             models_manager,
@@ -1826,7 +1824,7 @@ impl ChatWidget {
             active_cell_revision: 0,
             config,
             model: Some(header_model.clone()),
-            collaboration_mode: CollaborationModeSelection::Default,
+            collaboration_mode: CollaborationModeSelection::default(),
             pending_collaboration_mode: None,
             auth_manager,
             models_manager,
@@ -2258,7 +2256,7 @@ impl ChatWidget {
                     self.set_collaboration_mode(selection);
                 } else {
                     self.add_error_message(format!(
-                        "Unknown collaboration mode '{trimmed}'. Try: default, plan, pair, execute."
+                        "Unknown collaboration mode '{trimmed}'. Try: plan, pair, execute."
                     ));
                     self.request_redraw();
                 }
@@ -2744,6 +2742,11 @@ impl ChatWidget {
         let total_usage = token_info
             .map(|ti| &ti.total_token_usage)
             .unwrap_or(&default_usage);
+        let collaboration_mode = if self.collaboration_modes_enabled() {
+            Some(self.collaboration_mode.label())
+        } else {
+            None
+        };
         self.add_to_history(crate::status::new_status_output(
             &self.config,
             self.auth_manager.as_ref(),
@@ -2755,6 +2758,7 @@ impl ChatWidget {
             self.plan_type,
             Local::now(),
             self.model_display_name(),
+            collaboration_mode,
         ));
     }
 
@@ -4063,7 +4067,12 @@ impl ChatWidget {
         self.collaboration_mode = selection;
         self.pending_collaboration_mode = Some(selection);
 
-        let flash = Line::from(vec![selection.label().bold()]);
+        let flash = Line::from(vec![
+            selection.label().bold(),
+            " (".dim(),
+            key_hint::shift(KeyCode::Tab).into(),
+            " to change mode)".dim(),
+        ]);
         self.bottom_pane.flash_footer_hint(flash, FLASH_DURATION);
         self.request_redraw();
     }
@@ -4072,14 +4081,7 @@ impl ChatWidget {
         &self,
         selection: CollaborationModeSelection,
     ) -> Option<CollaborationMode> {
-        let model = self.current_model()?.to_string();
-        let effort = self.config.model_reasoning_effort;
         match selection {
-            CollaborationModeSelection::Default => Some(CollaborationMode::Custom(Settings {
-                model,
-                reasoning_effort: effort,
-                developer_instructions: None,
-            })),
             CollaborationModeSelection::Plan => self
                 .models_manager
                 .list_collaboration_modes()

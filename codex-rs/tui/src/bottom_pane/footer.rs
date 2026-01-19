@@ -160,6 +160,7 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 use_shift_enter_hint: props.use_shift_enter_hint,
                 esc_backtrack_hint: props.esc_backtrack_hint,
                 is_wsl,
+                collaboration_modes_enabled: props.collaboration_modes_enabled,
             };
             shortcut_overlay_lines(state)
         }
@@ -175,10 +176,6 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                     line.push_span(key_hint::plain(KeyCode::Tab));
                     line.push_span(" to queue message".dim());
                 }
-            } else if props.collaboration_modes_enabled {
-                line.push_span(" · ".dim());
-                line.push_span(key_hint::shift(KeyCode::Tab));
-                line.push_span(" to change mode".dim());
             }
             vec![line]
         }
@@ -190,6 +187,7 @@ struct ShortcutsState {
     use_shift_enter_hint: bool,
     esc_backtrack_hint: bool,
     is_wsl: bool,
+    collaboration_modes_enabled: bool,
 }
 
 fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
@@ -222,6 +220,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut edit_previous = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
+    let mut change_mode = Line::from("");
 
     for descriptor in SHORTCUTS {
         if let Some(text) = descriptor.overlay_entry(state) {
@@ -236,6 +235,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
+                ShortcutId::ChangeMode => change_mode = text,
             }
         }
     }
@@ -250,6 +250,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         external_editor,
         edit_previous,
         quit,
+        change_mode,
         Line::from(""),
         show_transcript,
     ];
@@ -330,6 +331,7 @@ enum ShortcutId {
     EditPrevious,
     Quit,
     ShowTranscript,
+    ChangeMode,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -350,6 +352,7 @@ enum DisplayCondition {
     WhenShiftEnterHint,
     WhenNotShiftEnterHint,
     WhenUnderWSL,
+    WhenCollaborationModesEnabled,
 }
 
 impl DisplayCondition {
@@ -359,6 +362,7 @@ impl DisplayCondition {
             DisplayCondition::WhenShiftEnterHint => state.use_shift_enter_hint,
             DisplayCondition::WhenNotShiftEnterHint => !state.use_shift_enter_hint,
             DisplayCondition::WhenUnderWSL => state.is_wsl,
+            DisplayCondition::WhenCollaborationModesEnabled => state.collaboration_modes_enabled,
         }
     }
 }
@@ -500,6 +504,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " to view transcript",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::ChangeMode,
+        bindings: &[ShortcutBinding {
+            key: key_hint::shift(KeyCode::Tab),
+            condition: DisplayCondition::WhenCollaborationModesEnabled,
+        }],
+        prefix: "",
+        label: " to change mode",
     },
 ];
 
