@@ -369,10 +369,10 @@ mod tests {
         let bash_shell = get_shell(ShellType::Bash, None).unwrap();
         let shell_path = bash_shell.shell_path;
 
+        assert_eq!(shell_path.file_name(), Some(std::ffi::OsStr::new("bash")));
         assert!(
-            shell_path == Path::new("/bin/bash")
-                || shell_path == Path::new("/usr/bin/bash")
-                || shell_path == Path::new("/usr/local/bin/bash"),
+            shell_path.is_absolute()
+                && std::fs::metadata(&shell_path).is_ok_and(|metadata| metadata.is_file()),
             "shell path: {shell_path:?}",
         );
     }

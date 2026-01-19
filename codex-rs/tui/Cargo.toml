@@ -61,6 +61,7 @@ ratatui = { workspace = true, features = [
     "unstable-widget-ref",
 ] }
 ratatui-macros = { workspace = true }
+reedline = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { version = "0.12", features = ["json"] }
 serde = { workspace = true, features = ["derive"] }

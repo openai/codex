@@ -24,6 +24,8 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use super::textarea::ViModeIndicator;
+
 /// The rendering inputs for the footer area under the composer.
 ///
 /// Callers are expected to construct `FooterProps` from higher-level state (`ChatComposer`,
@@ -37,6 +39,7 @@ pub(crate) struct FooterProps {
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
     pub(crate) steer_enabled: bool,
+    pub(crate) vi_mode_indicator: Option<ViModeIndicator>,
     /// Which key the user must press again to quit.
     ///
     /// This is rendered when `mode` is `FooterMode::QuitShortcutReminder`.
@@ -108,6 +111,7 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
     // (e.g., "? for shortcuts"). Keep it visible even when typing (i.e., when
     // the shortcut hint is hidden). Hide it only for the multi-line
     // ShortcutOverlay.
+    let vi_mode = props.vi_mode_indicator;
     match props.mode {
         FooterMode::QuitShortcutReminder => {
             vec![quit_shortcut_reminder_line(props.quit_shortcut_key)]
@@ -117,6 +121,14 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 props.context_window_percent,
                 props.context_window_used_tokens,
             );
+            if let Some(vi_mode) = vi_mode {
+                line.push_span(" · ".dim());
+                line.push_span("vi: ".dim());
+                match vi_mode {
+                    ViModeIndicator::Normal => line.push_span("normal".dim()),
+                    ViModeIndicator::Insert => line.push_span("insert".dim()),
+                }
+            }
             line.push_span(" · ".dim());
             line.extend(vec![
                 key_hint::plain(KeyCode::Char('?')).into(),
@@ -143,6 +155,14 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 props.context_window_percent,
                 props.context_window_used_tokens,
             );
+            if let Some(vi_mode) = vi_mode {
+                line.push_span(" · ".dim());
+                line.push_span("vi: ".dim());
+                match vi_mode {
+                    ViModeIndicator::Normal => line.push_span("normal".dim()),
+                    ViModeIndicator::Insert => line.push_span("insert".dim()),
+                }
+            }
             if props.is_task_running && props.steer_enabled {
                 line.push_span(" · ".dim());
                 line.push_span(key_hint::plain(KeyCode::Tab));
@@ -500,6 +520,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                vi_mode_indicator: None,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -514,6 +535,7 @@ mod tests {
                 use_shift_enter_hint: true,
                 is_task_running: false,
                 steer_enabled: false,
+                vi_mode_indicator: None,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -528,6 +550,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                vi_mode_indicator: None,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -542,6 +565,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
+                vi_mode_indicator: None,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -556,6 +580,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                vi_mode_indicator: None,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -570,6 +595,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                vi_mode_indicator: None,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -584,6 +610,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
+                vi_mode_indicator: None,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
@@ -598,6 +625,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                vi_mode_indicator: None,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
@@ -612,6 +640,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
+                vi_mode_indicator: None,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -626,6 +655,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: true,
+                vi_mode_indicator: None,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
