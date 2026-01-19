@@ -32,7 +32,8 @@ fn assistant_msg(text: &str) -> ResponseItem {
 }
 
 fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
-    let mut h = ContextManager::new();
+    let codex_home = PathBuf::from("/tmp");
+    let mut h = ContextManager::new(&codex_home);
     // Use a generous but fixed token budget; tests only rely on truncation
     // behavior, not on a specific model's token limit.
     h.record_items(items.iter(), TruncationPolicy::Tokens(10_000));
@@ -89,15 +90,9 @@ fn truncate_exec_output(content: &str) -> String {
 
 #[test]
 fn stores_oversized_user_message_in_user_message_dir() {
-    let mut history = ContextManager::new();
     let temp_dir = tempdir().expect("create temp dir");
-    history.set_user_message_dir(Some(
-        temp_dir
-            .path()
-            .join("context")
-            .join("usermsgs")
-            .join("test-session"),
-    ));
+    let codex_home = temp_dir.path().to_path_buf();
+    let mut history = ContextManager::new(&codex_home);
     history.set_token_info(Some(TokenUsageInfo {
         total_token_usage: TokenUsage::default(),
         last_token_usage: TokenUsage::default(),
@@ -531,7 +526,8 @@ fn normalization_retains_local_shell_outputs() {
 
 #[test]
 fn record_items_truncates_function_call_output_content() {
-    let mut history = ContextManager::new();
+    let codex_home = PathBuf::from("/tmp");
+    let mut history = ContextManager::new(&codex_home);
     // Any reasonably small token budget works; the test only cares that
     // truncation happens and the marker is present.
     let policy = TruncationPolicy::Tokens(1_000);
@@ -569,7 +565,8 @@ fn record_items_truncates_function_call_output_content() {
 
 #[test]
 fn record_items_truncates_custom_tool_call_output_content() {
-    let mut history = ContextManager::new();
+    let codex_home = PathBuf::from("/tmp");
+    let mut history = ContextManager::new(&codex_home);
     let policy = TruncationPolicy::Tokens(1_000);
     let line = "custom output that is very long\n";
     let long_output = line.repeat(2_500);
@@ -599,7 +596,8 @@ fn record_items_truncates_custom_tool_call_output_content() {
 
 #[test]
 fn record_items_respects_custom_token_limit() {
-    let mut history = ContextManager::new();
+    let codex_home = PathBuf::from("/tmp");
+    let mut history = ContextManager::new(&codex_home);
     let policy = TruncationPolicy::Tokens(10);
     let long_output = "tokenized content repeated many times ".repeat(200);
     let item = ResponseItem::FunctionCallOutput {

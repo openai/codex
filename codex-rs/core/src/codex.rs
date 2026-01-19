@@ -3544,8 +3544,7 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let conversation_id = ThreadId::default();
-        let mut state = SessionState::new(session_configuration, conversation_id);
+        let mut state = SessionState::new(session_configuration);
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 10.0,
@@ -3616,8 +3615,7 @@ mod tests {
             session_source: SessionSource::Exec,
         };
 
-        let conversation_id = ThreadId::default();
-        let mut state = SessionState::new(session_configuration, conversation_id);
+        let mut state = SessionState::new(session_configuration);
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 15.0,
@@ -3883,7 +3881,7 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let state = SessionState::new(session_configuration.clone(), conversation_id);
+        let state = SessionState::new(session_configuration.clone());
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let services = SessionServices {
@@ -3983,7 +3981,7 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let state = SessionState::new(session_configuration.clone(), conversation_id);
+        let state = SessionState::new(session_configuration.clone());
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let services = SessionServices {
@@ -4293,7 +4291,8 @@ mod tests {
         turn_context: &TurnContext,
     ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
         let mut rollout_items = Vec::new();
-        let mut live_history = ContextManager::new();
+        let codex_home = session.codex_home().await;
+        let mut live_history = ContextManager::new(&codex_home);
 
         let initial_context = session.build_initial_context(turn_context).await;
         for item in &initial_context {
