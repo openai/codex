@@ -1,6 +1,5 @@
 //! Session-wide mutable state.
 
-use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 
 use crate::codex::SessionConfiguration;
@@ -21,15 +20,8 @@ impl SessionState {
     /// Create a new session state mirroring previous `State::default()` semantics.
     pub(crate) fn new(
         session_configuration: SessionConfiguration,
-        conversation_id: ThreadId,
     ) -> Self {
-        let mut history = ContextManager::new();
-        let user_message_dir = session_configuration
-            .codex_home()
-            .join("context")
-            .join("usermsgs")
-            .join(conversation_id.to_string());
-        history.set_user_message_dir(Some(user_message_dir));
+        let history = ContextManager::new(session_configuration.codex_home());
         Self {
             session_configuration,
             history,

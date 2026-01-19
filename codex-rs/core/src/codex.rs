@@ -699,7 +699,7 @@ impl Session {
                     .await
                     .map(Arc::new);
         }
-        let state = SessionState::new(session_configuration.clone(), conversation_id);
+        let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -1352,7 +1352,7 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> Vec<ResponseItem> {
-        let mut history = ContextManager::new();
+        let mut history = ContextManager::new(&self.codex_home().await);
         for item in rollout_items {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
@@ -1569,6 +1569,10 @@ impl Session {
         };
         let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
         self.send_event(turn_context, event).await;
+    }
+
+    pub(crate) async fn codex_home(&self) -> PathBuf {
+        self.state.lock().await.session_configuration.codex_home().clone()
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {

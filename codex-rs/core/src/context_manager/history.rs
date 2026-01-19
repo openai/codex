@@ -26,15 +26,15 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
-    user_message_dir: Option<PathBuf>,
+    codex_home: PathBuf,
 }
 
 impl ContextManager {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(codex_home: &PathBuf) -> Self {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
-            user_message_dir: None,
+            codex_home: codex_home.clone(),
         }
     }
 
@@ -44,10 +44,6 @@ impl ContextManager {
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
         self.token_info = info;
-    }
-
-    pub(crate) fn set_user_message_dir(&mut self, dir: Option<PathBuf>) {
-        self.user_message_dir = dir;
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -331,10 +327,9 @@ impl ContextManager {
             return item.clone();
         }
 
-        let Some(user_message_dir) = self.user_message_dir.as_ref() else {
-            return item.clone();
-        };
-        let Some(path) = write_message_to_user_dir(&text, user_message_dir) else {
+        let id_str = Uuid::now_v7().to_string();
+        let user_message_dir = self.codex_home.join("context").join("usermsgs").join(&id_str);
+        let Some(path) = write_message_to_user_dir(&text, &user_message_dir) else {
             return item.clone();
         };
 
@@ -390,7 +385,7 @@ fn write_message_to_user_dir(text: &str, user_message_dir: &Path) -> Option<Path
         return None;
     }
 
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let path = user_message_dir.join(format!("user-message-{id}.txt"));
     if let Err(err) = std::fs::write(&path, text.as_bytes()) {
         warn!(error = %err, "failed to write user message to file");
