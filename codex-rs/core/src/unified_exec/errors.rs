@@ -10,6 +10,10 @@ pub(crate) enum UnifiedExecError {
     UnknownProcessId { process_id: String },
     #[error("failed to write to stdin")]
     WriteToStdin,
+    #[error(
+        "stdin is closed for this session; rerun exec_command with tty=true to keep stdin open"
+    )]
+    StdinClosed,
     #[error("missing command line for unified exec request")]
     MissingCommandLine,
     #[error("Command denied by sandbox: {message}")]

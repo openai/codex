@@ -92,6 +92,8 @@ const KEY_SPACE: KeyBinding = key_hint::plain(KeyCode::Char(' '));
 const KEY_SHIFT_SPACE: KeyBinding = key_hint::shift(KeyCode::Char(' '));
 const KEY_HOME: KeyBinding = key_hint::plain(KeyCode::Home);
 const KEY_END: KeyBinding = key_hint::plain(KeyCode::End);
+const KEY_LEFT: KeyBinding = key_hint::plain(KeyCode::Left);
+const KEY_RIGHT: KeyBinding = key_hint::plain(KeyCode::Right);
 const KEY_CTRL_F: KeyBinding = key_hint::ctrl(KeyCode::Char('f'));
 const KEY_CTRL_D: KeyBinding = key_hint::ctrl(KeyCode::Char('d'));
 const KEY_CTRL_B: KeyBinding = key_hint::ctrl(KeyCode::Char('b'));
@@ -637,10 +639,13 @@ impl TranscriptOverlay {
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
         render_key_hints(line1, buf, PAGER_KEY_HINTS);
 
-        let mut pairs: Vec<(&[KeyBinding], &str)> =
-            vec![(&[KEY_Q], "to quit"), (&[KEY_ESC], "to edit prev")];
+        let mut pairs: Vec<(&[KeyBinding], &str)> = vec![(&[KEY_Q], "to quit")];
         if self.highlight_cell.is_some() {
+            pairs.push((&[KEY_ESC, KEY_LEFT], "to edit prev"));
+            pairs.push((&[KEY_RIGHT], "to edit next"));
             pairs.push((&[KEY_ENTER], "to edit message"));
+        } else {
+            pairs.push((&[KEY_ESC], "to edit prev"));
         }
         render_key_hints(line2, buf, &pairs);
     }
@@ -816,22 +821,34 @@ mod tests {
             lines: vec![Line::from("hello")],
         })]);
 
-        // Render into a small buffer and assert the backtrack hint is present
-        let area = Rect::new(0, 0, 40, 10);
+        // Render into a wide buffer so the footer hints aren't truncated.
+        let area = Rect::new(0, 0, 120, 10);
         let mut buf = Buffer::empty(area);
         overlay.render(area, &mut buf);
 
-        // Flatten buffer to a string and check for the hint text
-        let mut s = String::new();
-        for y in area.y..area.bottom() {
-            for x in area.x..area.right() {
-                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
-            }
-            s.push('\n');
-        }
+        let s = buffer_to_text(&buf, area);
         assert!(
             s.contains("edit prev"),
             "expected 'edit prev' hint in overlay footer, got: {s:?}"
+        );
+    }
+
+    #[test]
+    fn edit_next_hint_is_visible_when_highlighted() {
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: vec![Line::from("hello")],
+        })]);
+        overlay.set_highlight_cell(Some(0));
+
+        // Render into a wide buffer so the footer hints aren't truncated.
+        let area = Rect::new(0, 0, 120, 10);
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+
+        let s = buffer_to_text(&buf, area);
+        assert!(
+            s.contains("edit next"),
+            "expected 'edit next' hint in overlay footer, got: {s:?}"
         );
     }
 

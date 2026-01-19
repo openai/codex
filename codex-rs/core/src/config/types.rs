@@ -423,21 +423,16 @@ impl Default for Notifications {
 /// Terminals generally encode both mouse wheels and trackpads as the same "scroll up/down" mouse
 /// button events, without a magnitude. This setting controls whether Codex uses a heuristic to
 /// infer wheel vs trackpad per stream, or forces a specific behavior.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ScrollInputMode {
     /// Infer wheel vs trackpad behavior per scroll stream.
+    #[default]
     Auto,
     /// Always treat scroll events as mouse-wheel input (fixed lines per tick).
     Wheel,
     /// Always treat scroll events as trackpad input (fractional accumulation).
     Trackpad,
-}
-
-impl Default for ScrollInputMode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 /// Collection of settings that are specific to the TUI.
@@ -603,6 +598,20 @@ pub struct Notice {
 impl Notice {
     /// referenced by config_edit helpers when writing notice flags
     pub(crate) const TABLE_KEY: &'static str = "notice";
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SkillConfig {
+    pub path: AbsolutePathBuf,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SkillsConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config: Vec<SkillConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]

@@ -17,8 +17,8 @@ use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::user_instructions::SkillInstructions;
-use crate::user_instructions::UserInstructions;
+use crate::instructions::SkillInstructions;
+use crate::instructions::UserInstructions;
 use crate::user_shell_command::is_user_shell_command_text;
 
 fn is_session_prefix(text: &str) -> bool {

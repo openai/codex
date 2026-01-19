@@ -1288,6 +1288,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             model: resumed.session_configured.model.clone(),
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await
         .unwrap();

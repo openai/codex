@@ -202,7 +202,7 @@ impl ToolHandler for UnifiedExecHandler {
                     })
                     .await
                     .map_err(|err| {
-                        FunctionCallError::RespondToModel(format!("write_stdin failed: {err:?}"))
+                        FunctionCallError::RespondToModel(format!("write_stdin failed: {err}"))
                     })?;
 
                 let interaction = TerminalInteractionEvent {

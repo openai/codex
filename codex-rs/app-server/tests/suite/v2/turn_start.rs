@@ -35,7 +35,10 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::protocol_config_types::ReasoningSummary;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
+use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::path::Path;
@@ -301,6 +304,77 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     )?;
     assert_eq!(completed.thread_id, thread.id);
     assert_eq!(completed.turn.status, TurnStatus::Completed);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let collaboration_mode = CollaborationMode::Custom(Settings {
+        model: "mock-model-collab".to_string(),
+        reasoning_effort: Some(ReasoningEffort::High),
+        developer_instructions: None,
+    });
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            model: Some("mock-model-override".to_string()),
+            effort: Some(ReasoningEffort::Low),
+            summary: Some(ReasoningSummary::Auto),
+            output_schema: None,
+            collaboration_mode: Some(collaboration_mode),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request = response_mock.single_request();
+    let payload = request.body_json();
+    assert_eq!(payload["model"].as_str(), Some("mock-model-collab"));
 
     Ok(())
 }
@@ -703,6 +777,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
             output_schema: None,
+            collaboration_mode: None,
         })
         .await?;
     timeout(
@@ -732,6 +807,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
             output_schema: None,
+            collaboration_mode: None,
         })
         .await?;
     timeout(

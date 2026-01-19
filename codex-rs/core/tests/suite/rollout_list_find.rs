@@ -25,7 +25,6 @@ fn write_minimal_rollout_with_id(codex_home: &Path, id: Uuid) -> PathBuf {
             "payload": {
                 "id": id,
                 "timestamp": "2024-01-01T00:00:00Z",
-                "instructions": null,
                 "cwd": ".",
                 "originator": "test",
                 "cli_version": "test",

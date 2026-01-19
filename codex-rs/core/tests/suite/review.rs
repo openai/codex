@@ -515,7 +515,6 @@ async fn review_input_isolated_from_parent_history() {
             "payload": {
                 "id": convo_id,
                 "timestamp": "2024-01-01T00:00:00Z",
-                "instructions": null,
                 "cwd": ".",
                 "originator": "test_originator",
                 "cli_version": "test_version",
@@ -820,6 +819,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
             model: None,
             effort: None,
             summary: None,
+            collaboration_mode: None,
         })
         .await
         .unwrap();

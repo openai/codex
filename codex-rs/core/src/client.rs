@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
@@ -66,6 +67,7 @@ use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
+pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 
 #[derive(Debug)]
 struct ModelClientState {
@@ -89,6 +91,17 @@ pub struct ModelClientSession {
     state: Arc<ModelClientState>,
     connection: Option<ApiWebSocketConnection>,
     websocket_last_items: Vec<ResponseItem>,
+    /// Turn state for sticky routing.
+    ///
+    /// This is an `OnceLock` that stores the turn state value received from the server
+    /// on turn start via the `x-codex-turn-state` response header. Once set, this value
+    /// should be sent back to the server in the `x-codex-turn-state` request header for
+    /// all subsequent requests within the same turn to maintain sticky routing.
+    ///
+    /// This is a contract between the client and server: we receive it at turn start,
+    /// keep sending it unchanged between turn requests (e.g., for retries, incremental
+    /// appends, or continuation requests), and must not send it between different turns.
+    turn_state: Arc<OnceLock<String>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -124,6 +137,7 @@ impl ModelClient {
             state: Arc::clone(&self.state),
             connection: None,
             websocket_last_items: Vec::new(),
+            turn_state: Arc::new(OnceLock::new()),
         }
     }
 }
@@ -226,7 +240,6 @@ impl ModelClient {
                 extra_headers.insert("x-openai-subagent", val);
             }
         }
-
         client
             .compact_input(&payload, extra_headers)
             .await
@@ -322,8 +335,9 @@ impl ModelClientSession {
             store_override: None,
             conversation_id: Some(conversation_id),
             session_source: Some(self.state.session_source.clone()),
-            extra_headers: build_responses_headers(&self.state.config),
+            extra_headers: build_responses_headers(&self.state.config, Some(&self.turn_state)),
             compression,
+            turn_state: Some(Arc::clone(&self.turn_state)),
         }
     }
 
@@ -397,7 +411,7 @@ impl ModelClientSession {
             headers.extend(build_conversation_headers(options.conversation_id.clone()));
             let new_conn: ApiWebSocketConnection =
                 ApiWebSocketResponsesClient::new(api_provider, api_auth)
-                    .connect(headers)
+                    .connect(headers, options.turn_state.clone())
                     .await?;
             self.connection = Some(new_conn);
         }
@@ -638,7 +652,10 @@ fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
     headers
 }
 
-fn build_responses_headers(config: &Config) -> ApiHeaderMap {
+fn build_responses_headers(
+    config: &Config,
+    turn_state: Option<&Arc<OnceLock<String>>>,
+) -> ApiHeaderMap {
     let mut headers = beta_feature_headers(config);
     headers.insert(
         WEB_SEARCH_ELIGIBLE_HEADER,
@@ -650,6 +667,12 @@ fn build_responses_headers(config: &Config) -> ApiHeaderMap {
             },
         ),
     );
+    if let Some(turn_state) = turn_state
+        && let Some(state) = turn_state.get()
+        && let Ok(header_value) = HeaderValue::from_str(state)
+    {
+        headers.insert(X_CODEX_TURN_STATE_HEADER, header_value);
+    }
     headers
 }
 

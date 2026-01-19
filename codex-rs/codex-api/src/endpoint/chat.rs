@@ -87,6 +87,7 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
                 extra_headers,
                 RequestCompression::None,
                 spawn_chat_stream,
+                None,
             )
             .await
     }

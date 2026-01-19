@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use codex_protocol::protocol::SkillScope;
@@ -32,4 +33,25 @@ pub struct SkillError {
 pub struct SkillLoadOutcome {
     pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillError>,
+    pub disabled_paths: HashSet<PathBuf>,
+}
+
+impl SkillLoadOutcome {
+    pub fn is_skill_enabled(&self, skill: &SkillMetadata) -> bool {
+        !self.disabled_paths.contains(&skill.path)
+    }
+
+    pub fn enabled_skills(&self) -> Vec<SkillMetadata> {
+        self.skills
+            .iter()
+            .filter(|skill| self.is_skill_enabled(skill))
+            .cloned()
+            .collect()
+    }
+
+    pub fn skills_with_enabled(&self) -> impl Iterator<Item = (&SkillMetadata, bool)> {
+        self.skills
+            .iter()
+            .map(|skill| (skill, self.is_skill_enabled(skill)))
+    }
 }

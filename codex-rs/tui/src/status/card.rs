@@ -66,6 +66,7 @@ struct StatusHistoryCell {
     model_provider: Option<String>,
     account: Option<StatusAccountDisplay>,
     session_id: Option<String>,
+    forked_from: Option<String>,
     token_usage: StatusTokenUsageData,
     rate_limits: StatusRateLimitData,
 }
@@ -77,6 +78,7 @@ pub(crate) fn new_status_output(
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
     session_id: &Option<ThreadId>,
+    forked_from: Option<ThreadId>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
     plan_type: Option<PlanType>,
     now: DateTime<Local>,
@@ -89,6 +91,7 @@ pub(crate) fn new_status_output(
         token_info,
         total_usage,
         session_id,
+        forked_from,
         rate_limits,
         plan_type,
         now,
@@ -106,6 +109,7 @@ impl StatusHistoryCell {
         token_info: Option<&TokenUsageInfo>,
         total_usage: &TokenUsage,
         session_id: &Option<ThreadId>,
+        forked_from: Option<ThreadId>,
         rate_limits: Option<&RateLimitSnapshotDisplay>,
         plan_type: Option<PlanType>,
         now: DateTime<Local>,
@@ -134,6 +138,7 @@ impl StatusHistoryCell {
         let model_provider = format_model_provider(config);
         let account = compose_account_display(auth_manager, plan_type);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
+        let forked_from = forked_from.map(|id| id.to_string());
         let default_usage = TokenUsage::default();
         let (context_usage, context_window) = match token_info {
             Some(info) => (&info.last_token_usage, info.model_context_window),
@@ -163,6 +168,7 @@ impl StatusHistoryCell {
             model_provider,
             account,
             session_id,
+            forked_from,
             token_usage,
             rate_limits,
         }
@@ -351,6 +357,9 @@ impl HistoryCell for StatusHistoryCell {
         if self.session_id.is_some() {
             push_label(&mut labels, &mut seen, "Session");
         }
+        if self.session_id.is_some() && self.forked_from.is_some() {
+            push_label(&mut labels, &mut seen, "Forked from");
+        }
         push_label(&mut labels, &mut seen, "Token usage");
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
@@ -402,6 +411,11 @@ impl HistoryCell for StatusHistoryCell {
 
         if let Some(session) = self.session_id.as_ref() {
             lines.push(formatter.line("Session", vec![Span::from(session.clone())]));
+        }
+        if self.session_id.is_some()
+            && let Some(forked_from) = self.forked_from.as_ref()
+        {
+            lines.push(formatter.line("Forked from", vec![Span::from(forked_from.clone())]));
         }
 
         lines.push(Line::from(Vec::<Span<'static>>::new()));

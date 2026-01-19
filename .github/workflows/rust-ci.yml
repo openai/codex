@@ -59,7 +59,7 @@ jobs:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.90
+      - uses: dtolnay/rust-toolchain@1.92
         with:
           components: rustfmt
       - name: cargo fmt
@@ -77,7 +77,7 @@ jobs:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.90
+      - uses: dtolnay/rust-toolchain@1.92
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: cargo-shear
@@ -177,7 +177,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.90
+      - uses: dtolnay/rust-toolchain@1.92
         with:
           targets: ${{ matrix.target }}
           components: clippy
@@ -416,7 +416,7 @@ jobs:
       - name: Install DotSlash
         uses: facebook/install-dotslash@v2
 
-      - uses: dtolnay/rust-toolchain@1.90
+      - uses: dtolnay/rust-toolchain@1.92
         with:
           targets: ${{ matrix.target }}
 

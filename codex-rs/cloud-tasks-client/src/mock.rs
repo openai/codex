@@ -16,7 +16,12 @@ pub struct MockClient;
 
 #[async_trait::async_trait]
 impl CloudBackend for MockClient {
-    async fn list_tasks(&self, _env: Option<&str>) -> Result<Vec<TaskSummary>> {
+    async fn list_tasks(
+        &self,
+        _env: Option<&str>,
+        _limit: Option<i64>,
+        _cursor: Option<&str>,
+    ) -> Result<crate::TaskListPage> {
         // Slightly vary content by env to aid tests that rely on the mock
         let rows = match _env {
             Some("env-A") => vec![("T-2000", "A: First", TaskStatus::Ready)],
@@ -58,11 +63,14 @@ impl CloudBackend for MockClient {
                 attempt_total: Some(if id_str == "T-1000" { 2 } else { 1 }),
             });
         }
-        Ok(out)
+        Ok(crate::TaskListPage {
+            tasks: out,
+            cursor: None,
+        })
     }
 
     async fn get_task_summary(&self, id: TaskId) -> Result<TaskSummary> {
-        let tasks = self.list_tasks(None).await?;
+        let tasks = self.list_tasks(None, None, None).await?.tasks;
         tasks
             .into_iter()
             .find(|t| t.id == id)

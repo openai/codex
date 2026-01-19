@@ -113,8 +113,8 @@ impl CommandPopup {
     }
 
     /// Compute fuzzy-filtered matches over built-in commands and user prompts,
-    /// paired with optional highlight indices and score. Sorted by ascending
-    /// score, then by name for stability.
+    /// paired with optional highlight indices and score. Preserves the original
+    /// presentation order for built-ins and prompts.
     fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>, i32)> {
         let filter = self.command_filter.trim();
         let mut out: Vec<(CommandItem, Option<Vec<usize>>, i32)> = Vec::new();
@@ -144,20 +144,6 @@ impl CommandPopup {
                 out.push((CommandItem::UserPrompt(idx), Some(indices), score));
             }
         }
-        // When filtering, sort by ascending score and then by name for stability.
-        out.sort_by(|a, b| {
-            a.2.cmp(&b.2).then_with(|| {
-                let an = match a.0 {
-                    CommandItem::Builtin(c) => c.command(),
-                    CommandItem::UserPrompt(i) => &self.prompts[i].name,
-                };
-                let bn = match b.0 {
-                    CommandItem::Builtin(c) => c.command(),
-                    CommandItem::UserPrompt(i) => &self.prompts[i].name,
-                };
-                an.cmp(bn)
-            })
-        });
         out
     }
 
@@ -290,6 +276,32 @@ mod tests {
             }
             None => panic!("expected at least one match for '/mo'"),
         }
+    }
+
+    #[test]
+    fn filtered_commands_keep_presentation_order() {
+        let mut popup = CommandPopup::new(Vec::new(), false);
+        popup.on_composer_text_change("/m".to_string());
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+        assert_eq!(
+            cmds,
+            vec![
+                "model",
+                "experimental",
+                "resume",
+                "compact",
+                "mention",
+                "mcp"
+            ]
+        );
     }
 
     #[test]

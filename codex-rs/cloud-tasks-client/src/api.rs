@@ -94,6 +94,12 @@ pub struct CreatedTask {
     pub id: TaskId,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskListPage {
+    pub tasks: Vec<TaskSummary>,
+    pub cursor: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct DiffSummary {
     pub files_changed: usize,
@@ -126,7 +132,12 @@ impl Default for TaskText {
 
 #[async_trait::async_trait]
 pub trait CloudBackend: Send + Sync {
-    async fn list_tasks(&self, env: Option<&str>) -> Result<Vec<TaskSummary>>;
+    async fn list_tasks(
+        &self,
+        env: Option<&str>,
+        limit: Option<i64>,
+        cursor: Option<&str>,
+    ) -> Result<TaskListPage>;
     async fn get_task_summary(&self, id: TaskId) -> Result<TaskSummary>;
     async fn get_task_diff(&self, id: TaskId) -> Result<Option<String>>;
     /// Return assistant output messages (no diff) when available.

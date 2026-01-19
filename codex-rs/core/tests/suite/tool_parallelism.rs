@@ -47,6 +47,7 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -363,6 +364,7 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 

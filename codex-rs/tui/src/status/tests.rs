@@ -14,6 +14,7 @@ use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
 use insta::assert_snapshot;
@@ -146,7 +147,59 @@ async fn status_snapshot_includes_reasoning_details() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         Some(&rate_display),
+        None,
+        captured_at,
+        &model_slug,
+    );
+    let mut rendered_lines = render_lines(&composite.display_lines(80));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(sanitized);
+}
+
+#[tokio::test]
+async fn status_snapshot_includes_forked_from() {
+    let temp_home = TempDir::new().expect("temp home");
+    let mut config = test_config(&temp_home).await;
+    config.model = Some("gpt-5.1-codex-max".to_string());
+    config.model_provider_id = "openai".to_string();
+    config.cwd = PathBuf::from("/workspace/tests");
+
+    let auth_manager = test_auth_manager(&config);
+    let usage = TokenUsage {
+        input_tokens: 800,
+        cached_input_tokens: 0,
+        output_tokens: 400,
+        reasoning_output_tokens: 0,
+        total_tokens: 1_200,
+    };
+
+    let captured_at = chrono::Local
+        .with_ymd_and_hms(2024, 8, 9, 10, 11, 12)
+        .single()
+        .expect("valid time");
+
+    let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
+    let token_info = token_info_for(&model_slug, &config, &usage);
+    let session_id =
+        ThreadId::from_string("0f0f3c13-6cf9-4aa4-8b80-7d49c2f1be2e").expect("session id");
+    let forked_from =
+        ThreadId::from_string("e9f18a88-8081-4e51-9d4e-8af5cde2d8dd").expect("forked id");
+
+    let composite = new_status_output(
+        &config,
+        &auth_manager,
+        Some(&token_info),
+        &usage,
+        &Some(session_id),
+        Some(forked_from),
+        None,
         None,
         captured_at,
         &model_slug,
@@ -202,6 +255,7 @@ async fn status_snapshot_includes_monthly_limit() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -246,6 +300,7 @@ async fn status_snapshot_shows_unlimited_credits() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -289,6 +344,7 @@ async fn status_snapshot_shows_positive_credits() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -332,6 +388,7 @@ async fn status_snapshot_hides_zero_credits() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -373,6 +430,7 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -414,6 +472,7 @@ async fn status_card_token_usage_excludes_cached_tokens() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         None,
         None,
         now,
@@ -470,6 +529,7 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -515,6 +575,7 @@ async fn status_snapshot_shows_missing_limits_message() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         None,
         None,
         now,
@@ -578,6 +639,7 @@ async fn status_snapshot_includes_credits_and_limits() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -629,6 +691,7 @@ async fn status_snapshot_shows_empty_limits_message() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         Some(&rate_display),
         None,
         captured_at,
@@ -689,6 +752,7 @@ async fn status_snapshot_shows_stale_limits_message() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         Some(&rate_display),
         None,
         now,
@@ -753,6 +817,7 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
         Some(&token_info),
         &usage,
         &None,
+        None,
         Some(&rate_display),
         None,
         now,
@@ -807,6 +872,7 @@ async fn status_context_window_uses_last_usage() {
         Some(&token_info),
         &total_usage,
         &None,
+        None,
         None,
         None,
         now,

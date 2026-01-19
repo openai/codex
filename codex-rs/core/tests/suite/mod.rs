@@ -24,6 +24,7 @@ mod cli_stream;
 mod client;
 mod client_websockets;
 mod codex_delegate;
+mod collaboration_instructions;
 mod compact;
 mod compact_remote;
 mod compact_resume_fork;

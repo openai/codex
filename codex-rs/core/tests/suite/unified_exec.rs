@@ -209,6 +209,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -336,6 +337,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -412,6 +414,7 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -491,6 +494,7 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -582,6 +586,7 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -655,6 +660,7 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -729,6 +735,7 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -805,6 +812,7 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
     let open_args = json!({
         "cmd": "/bin/bash -i",
         "yield_time_ms": 200,
+        "tty": true,
     });
 
     let stdin_call_id = "uexec-stdin-delta";
@@ -856,6 +864,7 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -905,6 +914,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
     let open_args = json!({
         "cmd": "sleep 3 && echo MARKER1 && sleep 3 && echo MARKER2",
         "yield_time_ms": 10,
+        "tty": true,
     });
 
     // Poll stdin three times: first for no output, second after the first marker,
@@ -990,6 +1000,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -1148,6 +1159,7 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -1244,6 +1256,7 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -1360,6 +1373,7 @@ async fn unified_exec_defaults_to_pipe() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -1448,6 +1462,7 @@ async fn unified_exec_can_enable_tty() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -1527,6 +1542,7 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -1656,6 +1672,7 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -1822,6 +1839,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -1897,6 +1915,7 @@ async fn unified_exec_closes_long_running_session_at_turn_end() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -1966,6 +1985,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     let first_args = serde_json::json!({
         "cmd": "/bin/cat",
         "yield_time_ms": 200,
+        "tty": true,
     });
 
     let second_call_id = "uexec-stdin";
@@ -2016,6 +2036,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -2149,6 +2170,7 @@ PY
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
     // This is a worst case scenario for the truncate logic.
@@ -2261,6 +2283,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -2355,6 +2378,7 @@ PY
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -2435,6 +2459,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -2537,6 +2562,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -2630,6 +2656,7 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -2678,6 +2705,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     let keep_args = serde_json::json!({
         "cmd": "/bin/cat",
         "yield_time_ms": 250,
+        "tty": true,
     });
 
     let prune_call_id = "uexec-prune-target";
@@ -2685,6 +2713,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
     let prune_args = serde_json::json!({
         "cmd": "sleep 1",
         "yield_time_ms": 1_250,
+        "tty": true,
     });
 
     let mut events = vec![ev_response_created("resp-prune-1")];
@@ -2761,6 +2790,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 

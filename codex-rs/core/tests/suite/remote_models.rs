@@ -139,6 +139,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             model: Some(REMOTE_MODEL_SLUG.to_string()),
             effort: None,
             summary: None,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -174,6 +175,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             model: REMOTE_MODEL_SLUG.to_string(),
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -363,6 +365,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             model: Some(model.to_string()),
             effort: None,
             summary: None,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -379,6 +382,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             model: model.to_string(),
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 

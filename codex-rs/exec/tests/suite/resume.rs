@@ -5,6 +5,7 @@ use core_test_support::test_codex_exec::test_codex_exec;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::string::ToString;
+use tempfile::TempDir;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -216,6 +217,90 @@ fn exec_resume_last_accepts_prompt_after_flag_in_json_mode() -> anyhow::Result<(
     let content = std::fs::read_to_string(&resumed_path)?;
     assert!(content.contains(&marker));
     assert!(content.contains(&marker2));
+    Ok(())
+}
+
+#[test]
+fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
+    let test = test_codex_exec();
+    let fixture = exec_fixture()?;
+
+    let dir_a = TempDir::new()?;
+    let dir_b = TempDir::new()?;
+
+    let marker_a = format!("resume-cwd-a-{}", Uuid::new_v4());
+    let prompt_a = format!("echo {marker_a}");
+    test.cmd()
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local")
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(dir_a.path())
+        .arg(&prompt_a)
+        .assert()
+        .success();
+
+    let marker_b = format!("resume-cwd-b-{}", Uuid::new_v4());
+    let prompt_b = format!("echo {marker_b}");
+    test.cmd()
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local")
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(dir_b.path())
+        .arg(&prompt_b)
+        .assert()
+        .success();
+
+    let sessions_dir = test.home_path().join("sessions");
+    let path_a = find_session_file_containing_marker(&sessions_dir, &marker_a)
+        .expect("no session file found for marker_a");
+    let path_b = find_session_file_containing_marker(&sessions_dir, &marker_b)
+        .expect("no session file found for marker_b");
+
+    let marker_b2 = format!("resume-cwd-b-2-{}", Uuid::new_v4());
+    let prompt_b2 = format!("echo {marker_b2}");
+    test.cmd()
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local")
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(dir_a.path())
+        .arg("resume")
+        .arg("--last")
+        .arg("--all")
+        .arg(&prompt_b2)
+        .assert()
+        .success();
+
+    let resumed_path_all = find_session_file_containing_marker(&sessions_dir, &marker_b2)
+        .expect("no resumed session file containing marker_b2");
+    assert_eq!(
+        resumed_path_all, path_b,
+        "resume --last --all should pick newest session"
+    );
+
+    let marker_a2 = format!("resume-cwd-a-2-{}", Uuid::new_v4());
+    let prompt_a2 = format!("echo {marker_a2}");
+    test.cmd()
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local")
+        .arg("--skip-git-repo-check")
+        .arg("-C")
+        .arg(dir_a.path())
+        .arg("resume")
+        .arg("--last")
+        .arg(&prompt_a2)
+        .assert()
+        .success();
+
+    let resumed_path_cwd = find_session_file_containing_marker(&sessions_dir, &marker_a2)
+        .expect("no resumed session file containing marker_a2");
+    assert_eq!(
+        resumed_path_cwd, path_a,
+        "resume --last should prefer sessions from the same cwd"
+    );
+
     Ok(())
 }
 

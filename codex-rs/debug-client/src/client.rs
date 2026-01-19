@@ -171,6 +171,7 @@ impl AppServerClient {
             params: ThreadListParams {
                 cursor,
                 limit: None,
+                sort_key: None,
                 model_providers: None,
             },
         };

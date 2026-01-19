@@ -9,6 +9,8 @@ mod win;
 
 /// Spawn a non-interactive process using regular pipes for stdin/stdout/stderr.
 pub use pipe::spawn_process as spawn_pipe_process;
+/// Spawn a non-interactive process using regular pipes, but close stdin immediately.
+pub use pipe::spawn_process_no_stdin as spawn_pipe_process_no_stdin;
 /// Handle for interacting with a spawned process (PTY or pipe).
 pub use process::ProcessHandle;
 /// Bundle of process handles plus output and exit receivers returned by spawn helpers.

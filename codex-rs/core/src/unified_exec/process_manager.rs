@@ -74,6 +74,7 @@ struct PreparedProcessHandles {
     cancellation_token: CancellationToken,
     command: Vec<String>,
     process_id: String,
+    tty: bool,
 }
 
 impl UnifiedExecProcessManager {
@@ -218,6 +219,7 @@ impl UnifiedExecProcessManager {
                 cwd.clone(),
                 start,
                 process_id,
+                request.tty,
                 Arc::clone(&transcript),
             )
             .await;
@@ -256,10 +258,14 @@ impl UnifiedExecProcessManager {
             cancellation_token,
             command: session_command,
             process_id,
+            tty,
             ..
         } = self.prepare_process_handles(process_id.as_str()).await?;
 
         if !request.input.is_empty() {
+            if !tty {
+                return Err(UnifiedExecError::StdinClosed);
+            }
             Self::send_input(&writer_tx, request.input.as_bytes()).await?;
             // Give the remote process a brief window to react so that we are
             // more likely to capture its output in the poll below.
@@ -380,6 +386,7 @@ impl UnifiedExecProcessManager {
             cancellation_token,
             command: entry.command.clone(),
             process_id: entry.process_id.clone(),
+            tty: entry.tty,
         })
     }
 
@@ -402,6 +409,7 @@ impl UnifiedExecProcessManager {
         cwd: PathBuf,
         started_at: Instant,
         process_id: String,
+        tty: bool,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     ) {
         let entry = ProcessEntry {
@@ -409,6 +417,7 @@ impl UnifiedExecProcessManager {
             call_id: context.call_id.clone(),
             process_id: process_id.clone(),
             command: command.to_vec(),
+            tty,
             last_used: started_at,
         };
         let number_processes = {
@@ -461,7 +470,7 @@ impl UnifiedExecProcessManager {
             )
             .await
         } else {
-            codex_utils_pty::pipe::spawn_process(
+            codex_utils_pty::pipe::spawn_process_no_stdin(
                 program,
                 args,
                 env.cwd.as_path(),
