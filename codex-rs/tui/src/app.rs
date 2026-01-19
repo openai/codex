@@ -671,10 +671,9 @@ impl App {
             AppEvent::NewSession => {
                 let summary =
                     session_summary(self.chat_widget.token_usage(), self.chat_widget.thread_id());
-                self.backtrack.pending_rollback = None;
-                self.suppress_shutdown_complete = true;
+                self.shutdown_current_thread().await;
                 if let Err(err) = self.server.remove_and_close_all_threads().await {
-                    tracing::warn!(error = %err, "failed to close all threads for /new");
+                    tracing::warn!(error = %err, "failed to close all threads");
                 }
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
