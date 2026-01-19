@@ -59,6 +59,7 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::parse_command::ParsedCommand;
@@ -1511,30 +1512,30 @@ async fn slash_init_skips_when_project_doc_exists() {
 #[test]
 fn parse_collaboration_mode_selection_accepts_common_aliases() {
     assert_eq!(
-        parse_collaboration_mode_selection("plan"),
+        collaboration_modes::parse_selection("plan"),
         Some(CollaborationModeSelection::Plan)
     );
     assert_eq!(
-        parse_collaboration_mode_selection("PAIR"),
+        collaboration_modes::parse_selection("PAIR"),
         Some(CollaborationModeSelection::PairProgramming)
     );
     assert_eq!(
-        parse_collaboration_mode_selection("pair_programming"),
+        collaboration_modes::parse_selection("pair_programming"),
         Some(CollaborationModeSelection::PairProgramming)
     );
     assert_eq!(
-        parse_collaboration_mode_selection("pp"),
+        collaboration_modes::parse_selection("pp"),
         Some(CollaborationModeSelection::PairProgramming)
     );
     assert_eq!(
-        parse_collaboration_mode_selection(" exec "),
+        collaboration_modes::parse_selection(" exec "),
         Some(CollaborationModeSelection::Execute)
     );
     assert_eq!(
-        parse_collaboration_mode_selection("execute"),
+        collaboration_modes::parse_selection("execute"),
         Some(CollaborationModeSelection::Execute)
     );
-    assert_eq!(parse_collaboration_mode_selection("unknown"), None);
+    assert_eq!(collaboration_modes::parse_selection("unknown"), None);
 }
 
 #[tokio::test]

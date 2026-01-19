@@ -136,6 +136,7 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::collab;
+use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
@@ -179,7 +180,6 @@ use codex_core::ThreadManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
-use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -372,49 +372,7 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CollaborationModeSelection {
-    Plan,
-    PairProgramming,
-    Execute,
-}
-
-impl CollaborationModeSelection {
-    fn default() -> Self {
-        Self::PairProgramming
-    }
-
-    fn next(self) -> Self {
-        match self {
-            Self::Plan => Self::PairProgramming,
-            Self::PairProgramming => Self::Execute,
-            Self::Execute => Self::Plan,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Plan => "Plan",
-            Self::PairProgramming => "Pair Programming",
-            Self::Execute => "Execute",
-        }
-    }
-}
-
-fn parse_collaboration_mode_selection(input: &str) -> Option<CollaborationModeSelection> {
-    let normalized: String = input
-        .chars()
-        .filter(|c| !c.is_ascii_whitespace() && *c != '-' && *c != '_')
-        .flat_map(|c| c.to_lowercase())
-        .collect();
-
-    match normalized.as_str() {
-        "plan" => Some(CollaborationModeSelection::Plan),
-        "pair" | "pairprogramming" | "pp" => Some(CollaborationModeSelection::PairProgramming),
-        "execute" | "exec" => Some(CollaborationModeSelection::Execute),
-        _ => None,
-    }
-}
+type CollaborationModeSelection = collaboration_modes::Selection;
 
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
@@ -2252,7 +2210,7 @@ impl ChatWidget {
         let trimmed = args.trim();
         match cmd {
             SlashCommand::Collab if !trimmed.is_empty() => {
-                if let Some(selection) = parse_collaboration_mode_selection(trimmed) {
+                if let Some(selection) = collaboration_modes::parse_selection(trimmed) {
                     self.set_collaboration_mode(selection);
                 } else {
                     self.add_error_message(format!(
@@ -2387,7 +2345,8 @@ impl ChatWidget {
 
         let op = if self.collaboration_modes_enabled()
             && let Some(selection) = self.pending_collaboration_mode
-            && let Some(collaboration_mode) = self.build_collaboration_mode(selection)
+            && let Some(collaboration_mode) =
+                collaboration_modes::resolve_mode(self.models_manager.as_ref(), selection)
         {
             self.pending_collaboration_mode = None;
             Op::UserTurn {
@@ -4067,37 +4026,9 @@ impl ChatWidget {
         self.collaboration_mode = selection;
         self.pending_collaboration_mode = Some(selection);
 
-        let flash = Line::from(vec![
-            selection.label().bold(),
-            " (".dim(),
-            key_hint::shift(KeyCode::Tab).into(),
-            " to change mode)".dim(),
-        ]);
+        let flash = collaboration_modes::flash_line(selection);
         self.bottom_pane.flash_footer_hint(flash, FLASH_DURATION);
         self.request_redraw();
-    }
-
-    fn build_collaboration_mode(
-        &self,
-        selection: CollaborationModeSelection,
-    ) -> Option<CollaborationMode> {
-        match selection {
-            CollaborationModeSelection::Plan => self
-                .models_manager
-                .list_collaboration_modes()
-                .into_iter()
-                .find(|mode| matches!(mode, CollaborationMode::Plan(_))),
-            CollaborationModeSelection::PairProgramming => self
-                .models_manager
-                .list_collaboration_modes()
-                .into_iter()
-                .find(|mode| matches!(mode, CollaborationMode::PairProgramming(_))),
-            CollaborationModeSelection::Execute => self
-                .models_manager
-                .list_collaboration_modes()
-                .into_iter()
-                .find(|mode| matches!(mode, CollaborationMode::Execute(_))),
-        }
     }
 
     fn current_model(&self) -> Option<&str> {
