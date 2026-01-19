@@ -122,7 +122,7 @@ axum = { version = "0.8", default-features = false }
 base64 = "0.22.1"
 bytes = "1.10.1"
 chardetng = "0.1.17"
-chrono = "0.4.42"
+chrono = "0.4.43"
 clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
