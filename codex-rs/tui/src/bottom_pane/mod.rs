@@ -995,6 +995,41 @@ mod tests {
     }
 
     #[test]
+    fn esc_with_slash_command_popup_does_not_interrupt_task() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+
+        // Repro: a running task + slash-command popup + Esc should not interrupt the task.
+        pane.insert_str("/");
+        assert!(
+            pane.composer.popup_active(),
+            "expected command popup after typing `/`"
+        );
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        while let Ok(ev) = rx.try_recv() {
+            assert!(
+                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
+                "expected Esc to not send Op::Interrupt while command popup is active"
+            );
+        }
+        assert_eq!(pane.composer_text(), "/");
+    }
+
+    #[test]
     fn esc_interrupts_running_task_when_no_popup() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
