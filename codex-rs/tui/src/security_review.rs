@@ -152,7 +152,7 @@ const CLASSIFICATION_PROMPT_SPEC_LIMIT: usize = 16_000;
 // prompts moved to `security_prompts.rs`
 const BUG_RERANK_CHUNK_SIZE: usize = 1;
 const BUG_RERANK_MAX_CONCURRENCY: usize = 32;
-const BUG_RERANK_CONTEXT_MAX_CHARS: usize = 2000;
+const BUG_RERANK_CONTEXT_MAX_CHARS: usize = 6_000;
 const BUG_RERANK_MAX_TOOL_ROUNDS: usize = 4;
 const BUG_RERANK_MAX_COMMAND_ERRORS: usize = 5;
 const SPEC_COMBINE_MAX_TOOL_ROUNDS: usize = 6;
@@ -995,7 +995,7 @@ struct SecurityReviewPlanTracker {
     explanation: String,
     steps: Vec<SecurityReviewPlanItem>,
     step_models: HashMap<SecurityReviewPlanStep, PlanStepModelInfo>,
-    did_emit_final_plan_cell: bool,
+    did_emit_plan_cell: bool,
 }
 
 #[derive(Clone)]
@@ -1023,7 +1023,7 @@ impl SecurityReviewPlanTracker {
             explanation,
             steps,
             step_models,
-            did_emit_final_plan_cell: false,
+            did_emit_plan_cell: false,
         };
         tracker.emit_update();
         tracker
@@ -1081,11 +1081,11 @@ impl SecurityReviewPlanTracker {
         write_log_sink(&self.log_sink, summary.as_str());
     }
 
-    fn emit_final_plan_cell(&mut self) {
-        if self.did_emit_final_plan_cell {
+    fn emit_plan_cell(&mut self) {
+        if self.did_emit_plan_cell {
             return;
         }
-        self.did_emit_final_plan_cell = true;
+        self.did_emit_plan_cell = true;
 
         let Some(sender) = self.sender.as_ref() else {
             return;
@@ -1155,7 +1155,7 @@ impl SecurityReviewPlanTracker {
 
 impl Drop for SecurityReviewPlanTracker {
     fn drop(&mut self) {
-        self.emit_final_plan_cell();
+        self.emit_plan_cell();
     }
 }
 
@@ -3872,6 +3872,24 @@ pub async fn run_security_review(
                             tracing::info!("{message}");
                         }
                     }
+                    AppEvent::InsertHistoryCell(cell) => {
+                        for line in cell
+                            .transcript_lines(u16::MAX)
+                            .into_iter()
+                            .map(|line| {
+                                line.spans
+                                    .iter()
+                                    .map(|span| span.content.as_ref())
+                                    .collect::<String>()
+                            })
+                            .filter(|line| !line.trim().is_empty())
+                        {
+                            write_log_sink(&log_sink_for_task, line.as_str());
+                            if log_sink_for_task.is_none() {
+                                tracing::info!("{line}");
+                            }
+                        }
+                    }
                     AppEvent::SecurityReviewCommandStatus {
                         summary,
                         state,
@@ -4509,6 +4527,7 @@ pub async fn run_security_review(
     }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
+    plan_tracker.emit_plan_cell();
 
     let mut validation_target_prep_task: Option<
         tokio::task::JoinHandle<ValidationTargetPrepOutcome>,
@@ -4735,12 +4754,9 @@ pub async fn run_security_review(
         record(
             &mut logs,
             format!(
-                "Running LLM file triage to prioritize analysis across {} files ({} directories) (model: {triage_model}, reasoning: {triage_reasoning_label}).",
+                "Skipping LLM file triage (avoid enumerating file lists); analyzing {} files across {} directories.",
                 pruned_snippets.len(),
                 refined_dir_count,
-                triage_reasoning_label = reasoning_effort_label(
-                    normalize_reasoning_effort_for_model(triage_model, triage_reasoning_effort,)
-                )
             ),
         );
         let triage = match triage_files_for_bug_analysis(
@@ -4776,30 +4792,6 @@ pub async fn run_security_review(
         selected_snippets = Some(triage.included);
         checkpoint.selected_snippets = selected_snippets.clone();
         persist_checkpoint(&mut checkpoint, &mut logs);
-
-        // Merge triaged file paths into the displayed scope paths for downstream prompts.
-        if let Some(snippets) = selected_snippets.as_ref() {
-            let mut combined: Vec<String> = scope_display_paths.clone();
-            for snippet in snippets {
-                let abs = repo_path.join(&snippet.relative_path);
-                combined.push(display_path_for(&abs, &repo_path));
-            }
-            combined.sort();
-            combined.dedup();
-            if combined != scope_display_paths {
-                scope_display_paths = combined;
-                checkpoint.scope_display_paths = scope_display_paths.clone();
-                persist_checkpoint(&mut checkpoint, &mut logs);
-                if let Err(err) = write_scope_file(
-                    &request.output_root,
-                    &repo_path,
-                    &scope_display_paths,
-                    linear_issue.as_deref(),
-                ) {
-                    record(&mut logs, format!("Failed to update scope file: {err}"));
-                }
-            }
-        }
 
         plan_tracker.complete_and_start_next(
             SecurityReviewPlanStep::FileTriage,
@@ -7213,24 +7205,19 @@ fn collect_snippets_blocking(
 
 #[allow(clippy::needless_collect, clippy::too_many_arguments)]
 async fn triage_files_for_bug_analysis(
-    client: &CodexHttpClient,
-    provider: &ModelProviderInfo,
-    auth: &Option<CodexAuth>,
-    triage_model: &str,
-    reasoning_effort: Option<ReasoningEffort>,
-    scope_prompt: Option<String>,
+    _client: &CodexHttpClient,
+    _provider: &ModelProviderInfo,
+    _auth: &Option<CodexAuth>,
+    _triage_model: &str,
+    _reasoning_effort: Option<ReasoningEffort>,
+    _scope_prompt: Option<String>,
     snippets: Vec<FileSnippet>,
     progress_sender: Option<AppEventSender>,
     log_sink: Option<Arc<SecurityReviewLogSink>>,
-    metrics: Arc<ReviewMetrics>,
+    _metrics: Arc<ReviewMetrics>,
 ) -> Result<FileTriageResult, SecurityReviewFailure> {
     let total = snippets.len();
     let mut logs: Vec<String> = Vec::new();
-    let triage_model = if triage_model.trim().is_empty() {
-        FILE_TRIAGE_MODEL
-    } else {
-        triage_model
-    };
 
     if total == 0 {
         return Ok(FileTriageResult {
@@ -7239,178 +7226,15 @@ async fn triage_files_for_bug_analysis(
         });
     }
 
-    let start_message = format!("Running LLM triage over {total} file(s) to prioritize analysis.");
-    push_progress_log(
-        &progress_sender,
-        &log_sink,
-        &mut logs,
-        start_message.clone(),
+    let start_message = format!(
+        "Skipping LLM file triage (avoid enumerating full file lists); analyzing {total} file(s)."
     );
+    push_progress_log(&progress_sender, &log_sink, &mut logs, start_message);
 
-    let scope_prompt = scope_prompt
-        .map(|prompt| prompt.trim().to_string())
-        .filter(|prompt| !prompt.is_empty())
-        .map(Arc::<str>::from);
-    if let Some(prompt) = scope_prompt.as_deref() {
-        let summarized = truncate_text(prompt, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-        push_progress_log(
-            &progress_sender,
-            &log_sink,
-            &mut logs,
-            format!("Guiding file triage with user prompt: {summarized}"),
-        );
-    }
-
-    let chunk_requests: Vec<FileTriageChunkRequest> = snippets
-        .iter()
-        .enumerate()
-        .collect::<Vec<_>>()
-        .chunks(FILE_TRIAGE_CHUNK_SIZE)
-        .map(|chunk| {
-            let start_idx = chunk.first().map(|(idx, _)| *idx).unwrap_or(0);
-            let end_idx = chunk.last().map(|(idx, _)| *idx).unwrap_or(start_idx);
-            let descriptors = chunk
-                .iter()
-                .map(|(idx, snippet)| {
-                    let preview = snippet
-                        .content
-                        .chars()
-                        .filter(|c| *c == '\n' || *c == '\r' || *c == '\t' || !c.is_control())
-                        .take(400)
-                        .collect::<String>();
-                    let descriptor = json!({
-                        "id": idx,
-                        "path": snippet.relative_path.display().to_string(),
-                        "language": snippet.language,
-                        "bytes": snippet.bytes,
-                        "preview": preview,
-                    });
-                    FileTriageDescriptor {
-                        id: *idx,
-                        path: snippet.relative_path.display().to_string(),
-                        listing_json: descriptor.to_string(),
-                    }
-                })
-                .collect();
-            FileTriageChunkRequest {
-                start_idx,
-                end_idx,
-                descriptors,
-            }
-        })
-        .collect();
-
-    let mut include_ids: HashSet<usize> = HashSet::new();
-    let mut aggregated_logs: Vec<String> = Vec::new();
-    let mut processed_files: usize = 0;
-
-    let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
-    let mut remaining = chunk_requests.into_iter();
-    let total_chunks = total.div_ceil(FILE_TRIAGE_CHUNK_SIZE.max(1));
-    let concurrency = FILE_TRIAGE_CONCURRENCY.min(total_chunks.max(1));
-
-    // Emit a brief, on-screen preview of the parallel task and sample tool calls.
-    if let Some(tx) = progress_sender.as_ref() {
-        tx.send(AppEvent::SecurityReviewLog(format!(
-            "  └ Launching parallel file triage ({concurrency} workers)"
-        )));
-    }
-
-    for _ in 0..concurrency {
-        if let Some(request) = remaining.next() {
-            in_flight.push(triage_chunk(
-                client,
-                provider.clone(),
-                auth.clone(),
-                triage_model.to_string(),
-                reasoning_effort,
-                scope_prompt.clone(),
-                request,
-                progress_sender.clone(),
-                log_sink.clone(),
-                total,
-                metrics.clone(),
-            ));
-        }
-    }
-
-    while let Some(result) = in_flight.next().await {
-        match result {
-            Ok(chunk_result) => {
-                aggregated_logs.extend(chunk_result.logs);
-                include_ids.extend(chunk_result.include_ids);
-                processed_files = processed_files.saturating_add(chunk_result.processed);
-                if let Some(tx) = progress_sender.as_ref() {
-                    let percent = if total == 0 {
-                        0
-                    } else {
-                        (processed_files * 100) / total
-                    };
-                    tx.send(AppEvent::SecurityReviewLog(format!(
-                        "File triage progress: {}/{} - {percent}%.",
-                        processed_files.min(total),
-                        total
-                    )));
-                }
-                if let Some(next_request) = remaining.next() {
-                    in_flight.push(triage_chunk(
-                        client,
-                        provider.clone(),
-                        auth.clone(),
-                        triage_model.to_string(),
-                        reasoning_effort,
-                        scope_prompt.clone(),
-                        next_request,
-                        progress_sender.clone(),
-                        log_sink.clone(),
-                        total,
-                        metrics.clone(),
-                    ));
-                }
-            }
-            Err(mut failure) => {
-                logs.append(&mut failure.logs);
-                return Err(SecurityReviewFailure {
-                    message: failure.message,
-                    logs,
-                });
-            }
-        }
-    }
-
-    logs.extend(aggregated_logs);
-
-    if include_ids.is_empty() {
-        append_log(
-            &log_sink,
-            &mut logs,
-            "LLM triage excluded all files.".to_string(),
-        );
-        return Ok(FileTriageResult {
-            included: Vec::new(),
-            logs,
-        });
-    }
-
-    let mut included = Vec::with_capacity(include_ids.len());
-    for (idx, snippet) in snippets.into_iter().enumerate() {
-        if include_ids.contains(&idx) {
-            included.push(snippet);
-        }
-    }
-
-    append_log(
-        &log_sink,
-        &mut logs,
-        format!(
-            "File triage selected {} of {} files (excluded {}).",
-            included.len(),
-            total,
-            total.saturating_sub(included.len())
-        ),
-    );
-
-    Ok(FileTriageResult { included, logs })
+    Ok(FileTriageResult {
+        included: snippets,
+        logs,
+    })
 }
 
 fn build_file_triage_prompt(listing: &str, scope_prompt: Option<&str>) -> String {
@@ -10967,7 +10791,7 @@ async fn compact_analysis_context(
     );
 
     let prompt = format!(
-        "Condense the following specification and threat model into a concise context for finding security bugs. Keep architecture, data flows, authn/z, controls, data sensitivity, and notable threats. Aim for at most {ANALYSIS_CONTEXT_MAX_CHARS} characters. Return short paragraphs or bullets; no tables or headings longer than a few words.\n\n{combined}"
+        "Condense the following specification and threat model into a concise context for finding security bugs. Keep architecture, data flows, authn/z, controls, data sensitivity, and notable threats. Aim for at most {ANALYSIS_CONTEXT_MAX_CHARS} characters. Return short paragraphs or bullets; no tables; do not include lists of file paths.\n\n{combined}"
     );
 
     let response = call_model(
@@ -11219,6 +11043,8 @@ async fn prepare_validation_targets(
     let mut logs: Vec<String> = Vec::new();
     let mut additions: Vec<String> = Vec::new();
 
+    let (has_cargo, has_package_json, _, _, _, default_port, _) = guess_testing_defaults(repo_root);
+
     let compose_candidates = [
         "docker-compose.yml",
         "docker-compose.yaml",
@@ -11232,20 +11058,34 @@ async fn prepare_validation_targets(
         .collect();
     let has_dockerfile = repo_root.join("Dockerfile").exists();
 
+    let testing_path = output_root.join("specs").join("TESTING.md");
     if compose_paths.is_empty() && !has_dockerfile {
         push_progress_log(
             &progress_sender,
             &log_sink,
             &mut logs,
-            "Validation target prep: no Dockerfile/compose config detected; skipping.".to_string(),
+            format!(
+                "Validation target prep: no Dockerfile/compose config detected; adding native build guidance to {}.",
+                display_path_for(&testing_path, repo_root)
+            ),
         );
+        if has_cargo {
+            additions.push("- Native build (Cargo): run `cargo build --locked` (or `cargo build` if no lockfile), then build/rerun any per-finding validation scripts against the produced binaries.".to_string());
+        }
+        if has_package_json {
+            additions.push(format!(
+                "- Native build (Node/Web): run `npm install` + `npm run build`, then start the app (for example: `npm run dev -- --port {default_port}`) before running validation checks."
+            ));
+        }
+        if !has_cargo && !has_package_json {
+            additions.push("- Native build: no Docker config found. Build and run the project with its native build system (cargo/make/cmake/npm/etc) before attempting validation.".to_string());
+        }
         return ValidationTargetPrepOutcome {
             logs,
             testing_md_additions: additions,
         };
     }
 
-    let testing_path = output_root.join("specs").join("TESTING.md");
     push_progress_log(
         &progress_sender,
         &log_sink,
@@ -15535,7 +15375,7 @@ async fn rerank_bugs_by_risk(
     reasoning_effort: Option<ReasoningEffort>,
     summaries: &mut [BugSummary],
     repo_root: &Path,
-    repository_summary: &str,
+    _repository_summary: &str,
     spec_context: Option<&str>,
     metrics: Arc<ReviewMetrics>,
 ) -> Vec<String> {
@@ -15543,8 +15383,6 @@ async fn rerank_bugs_by_risk(
         return Vec::new();
     }
 
-    let repo_summary_snippet =
-        trim_prompt_context(repository_summary, BUG_RERANK_CONTEXT_MAX_CHARS);
     let spec_excerpt_snippet = spec_context
         .map(|text| trim_prompt_context(text, BUG_RERANK_CONTEXT_MAX_CHARS))
         .filter(|s| !s.is_empty())
@@ -15573,7 +15411,6 @@ async fn rerank_bugs_by_risk(
             .join("\n");
         let ids: Vec<usize> = chunk.iter().map(|summary| summary.id).collect();
         let prompt = BUG_RERANK_PROMPT_TEMPLATE
-            .replace("{repository_summary}", &repo_summary_snippet)
             .replace("{spec_excerpt}", &spec_excerpt_snippet)
             .replace("{findings}", &findings_payload);
         prompt_chunks.push((ids, prompt));
@@ -16592,14 +16429,8 @@ fn determine_language(path: &Path) -> Option<&'static str> {
         })
 }
 
-fn build_repository_summary(snippets: &[FileSnippet]) -> String {
+fn build_repository_summary(_snippets: &[FileSnippet]) -> String {
     let mut lines = Vec::new();
-    lines.push("Included files:".to_string());
-    for snippet in snippets {
-        let size = human_readable_bytes(snippet.bytes);
-        lines.push(format!("- {} ({size})", snippet.relative_path.display()));
-    }
-    lines.push(String::new());
     let platform = format!(
         "{} {} ({})",
         std::env::consts::OS,

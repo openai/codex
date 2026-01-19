@@ -1,9 +1,6 @@
-pub(crate) const BUG_RERANK_SYSTEM_PROMPT: &str = "You are a senior application security engineer triaging review findings. Reassess customer-facing risk using the supplied repository context and previously generated specs. Only respond with JSON Lines.";
+pub(crate) const BUG_RERANK_SYSTEM_PROMPT: &str = "You are a senior application security engineer triaging review findings. Reassess customer-facing risk using the supplied specification/threat model context (no full file listings). Only respond with JSON Lines.";
 pub(crate) const BUG_RERANK_PROMPT_TEMPLATE: &str = r#"
-Repository summary (trimmed):
-{repository_summary}
-
-Spec excerpt (trimmed; pull in concrete details or note if unavailable):
+Specification/threat model excerpt (trimmed; pull in concrete details or note if unavailable):
 {spec_excerpt}
 
 Examples:
@@ -27,7 +24,7 @@ Examples:
 Instructions:
 - Output severity **only** from ["High","Medium","Low","Informational","Ignore"]. Map "critical"/"p0" to "High".
 - Produce `risk_score` between 0-100 (higher means greater customer impact) and use the full range for comparability.
-- Review the repository summary, spec excerpt, blame metadata, and file locations before requesting anything new; reuse existing specs or context attachments when possible.
+- Review the spec excerpt, blame metadata, and file locations before requesting anything new; reuse existing context attachments when possible.
 - Determine severity from Impact and Likelihood levels using this deterministic risk matrix:
   - Convert levels to numbers: High=3, Medium=2, Low=1.
   - risk = Impact * Likelihood (range 1-9).
