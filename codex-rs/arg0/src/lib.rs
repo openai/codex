@@ -10,6 +10,7 @@ use tempfile::TempDir;
 const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
+const HYPHENATED_APPLY_PATCH_ARG0: &str = "apply-patch";
 
 pub fn arg0_dispatch() -> Option<TempDir> {
     // Determine if we were invoked via the special alias.
@@ -23,7 +24,10 @@ pub fn arg0_dispatch() -> Option<TempDir> {
     if exe_name == LINUX_SANDBOX_ARG0 {
         // Safety: [`run_main`] never returns.
         codex_linux_sandbox::run_main();
-    } else if exe_name == APPLY_PATCH_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_ARG0 {
+    } else if exe_name == APPLY_PATCH_ARG0
+        || exe_name == MISSPELLED_APPLY_PATCH_ARG0
+        || exe_name == HYPHENATED_APPLY_PATCH_ARG0
+    {
         codex_apply_patch::main();
     }
 
@@ -185,6 +189,7 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
     for filename in &[
         APPLY_PATCH_ARG0,
         MISSPELLED_APPLY_PATCH_ARG0,
+        HYPHENATED_APPLY_PATCH_ARG0,
         #[cfg(target_os = "linux")]
         LINUX_SANDBOX_ARG0,
     ] {

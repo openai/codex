@@ -22,7 +22,17 @@ use crate::unified_diff_from_chunks;
 use std::str::Utf8Error;
 use tree_sitter::LanguageError;
 
-const APPLY_PATCH_COMMANDS: [&str; 2] = ["apply_patch", "applypatch"];
+const APPLY_PATCH_COMMANDS: [&str; 3] = ["apply_patch", "applypatch", "apply-patch"];
+
+/// Check if a command name (potentially with path prefix) matches an apply_patch variant.
+/// Handles cases like "/usr/bin/apply_patch" -> matches "apply_patch".
+fn is_apply_patch_command(cmd: &str) -> bool {
+    let cmd_name = std::path::Path::new(cmd)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(cmd);
+    APPLY_PATCH_COMMANDS.contains(&cmd_name)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ApplyPatchShell {
@@ -103,7 +113,8 @@ fn extract_apply_patch_from_shell(
 pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
     match argv {
         // Direct invocation: apply_patch <patch>
-        [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => match parse_patch(body) {
+        // Also handles path-prefixed commands like /usr/bin/apply_patch
+        [cmd, body] if is_apply_patch_command(cmd) => match parse_patch(body) {
             Ok(source) => MaybeApplyPatch::Body(source),
             Err(e) => MaybeApplyPatch::PatchParseError(e),
         },
@@ -271,7 +282,7 @@ fn extract_apply_patch_from_bash(
                 . (redirected_statement
                     body: (command
                             name: (command_name (word) @apply_name) .)
-                    (#any-of? @apply_name "apply_patch" "applypatch")
+                    (#any-of? @apply_name "apply_patch" "applypatch" "apply-patch")
                     redirect: (heredoc_redirect
                                 . (heredoc_start)
                                 . (heredoc_body) @heredoc
@@ -295,7 +306,7 @@ fn extract_apply_patch_from_bash(
                                 name: (command_name (word) @apply_name))
                             .)
                     (#eq? @cd_name "cd")
-                    (#any-of? @apply_name "apply_patch" "applypatch")
+                    (#any-of? @apply_name "apply_patch" "applypatch" "apply-patch")
                     redirect: (heredoc_redirect
                                 . (heredoc_start)
                                 . (heredoc_body) @heredoc
@@ -523,6 +534,84 @@ mod tests {
     }
 
     #[test]
+    fn test_literal_apply_hyphen_patch() {
+        // Test the hyphenated variant: apply-patch
+        let args = strs_to_strings(&[
+            "apply-patch",
+            r#"*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+"#,
+        ]);
+
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
+                assert_eq!(
+                    hunks,
+                    vec![Hunk::AddFile {
+                        path: PathBuf::from("foo"),
+                        contents: "hi\n".to_string()
+                    }]
+                );
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_literal_with_path_prefix() {
+        // Test path-prefixed command: /usr/bin/apply_patch
+        let args = strs_to_strings(&[
+            "/usr/bin/apply_patch",
+            r#"*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+"#,
+        ]);
+
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
+                assert_eq!(
+                    hunks,
+                    vec![Hunk::AddFile {
+                        path: PathBuf::from("foo"),
+                        contents: "hi\n".to_string()
+                    }]
+                );
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_literal_with_relative_path_prefix() {
+        // Test relative path-prefixed command: ./apply_patch
+        let args = strs_to_strings(&[
+            "./apply_patch",
+            r#"*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+"#,
+        ]);
+
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
+                assert_eq!(
+                    hunks,
+                    vec![Hunk::AddFile {
+                        path: PathBuf::from("foo"),
+                        contents: "hi\n".to_string()
+                    }]
+                );
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+    }
+
+    #[test]
     fn test_heredoc() {
         assert_match(&heredoc_script(""), None);
     }
@@ -550,6 +639,64 @@ PATCH"#,
         match maybe_parse_apply_patch(&args) {
             MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
                 assert_eq!(workdir, None);
+                assert_eq!(
+                    hunks,
+                    vec![Hunk::AddFile {
+                        path: PathBuf::from("foo"),
+                        contents: "hi\n".to_string()
+                    }]
+                );
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_heredoc_apply_hyphen_patch() {
+        // Test the hyphenated variant in heredoc form: apply-patch
+        let args = strs_to_strings(&[
+            "bash",
+            "-lc",
+            r#"apply-patch <<'PATCH'
+*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+PATCH"#,
+        ]);
+
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
+                assert_eq!(workdir, None);
+                assert_eq!(
+                    hunks,
+                    vec![Hunk::AddFile {
+                        path: PathBuf::from("foo"),
+                        contents: "hi\n".to_string()
+                    }]
+                );
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_heredoc_with_cd_apply_hyphen_patch() {
+        // Test the hyphenated variant with cd prefix: cd foo && apply-patch
+        let args = strs_to_strings(&[
+            "bash",
+            "-lc",
+            r#"cd mydir && apply-patch <<'PATCH'
+*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+PATCH"#,
+        ]);
+
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
+                assert_eq!(workdir.as_deref(), Some("mydir"));
                 assert_eq!(
                     hunks,
                     vec![Hunk::AddFile {
