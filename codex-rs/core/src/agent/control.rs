@@ -85,7 +85,6 @@ impl AgentControl {
         result
     }
 
-    #[allow(dead_code)] // Will be used for collab tools.
     /// Fetch the last known status for `agent_id`, returning `NotFound` when unavailable.
     pub(crate) async fn get_status(&self, agent_id: ThreadId) -> AgentStatus {
         let Ok(state) = self.upgrade() else {

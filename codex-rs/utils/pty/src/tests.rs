@@ -152,6 +152,49 @@ async fn pipe_process_round_trips_stdin() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipe_process_detaches_from_parent_session() -> anyhow::Result<()> {
+    let parent_sid = unsafe { libc::getsid(0) };
+    if parent_sid == -1 {
+        anyhow::bail!("failed to read parent session id");
+    }
+
+    let env_map: HashMap<String, String> = std::env::vars().collect();
+    let script = "echo $$; sleep 0.2";
+    let (program, args) = shell_command(script);
+    let spawned = spawn_pipe_process(&program, &args, Path::new("."), &env_map, &None).await?;
+
+    let mut output_rx = spawned.output_rx;
+    let pid_bytes =
+        tokio::time::timeout(tokio::time::Duration::from_millis(500), output_rx.recv()).await??;
+    let pid_text = String::from_utf8_lossy(&pid_bytes);
+    let child_pid: i32 = pid_text
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing child pid output: {pid_text:?}"))?
+        .parse()?;
+
+    let child_sid = unsafe { libc::getsid(child_pid) };
+    if child_sid == -1 {
+        anyhow::bail!("failed to read child session id");
+    }
+
+    assert_eq!(child_sid, child_pid, "expected child to be session leader");
+    assert_ne!(
+        child_sid, parent_sid,
+        "expected child to be detached from parent session"
+    );
+
+    let exit_code = spawned.exit_rx.await.unwrap_or(-1);
+    assert_eq!(
+        exit_code, 0,
+        "expected detached pipe process to exit cleanly"
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pipe_and_pty_share_interface() -> anyhow::Result<()> {
     let env_map: HashMap<String, String> = std::env::vars().collect();
