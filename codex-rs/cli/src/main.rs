@@ -459,8 +459,8 @@ enum FeaturesSubcommand {
 fn stage_str(stage: codex_core::features::Stage) -> &'static str {
     use codex_core::features::Stage;
     match stage {
-        Stage::Experimental => "experimental",
-        Stage::Beta { .. } => "beta",
+        Stage::Beta => "experimental",
+        Stage::Experimental { .. } => "beta",
         Stage::Stable => "stable",
         Stage::Deprecated => "deprecated",
         Stage::Removed => "removed",

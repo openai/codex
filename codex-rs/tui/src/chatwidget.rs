@@ -136,6 +136,7 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::collab;
+use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
@@ -371,6 +372,8 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
+type CollaborationModeSelection = collaboration_modes::Selection;
+
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
 /// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
@@ -400,6 +403,11 @@ pub(crate) struct ChatWidget {
     active_cell_revision: u64,
     config: Config,
     model: Option<String>,
+    /// Current UI selection for collaboration modes.
+    ///
+    /// This selection is only meaningful when `Feature::CollaborationModes` is enabled; when the
+    /// feature is disabled, the value is effectively inert.
+    collaboration_mode: CollaborationModeSelection,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     session_header: SessionHeader,
@@ -1673,6 +1681,7 @@ impl ChatWidget {
             active_cell_revision: 0,
             config,
             model,
+            collaboration_mode: CollaborationModeSelection::default(),
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(model_for_header),
@@ -1722,6 +1731,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_collaboration_modes_enabled(
+            widget.config.features.enabled(Feature::CollaborationModes),
+        );
 
         widget
     }
@@ -1772,6 +1784,7 @@ impl ChatWidget {
             active_cell_revision: 0,
             config,
             model: Some(header_model.clone()),
+            collaboration_mode: CollaborationModeSelection::default(),
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(header_model),
@@ -1821,6 +1834,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_collaboration_modes_enabled(
+            widget.config.features.enabled(Feature::CollaborationModes),
+        );
 
         widget
     }
@@ -1885,6 +1901,16 @@ impl ChatWidget {
         }
 
         match key_event {
+            KeyEvent {
+                code: KeyCode::BackTab,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.collaboration_modes_enabled()
+                && !self.bottom_pane.is_task_running()
+                && self.bottom_pane.no_modal_or_popup_active() =>
+            {
+                self.cycle_collaboration_mode();
+            }
             KeyEvent {
                 code: KeyCode::Up,
                 modifiers: KeyModifiers::ALT,
@@ -2021,6 +2047,11 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::Collab => {
+                if self.collaboration_modes_enabled() {
+                    self.cycle_collaboration_mode();
+                }
             }
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
@@ -2178,6 +2209,16 @@ impl ChatWidget {
 
         let trimmed = args.trim();
         match cmd {
+            SlashCommand::Collab if !trimmed.is_empty() => {
+                if let Some(selection) = collaboration_modes::parse_selection(trimmed) {
+                    self.set_collaboration_mode(selection);
+                } else {
+                    self.add_error_message(format!(
+                        "Unknown collaboration mode '{trimmed}'. Try: plan, pair, execute."
+                    ));
+                    self.request_redraw();
+                }
+            }
             SlashCommand::Review if !trimmed.is_empty() => {
                 self.submit_op(Op::Review {
                     review_request: ReviewRequest {
@@ -2255,6 +2296,14 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        let Some(model) = self.current_model().or(self.config.model.as_deref()) else {
+            tracing::warn!("cannot submit user message before model is known; queueing");
+            self.queued_user_messages.push_front(user_message);
+            self.refresh_queued_user_messages();
+            return;
+        };
+        let model = model.to_string();
+
         let UserMessage { text, image_paths } = user_message;
         if text.is_empty() && image_paths.is_empty() {
             return;
@@ -2302,14 +2351,29 @@ impl ChatWidget {
             }
         }
 
-        self.codex_op_tx
-            .send(Op::UserInput {
-                items,
-                final_output_json_schema: None,
-            })
-            .unwrap_or_else(|e| {
-                tracing::error!("failed to send message: {e}");
-            });
+        let collaboration_mode = self.collaboration_modes_enabled().then(|| {
+            collaboration_modes::resolve_mode_or_fallback(
+                self.models_manager.as_ref(),
+                self.collaboration_mode,
+                model.as_str(),
+                self.config.model_reasoning_effort,
+            )
+        });
+        let op = Op::UserTurn {
+            items,
+            cwd: self.config.cwd.clone(),
+            approval_policy: self.config.approval_policy.value(),
+            sandbox_policy: self.config.sandbox_policy.get().clone(),
+            model,
+            effort: self.config.model_reasoning_effort,
+            summary: self.config.model_reasoning_summary,
+            final_output_json_schema: None,
+            collaboration_mode,
+        };
+
+        self.codex_op_tx.send(op).unwrap_or_else(|e| {
+            tracing::error!("failed to send message: {e}");
+        });
 
         // Persist the text to cross-session message history.
         if !text.is_empty() {
@@ -2479,7 +2543,8 @@ impl ChatWidget {
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ReasoningRawContentDelta(_) => {}
+            | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::RequestUserInput(_) => {}
         }
     }
 
@@ -2633,6 +2698,11 @@ impl ChatWidget {
         let total_usage = token_info
             .map(|ti| &ti.total_token_usage)
             .unwrap_or(&default_usage);
+        let collaboration_mode = if self.collaboration_modes_enabled() {
+            Some(self.collaboration_mode.label())
+        } else {
+            None
+        };
         self.add_to_history(crate::status::new_status_output(
             &self.config,
             self.auth_manager.as_ref(),
@@ -2644,6 +2714,7 @@ impl ChatWidget {
             self.plan_type,
             Local::now(),
             self.model_display_name(),
+            collaboration_mode,
         ));
     }
 
@@ -3893,6 +3964,8 @@ impl ChatWidget {
         }
         if feature == Feature::Steer {
             self.bottom_pane.set_steer_enabled(enabled);
+        } else if feature == Feature::CollaborationModes {
+            self.bottom_pane.set_collaboration_modes_enabled(enabled);
         }
     }
 
@@ -3930,8 +4003,37 @@ impl ChatWidget {
         self.model = Some(model.to_string());
     }
 
+    fn cycle_collaboration_mode(&mut self) {
+        if !self.collaboration_modes_enabled() {
+            return;
+        }
+        let next = self.collaboration_mode.next();
+        self.set_collaboration_mode(next);
+    }
+
+    /// Update the selected collaboration mode.
+    ///
+    /// When collaboration modes are enabled, the current selection is attached to *every*
+    /// submission as `Op::UserTurn { collaboration_mode: Some(...) }`.
+    fn set_collaboration_mode(&mut self, selection: CollaborationModeSelection) {
+        if !self.collaboration_modes_enabled() {
+            return;
+        }
+        const FLASH_DURATION: Duration = Duration::from_secs(1);
+
+        self.collaboration_mode = selection;
+
+        let flash = collaboration_modes::flash_line(selection);
+        self.bottom_pane.flash_footer_hint(flash, FLASH_DURATION);
+        self.request_redraw();
+    }
+
     fn current_model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    fn collaboration_modes_enabled(&self) -> bool {
+        self.config.features.enabled(Feature::CollaborationModes)
     }
 
     fn model_display_name(&self) -> &str {

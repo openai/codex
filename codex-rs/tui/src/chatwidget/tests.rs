@@ -59,6 +59,7 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::parse_command::ParsedCommand;
@@ -404,6 +405,7 @@ async fn make_chatwidget_manual(
         active_cell_revision: 0,
         config: cfg,
         model: Some(resolved_model.clone()),
+        collaboration_mode: CollaborationModeSelection::default(),
         auth_manager: auth_manager.clone(),
         models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager)),
         session_header: SessionHeader::new(resolved_model),
@@ -447,6 +449,19 @@ async fn make_chatwidget_manual(
         external_editor_state: ExternalEditorState::Closed,
     };
     (widget, rx, op_rx)
+}
+
+// ChatWidget may emit other `Op`s (e.g. history/logging updates) on the same channel; this helper
+// filters until we see a submission op.
+fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
+    loop {
+        match op_rx.try_recv() {
+            Ok(op @ Op::UserTurn { .. }) => return op,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected a submit op but queue was empty"),
+            Err(TryRecvError::Disconnected) => panic!("expected submit op but channel closed"),
+        }
+    }
 }
 
 fn set_chatgpt_auth(chat: &mut ChatWidget) {
@@ -1504,6 +1519,104 @@ async fn slash_init_skips_when_project_doc_exists() {
         std::fs::read_to_string(existing_path).unwrap(),
         "existing instructions"
     );
+}
+
+#[test]
+fn parse_collaboration_mode_selection_accepts_common_aliases() {
+    assert_eq!(
+        collaboration_modes::parse_selection("plan"),
+        Some(CollaborationModeSelection::Plan)
+    );
+    assert_eq!(
+        collaboration_modes::parse_selection("PAIR"),
+        Some(CollaborationModeSelection::PairProgramming)
+    );
+    assert_eq!(
+        collaboration_modes::parse_selection("pair_programming"),
+        Some(CollaborationModeSelection::PairProgramming)
+    );
+    assert_eq!(
+        collaboration_modes::parse_selection("pp"),
+        Some(CollaborationModeSelection::PairProgramming)
+    );
+    assert_eq!(
+        collaboration_modes::parse_selection(" exec "),
+        Some(CollaborationModeSelection::Execute)
+    );
+    assert_eq!(
+        collaboration_modes::parse_selection("execute"),
+        Some(CollaborationModeSelection::Execute)
+    );
+    assert_eq!(collaboration_modes::parse_selection("unknown"), None);
+}
+
+#[tokio::test]
+async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, false);
+
+    let initial = chat.collaboration_mode;
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.collaboration_mode, initial);
+
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.collaboration_mode, CollaborationModeSelection::Execute);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.collaboration_mode, CollaborationModeSelection::Plan);
+
+    chat.on_task_started();
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.collaboration_mode, CollaborationModeSelection::Plan);
+}
+
+#[tokio::test]
+async fn collab_slash_command_sets_mode_and_next_submit_sends_user_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    chat.dispatch_command_with_args(SlashCommand::Collab, "plan".to_string());
+    assert_eq!(chat.collaboration_mode, CollaborationModeSelection::Plan);
+
+    chat.bottom_pane.set_composer_text("hello".to_string());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode: Some(CollaborationMode::Plan(_)),
+            ..
+        } => {}
+        other => panic!("expected Op::UserTurn with plan collab mode, got {other:?}"),
+    }
+
+    chat.bottom_pane.set_composer_text("follow up".to_string());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode: Some(CollaborationMode::Plan(_)),
+            ..
+        } => {}
+        other => panic!("expected Op::UserTurn with plan collab mode, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn collab_mode_defaults_to_pair_programming_when_enabled() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    chat.bottom_pane.set_composer_text("hello".to_string());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode: Some(CollaborationMode::PairProgramming(_)),
+            ..
+        } => {}
+        other => panic!("expected Op::UserTurn with pair programming collab mode, got {other:?}"),
+    }
 }
 
 #[tokio::test]

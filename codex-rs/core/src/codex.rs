@@ -49,6 +49,8 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::request_user_input::RequestUserInputArgs;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use futures::future::BoxFuture;
@@ -118,6 +120,7 @@ use crate::protocol::Op;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::ReasoningContentDeltaEvent;
 use crate::protocol::ReasoningRawContentDeltaEvent;
+use crate::protocol::RequestUserInputEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
@@ -806,7 +809,7 @@ impl Session {
 
     async fn get_total_token_usage(&self) -> i64 {
         let state = self.state.lock().await;
-        state.get_total_token_usage()
+        state.get_total_token_usage(state.server_reasoning_included())
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
@@ -1296,6 +1299,63 @@ impl Session {
         rx_approve
     }
 
+    pub async fn request_user_input(
+        &self,
+        turn_context: &TurnContext,
+        call_id: String,
+        args: RequestUserInputArgs,
+    ) -> Option<RequestUserInputResponse> {
+        let sub_id = turn_context.sub_id.clone();
+        let (tx_response, rx_response) = oneshot::channel();
+        let event_id = sub_id.clone();
+        let prev_entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_user_input(sub_id, tx_response)
+                }
+                None => None,
+            }
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending user input for sub_id: {event_id}");
+        }
+
+        let event = EventMsg::RequestUserInput(RequestUserInputEvent {
+            call_id,
+            turn_id: turn_context.sub_id.clone(),
+            questions: args.questions,
+        });
+        self.send_event(turn_context, event).await;
+        rx_response.await.ok()
+    }
+
+    pub async fn notify_user_input_response(
+        &self,
+        sub_id: &str,
+        response: RequestUserInputResponse,
+    ) {
+        let entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_user_input(sub_id)
+                }
+                None => None,
+            }
+        };
+        match entry {
+            Some(tx_response) => {
+                tx_response.send(response).ok();
+            }
+            None => {
+                warn!("No pending user input found for sub_id: {sub_id}");
+            }
+        }
+    }
+
     pub async fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
         let entry = {
             let mut active = self.active_turn.lock().await;
@@ -1390,6 +1450,9 @@ impl Session {
     }
 
     pub(crate) async fn record_model_warning(&self, message: impl Into<String>, ctx: &TurnContext) {
+        self.services
+            .otel_manager
+            .counter("codex.model_warning", 1, &[]);
         let item = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -1553,6 +1616,11 @@ impl Session {
             state.set_rate_limits(new_rate_limits);
         }
         self.send_token_count_event(turn_context).await;
+    }
+
+    pub(crate) async fn set_server_reasoning_included(&self, included: bool) {
+        let mut state = self.state.lock().await;
+        state.set_server_reasoning_included(included);
     }
 
     async fn send_token_count_event(&self, turn_context: &TurnContext) {
@@ -1930,6 +1998,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::PatchApproval { id, decision } => {
                 handlers::patch_approval(&sess, id, decision).await;
             }
+            Op::UserInputAnswer { id, response } => {
+                handlers::request_user_input_response(&sess, id, response).await;
+            }
             Op::AddToHistory { text } => {
                 handlers::add_to_history(&sess, &config, text).await;
             }
@@ -2019,6 +2090,7 @@ mod handlers {
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
+    use codex_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
     use codex_protocol::config_types::CollaborationMode;
@@ -2245,6 +2317,14 @@ mod handlers {
             }
             other => sess.notify_approval(&id, other).await,
         }
+    }
+
+    pub async fn request_user_input_response(
+        sess: &Arc<Session>,
+        id: String,
+        response: RequestUserInputResponse,
+    ) {
+        sess.notify_user_input_response(&id, response).await;
     }
 
     pub async fn add_to_history(sess: &Arc<Session>, config: &Arc<Config>, text: String) {
@@ -3073,6 +3153,9 @@ async fn try_run_sampling_request(
 
                     active_item = Some(tracked_item);
                 }
+            }
+            ResponseEvent::ServerReasoningIncluded(included) => {
+                sess.set_server_reasoning_included(included).await;
             }
             ResponseEvent::RateLimits(snapshot) => {
                 // Update internal state with latest rate limits, but defer sending until

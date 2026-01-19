@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use tokio::sync::oneshot;
 
 use crate::codex::TurnContext;
@@ -68,6 +69,7 @@ impl ActiveTurn {
 #[derive(Default)]
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_input: Vec<ResponseInputItem>,
 }
 
@@ -89,7 +91,23 @@ impl TurnState {
 
     pub(crate) fn clear_pending(&mut self) {
         self.pending_approvals.clear();
+        self.pending_user_input.clear();
         self.pending_input.clear();
+    }
+
+    pub(crate) fn insert_pending_user_input(
+        &mut self,
+        key: String,
+        tx: oneshot::Sender<RequestUserInputResponse>,
+    ) -> Option<oneshot::Sender<RequestUserInputResponse>> {
+        self.pending_user_input.insert(key, tx)
+    }
+
+    pub(crate) fn remove_pending_user_input(
+        &mut self,
+        key: &str,
+    ) -> Option<oneshot::Sender<RequestUserInputResponse>> {
+        self.pending_user_input.remove(key)
     }
 
     pub(crate) fn push_pending_input(&mut self, input: ResponseInputItem) {

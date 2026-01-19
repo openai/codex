@@ -69,7 +69,6 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -80,12 +79,15 @@ use ratatui::widgets::WidgetRef;
 use super::chat_composer_history::ChatComposerHistory;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
+use super::command_popup::CommandPopupFlags;
 use super::file_search_popup::FileSearchPopup;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
+use super::footer::inset_footer_hint_area;
 use super::footer::render_footer;
+use super::footer::render_footer_hint_items;
 use super::footer::reset_mode_after_activity;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
@@ -191,12 +193,20 @@ pub(crate) struct ChatComposer {
     custom_prompts: Vec<CustomPrompt>,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
+    footer_flash: Option<FooterFlash>,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
+    collaboration_modes_enabled: bool,
+}
+
+#[derive(Clone, Debug)]
+struct FooterFlash {
+    line: Line<'static>,
+    expires_at: Instant,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -244,11 +254,13 @@ impl ChatComposer {
             custom_prompts: Vec::new(),
             footer_mode: FooterMode::ShortcutSummary,
             footer_hint_override: None,
+            footer_flash: None,
             context_window_percent: None,
             context_window_used_tokens: None,
             skills: None,
             dismissed_skill_popup_token: None,
             steer_enabled: false,
+            collaboration_modes_enabled: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -267,6 +279,10 @@ impl ChatComposer {
     /// "queue while a task is running" behavior.
     pub fn set_steer_enabled(&mut self, enabled: bool) {
         self.steer_enabled = enabled;
+    }
+
+    pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
+        self.collaboration_modes_enabled = enabled;
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -497,6 +513,19 @@ impl ChatComposer {
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.footer_hint_override = items;
+    }
+
+    pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
+        let expires_at = Instant::now()
+            .checked_add(duration)
+            .unwrap_or_else(Instant::now);
+        self.footer_flash = Some(FooterFlash { line, expires_at });
+    }
+
+    pub(crate) fn footer_flash_visible(&self) -> bool {
+        self.footer_flash
+            .as_ref()
+            .is_some_and(|flash| Instant::now() < flash.expires_at)
     }
 
     /// Replace the entire composer content with `text` and reset cursor.
@@ -1347,12 +1376,9 @@ impl ChatComposer {
         if let Some((name, _rest)) = parse_slash_name(&text) {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
             if !treat_as_plain_text {
-                let is_builtin = built_in_slash_commands()
-                    .into_iter()
-                    .filter(|(_, cmd)| {
-                        windows_degraded_sandbox_active() || *cmd != SlashCommand::ElevateSandbox
-                    })
-                    .any(|(command_name, _)| command_name == name);
+                let is_builtin =
+                    Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
+                        .any(|(command_name, _)| command_name == name);
                 let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
                 let is_known_prompt = name
                     .strip_prefix(&prompt_prefix)
@@ -1469,12 +1495,9 @@ impl ChatComposer {
         let first_line = self.textarea.text().lines().next().unwrap_or("");
         if let Some((name, rest)) = parse_slash_name(first_line)
             && rest.is_empty()
-            && let Some((_n, cmd)) = built_in_slash_commands()
-                .into_iter()
-                .filter(|(_, cmd)| {
-                    windows_degraded_sandbox_active() || *cmd != SlashCommand::ElevateSandbox
-                })
-                .find(|(n, _)| *n == name)
+            && let Some((_n, cmd)) =
+                Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
+                    .find(|(n, _)| *n == name)
         {
             self.textarea.set_text("");
             Some(InputResult::Command(cmd))
@@ -1494,9 +1517,9 @@ impl ChatComposer {
             if let Some((name, rest)) = parse_slash_name(&text)
                 && !rest.is_empty()
                 && !name.contains('/')
-                && let Some((_n, cmd)) = built_in_slash_commands()
-                    .into_iter()
-                    .find(|(command_name, _)| *command_name == name)
+                && let Some((_n, cmd)) =
+                    Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
+                        .find(|(command_name, _)| *command_name == name)
                 && cmd == SlashCommand::Review
             {
                 self.textarea.set_text("");
@@ -1843,6 +1866,7 @@ impl ChatComposer {
             is_task_running: self.is_task_running,
             quit_shortcut_key: self.quit_shortcut_key,
             steer_enabled: self.steer_enabled,
+            collaboration_modes_enabled: self.collaboration_modes_enabled,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
         }
@@ -1865,6 +1889,9 @@ impl ChatComposer {
     }
 
     fn custom_footer_height(&self) -> Option<u16> {
+        if self.footer_flash_visible() {
+            return Some(1);
+        }
         self.footer_hint_override
             .as_ref()
             .map(|items| if items.is_empty() { 0 } else { 1 })
@@ -1948,12 +1975,9 @@ impl ChatComposer {
             return rest_after_name.is_empty();
         }
 
-        let builtin_match = built_in_slash_commands()
-            .into_iter()
-            .filter(|(_, cmd)| {
-                windows_degraded_sandbox_active() || *cmd != SlashCommand::ElevateSandbox
-            })
-            .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
+        let builtin_match =
+            Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
+                .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
 
         if builtin_match {
             return true;
@@ -2006,13 +2030,29 @@ impl ChatComposer {
             _ => {
                 if is_editing_slash_command_name {
                     let skills_enabled = self.skills_enabled();
-                    let mut command_popup =
-                        CommandPopup::new(self.custom_prompts.clone(), skills_enabled);
+                    let collaboration_modes_enabled = self.collaboration_modes_enabled;
+                    let mut command_popup = CommandPopup::new(
+                        self.custom_prompts.clone(),
+                        CommandPopupFlags {
+                            skills_enabled,
+                            collaboration_modes_enabled,
+                        },
+                    );
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
             }
         }
+    }
+
+    fn built_in_slash_commands_for_input(
+        collaboration_modes_enabled: bool,
+    ) -> impl Iterator<Item = (&'static str, SlashCommand)> {
+        let allow_elevate_sandbox = windows_degraded_sandbox_active();
+        built_in_slash_commands()
+            .into_iter()
+            .filter(move |(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
+            .filter(move |(_, cmd)| collaboration_modes_enabled || *cmd != SlashCommand::Collab)
     }
 
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
@@ -2180,24 +2220,12 @@ impl Renderable for ChatComposer {
                 } else {
                     popup_rect
                 };
-                if let Some(items) = self.footer_hint_override.as_ref() {
-                    if !items.is_empty() {
-                        let mut spans = Vec::with_capacity(items.len() * 4);
-                        for (idx, (key, label)) in items.iter().enumerate() {
-                            spans.push(" ".into());
-                            spans.push(Span::styled(key.clone(), Style::default().bold()));
-                            spans.push(format!(" {label}").into());
-                            if idx + 1 != items.len() {
-                                spans.push("   ".into());
-                            }
-                        }
-                        let mut custom_rect = hint_rect;
-                        if custom_rect.width > 2 {
-                            custom_rect.x += 2;
-                            custom_rect.width = custom_rect.width.saturating_sub(2);
-                        }
-                        Line::from(spans).render_ref(custom_rect, buf);
+                if self.footer_flash_visible() {
+                    if let Some(flash) = self.footer_flash.as_ref() {
+                        flash.line.render(inset_footer_hint_area(hint_rect), buf);
                     }
+                } else if let Some(items) = self.footer_hint_override.as_ref() {
+                    render_footer_hint_items(hint_rect, buf, items);
                 } else {
                     render_footer(hint_rect, buf, footer_props);
                 }
@@ -2354,6 +2382,84 @@ mod tests {
             spacing_row.trim(),
             "",
             "expected blank spacing row above hints but saw: {spacing_row:?}",
+        );
+    }
+
+    #[test]
+    fn footer_flash_overrides_footer_hint_override() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_footer_hint_override(Some(vec![("K".to_string(), "label".to_string())]));
+        composer.show_footer_flash(Line::from("FLASH"), Duration::from_secs(10));
+
+        let area = Rect::new(0, 0, 60, 6);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+
+        let mut bottom_row = String::new();
+        for x in 0..area.width {
+            bottom_row.push(
+                buf[(x, area.height - 1)]
+                    .symbol()
+                    .chars()
+                    .next()
+                    .unwrap_or(' '),
+            );
+        }
+        assert!(
+            bottom_row.contains("FLASH"),
+            "expected flash content to render in footer row, saw: {bottom_row:?}",
+        );
+        assert!(
+            !bottom_row.contains("K label"),
+            "expected flash to override hint override, saw: {bottom_row:?}",
+        );
+    }
+
+    #[test]
+    fn footer_flash_expires_and_falls_back_to_hint_override() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_footer_hint_override(Some(vec![("K".to_string(), "label".to_string())]));
+        composer.show_footer_flash(Line::from("FLASH"), Duration::from_secs(10));
+        composer.footer_flash.as_mut().unwrap().expires_at =
+            Instant::now() - Duration::from_secs(1);
+
+        let area = Rect::new(0, 0, 60, 6);
+        let mut buf = Buffer::empty(area);
+        composer.render(area, &mut buf);
+
+        let mut bottom_row = String::new();
+        for x in 0..area.width {
+            bottom_row.push(
+                buf[(x, area.height - 1)]
+                    .symbol()
+                    .chars()
+                    .next()
+                    .unwrap_or(' '),
+            );
+        }
+        assert!(
+            bottom_row.contains("K label"),
+            "expected hint override to render after flash expired, saw: {bottom_row:?}",
+        );
+        assert!(
+            !bottom_row.contains("FLASH"),
+            "expected expired flash to be hidden, saw: {bottom_row:?}",
         );
     }
 

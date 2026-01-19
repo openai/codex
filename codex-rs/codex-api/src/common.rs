@@ -42,6 +42,10 @@ pub enum ResponseEvent {
     Created,
     OutputItemDone(ResponseItem),
     OutputItemAdded(ResponseItem),
+    /// Emitted when `X-Reasoning-Included: true` is present on the response,
+    /// meaning the server already accounted for past reasoning tokens and the
+    /// client should not re-estimate them.
+    ServerReasoningIncluded(bool),
     Completed {
         response_id: String,
         token_usage: Option<TokenUsage>,
