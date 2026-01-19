@@ -1,3 +1,4 @@
+use crate::key_hint::is_altgr;
 use crossterm::event::Event;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -11,8 +12,11 @@ use ratatui::widgets::WidgetRef;
 use reedline::EditCommand;
 use reedline::EditMode as _;
 use reedline::Emacs;
+use reedline::PromptEditMode;
+use reedline::PromptViMode;
 use reedline::ReedlineEvent;
 use reedline::ReedlineRawEvent;
+use reedline::Vi;
 use std::cell::Ref;
 use std::cell::RefCell;
 use std::ops::Range;
@@ -26,21 +30,61 @@ fn is_word_separator(ch: char) -> bool {
     WORD_SEPARATORS.contains(ch)
 }
 
-#[derive(Default)]
-struct ReedlineEmacs {
-    emacs: Emacs,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ViModeIndicator {
+    Normal,
+    Insert,
 }
 
-impl ReedlineEmacs {
+enum ReedlineEditMode {
+    Emacs(Emacs),
+    Vi(Vi),
+}
+
+impl ReedlineEditMode {
     fn parse_key_event(&mut self, key_event: KeyEvent) -> Option<ReedlineEvent> {
         let raw = ReedlineRawEvent::try_from(Event::Key(key_event)).ok()?;
-        Some(self.emacs.parse_event(raw))
+        Some(match self {
+            Self::Emacs(emacs) => emacs.parse_event(raw),
+            Self::Vi(vi) => vi.parse_event(raw),
+        })
+    }
+
+    fn mode_indicator(&self) -> Option<ViModeIndicator> {
+        match match self {
+            Self::Emacs(emacs) => emacs.edit_mode(),
+            Self::Vi(vi) => vi.edit_mode(),
+        } {
+            PromptEditMode::Vi(mode) => Some(match mode {
+                PromptViMode::Normal => ViModeIndicator::Normal,
+                PromptViMode::Insert => ViModeIndicator::Insert,
+            }),
+            _ => None,
+        }
+    }
+
+    fn set_vi_mode_enabled(&mut self, enabled: bool) {
+        let currently_vi = matches!(self, Self::Vi(_));
+        match (enabled, currently_vi) {
+            (true, true) | (false, false) => {}
+            (true, false) => *self = Self::Vi(Vi::default()),
+            (false, true) => *self = Self::Emacs(Emacs::default()),
+        }
     }
 }
 
-impl std::fmt::Debug for ReedlineEmacs {
+impl Default for ReedlineEditMode {
+    fn default() -> Self {
+        Self::Emacs(Emacs::default())
+    }
+}
+
+impl std::fmt::Debug for ReedlineEditMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ReedlineEmacs { .. }")
+        match self {
+            Self::Emacs(_) => f.write_str("ReedlineEditMode::Emacs"),
+            Self::Vi(_) => f.write_str("ReedlineEditMode::Vi"),
+        }
     }
 }
 
@@ -57,7 +101,7 @@ pub(crate) struct TextArea {
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
     kill_buffer: String,
-    reedline: ReedlineEmacs,
+    reedline: ReedlineEditMode,
 }
 
 #[derive(Debug, Clone)]
@@ -81,8 +125,16 @@ impl TextArea {
             preferred_col: None,
             elements: Vec::new(),
             kill_buffer: String::new(),
-            reedline: ReedlineEmacs::default(),
+            reedline: ReedlineEditMode::default(),
         }
+    }
+
+    pub(crate) fn set_vi_mode_enabled(&mut self, enabled: bool) {
+        self.reedline.set_vi_mode_enabled(enabled);
+    }
+
+    pub(crate) fn vi_mode_indicator(&self) -> Option<ViModeIndicator> {
+        self.reedline.mode_indicator()
     }
 
     pub fn set_text(&mut self, text: &str) {
@@ -282,6 +334,18 @@ impl TextArea {
             _ => {}
         }
 
+        // On Windows, AltGr is reported as Ctrl+Alt; preserve character insertion semantics.
+        if let KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers,
+            ..
+        } = event
+            && is_altgr(modifiers)
+        {
+            self.insert_str(&c.to_string());
+            return;
+        }
+
         // Match Codex-specific multiline Home/End behavior.
         match event {
             KeyEvent {
@@ -321,6 +385,12 @@ impl TextArea {
             && event.modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT)
         {
             self.delete_backward_word();
+            return;
+        }
+
+        // Preserve Shift+Enter newline insertion when enhanced keys are enabled.
+        if event.code == KeyCode::Enter && event.modifiers == KeyModifiers::SHIFT {
+            self.insert_str("\n");
             return;
         }
 
@@ -441,16 +511,30 @@ impl TextArea {
                 self.delete_forward(1);
                 true
             }
-            EditCommand::BackspaceWord | EditCommand::CutWordLeft | EditCommand::CutBigWordLeft => {
+            EditCommand::CutChar => {
+                let start = self.cursor_pos;
+                let end = self.next_atomic_boundary(self.cursor_pos);
+                if end > start {
+                    self.kill_range(start..end);
+                }
+                true
+            }
+            EditCommand::BackspaceWord | EditCommand::CutWordLeft => {
                 self.delete_backward_word();
+                true
+            }
+            EditCommand::CutBigWordLeft => {
+                self.delete_backward_big_word();
                 true
             }
             EditCommand::DeleteWord
             | EditCommand::CutWordRight
-            | EditCommand::CutBigWordRight
-            | EditCommand::CutWordRightToNext
-            | EditCommand::CutBigWordRightToNext => {
+            | EditCommand::CutWordRightToNext => {
                 self.delete_forward_word();
+                true
+            }
+            EditCommand::CutBigWordRight | EditCommand::CutBigWordRightToNext => {
+                self.delete_forward_big_word();
                 true
             }
             EditCommand::MoveToStart { .. } => {
@@ -477,16 +561,28 @@ impl TextArea {
                 self.move_cursor_right();
                 true
             }
-            EditCommand::MoveWordLeft { .. } | EditCommand::MoveBigWordLeft { .. } => {
+            EditCommand::MoveWordLeft { .. } => {
                 self.set_cursor(self.beginning_of_previous_word());
                 true
             }
-            EditCommand::MoveWordRight { .. }
-            | EditCommand::MoveWordRightStart { .. }
-            | EditCommand::MoveWordRightEnd { .. }
-            | EditCommand::MoveBigWordRightStart { .. }
-            | EditCommand::MoveBigWordRightEnd { .. } => {
+            EditCommand::MoveBigWordLeft { .. } => {
+                self.set_cursor(self.beginning_of_previous_big_word());
+                true
+            }
+            EditCommand::MoveWordRight { .. } | EditCommand::MoveWordRightEnd { .. } => {
                 self.set_cursor(self.end_of_next_word());
+                true
+            }
+            EditCommand::MoveWordRightStart { .. } => {
+                self.set_cursor(self.beginning_of_next_word());
+                true
+            }
+            EditCommand::MoveBigWordRightStart { .. } => {
+                self.set_cursor(self.beginning_of_next_big_word());
+                true
+            }
+            EditCommand::MoveBigWordRightEnd { .. } => {
+                self.set_cursor(self.end_of_next_big_word());
                 true
             }
             EditCommand::Clear => {
@@ -550,6 +646,11 @@ impl TextArea {
         self.kill_range(start..self.cursor_pos);
     }
 
+    pub fn delete_backward_big_word(&mut self) {
+        let start = self.beginning_of_previous_big_word();
+        self.kill_range(start..self.cursor_pos);
+    }
+
     /// Delete text to the right of the cursor using "word" semantics.
     ///
     /// Deletes from the current cursor position through the end of the next word as determined
@@ -557,6 +658,13 @@ impl TextArea {
     /// word is included in the deletion.
     pub fn delete_forward_word(&mut self) {
         let end = self.end_of_next_word();
+        if end > self.cursor_pos {
+            self.kill_range(self.cursor_pos..end);
+        }
+    }
+
+    pub fn delete_forward_big_word(&mut self) {
+        let end = self.end_of_next_big_word();
         if end > self.cursor_pos {
             self.kill_range(self.cursor_pos..end);
         }
@@ -1061,6 +1169,35 @@ impl TextArea {
         self.adjust_pos_out_of_elements(start, true)
     }
 
+    pub(crate) fn beginning_of_next_word(&self) -> usize {
+        if self.cursor_pos >= self.text.len() {
+            return self.text.len();
+        }
+
+        let mut pos = self.cursor_pos;
+        let mut iter = self.text[pos..].char_indices();
+        let Some((_, first_ch)) = iter.next() else {
+            return self.text.len();
+        };
+
+        if !first_ch.is_whitespace() {
+            let is_separator = is_word_separator(first_ch);
+            pos = self.text.len();
+            for (idx, ch) in iter {
+                if ch.is_whitespace() || is_word_separator(ch) != is_separator {
+                    pos = self.cursor_pos + idx;
+                    break;
+                }
+            }
+        }
+
+        let Some(first_non_ws) = self.text[pos..].find(|c: char| !c.is_whitespace()) else {
+            return self.text.len();
+        };
+        let start = pos + first_non_ws;
+        self.adjust_pos_out_of_elements(start, true)
+    }
+
     pub(crate) fn end_of_next_word(&self) -> usize {
         let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
         else {
@@ -1079,6 +1216,67 @@ impl TextArea {
                 break;
             }
         }
+        self.adjust_pos_out_of_elements(end, false)
+    }
+
+    pub(crate) fn beginning_of_previous_big_word(&self) -> usize {
+        let prefix = &self.text[..self.cursor_pos];
+        let Some((first_non_ws_idx, _)) = prefix
+            .char_indices()
+            .rev()
+            .find(|&(_, ch)| !ch.is_whitespace())
+        else {
+            return 0;
+        };
+
+        let mut start = 0;
+        for (idx, ch) in prefix[..first_non_ws_idx].char_indices().rev() {
+            if ch.is_whitespace() {
+                start = idx + ch.len_utf8();
+                break;
+            }
+        }
+        self.adjust_pos_out_of_elements(start, true)
+    }
+
+    pub(crate) fn beginning_of_next_big_word(&self) -> usize {
+        if self.cursor_pos >= self.text.len() {
+            return self.text.len();
+        }
+
+        let mut pos = self.cursor_pos;
+        let mut iter = self.text[pos..].char_indices();
+        let Some((_, first_ch)) = iter.next() else {
+            return self.text.len();
+        };
+
+        if !first_ch.is_whitespace() {
+            pos = self.text.len();
+            for (idx, ch) in iter {
+                if ch.is_whitespace() {
+                    pos = self.cursor_pos + idx;
+                    break;
+                }
+            }
+        }
+
+        let Some(first_non_ws) = self.text[pos..].find(|c: char| !c.is_whitespace()) else {
+            return self.text.len();
+        };
+        let start = pos + first_non_ws;
+        self.adjust_pos_out_of_elements(start, true)
+    }
+
+    pub(crate) fn end_of_next_big_word(&self) -> usize {
+        let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
+        else {
+            return self.text.len();
+        };
+        let word_start = self.cursor_pos + first_non_ws;
+        let Some(next_ws) = self.text[word_start..].find(|c: char| c.is_whitespace()) else {
+            return self.text.len();
+        };
+        let end = word_start + next_ws;
         self.adjust_pos_out_of_elements(end, false)
     }
 
@@ -1183,6 +1381,7 @@ impl TextArea {
         for (row, idx) in range.enumerate() {
             let r = &lines[idx];
             let y = area.y + row as u16;
+            // `wrap_ranges` includes a trailing sentinel byte (and preserves trailing spaces).
             let line_range = r.start..r.end - 1;
             // Draw base line with default style.
             buf.set_string(area.x, y, &self.text[line_range.clone()], Style::default());
@@ -1714,6 +1913,22 @@ mod tests {
     }
 
     #[test]
+    fn vi_mode_indicator_tracks_insert_and_normal() {
+        let mut t = ta_with("hello");
+        assert_eq!(t.vi_mode_indicator(), None);
+
+        t.set_vi_mode_enabled(true);
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(t.vi_mode_indicator(), Some(ViModeIndicator::Normal));
+
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        assert_eq!(t.vi_mode_indicator(), Some(ViModeIndicator::Insert));
+
+        t.set_vi_mode_enabled(false);
+        assert_eq!(t.vi_mode_indicator(), None);
+    }
+
+    #[test]
     fn cursor_vertical_movement_across_lines_and_bounds() {
         let mut t = ta_with("short\nloooooooooong\nmid");
         // Place cursor on second line, column 5
@@ -1788,21 +2003,46 @@ mod tests {
 
     #[test]
     fn word_navigation_helpers() {
-        let t = ta_with("  alpha  beta   gamma");
-        let mut t = t; // make mutable for set_cursor
-        // Put cursor after "alpha"
-        let after_alpha = t.text().find("alpha").unwrap() + "alpha".len();
-        t.set_cursor(after_alpha);
-        assert_eq!(t.beginning_of_previous_word(), 2); // skip initial spaces
-
-        // Put cursor at start of beta
+        let mut t = ta_with("  alpha  beta   gamma");
+        let alpha_start = t.text().find("alpha").unwrap();
         let beta_start = t.text().find("beta").unwrap();
+        let gamma_start = t.text().find("gamma").unwrap();
+
+        // Put cursor after "alpha"
+        t.set_cursor(alpha_start + "alpha".len());
+        assert_eq!(t.beginning_of_previous_word(), alpha_start);
+
+        // From the middle of "alpha", go to start of "beta"
+        t.set_cursor(alpha_start + 2);
+        assert_eq!(t.beginning_of_next_word(), beta_start);
+        assert_eq!(t.end_of_next_word(), alpha_start + "alpha".len());
+
+        // From start of "beta", go to start of "gamma"
         t.set_cursor(beta_start);
+        assert_eq!(t.beginning_of_next_word(), gamma_start);
         assert_eq!(t.end_of_next_word(), beta_start + "beta".len());
 
-        // If at end, end_of_next_word returns len
+        // If at end, helpers return len
         t.set_cursor(t.text().len());
+        assert_eq!(t.beginning_of_next_word(), t.text().len());
         assert_eq!(t.end_of_next_word(), t.text().len());
+    }
+
+    #[test]
+    fn big_word_navigation_helpers() {
+        let mut t = ta_with("foo-bar baz");
+        let baz_start = t.text().find("baz").unwrap();
+
+        t.set_cursor(0);
+        assert_eq!(t.beginning_of_next_big_word(), baz_start);
+        assert_eq!(t.end_of_next_big_word(), "foo-bar".len());
+
+        t.set_cursor(baz_start);
+        assert_eq!(t.beginning_of_previous_big_word(), 0);
+
+        t.set_cursor(t.text().len());
+        assert_eq!(t.beginning_of_next_big_word(), t.text().len());
+        assert_eq!(t.end_of_next_big_word(), t.text().len());
     }
 
     #[test]

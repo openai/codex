@@ -962,6 +962,9 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::SetComposerText(text) => {
+                self.chat_widget.set_composer_text(text);
+            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);

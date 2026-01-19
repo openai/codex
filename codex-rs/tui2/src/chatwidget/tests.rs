@@ -353,6 +353,322 @@ async fn helpers_are_available_and_do_not_panic() {
     let _ = &mut w;
 }
 
+#[tokio::test]
+async fn ctrl_r_history_search_pastes_most_recent_entry() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    while rx.try_recv().is_ok() {}
+
+    let tmp = tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("history.jsonl"),
+        concat!(
+            r#"{"session_id":"s","ts":1,"text":"first"}"#,
+            "\n",
+            r#"{"session_id":"s","ts":2,"text":"second"}"#,
+            "\n",
+            r#"{"session_id":"s","ts":3,"text":"third"}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+
+    chat.config.codex_home = tmp.path().to_path_buf();
+    chat.config
+        .features
+        .enable(codex_core::features::Feature::TuiCommandHistory);
+
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    assert!(!chat.bottom_pane.no_modal_or_popup_active());
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+
+    let event = rx.try_recv().expect("expected SetComposerText AppEvent");
+    assert_matches!(event, AppEvent::SetComposerText(text) if text == "third");
+}
+
+#[tokio::test]
+async fn ctrl_r_history_search_control_char_fallback_pastes_most_recent_entry() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    while rx.try_recv().is_ok() {}
+
+    let tmp = tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("history.jsonl"),
+        concat!(
+            r#"{"session_id":"s","ts":1,"text":"first"}"#,
+            "\n",
+            r#"{"session_id":"s","ts":2,"text":"second"}"#,
+            "\n",
+            r#"{"session_id":"s","ts":3,"text":"third"}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+
+    chat.config.codex_home = tmp.path().to_path_buf();
+    chat.config.features.enable(Feature::TuiCommandHistory);
+
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('\u{0012}'), KeyModifiers::NONE));
+    assert!(!chat.bottom_pane.no_modal_or_popup_active());
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    assert!(chat.bottom_pane.no_modal_or_popup_active());
+
+    let event = rx.try_recv().expect("expected SetComposerText AppEvent");
+    assert_matches!(event, AppEvent::SetComposerText(text) if text == "third");
+}
+
+#[tokio::test]
+async fn vi_mode_allows_esc_backtrack_only_in_normal_mode() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    assert!(chat.bottom_pane.is_normal_backtrack_mode());
+    chat.set_feature_enabled(codex_core::features::Feature::TuiViMode, true);
+
+    // Normalize initial vi mode: if reedline starts in insert, exit to normal first.
+    if !chat.bottom_pane.codex_esc_behavior_allowed() {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    }
+    assert!(chat.bottom_pane.is_normal_backtrack_mode());
+
+    let width = 80;
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("render vi normal mode");
+    let screen = terminal.backend().vt100().screen().contents();
+    assert!(
+        screen.contains("vi: normal"),
+        "expected vi normal mode indicator in footer"
+    );
+
+    // 'i' switches normal -> insert, disabling Esc-based Codex behavior.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    assert!(!chat.bottom_pane.is_normal_backtrack_mode());
+
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("render vi insert mode");
+    let screen = terminal.backend().vt100().screen().contents();
+    assert!(
+        screen.contains("vi: insert"),
+        "expected vi insert mode indicator in footer"
+    );
+
+    // Esc switches insert -> normal. In normal mode, Codex can safely use Esc-Esc for backtrack.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    assert!(chat.bottom_pane.is_normal_backtrack_mode());
+
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("render vi normal mode again");
+    let screen = terminal.backend().vt100().screen().contents();
+    assert!(
+        screen.contains("vi: normal"),
+        "expected vi normal mode indicator in footer"
+    );
+
+    chat.set_feature_enabled(codex_core::features::Feature::TuiViMode, false);
+    assert!(chat.bottom_pane.is_normal_backtrack_mode());
+
+    let height = chat.desired_height(width);
+    let mut terminal =
+        ratatui::Terminal::new(VT100Backend::new(width, height)).expect("create terminal");
+    terminal.set_viewport_area(Rect::new(0, 0, width, height));
+    terminal
+        .draw(|f| chat.render(f.area(), f.buffer_mut()))
+        .expect("render emacs mode");
+    let screen = terminal.backend().vt100().screen().contents();
+    assert!(
+        !screen.contains("vi:"),
+        "vi mode indicator should be hidden when disabled"
+    );
+}
+
+#[tokio::test]
+async fn vi_mode_esc_interrupt_requires_normal_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    while rx.try_recv().is_ok() {}
+
+    chat.set_feature_enabled(codex_core::features::Feature::TuiViMode, true);
+    chat.bottom_pane.set_task_running(true);
+    assert!(chat.bottom_pane.status_indicator_visible());
+
+    // Ensure we are in insert mode so Esc can be used to exit without being hijacked.
+    if chat.bottom_pane.codex_esc_behavior_allowed() {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+    }
+
+    // First Esc: exit insert mode, do not interrupt.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let mut found_interrupt = false;
+    while let Ok(ev) = rx.try_recv() {
+        if matches!(ev, AppEvent::CodexOp(Op::Interrupt)) {
+            found_interrupt = true;
+        }
+    }
+    assert!(
+        !found_interrupt,
+        "unexpected interrupt while in vi insert mode"
+    );
+
+    // Second Esc: now in vi normal mode, Esc can be used for Codex interrupt.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    let mut found_interrupt = false;
+    while let Ok(ev) = rx.try_recv() {
+        if matches!(ev, AppEvent::CodexOp(Op::Interrupt)) {
+            found_interrupt = true;
+        }
+    }
+    assert!(found_interrupt, "expected interrupt in vi normal mode");
+}
+
+#[tokio::test]
+async fn random_key_sequences_do_not_panic_with_vi_and_history_search() {
+    use rand::Rng as _;
+    use rand::SeedableRng as _;
+
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    while rx.try_recv().is_ok() {}
+    while op_rx.try_recv().is_ok() {}
+
+    let tmp = tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("history.jsonl"),
+        concat!(
+            r#"{"session_id":"s","ts":1,"text":"one"}"#,
+            "\n",
+            r#"{"session_id":"s","ts":2,"text":"two"}"#,
+            "\n",
+            r#"{"session_id":"s","ts":3,"text":"three"}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    chat.config.codex_home = tmp.path().to_path_buf();
+
+    let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+    for step in 0..400usize {
+        if rng.random_ratio(1, 40) {
+            chat.set_feature_enabled(
+                codex_core::features::Feature::TuiViMode,
+                rng.random_bool(0.5),
+            );
+        }
+        if rng.random_ratio(1, 40) {
+            chat.set_feature_enabled(
+                codex_core::features::Feature::TuiCommandHistory,
+                rng.random_bool(0.5),
+            );
+        }
+        if rng.random_ratio(1, 50) {
+            let running = !chat.bottom_pane.is_task_running();
+            chat.bottom_pane.set_task_running(running);
+        }
+
+        let key_event = {
+            let roll: u8 = rng.random_range(0..=100);
+            match roll {
+                0..=49 => {
+                    let chars = [
+                        'a', 'b', 'c', 'd', 'e', '/', '@', '?', ' ', '-', '_', '1', '2', '3',
+                    ];
+                    let ch = chars[rng.random_range(0..chars.len())];
+                    let modifiers = match rng.random_range(0..=20) {
+                        0 => KeyModifiers::ALT,
+                        1 => KeyModifiers::SHIFT,
+                        _ => KeyModifiers::NONE,
+                    };
+                    KeyEvent::new(KeyCode::Char(ch), modifiers)
+                }
+                50..=54 => KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                55..=59 => KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+                60..=64 => KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE),
+                65..=69 => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                70..=74 => KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+                75..=79 => KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+                80..=84 => KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                85..=89 => KeyEvent::new(KeyCode::Left, KeyModifiers::NONE),
+                90..=94 => KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+                95..=96 => KeyEvent::new(KeyCode::Home, KeyModifiers::NONE),
+                97..=98 => KeyEvent::new(KeyCode::End, KeyModifiers::NONE),
+                99 => KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+                100 => KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+                _ => KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            }
+        };
+        chat.handle_key_event(key_event);
+
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::SetComposerText(text) = event {
+                chat.set_composer_text(text);
+            }
+        }
+        while op_rx.try_recv().is_ok() {}
+
+        let vi_enabled = chat.config.features.enabled(Feature::TuiViMode);
+        let allow_esc = chat.bottom_pane.codex_esc_behavior_allowed();
+        if !vi_enabled {
+            assert!(
+                allow_esc,
+                "vi disabled but Codex Esc behavior is not allowed (step {step})"
+            );
+        }
+        if !allow_esc {
+            assert!(
+                vi_enabled,
+                "Codex Esc behavior is disabled but vi is not enabled (step {step})"
+            );
+        }
+
+        let expected_backtrack = allow_esc
+            && !chat.bottom_pane.is_task_running()
+            && chat.bottom_pane.no_modal_or_popup_active();
+        assert_eq!(
+            chat.bottom_pane.is_normal_backtrack_mode(),
+            expected_backtrack,
+            "unexpected backtrack mode state (step {step})"
+        );
+
+        if step % 25 == 0 {
+            let width = 80;
+            let height = chat.desired_height(width).clamp(1, 40);
+            let area = Rect::new(0, 0, width, height);
+            let mut buf = ratatui::buffer::Buffer::empty(area);
+            chat.render(area, &mut buf);
+
+            if let Some((x, y)) = chat.cursor_pos(area) {
+                assert!(
+                    x >= area.x && x < area.x + area.width,
+                    "cursor x out of bounds: {x} width={}",
+                    area.width
+                );
+                assert!(
+                    y >= area.y && y < area.y + area.height,
+                    "cursor y out of bounds: {y} height={}",
+                    area.height
+                );
+            }
+        }
+    }
+}
+
 // --- Helpers for tests that need direct construction and event draining ---
 async fn make_chatwidget_manual(
     model_override: Option<&str>,

@@ -86,6 +86,9 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
+    /// Replace the composer content with `text`.
+    SetComposerText(String),
+
     StartCommitAnimation,
     StopCommitAnimation,
     CommitTick,

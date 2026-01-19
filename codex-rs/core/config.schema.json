@@ -129,6 +129,12 @@
         "tui2": {
           "type": "boolean"
         },
+        "tui_command_history": {
+          "type": "boolean"
+        },
+        "tui_vi_mode": {
+          "type": "boolean"
+        },
         "undo": {
           "type": "boolean"
         },
@@ -359,12 +365,12 @@
     },
     "shell_environment_policy": {
       "default": {
-        "inherit": null,
-        "ignore_default_excludes": null,
         "exclude": null,
-        "set": null,
+        "experimental_use_profile": null,
+        "ignore_default_excludes": null,
         "include_only": null,
-        "experimental_use_profile": null
+        "inherit": null,
+        "set": null
       },
       "allOf": [
         {
@@ -606,6 +612,12 @@
               "type": "boolean"
             },
             "tui2": {
+              "type": "boolean"
+            },
+            "tui_command_history": {
+              "type": "boolean"
+            },
+            "tui_vi_mode": {
               "type": "boolean"
             },
             "undo": {

@@ -114,6 +114,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
+use crate::bottom_pane::textarea::ViModeIndicator;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
@@ -203,6 +204,8 @@ pub(crate) struct ChatComposer {
     dismissed_skill_popup_token: Option<String>,
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
+    /// When enabled, the textarea uses Vi keybindings and the UI must not hijack `Esc`.
+    vi_mode_enabled: bool,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -260,10 +263,27 @@ impl ChatComposer {
             skills: None,
             dismissed_skill_popup_token: None,
             steer_enabled: false,
+            vi_mode_enabled: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
         this
+    }
+
+    pub(crate) fn set_vi_mode_enabled(&mut self, enabled: bool) {
+        self.vi_mode_enabled = enabled;
+        self.textarea.set_vi_mode_enabled(enabled);
+    }
+
+    pub(super) fn allow_codex_esc_behavior(&self) -> bool {
+        if !self.vi_mode_enabled {
+            return true;
+        }
+
+        matches!(
+            self.textarea.vi_mode_indicator(),
+            Some(ViModeIndicator::Normal)
+        )
     }
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
@@ -1445,7 +1465,7 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
         if key_event.code == KeyCode::Esc {
-            if self.is_empty() {
+            if self.is_empty() && self.allow_codex_esc_behavior() {
                 let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
                 if next_mode != self.footer_mode {
                     self.footer_mode = next_mode;
@@ -1567,6 +1587,31 @@ impl ChatComposer {
             && self.paste_burst.is_active()
             && self.paste_burst.append_newline_if_active(now)
         {
+            return (InputResult::None, true);
+        }
+
+        // In vi normal mode, plain key presses are commands rather than text input. Do not apply
+        // paste-burst buffering/holding, since it would delay or drop vi commands like `i`, `h`,
+        // `w`, etc.
+        if self.vi_mode_enabled
+            && matches!(
+                self.textarea.vi_mode_indicator(),
+                Some(ViModeIndicator::Normal)
+            )
+        {
+            if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+                self.handle_paste(pasted);
+            }
+            let elements_before =
+                if self.pending_pastes.is_empty() && self.attached_images.is_empty() {
+                    None
+                } else {
+                    Some(self.textarea.element_payloads())
+                };
+            self.textarea.input(input);
+            if let Some(elements_before) = elements_before {
+                self.reconcile_deleted_elements(elements_before);
+            }
             return (InputResult::None, true);
         }
 
@@ -1776,6 +1821,7 @@ impl ChatComposer {
             is_task_running: self.is_task_running,
             quit_shortcut_key: self.quit_shortcut_key,
             steer_enabled: self.steer_enabled,
+            vi_mode_indicator: self.textarea.vi_mode_indicator(),
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
             transcript_scrolled: self.transcript_scrolled,
@@ -3947,6 +3993,33 @@ mod tests {
         } else {
             panic!("Placeholder not found in textarea");
         }
+    }
+
+    #[test]
+    fn vi_normal_delete_image_placeholder_removes_attached_image() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let path = PathBuf::from("/tmp/image_vi.png");
+        composer.attach_image(path);
+        let placeholder = composer.attached_images[0].placeholder.clone();
+
+        composer.set_vi_mode_enabled(true);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        composer
+            .textarea
+            .set_cursor(composer.textarea.text().find(&placeholder).unwrap());
+
+        composer.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert!(!composer.textarea.text().contains(&placeholder));
+        assert!(composer.attached_images.is_empty());
     }
 
     #[test]
