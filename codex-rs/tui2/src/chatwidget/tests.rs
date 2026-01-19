@@ -1689,7 +1689,8 @@ async fn collab_slash_command_sets_mode_and_next_submit_sends_user_turn() {
     chat.dispatch_command_with_args(SlashCommand::Collab, "plan".to_string());
     assert_eq!(chat.collaboration_mode, CollaborationModeSelection::Plan);
 
-    chat.bottom_pane.set_composer_text("hello".to_string());
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
@@ -1699,7 +1700,8 @@ async fn collab_slash_command_sets_mode_and_next_submit_sends_user_turn() {
         other => panic!("expected Op::UserTurn with plan collab mode, got {other:?}"),
     }
 
-    chat.bottom_pane.set_composer_text("follow up".to_string());
+    chat.bottom_pane
+        .set_composer_text("follow up".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
@@ -1716,7 +1718,8 @@ async fn collab_mode_defaults_to_pair_programming_when_enabled() {
     chat.conversation_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
-    chat.bottom_pane.set_composer_text("hello".to_string());
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
