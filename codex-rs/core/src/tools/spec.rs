@@ -27,6 +27,7 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
     pub collab_tools: bool,
+    pub collaboration_modes_tools: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -45,6 +46,7 @@ impl ToolsConfig {
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_collab_tools = features.enabled(Feature::Collab);
+        let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -76,6 +78,7 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
             collab_tools: include_collab_tools,
+            collaboration_modes_tools: include_collaboration_modes_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
     }
@@ -1294,8 +1297,10 @@ pub(crate) fn build_specs(
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
 
-    builder.push_spec(create_request_user_input_tool());
-    builder.register_handler("request_user_input", request_user_input_handler);
+    if config.collaboration_modes_tools {
+        builder.push_spec(create_request_user_input_tool());
+        builder.register_handler("request_user_input", request_user_input_handler);
+    }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
@@ -1498,6 +1503,7 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        features.enable(Feature::CollaborationModes);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -1561,6 +1567,7 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Collab);
+        features.enable(Feature::CollaborationModes);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -1571,6 +1578,33 @@ mod tests {
             &tools,
             &["spawn_agent", "send_input", "wait", "close_agent"],
         );
+    }
+
+    #[test]
+    fn request_user_input_requires_collaboration_modes_feature() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.disable(Feature::CollaborationModes);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, None).build();
+        assert!(
+            !tools.iter().any(|t| t.spec.name() == "request_user_input"),
+            "request_user_input should be disabled when collaboration_modes feature is off"
+        );
+
+        features.enable(Feature::CollaborationModes);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, None).build();
+        assert_contains_tool_names(&tools, &["request_user_input"]);
     }
 
     fn assert_model_tools(
@@ -1637,9 +1671,11 @@ mod tests {
 
     #[test]
     fn test_build_specs_gpt5_codex_default() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5-codex",
-            &Features::with_defaults(),
+            &features,
             Some(WebSearchMode::Cached),
             &[
                 "shell_command",
@@ -1657,9 +1693,11 @@ mod tests {
 
     #[test]
     fn test_build_specs_gpt51_codex_default() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5.1-codex",
-            &Features::with_defaults(),
+            &features,
             Some(WebSearchMode::Cached),
             &[
                 "shell_command",
@@ -1677,9 +1715,12 @@ mod tests {
 
     #[test]
     fn test_build_specs_gpt5_codex_unified_exec_web_search() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5-codex",
-            Features::with_defaults().enable(Feature::UnifiedExec),
+            &features,
             Some(WebSearchMode::Live),
             &[
                 "exec_command",
@@ -1698,9 +1739,12 @@ mod tests {
 
     #[test]
     fn test_build_specs_gpt51_codex_unified_exec_web_search() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5.1-codex",
-            Features::with_defaults().enable(Feature::UnifiedExec),
+            &features,
             Some(WebSearchMode::Live),
             &[
                 "exec_command",
@@ -1719,9 +1763,11 @@ mod tests {
 
     #[test]
     fn test_codex_mini_defaults() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "codex-mini-latest",
-            &Features::with_defaults(),
+            &features,
             Some(WebSearchMode::Cached),
             &[
                 "local_shell",
@@ -1738,9 +1784,11 @@ mod tests {
 
     #[test]
     fn test_codex_5_1_mini_defaults() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5.1-codex-mini",
-            &Features::with_defaults(),
+            &features,
             Some(WebSearchMode::Cached),
             &[
                 "shell_command",
@@ -1758,9 +1806,11 @@ mod tests {
 
     #[test]
     fn test_gpt_5_defaults() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5",
-            &Features::with_defaults(),
+            &features,
             Some(WebSearchMode::Cached),
             &[
                 "shell",
@@ -1777,9 +1827,11 @@ mod tests {
 
     #[test]
     fn test_gpt_5_1_defaults() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5.1",
-            &Features::with_defaults(),
+            &features,
             Some(WebSearchMode::Cached),
             &[
                 "shell_command",
@@ -1797,9 +1849,11 @@ mod tests {
 
     #[test]
     fn test_exp_5_1_defaults() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "exp-5.1",
-            &Features::with_defaults(),
+            &features,
             Some(WebSearchMode::Cached),
             &[
                 "exec_command",
@@ -1818,9 +1872,12 @@ mod tests {
 
     #[test]
     fn test_codex_mini_unified_exec_web_search() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "codex-mini-latest",
-            Features::with_defaults().enable(Feature::UnifiedExec),
+            &features,
             Some(WebSearchMode::Live),
             &[
                 "exec_command",

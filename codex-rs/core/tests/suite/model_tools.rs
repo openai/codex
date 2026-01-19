@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_core::features::Feature;
 use codex_protocol::config_types::WebSearchMode;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
@@ -36,7 +37,10 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     let mut builder = test_codex()
         .with_model(model)
         // Keep tool expectations stable when the default web_search mode changes.
-        .with_config(|config| config.web_search_mode = Some(WebSearchMode::Cached));
+        .with_config(|config| {
+            config.web_search_mode = Some(WebSearchMode::Cached);
+            config.features.enable(Feature::CollaborationModes);
+        });
     let test = builder
         .build(&server)
         .await
