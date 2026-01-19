@@ -13225,8 +13225,7 @@ async fn analyze_single_file(
         let warn = format!(
             "Bug agent returned an empty response for {path_display}; treating as no findings."
         );
-        push_progress_log(&progress_sender, &log_sink, &mut logs, warn.clone());
-        logs.push(warn);
+        push_progress_log(&progress_sender, &log_sink, &mut logs, warn);
         return FileBugResult {
             index,
             path_display,
@@ -13240,8 +13239,7 @@ async fn analyze_single_file(
     }
     if trimmed.eq_ignore_ascii_case("no bugs found") {
         let message = format!("No bugs found in {path_display}.");
-        push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
-        logs.push(message);
+        push_progress_log(&progress_sender, &log_sink, &mut logs, message);
         return FileBugResult {
             index,
             path_display,
@@ -13264,8 +13262,7 @@ async fn analyze_single_file(
         let plural = if file_findings == 1 { "" } else { "s" };
         format!("Recorded {file_findings} finding{plural} for {path_display}.")
     };
-    push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
-    logs.push(message);
+    push_progress_log(&progress_sender, &log_sink, &mut logs, message);
     FileBugResult {
         index,
         path_display,
