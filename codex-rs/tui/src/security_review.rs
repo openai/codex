@@ -396,7 +396,35 @@ fn write_checkpoint(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let bytes = serde_json::to_vec_pretty(checkpoint)?;
+    let mut value = serde_json::to_value(checkpoint).map_err(std::io::Error::other)?;
+    if let Value::Object(map) = &mut value
+        && let Some(plan_statuses) = map.get_mut("plan_statuses")
+        && let Value::Object(plan_map) = plan_statuses
+    {
+        let mut ordered: Map<String, Value> = Map::new();
+        let mut known: HashSet<String> = HashSet::new();
+
+        for step in plan_steps_for_mode(checkpoint.mode) {
+            let slug = plan_step_slug(step.kind).to_string();
+            known.insert(slug.clone());
+            if let Some(value) = plan_map.get(&slug) {
+                ordered.insert(slug, value.clone());
+            }
+        }
+
+        let mut extras: Vec<(String, Value)> = plan_map
+            .iter()
+            .filter(|(key, _)| !known.contains(key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        extras.sort_by(|a, b| a.0.cmp(&b.0));
+        for (key, value) in extras {
+            ordered.insert(key, value);
+        }
+
+        *plan_map = ordered;
+    }
+    let bytes = serde_json::to_vec_pretty(&value).map_err(std::io::Error::other)?;
     fs::write(path, bytes)
 }
 
