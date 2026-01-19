@@ -1,4 +1,6 @@
 use crate::auth::AuthCredentialsStoreMode;
+use crate::config::edit::ConfigEdit;
+use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -751,30 +753,17 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
             ));
         }
     }
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
-
-    // Read existing config or create empty string if file doesn't exist
-    let content = match std::fs::read_to_string(&config_path) {
-        Ok(content) => content,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e),
-    };
-
-    // Parse as DocumentMut for editing while preserving structure
-    let mut doc = content.parse::<DocumentMut>().map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("failed to parse config.toml: {e}"),
-        )
-    })?;
-
-    // Set the default_oss_provider at root level
     use toml_edit::value;
-    doc["oss_provider"] = value(provider);
 
-    // Write the modified document back
-    std::fs::write(&config_path, doc.to_string())?;
-    Ok(())
+    let edits = [ConfigEdit::SetPath {
+        segments: vec!["oss_provider".to_string()],
+        value: value(provider),
+    }];
+
+    ConfigEditsBuilder::new(codex_home)
+        .with_edits(edits)
+        .apply_blocking()
+        .map_err(|err| std::io::Error::other(format!("failed to persist config.toml: {err}")))
 }
 
 /// Base config deserialized from ~/.codex/config.toml.

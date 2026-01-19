@@ -149,6 +149,12 @@ impl Session {
             })
         };
 
+        let timer = turn_context
+            .client
+            .get_otel_manager()
+            .start_timer("codex.turn.e2e_duration_ms", &[])
+            .ok();
+
         let running_task = RunningTask {
             done,
             handle: Arc::new(AbortOnDropHandle::new(handle)),
@@ -156,6 +162,7 @@ impl Session {
             task,
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
+            _timer: timer,
         };
         self.register_new_active_task(running_task).await;
     }

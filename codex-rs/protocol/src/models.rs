@@ -237,7 +237,7 @@ impl DeveloperInstructions {
     pub fn from_collaboration_mode(collaboration_mode: &CollaborationMode) -> Option<Self> {
         let settings = match collaboration_mode {
             CollaborationMode::Plan(settings)
-            | CollaborationMode::Collaborate(settings)
+            | CollaborationMode::PairProgramming(settings)
             | CollaborationMode::Execute(settings)
             | CollaborationMode::Custom(settings) => settings,
         };

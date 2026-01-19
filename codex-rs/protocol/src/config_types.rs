@@ -135,7 +135,7 @@ pub enum AltScreenMode {
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum CollaborationMode {
     Plan(Settings),
-    Collaborate(Settings),
+    PairProgramming(Settings),
     Execute(Settings),
     Custom(Settings),
 }
@@ -145,7 +145,7 @@ impl CollaborationMode {
     fn settings(&self) -> &Settings {
         match self {
             CollaborationMode::Plan(settings)
-            | CollaborationMode::Collaborate(settings)
+            | CollaborationMode::PairProgramming(settings)
             | CollaborationMode::Execute(settings)
             | CollaborationMode::Custom(settings) => settings,
         }
@@ -182,7 +182,9 @@ impl CollaborationMode {
 
         match self {
             CollaborationMode::Plan(_) => CollaborationMode::Plan(updated_settings),
-            CollaborationMode::Collaborate(_) => CollaborationMode::Collaborate(updated_settings),
+            CollaborationMode::PairProgramming(_) => {
+                CollaborationMode::PairProgramming(updated_settings)
+            }
             CollaborationMode::Execute(_) => CollaborationMode::Execute(updated_settings),
             CollaborationMode::Custom(_) => CollaborationMode::Custom(updated_settings),
         }

@@ -525,7 +525,6 @@ impl Session {
             session_configuration.collaboration_mode.model(),
             model_info.slug.as_str(),
         );
-
         let per_turn_config = Arc::new(per_turn_config);
         let client = ModelClient::new(
             per_turn_config.clone(),
