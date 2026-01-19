@@ -560,7 +560,7 @@ fn create_request_user_input_tool() -> ToolSpec {
 
     let options_schema = JsonSchema::Array {
         description: Some(
-            "Optional 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Do not include an \"Other\" option."
+            "Optional 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Only include \"Other\" option if we want to include a free form option. If the question is free form in nature, please do not have any option."
                 .to_string(),
         ),
         items: Box::new(JsonSchema::Object {
@@ -598,10 +598,7 @@ fn create_request_user_input_tool() -> ToolSpec {
     question_props.insert("options".to_string(), options_schema);
 
     let questions_schema = JsonSchema::Array {
-        description: Some(
-            "Questions to show the user (1-3). Prefer 1 unless multiple independent decisions block progress."
-                .to_string(),
-        ),
+        description: Some("Questions to show the user. Prefer 1 and do not exceed 3".to_string()),
         items: Box::new(JsonSchema::Object {
             properties: question_props,
             required: Some(vec![
