@@ -2375,11 +2375,6 @@ impl ChatWidget {
             }
         };
 
-        if !self.agent_turn_running {
-            self.agent_turn_running = true;
-            self.update_task_running_state();
-        }
-
         self.codex_op_tx.send(op).unwrap_or_else(|e| {
             tracing::error!("failed to send message: {e}");
         });
