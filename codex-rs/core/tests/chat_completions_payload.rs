@@ -83,6 +83,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         None,
         Some("test@test.com".to_string()),
         Some(AuthMode::ApiKey),
+        "test_originator".to_string(),
         false,
         "test".to_string(),
         SessionSource::Exec,

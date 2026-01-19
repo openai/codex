@@ -1240,6 +1240,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         None,
         Some("test@test.com".to_string()),
         auth_manager.get_auth_mode(),
+        "test_originator".to_string(),
         false,
         "test".to_string(),
         SessionSource::Exec,

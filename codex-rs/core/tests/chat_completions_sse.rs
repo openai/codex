@@ -84,6 +84,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         None,
         Some("test@test.com".to_string()),
         auth_mode,
+        "test_originator".to_string(),
         false,
         "test".to_string(),
         SessionSource::Exec,

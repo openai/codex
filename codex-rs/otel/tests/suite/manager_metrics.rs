@@ -23,6 +23,7 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
         Some("account-id".to_string()),
         None,
         Some(AuthMode::ApiKey),
+        "originator_123".to_string(),
         true,
         "tty".to_string(),
         SessionSource::Cli,
@@ -54,6 +55,7 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
         ),
         ("auth_mode".to_string(), AuthMode::ApiKey.to_string()),
         ("model".to_string(), "gpt-5.1".to_string()),
+        ("originator".to_string(), "originator_123".to_string()),
         ("service".to_string(), "codex-cli".to_string()),
         ("source".to_string(), "tui".to_string()),
     ]);
@@ -73,6 +75,7 @@ fn manager_allows_disabling_metadata_tags() -> Result<()> {
         Some("account-id".to_string()),
         None,
         Some(AuthMode::ApiKey),
+        "codex_cli_rs".to_string(),
         true,
         "tty".to_string(),
         SessionSource::Cli,

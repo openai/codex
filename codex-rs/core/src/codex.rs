@@ -17,6 +17,7 @@ use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
+use crate::default_client::originator;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
 use crate::features::Features;
@@ -657,6 +658,7 @@ impl Session {
             auth.and_then(CodexAuth::get_account_id),
             auth.and_then(CodexAuth::get_account_email),
             auth.map(|a| a.mode),
+            originator().value,
             config.otel.log_user_prompt,
             terminal::user_agent(),
             session_configuration.session_source.clone(),
@@ -3816,6 +3818,7 @@ mod tests {
             None,
             Some("test@test.com".to_string()),
             Some(AuthMode::ChatGPT),
+            originator().value,
             false,
             "test".to_string(),
             session_source,
