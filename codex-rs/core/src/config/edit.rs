@@ -1,13 +1,14 @@
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
+use crate::path_utils::resolve_symlink_write_paths;
+use crate::path_utils::write_atomically;
 use anyhow::Context;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
-use tempfile::NamedTempFile;
 use tokio::task;
 use toml_edit::ArrayOfTables;
 use toml_edit::DocumentMut;
@@ -625,10 +626,14 @@ pub fn apply_blocking(
     }
 
     let config_path = codex_home.join(CONFIG_TOML_FILE);
-    let serialized = match std::fs::read_to_string(&config_path) {
-        Ok(contents) => contents,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(err) => return Err(err.into()),
+    let write_paths = resolve_symlink_write_paths(&config_path)?;
+    let serialized = match write_paths.read_path {
+        Some(path) => match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(err) => return Err(err.into()),
+        },
+        None => String::new(),
     };
 
     let doc = if serialized.is_empty() {
@@ -654,21 +659,12 @@ pub fn apply_blocking(
         return Ok(());
     }
 
-    std::fs::create_dir_all(codex_home).with_context(|| {
+    write_atomically(&write_paths.write_path, &document.doc.to_string()).with_context(|| {
         format!(
-            "failed to create Codex home directory at {}",
-            codex_home.display()
+            "failed to persist config.toml at {}",
+            write_paths.write_path.display()
         )
     })?;
-
-    let tmp = NamedTempFile::new_in(codex_home)?;
-    std::fs::write(tmp.path(), document.doc.to_string()).with_context(|| {
-        format!(
-            "failed to write temporary config file at {}",
-            tmp.path().display()
-        )
-    })?;
-    tmp.persist(config_path)?;
 
     Ok(())
 }
@@ -813,6 +809,8 @@ mod tests {
     use crate::config::types::McpServerTransportConfig;
     use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use tempfile::tempdir;
     use toml::Value as TomlValue;
 
@@ -950,6 +948,71 @@ profiles = { fast = { model = "gpt-4o", sandbox_mode = "strict" } }
             fast_tbl.get("model").and_then(|v| v.as_str()),
             Some("o4-mini")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn blocking_set_model_writes_through_symlink_chain() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        let target_dir = tempdir().expect("target dir");
+        let target_path = target_dir.path().join(CONFIG_TOML_FILE);
+        let link_path = codex_home.join("config-link.toml");
+        let config_path = codex_home.join(CONFIG_TOML_FILE);
+
+        symlink(&target_path, &link_path).expect("symlink link");
+        symlink("config-link.toml", &config_path).expect("symlink config");
+
+        apply_blocking(
+            codex_home,
+            None,
+            &[ConfigEdit::SetModel {
+                model: Some("gpt-5.1-codex".to_string()),
+                effort: Some(ReasoningEffort::High),
+            }],
+        )
+        .expect("persist");
+
+        let meta = std::fs::symlink_metadata(&config_path).expect("config metadata");
+        assert!(meta.file_type().is_symlink());
+
+        let contents = std::fs::read_to_string(&target_path).expect("read target");
+        let expected = r#"model = "gpt-5.1-codex"
+model_reasoning_effort = "high"
+"#;
+        assert_eq!(contents, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn blocking_set_model_replaces_symlink_on_cycle() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        let link_a = codex_home.join("a.toml");
+        let link_b = codex_home.join("b.toml");
+        let config_path = codex_home.join(CONFIG_TOML_FILE);
+
+        symlink("b.toml", &link_a).expect("symlink a");
+        symlink("a.toml", &link_b).expect("symlink b");
+        symlink("a.toml", &config_path).expect("symlink config");
+
+        apply_blocking(
+            codex_home,
+            None,
+            &[ConfigEdit::SetModel {
+                model: Some("gpt-5.1-codex".to_string()),
+                effort: None,
+            }],
+        )
+        .expect("persist");
+
+        let meta = std::fs::symlink_metadata(&config_path).expect("config metadata");
+        assert!(!meta.file_type().is_symlink());
+
+        let contents = std::fs::read_to_string(&config_path).expect("read config");
+        let expected = r#"model = "gpt-5.1-codex"
+"#;
+        assert_eq!(contents, expected);
     }
 
     #[test]

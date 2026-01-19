@@ -1617,6 +1617,8 @@ impl App {
                 self.transcript_cells.push(cell.clone());
                 if self.overlay.is_some() {
                     self.deferred_history_cells.push(cell);
+                } else {
+                    tui.frame_requester().schedule_frame();
                 }
             }
             AppEvent::StartCommitAnimation => {
