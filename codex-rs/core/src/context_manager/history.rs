@@ -314,13 +314,16 @@ impl ContextManager {
             return item.clone();
         };
 
-        let remaining = context_window.saturating_sub(self.get_total_token_usage());
+        let mut remaining = context_window.saturating_sub(self.get_total_token_usage());
         let offloader = ContextOffloader::new(&self.codex_home);
         let mut new_content = Vec::with_capacity(content.len().saturating_add(1));
         for item in content {
             match item {
                 ContentItem::InputText { text } if item.is_user_message_text() => {
-                    new_content.extend(process_user_text_item(text, remaining, policy, &offloader));
+                    let (items, used_tokens) =
+                        process_user_text_item(text, remaining, policy, &offloader);
+                    new_content.extend(items);
+                    remaining = remaining.saturating_sub(used_tokens);
                 }
                 ContentItem::InputText { .. }
                 | ContentItem::OutputText { .. }
@@ -343,28 +346,32 @@ fn process_user_text_item(
     remaining: i64,
     policy: TruncationPolicy,
     offloader: &ContextOffloader,
-) -> Vec<ContentItem> {
+) -> (Vec<ContentItem>, i64) {
     if text.is_empty() {
-        return Vec::new();
+        return (Vec::new(), 0);
     }
 
     let text_tokens = i64::try_from(approx_token_count(text)).unwrap_or(i64::MAX);
     if text_tokens <= remaining {
-        return vec![ContentItem::InputText {
-            text: text.to_string(),
-        }];
+        return (
+            vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            text_tokens,
+        );
     }
 
     if let Some(offloaded) = offloader.write_user_message(text) {
-        vec![ContentItem::InputText {
-            text: format!(
-                "User input was too large for the remaining context window and was saved to {}. Use read_file to load it.",
-                offloaded.display()
-            ),
-        }]
+        let notice = format!(
+            "User input was too large for the remaining context window and was saved to {}. Use read_file to load it.",
+            offloaded.display()
+        );
+        let notice_tokens = i64::try_from(approx_token_count(&notice)).unwrap_or(i64::MAX);
+        (vec![ContentItem::InputText { text: notice }], notice_tokens)
     } else {
         let truncated = truncate_text(text, policy);
-        build_truncated_text_item(truncated)
+        let used_tokens = i64::try_from(approx_token_count(&truncated)).unwrap_or(i64::MAX);
+        (build_truncated_text_item(truncated), used_tokens)
     }
 }
 

@@ -219,6 +219,78 @@ fn offloads_each_user_input_item_independently() {
 }
 
 #[test]
+fn decrements_remaining_for_multiple_user_text_items() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let codex_home = temp_dir.path().to_path_buf();
+    let mut history = ContextManager::new(&codex_home);
+    history.set_token_info(Some(TokenUsageInfo {
+        total_token_usage: TokenUsage::default(),
+        last_token_usage: TokenUsage::default(),
+        model_context_window: Some(10),
+    }));
+
+    let first = "a".repeat(36);
+    let second = "b".repeat(36);
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: first.clone(),
+            },
+            ContentItem::InputText {
+                text: second.clone(),
+            },
+        ],
+    };
+    history.record_items([&item], TruncationPolicy::Tokens(10_000));
+
+    let [ResponseItem::Message { content, .. }] = history.raw_items() else {
+        panic!("expected single message item");
+    };
+
+    assert!(
+        content.iter().any(|item| matches!(
+            item,
+            ContentItem::InputText { text } if text == &first
+        )),
+        "expected first user input to remain in message content"
+    );
+
+    assert!(
+        !content.iter().any(|item| matches!(
+            item,
+            ContentItem::InputText { text } if text == &second
+        )),
+        "expected second user input to be removed from message content"
+    );
+
+    let placeholder = content
+        .iter()
+        .find_map(|item| match item {
+            ContentItem::InputText { text }
+                if text.contains("User input was too large for the remaining context window") =>
+            {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected placeholder text, got {content:?}"));
+
+    let path = placeholder
+        .split("saved to ")
+        .nth(1)
+        .and_then(|tail| tail.split(". Use").next())
+        .expect("capture temp path");
+    let path = PathBuf::from(path);
+
+    let file_contents = fs::read_to_string(&path).expect("read temp file");
+    assert_eq!(file_contents, second);
+
+    fs::remove_file(path).expect("cleanup temp file");
+}
+
+#[test]
 fn filters_non_api_messages() {
     let mut h = ContextManager::default();
     let policy = TruncationPolicy::Tokens(10_000);
