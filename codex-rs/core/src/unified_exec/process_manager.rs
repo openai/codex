@@ -128,6 +128,8 @@ impl UnifiedExecProcessManager {
                 cwd.clone(),
                 request.sandbox_permissions,
                 request.justification,
+                request.request_approval.clone(),
+                request.rule_prefix.clone(),
                 request.tty,
                 context,
             )
@@ -490,6 +492,8 @@ impl UnifiedExecProcessManager {
         cwd: PathBuf,
         sandbox_permissions: SandboxPermissions,
         justification: Option<String>,
+        request_approval: Option<String>,
+        rule_prefix: Option<Vec<String>>,
         tty: bool,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
@@ -507,6 +511,8 @@ impl UnifiedExecProcessManager {
                 context.turn.approval_policy,
                 &context.turn.sandbox_policy,
                 sandbox_permissions,
+                request_approval,
+                rule_prefix,
             )
             .await;
         let req = UnifiedExecToolRequest::new(

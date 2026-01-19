@@ -9,6 +9,7 @@ use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
+use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -29,9 +30,9 @@ pub struct ShellHandler;
 pub struct ShellCommandHandler;
 
 impl ShellHandler {
-    fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
+    fn to_exec_params(params: &ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
         ExecParams {
-            command: params.command,
+            command: params.command.clone(),
             cwd: turn_context.resolve_path(params.workdir.clone()),
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy),
@@ -50,7 +51,7 @@ impl ShellCommandHandler {
     }
 
     fn to_exec_params(
-        params: ShellCommandToolCallParams,
+        params: &ShellCommandToolCallParams,
         session: &crate::codex::Session,
         turn_context: &TurnContext,
     ) -> ExecParams {
@@ -108,10 +109,14 @@ impl ToolHandler for ShellHandler {
         match payload {
             ToolPayload::Function { arguments } => {
                 let params: ShellToolCallParams = parse_arguments(&arguments)?;
-                let exec_params = Self::to_exec_params(params, turn.as_ref());
+                let request_approval = params.request_approval.clone();
+                let rule_prefix = params.rule_prefix.clone();
+                let exec_params = Self::to_exec_params(&params, turn.as_ref());
                 Self::run_exec_like(
                     tool_name.as_str(),
                     exec_params,
+                    request_approval,
+                    rule_prefix,
                     session,
                     turn,
                     tracker,
@@ -121,10 +126,12 @@ impl ToolHandler for ShellHandler {
                 .await
             }
             ToolPayload::LocalShell { params } => {
-                let exec_params = Self::to_exec_params(params, turn.as_ref());
+                let exec_params = Self::to_exec_params(&params, turn.as_ref());
                 Self::run_exec_like(
                     tool_name.as_str(),
                     exec_params,
+                    None,
+                    None,
                     session,
                     turn,
                     tracker,
@@ -181,10 +188,14 @@ impl ToolHandler for ShellCommandHandler {
         };
 
         let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
-        let exec_params = Self::to_exec_params(params, session.as_ref(), turn.as_ref());
+        let request_approval = params.request_approval.clone();
+        let rule_prefix = params.rule_prefix.clone();
+        let exec_params = Self::to_exec_params(&params, session.as_ref(), turn.as_ref());
         ShellHandler::run_exec_like(
             tool_name.as_str(),
             exec_params,
+            request_approval,
+            rule_prefix,
             session,
             turn,
             tracker,
@@ -199,12 +210,29 @@ impl ShellHandler {
     async fn run_exec_like(
         tool_name: &str,
         exec_params: ExecParams,
+        request_approval: Option<String>,
+        rule_prefix: Option<Vec<String>>,
         session: Arc<crate::codex::Session>,
         turn: Arc<TurnContext>,
         tracker: crate::tools::context::SharedTurnDiffTracker,
         call_id: String,
         freeform: bool,
     ) -> Result<ToolOutput, FunctionCallError> {
+        let mut exec_params = exec_params;
+
+        if request_approval.is_some() {
+            if !matches!(
+                turn.approval_policy,
+                codex_protocol::protocol::AskForApproval::OnRequestRule
+            ) {
+                let approval_policy = turn.approval_policy;
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "approval policy is {approval_policy:?}; reject command — you should not request approval if the approval policy is {approval_policy:?}"
+                )));
+            }
+            exec_params.sandbox_permissions = SandboxPermissions::RequireEscalated;
+        }
+
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params
             .sandbox_permissions
@@ -212,11 +240,12 @@ impl ShellHandler {
             && !matches!(
                 turn.approval_policy,
                 codex_protocol::protocol::AskForApproval::OnRequest
+                    | codex_protocol::protocol::AskForApproval::OnRequestRule
             )
         {
+            let approval_policy = turn.approval_policy;
             return Err(FunctionCallError::RespondToModel(format!(
-                "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
-                policy = turn.approval_policy
+                "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
             )));
         }
 
@@ -256,6 +285,8 @@ impl ShellHandler {
                 turn.approval_policy,
                 &turn.sandbox_policy,
                 exec_params.sandbox_permissions,
+                request_approval,
+                rule_prefix,
             )
             .await;
 
@@ -377,10 +408,12 @@ mod tests {
             login,
             timeout_ms,
             sandbox_permissions: Some(sandbox_permissions),
+            request_approval: None,
+            rule_prefix: None,
             justification: justification.clone(),
         };
 
-        let exec_params = ShellCommandHandler::to_exec_params(params, &session, &turn_context);
+        let exec_params = ShellCommandHandler::to_exec_params(&params, &session, &turn_context);
 
         // ExecParams cannot derive Eq due to the CancellationToken field, so we manually compare the fields.
         assert_eq!(exec_params.command, expected_command);

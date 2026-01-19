@@ -117,7 +117,12 @@ impl ExecPolicyManager {
         approval_policy: AskForApproval,
         sandbox_policy: &SandboxPolicy,
         sandbox_permissions: SandboxPermissions,
+        request_approval: Option<String>,
+        rule_prefix: Option<Vec<String>>,
     ) -> ExecApprovalRequirement {
+        let request_approval = normalize_request_approval(request_approval);
+        let rule_prefix = normalize_rule_prefix(rule_prefix);
+        let rule_prefix = request_approval.as_ref().and(rule_prefix.as_ref());
         let exec_policy = self.current();
         let commands =
             parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
@@ -130,6 +135,17 @@ impl ExecPolicyManager {
             )
         };
         let evaluation = exec_policy.check_multiple(commands.iter(), &exec_policy_fallback);
+        let approval_requested =
+            matches!(approval_policy, AskForApproval::OnRequestRule) && request_approval.is_some();
+        let requested_amendment = derive_requested_execpolicy_amendment(
+            features,
+            &request_approval,
+            rule_prefix,
+            &evaluation.matched_rules,
+        );
+        let has_policy_allow = evaluation.matched_rules.iter().any(|rule_match| {
+            is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
+        });
 
         match evaluation.decision {
             Decision::Forbidden => ExecApprovalRequirement::Forbidden {
@@ -139,6 +155,23 @@ impl ExecPolicyManager {
                 if matches!(approval_policy, AskForApproval::Never) {
                     ExecApprovalRequirement::Forbidden {
                         reason: PROMPT_CONFLICT_REASON.to_string(),
+                    }
+                } else if matches!(approval_policy, AskForApproval::OnRequestRule) {
+                    ExecApprovalRequirement::NeedsApproval {
+                        reason: request_approval
+                            .clone()
+                            .or_else(|| derive_prompt_reason(command, &evaluation)),
+                        proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
+                            if approval_requested {
+                                requested_amendment
+                            } else {
+                                try_derive_execpolicy_amendment_for_prompt_rules(
+                                    &evaluation.matched_rules,
+                                )
+                            }
+                        } else {
+                            None
+                        },
                     }
                 } else {
                     ExecApprovalRequirement::NeedsApproval {
@@ -153,17 +186,30 @@ impl ExecPolicyManager {
                     }
                 }
             }
-            Decision::Allow => ExecApprovalRequirement::Skip {
-                // Bypass sandbox if execpolicy allows the command
-                bypass_sandbox: evaluation.matched_rules.iter().any(|rule_match| {
-                    is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
-                }),
-                proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
-                    try_derive_execpolicy_amendment_for_allow_rules(&evaluation.matched_rules)
+            Decision::Allow => {
+                if approval_requested && !has_policy_allow {
+                    ExecApprovalRequirement::NeedsApproval {
+                        reason: request_approval.clone(),
+                        proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
+                            requested_amendment
+                        } else {
+                            None
+                        },
+                    }
                 } else {
-                    None
-                },
-            },
+                    ExecApprovalRequirement::Skip {
+                        // Bypass sandbox if execpolicy allows the command
+                        bypass_sandbox: has_policy_allow,
+                        proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
+                            try_derive_execpolicy_amendment_for_allow_rules(
+                                &evaluation.matched_rules,
+                            )
+                        } else {
+                            None
+                        },
+                    }
+                }
+            }
         }
     }
 
@@ -380,6 +426,52 @@ fn try_derive_execpolicy_amendment_for_allow_rules(
             } => Some(ExecPolicyAmendment::from(command.clone())),
             _ => None,
         })
+}
+
+fn normalize_request_approval(request_approval: Option<String>) -> Option<String> {
+    request_approval.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn normalize_rule_prefix(rule_prefix: Option<Vec<String>>) -> Option<Vec<String>> {
+    rule_prefix.and_then(|prefix| {
+        if prefix.is_empty() {
+            None
+        } else {
+            Some(prefix)
+        }
+    })
+}
+
+fn derive_requested_execpolicy_amendment(
+    features: &Features,
+    request_approval: &Option<String>,
+    rule_prefix: Option<&Vec<String>>,
+    matched_rules: &[RuleMatch],
+) -> Option<ExecPolicyAmendment> {
+    if request_approval.is_none() || !features.enabled(Feature::ExecPolicy) {
+        return None;
+    }
+
+    let rule_prefix = rule_prefix?;
+    if rule_prefix.is_empty() {
+        return None;
+    }
+
+    if matched_rules
+        .iter()
+        .any(|rule_match| is_policy_match(rule_match) && rule_match.decision() == Decision::Prompt)
+    {
+        return None;
+    }
+
+    Some(ExecPolicyAmendment::new(rule_prefix.clone()))
 }
 
 /// Only return a reason when a policy rule drove the prompt decision.
@@ -762,6 +854,8 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 AskForApproval::OnRequest,
                 &SandboxPolicy::DangerFullAccess,
                 SandboxPermissions::UseDefault,
+                None,
+                None,
             )
             .await;
 
@@ -800,6 +894,8 @@ prefix_rule(
                 AskForApproval::OnRequest,
                 &SandboxPolicy::DangerFullAccess,
                 SandboxPermissions::UseDefault,
+                None,
+                None,
             )
             .await;
 
@@ -829,6 +925,8 @@ prefix_rule(
                 AskForApproval::OnRequest,
                 &SandboxPolicy::DangerFullAccess,
                 SandboxPermissions::UseDefault,
+                None,
+                None,
             )
             .await;
 
@@ -859,6 +957,8 @@ prefix_rule(
                 AskForApproval::Never,
                 &SandboxPolicy::DangerFullAccess,
                 SandboxPermissions::UseDefault,
+                None,
+                None,
             )
             .await;
 
@@ -882,6 +982,8 @@ prefix_rule(
                 AskForApproval::UnlessTrusted,
                 &SandboxPolicy::ReadOnly,
                 SandboxPermissions::UseDefault,
+                None,
+                None,
             )
             .await;
 
@@ -890,6 +992,39 @@ prefix_rule(
             ExecApprovalRequirement::NeedsApproval {
                 reason: None,
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command))
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn on_request_rule_uses_requested_approval_and_rule_prefix() {
+        let command = vec![
+            "cargo".to_string(),
+            "install".to_string(),
+            "cargo-insta".to_string(),
+        ];
+        let manager = ExecPolicyManager::default();
+
+        let requirement = manager
+            .create_exec_approval_requirement_for_command(
+                &Features::with_defaults(),
+                &command,
+                AskForApproval::OnRequestRule,
+                &SandboxPolicy::DangerFullAccess,
+                SandboxPermissions::UseDefault,
+                Some("Install cargo-insta for snapshot tests?".to_string()),
+                Some(vec!["cargo".to_string(), "install".to_string()]),
+            )
+            .await;
+
+        assert_eq!(
+            requirement,
+            ExecApprovalRequirement::NeedsApproval {
+                reason: Some("Install cargo-insta for snapshot tests?".to_string()),
+                proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                    "cargo".to_string(),
+                    "install".to_string()
+                ])),
             }
         );
     }
@@ -916,6 +1051,8 @@ prefix_rule(
                     AskForApproval::UnlessTrusted,
                     &SandboxPolicy::DangerFullAccess,
                     SandboxPermissions::UseDefault,
+                    None,
+                    None,
                 )
                 .await,
             ExecApprovalRequirement::NeedsApproval {
@@ -990,6 +1127,8 @@ prefix_rule(
                 AskForApproval::UnlessTrusted,
                 &SandboxPolicy::ReadOnly,
                 SandboxPermissions::UseDefault,
+                None,
+                None,
             )
             .await;
 
@@ -1017,6 +1156,8 @@ prefix_rule(
                 AskForApproval::UnlessTrusted,
                 &SandboxPolicy::ReadOnly,
                 SandboxPermissions::UseDefault,
+                None,
+                None,
             )
             .await;
 
@@ -1047,6 +1188,8 @@ prefix_rule(
                 AskForApproval::OnRequest,
                 &SandboxPolicy::DangerFullAccess,
                 SandboxPermissions::UseDefault,
+                None,
+                None,
             )
             .await;
 
@@ -1074,6 +1217,8 @@ prefix_rule(
                 AskForApproval::UnlessTrusted,
                 &SandboxPolicy::ReadOnly,
                 SandboxPermissions::UseDefault,
+                None,
+                None,
             )
             .await;
 
@@ -1112,6 +1257,8 @@ prefix_rule(
                     AskForApproval::UnlessTrusted,
                     &SandboxPolicy::ReadOnly,
                     SandboxPermissions::UseDefault,
+                    None,
+                    None,
                 )
                 .await,
             ExecApprovalRequirement::NeedsApproval {
@@ -1135,6 +1282,8 @@ prefix_rule(
                 AskForApproval::OnRequest,
                 &SandboxPolicy::ReadOnly,
                 SandboxPermissions::UseDefault,
+                None,
+                None,
             )
             .await;
 
@@ -1165,6 +1314,8 @@ prefix_rule(
                 AskForApproval::OnRequest,
                 &SandboxPolicy::ReadOnly,
                 SandboxPermissions::UseDefault,
+                None,
+                None,
             )
             .await;
 
@@ -1232,6 +1383,8 @@ prefix_rule(
                     AskForApproval::OnRequest,
                     &SandboxPolicy::ReadOnly,
                     permissions,
+                    None,
+                    None,
                 )
                 .await,
             "{pwsh_approval_reason}"
@@ -1255,6 +1408,8 @@ prefix_rule(
                     AskForApproval::OnRequest,
                     &SandboxPolicy::ReadOnly,
                     permissions,
+                    None,
+                    None,
                 )
                 .await,
             r#"On all platforms, a forbidden command should require approval
@@ -1274,6 +1429,8 @@ prefix_rule(
                     AskForApproval::Never,
                     &SandboxPolicy::ReadOnly,
                     permissions,
+                    None,
+                    None,
                 )
                 .await,
             r#"On all platforms, a forbidden command should require approval

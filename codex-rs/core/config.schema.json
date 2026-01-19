@@ -80,6 +80,13 @@
           "type": "string"
         },
         {
+          "description": "The model can request approval and propose a rule to the user to skip approval in the future.",
+          "type": "string",
+          "enum": [
+            "on-request-rule"
+          ]
+        },
+        {
           "description": "Never ask the user to approve commands. Failures are immediately returned to the model, and never escalated to the user for approval.",
           "enum": [
             "never"

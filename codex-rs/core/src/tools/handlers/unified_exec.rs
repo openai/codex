@@ -43,6 +43,10 @@ struct ExecCommandArgs {
     sandbox_permissions: SandboxPermissions,
     #[serde(default)]
     justification: Option<String>,
+    #[serde(default)]
+    request_approval: Option<String>,
+    #[serde(default)]
+    rule_prefix: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,19 +139,38 @@ impl ToolHandler for UnifiedExecHandler {
                     max_output_tokens,
                     sandbox_permissions,
                     justification,
+                    request_approval,
+                    rule_prefix,
                     ..
                 } = args;
+
+                let sandbox_permissions = if request_approval.is_some() {
+                    if !matches!(
+                        context.turn.approval_policy,
+                        codex_protocol::protocol::AskForApproval::OnRequestRule
+                    ) {
+                        let approval_policy = context.turn.approval_policy;
+                        manager.release_process_id(&process_id).await;
+                        return Err(FunctionCallError::RespondToModel(format!(
+                            "approval policy is {approval_policy:?}; reject command — you should not request approval if the approval policy is {approval_policy:?}"
+                        )));
+                    }
+                    SandboxPermissions::RequireEscalated
+                } else {
+                    sandbox_permissions
+                };
 
                 if sandbox_permissions.requires_escalated_permissions()
                     && !matches!(
                         context.turn.approval_policy,
                         codex_protocol::protocol::AskForApproval::OnRequest
+                            | codex_protocol::protocol::AskForApproval::OnRequestRule
                     )
                 {
+                    let approval_policy = context.turn.approval_policy;
                     manager.release_process_id(&process_id).await;
                     return Err(FunctionCallError::RespondToModel(format!(
-                        "approval policy is {policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {policy:?}",
-                        policy = context.turn.approval_policy
+                        "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
                     )));
                 }
 
@@ -183,6 +206,8 @@ impl ToolHandler for UnifiedExecHandler {
                             tty,
                             sandbox_permissions,
                             justification,
+                            request_approval,
+                            rule_prefix,
                         },
                         &context,
                     )
