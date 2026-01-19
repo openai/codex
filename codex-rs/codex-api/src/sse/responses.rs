@@ -16,6 +16,7 @@ use serde_json::Value;
 use std::io::BufRead;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -49,6 +50,7 @@ pub fn spawn_response_stream(
     stream_response: StreamResponse,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
+    turn_state: Option<Arc<OnceLock<String>>>,
 ) -> ResponseStream {
     let rate_limits = parse_rate_limit(&stream_response.headers);
     let models_etag = stream_response
@@ -56,6 +58,14 @@ pub fn spawn_response_stream(
         .get("X-Models-Etag")
         .and_then(|v| v.to_str().ok())
         .map(ToString::to_string);
+    if let Some(turn_state) = turn_state.as_ref()
+        && let Some(header_value) = stream_response
+            .headers
+            .get("x-codex-turn-state")
+            .and_then(|v| v.to_str().ok())
+    {
+        let _ = turn_state.set(header_value.to_string());
+    }
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(async move {
         if let Some(snapshot) = rate_limits {
@@ -84,6 +94,14 @@ struct Error {
 #[allow(dead_code)]
 struct ResponseCompleted {
     id: String,
+    #[serde(default)]
+    usage: Option<ResponseCompletedUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponseDone {
+    #[serde(default)]
+    id: Option<String>,
     #[serde(default)]
     usage: Option<ResponseCompletedUsage>,
 }
@@ -199,6 +217,11 @@ pub fn process_responses_event(
                         response_error = ApiError::QuotaExceeded;
                     } else if is_usage_not_included(&error) {
                         response_error = ApiError::UsageNotIncluded;
+                    } else if is_invalid_prompt_error(&error) {
+                        let message = error
+                            .message
+                            .unwrap_or_else(|| "Invalid request.".to_string());
+                        response_error = ApiError::InvalidRequest { message };
                     } else {
                         let delay = try_parse_retry_after(&error);
                         let message = error.message.unwrap_or_default();
@@ -228,6 +251,29 @@ pub fn process_responses_event(
                     }
                 }
             }
+        }
+        "response.done" => {
+            if let Some(resp_val) = event.response {
+                match serde_json::from_value::<ResponseDone>(resp_val) {
+                    Ok(resp) => {
+                        return Ok(Some(ResponseEvent::Completed {
+                            response_id: resp.id.unwrap_or_default(),
+                            token_usage: resp.usage.map(Into::into),
+                        }));
+                    }
+                    Err(err) => {
+                        let error = format!("failed to parse ResponseCompleted: {err}");
+                        debug!("{error}");
+                        return Err(ResponsesEventError::Api(ApiError::Stream(error)));
+                    }
+                }
+            }
+
+            debug!("response.done missing response payload");
+            return Ok(Some(ResponseEvent::Completed {
+                response_id: String::new(),
+                token_usage: None,
+            }));
         }
         "response.output_item.added" => {
             if let Some(item_val) = event.item {
@@ -259,7 +305,6 @@ pub async fn process_sse(
     telemetry: Option<Arc<dyn SseTelemetry>>,
 ) {
     let mut stream = stream.eventsource();
-    let mut response_completed: Option<ResponseEvent> = None;
     let mut response_error: Option<ApiError> = None;
 
     loop {
@@ -276,17 +321,10 @@ pub async fn process_sse(
                 return;
             }
             Ok(None) => {
-                match response_completed.take() {
-                    Some(event) => {
-                        let _ = tx_event.send(Ok(event)).await;
-                    }
-                    None => {
-                        let error = response_error.unwrap_or(ApiError::Stream(
-                            "stream closed before response.completed".into(),
-                        ));
-                        let _ = tx_event.send(Err(error)).await;
-                    }
-                }
+                let error = response_error.unwrap_or(ApiError::Stream(
+                    "stream closed before response.completed".into(),
+                ));
+                let _ = tx_event.send(Err(error)).await;
                 return;
             }
             Err(_) => {
@@ -297,8 +335,7 @@ pub async fn process_sse(
             }
         };
 
-        let raw = sse.data.clone();
-        trace!("SSE event: {raw}");
+        trace!("SSE event: {}", &sse.data);
 
         let event: ResponsesStreamEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
@@ -310,9 +347,11 @@ pub async fn process_sse(
 
         match process_responses_event(event) {
             Ok(Some(event)) => {
-                if matches!(event, ResponseEvent::Completed { .. }) {
-                    response_completed = Some(event);
-                } else if tx_event.send(Ok(event)).await.is_err() {
+                let is_completed = matches!(event, ResponseEvent::Completed { .. });
+                if tx_event.send(Ok(event)).await.is_err() {
+                    return;
+                }
+                if is_completed {
                     return;
                 }
             }
@@ -362,6 +401,10 @@ fn is_usage_not_included(error: &Error) -> bool {
     error.code.as_deref() == Some("usage_not_included")
 }
 
+fn is_invalid_prompt_error(error: &Error) -> bool {
+    error.code.as_deref() == Some("invalid_prompt")
+}
+
 fn rate_limit_regex() -> &'static regex_lite::Regex {
     static RE: std::sync::OnceLock<regex_lite::Regex> = std::sync::OnceLock::new();
     #[expect(clippy::unwrap_used)]
@@ -374,7 +417,9 @@ fn rate_limit_regex() -> &'static regex_lite::Regex {
 mod tests {
     use super::*;
     use assert_matches::assert_matches;
+    use bytes::Bytes;
     use codex_protocol::models::ResponseItem;
+    use futures::stream;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::sync::mpsc;
@@ -518,6 +563,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn response_done_emits_completed() {
+        let done = json!({
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 1,
+                    "input_tokens_details": null,
+                    "output_tokens": 2,
+                    "output_tokens_details": null,
+                    "total_tokens": 3
+                }
+            }
+        })
+        .to_string();
+
+        let sse1 = format!("event: response.done\ndata: {done}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Ok(ResponseEvent::Completed {
+                response_id,
+                token_usage,
+            }) => {
+                assert_eq!(response_id, "");
+                assert!(token_usage.is_some());
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn response_done_without_payload_emits_completed() {
+        let done = json!({
+            "type": "response.done"
+        })
+        .to_string();
+
+        let sse1 = format!("event: response.done\ndata: {done}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Ok(ResponseEvent::Completed {
+                response_id,
+                token_usage,
+            }) => {
+                assert_eq!(response_id, "");
+                assert!(token_usage.is_none());
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn emits_completed_without_stream_end() {
+        let completed = json!({
+            "type": "response.completed",
+            "response": { "id": "resp1" }
+        })
+        .to_string();
+
+        let sse1 = format!("event: response.completed\ndata: {completed}\n\n");
+        let stream = stream::iter(vec![Ok(Bytes::from(sse1))]).chain(stream::pending());
+        let stream: ByteStream = Box::pin(stream);
+
+        let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent, ApiError>>(8);
+        tokio::spawn(process_sse(stream, tx, idle_timeout(), None));
+
+        let events = tokio::time::timeout(Duration::from_millis(1000), async {
+            let mut events = Vec::new();
+            while let Some(ev) = rx.recv().await {
+                events.push(ev);
+            }
+            events
+        })
+        .await
+        .expect("timed out collecting events");
+
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            Ok(ResponseEvent::Completed {
+                response_id,
+                token_usage,
+            }) => {
+                assert_eq!(response_id, "resp1");
+                assert!(token_usage.is_none());
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn error_when_error_event() {
         let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_689bcf18d7f08194bf3440ba62fe05d803fee0cdac429894","object":"response","created_at":1755041560,"status":"failed","background":false,"error":{"code":"rate_limit_exceeded","message":"Rate limit reached for gpt-5.1 in organization org-AAA on tokens per min (TPM): Limit 30000, Used 22999, Requested 12528. Please try again in 11.054s. Visit https://platform.openai.com/account/rate-limits to learn more."}, "usage":null,"user":null,"metadata":{}}}"#;
 
@@ -576,6 +718,27 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         assert_matches!(events[0], Err(ApiError::QuotaExceeded));
+    }
+
+    #[tokio::test]
+    async fn invalid_prompt_without_type_is_invalid_request() {
+        let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_invalid_prompt_no_type","object":"response","created_at":1759771628,"status":"failed","background":false,"error":{"code":"invalid_prompt","message":"Invalid prompt: we've limited access to this content for safety reasons."},"incomplete_details":null}}"#;
+
+        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Err(ApiError::InvalidRequest { message }) => {
+                assert_eq!(
+                    message,
+                    "Invalid prompt: we've limited access to this content for safety reasons."
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 
     #[tokio::test]

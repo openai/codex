@@ -69,7 +69,7 @@ pub(crate) async fn get_user_instructions(
         output.push_str(&skills_section);
     }
 
-    if config.features.enabled(Feature::HierarchicalAgents) {
+    if config.features.enabled(Feature::ChildAgentsMd) {
         if !output.is_empty() {
             output.push_str("\n\n");
         }

@@ -63,9 +63,11 @@ struct StatusHistoryCell {
     approval: String,
     sandbox: String,
     agents_summary: String,
+    collaboration_mode: Option<String>,
     model_provider: Option<String>,
     account: Option<StatusAccountDisplay>,
     session_id: Option<String>,
+    forked_from: Option<String>,
     token_usage: StatusTokenUsageData,
     rate_limits: StatusRateLimitData,
 }
@@ -77,10 +79,12 @@ pub(crate) fn new_status_output(
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
     session_id: &Option<ThreadId>,
+    forked_from: Option<ThreadId>,
     rate_limits: Option<&RateLimitSnapshotDisplay>,
     plan_type: Option<PlanType>,
     now: DateTime<Local>,
     model_name: &str,
+    collaboration_mode: Option<&str>,
 ) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let card = StatusHistoryCell::new(
@@ -89,10 +93,12 @@ pub(crate) fn new_status_output(
         token_info,
         total_usage,
         session_id,
+        forked_from,
         rate_limits,
         plan_type,
         now,
         model_name,
+        collaboration_mode,
     );
 
     CompositeHistoryCell::new(vec![Box::new(command), Box::new(card)])
@@ -106,10 +112,12 @@ impl StatusHistoryCell {
         token_info: Option<&TokenUsageInfo>,
         total_usage: &TokenUsage,
         session_id: &Option<ThreadId>,
+        forked_from: Option<ThreadId>,
         rate_limits: Option<&RateLimitSnapshotDisplay>,
         plan_type: Option<PlanType>,
         now: DateTime<Local>,
         model_name: &str,
+        collaboration_mode: Option<&str>,
     ) -> Self {
         let config_entries = create_config_summary_entries(config, model_name);
         let (model_name, model_details) = compose_model_display(model_name, &config_entries);
@@ -134,6 +142,7 @@ impl StatusHistoryCell {
         let model_provider = format_model_provider(config);
         let account = compose_account_display(auth_manager, plan_type);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
+        let forked_from = forked_from.map(|id| id.to_string());
         let default_usage = TokenUsage::default();
         let (context_usage, context_window) = match token_info {
             Some(info) => (&info.last_token_usage, info.model_context_window),
@@ -160,9 +169,11 @@ impl StatusHistoryCell {
             approval,
             sandbox,
             agents_summary,
+            collaboration_mode: collaboration_mode.map(ToString::to_string),
             model_provider,
             account,
             session_id,
+            forked_from,
             token_usage,
             rate_limits,
         }
@@ -351,6 +362,12 @@ impl HistoryCell for StatusHistoryCell {
         if self.session_id.is_some() {
             push_label(&mut labels, &mut seen, "Session");
         }
+        if self.session_id.is_some() && self.forked_from.is_some() {
+            push_label(&mut labels, &mut seen, "Forked from");
+        }
+        if self.collaboration_mode.is_some() {
+            push_label(&mut labels, &mut seen, "Collaboration mode");
+        }
         push_label(&mut labels, &mut seen, "Token usage");
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
@@ -399,8 +416,17 @@ impl HistoryCell for StatusHistoryCell {
             lines.push(formatter.line("Account", vec![Span::from(account_value)]));
         }
 
+        if let Some(collab_mode) = self.collaboration_mode.as_ref() {
+            lines.push(formatter.line("Collaboration mode", vec![Span::from(collab_mode.clone())]));
+        }
+
         if let Some(session) = self.session_id.as_ref() {
             lines.push(formatter.line("Session", vec![Span::from(session.clone())]));
+        }
+        if self.session_id.is_some()
+            && let Some(forked_from) = self.forked_from.as_ref()
+        {
+            lines.push(formatter.line("Forked from", vec![Span::from(forked_from.clone())]));
         }
 
         lines.push(Line::from(Vec::<Span<'static>>::new()));

@@ -1,6 +1,7 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use codex_common::CliConfigOverrides;
+use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::LoaderOverrides;
 use std::io::ErrorKind;
@@ -10,7 +11,9 @@ use std::path::PathBuf;
 use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
+use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_core::check_execpolicy_for_warnings;
 use codex_feedback::CodexFeedback;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
@@ -21,6 +24,7 @@ use toml::Value as TomlValue;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing::warn;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
@@ -44,6 +48,7 @@ pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
+    default_analytics_enabled: bool,
 ) -> IoResult<()> {
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
@@ -81,14 +86,38 @@ pub async fn run_main(
         )
     })?;
     let loader_overrides_for_config_api = loader_overrides.clone();
-    let config = ConfigBuilder::default()
+    let mut config_warnings = Vec::new();
+    let config = match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides.clone())
         .loader_overrides(loader_overrides)
         .build()
         .await
-        .map_err(|e| {
-            std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
-        })?;
+    {
+        Ok(config) => config,
+        Err(err) => {
+            let message = ConfigWarningNotification {
+                summary: "Invalid configuration; using defaults.".to_string(),
+                details: Some(err.to_string()),
+            };
+            config_warnings.push(message);
+            Config::load_default_with_cli_overrides(cli_kv_overrides.clone()).map_err(|e| {
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("error loading default config after config error: {e}"),
+                )
+            })?
+        }
+    };
+
+    if let Ok(Some(err)) =
+        check_execpolicy_for_warnings(&config.features, &config.config_layer_stack).await
+    {
+        let message = ConfigWarningNotification {
+            summary: "Error parsing rules; custom rules not applied.".to_string(),
+            details: Some(err.to_string()),
+        };
+        config_warnings.push(message);
+    }
 
     let feedback = CodexFeedback::new();
 
@@ -96,7 +125,7 @@ pub async fn run_main(
         &config,
         env!("CARGO_PKG_VERSION"),
         Some("codex_app_server"),
-        false,
+        default_analytics_enabled,
     )
     .map_err(|e| {
         std::io::Error::new(
@@ -126,6 +155,12 @@ pub async fn run_main(
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
+    for warning in &config_warnings {
+        match &warning.details {
+            Some(details) => error!("{} {}", warning.summary, details),
+            None => error!("{}", warning.summary),
+        }
+    }
 
     // Task: process incoming messages.
     let processor_handle = tokio::spawn({
@@ -139,14 +174,41 @@ pub async fn run_main(
             cli_overrides,
             loader_overrides,
             feedback.clone(),
+            config_warnings,
         );
+        let mut thread_created_rx = processor.thread_created_receiver();
         async move {
-            while let Some(msg) = incoming_rx.recv().await {
-                match msg {
-                    JSONRPCMessage::Request(r) => processor.process_request(r).await,
-                    JSONRPCMessage::Response(r) => processor.process_response(r).await,
-                    JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
-                    JSONRPCMessage::Error(e) => processor.process_error(e),
+            let mut listen_for_threads = true;
+            loop {
+                tokio::select! {
+                    msg = incoming_rx.recv() => {
+                        let Some(msg) = msg else {
+                            break;
+                        };
+                        match msg {
+                            JSONRPCMessage::Request(r) => processor.process_request(r).await,
+                            JSONRPCMessage::Response(r) => processor.process_response(r).await,
+                            JSONRPCMessage::Notification(n) => processor.process_notification(n).await,
+                            JSONRPCMessage::Error(e) => processor.process_error(e),
+                        }
+                    }
+                    created = thread_created_rx.recv(), if listen_for_threads => {
+                        match created {
+                            Ok(thread_id) => {
+                                processor.try_attach_thread_listener(thread_id).await;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                                // TODO(jif) handle lag.
+                                // Assumes thread creation volume is low enough that lag never happens.
+                                // If it does, we log and continue without resyncing to avoid attaching
+                                // listeners for threads that should remain unsubscribed.
+                                warn!("thread_created receiver lagged; skipping resync");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                listen_for_threads = false;
+                            }
+                        }
+                    }
                 }
             }
 

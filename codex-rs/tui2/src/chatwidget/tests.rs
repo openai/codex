@@ -1,5 +1,12 @@
+//! Exercises `ChatWidget` event handling and rendering invariants.
+//!
+//! These tests treat the widget as the adapter between `codex_core::protocol::EventMsg` inputs and
+//! the TUI output. Many assertions are snapshot-based so that layout regressions and status/header
+//! changes show up as stable, reviewable diffs.
+
 use super::*;
 use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
 use crate::app_event_sender::AppEventSender;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
@@ -10,7 +17,6 @@ use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
-#[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::AgentMessageDeltaEvent;
@@ -29,6 +35,7 @@ use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::McpStartupCompleteEvent;
 use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::McpStartupUpdateEvent;
 use codex_core::protocol::Op;
@@ -49,6 +56,7 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::parse_command::ParsedCommand;
@@ -112,6 +120,7 @@ async fn resumed_initial_messages_render_history() {
     let rollout_file = NamedTempFile::new().unwrap();
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
+        forked_from_id: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
         approval_policy: AskForApproval::Never,
@@ -124,6 +133,8 @@ async fn resumed_initial_messages_render_history() {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "hello from user".to_string(),
                 images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "assistant reply".to_string(),
@@ -319,14 +330,13 @@ async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config().await;
-    let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
     let thread_manager = Arc::new(ThreadManager::with_models_provider(
         CodexAuth::from_api_key("test"),
         cfg.model_provider.clone(),
     ));
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
-        config: cfg,
+        config: cfg.clone(),
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: tx,
         initial_prompt: None,
@@ -336,7 +346,7 @@ async fn helpers_are_available_and_do_not_panic() {
         models_manager: thread_manager.get_models_manager(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
-        model: resolved_model,
+        model: cfg.model,
     };
     let mut w = ChatWidget::new(init, thread_manager);
     // Basic construction sanity.
@@ -372,6 +382,7 @@ async fn make_chatwidget_manual(
         skills: None,
     });
     bottom.set_steer_enabled(true);
+    bottom.set_collaboration_modes_enabled(cfg.features.enabled(Feature::CollaborationModes));
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let codex_home = cfg.codex_home.clone();
     let widget = ChatWidget {
@@ -381,7 +392,8 @@ async fn make_chatwidget_manual(
         active_cell: None,
         active_cell_revision: 0,
         config: cfg,
-        model: resolved_model.clone(),
+        model: Some(resolved_model.clone()),
+        collaboration_mode: CollaborationModeSelection::default(),
         auth_manager: auth_manager.clone(),
         models_manager: Arc::new(ModelsManager::new(codex_home, auth_manager)),
         session_header: SessionHeader::new(resolved_model),
@@ -397,6 +409,7 @@ async fn make_chatwidget_manual(
         suppressed_exec_calls: HashSet::new(),
         last_unified_wait: None,
         task_complete_pending: false,
+        agent_turn_running: false,
         mcp_startup_status: None,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
@@ -404,19 +417,37 @@ async fn make_chatwidget_manual(
         current_status_header: String::from("Working"),
         retry_status_header: None,
         conversation_id: None,
+        forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
         pending_notification: None,
+        quit_shortcut_expires_at: None,
+        quit_shortcut_key: None,
         is_review_mode: false,
         pre_review_token_info: None,
         needs_final_message_separator: false,
+        had_work_activity: false,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
     };
     (widget, rx, op_rx)
+}
+
+// ChatWidget may emit other `Op`s (e.g. history/logging updates) on the same channel; this helper
+// filters until we see a submission op.
+fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
+    loop {
+        match op_rx.try_recv() {
+            Ok(op @ Op::UserTurn { .. }) => return op,
+            Ok(op @ Op::UserInput { .. }) => return op,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected a submit op but queue was empty"),
+            Err(TryRecvError::Disconnected) => panic!("expected submit op but channel closed"),
+        }
+    }
 }
 
 fn set_chatgpt_auth(chat: &mut ChatWidget) {
@@ -996,6 +1027,8 @@ async fn alt_up_edits_most_recent_queued_message() {
 #[tokio::test]
 async fn enqueueing_history_prompt_multiple_times_is_stable() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.conversation_id = Some(ThreadId::new());
+    assert!(!chat.bottom_pane.is_task_running());
 
     // Submit an initial prompt to seed history.
     chat.bottom_pane.set_composer_text("repeat me".to_string());
@@ -1003,6 +1036,7 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
 
     // Simulate an active task so further submissions are queued.
     chat.bottom_pane.set_task_running(true);
+    assert!(chat.bottom_pane.is_task_running());
 
     for _ in 0..3 {
         // Recall the prompt from history and ensure it is what we expect.
@@ -1022,8 +1056,10 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
 #[tokio::test]
 async fn streaming_final_answer_keeps_task_running_state() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.conversation_id = Some(ThreadId::new());
 
     chat.on_task_started();
+    assert!(chat.bottom_pane.is_task_running());
     chat.on_agent_message_delta("Final answer line\n".to_string());
     chat.on_commit_tick();
 
@@ -1046,19 +1082,34 @@ async fn streaming_final_answer_keeps_task_running_state() {
         Ok(Op::Interrupt) => {}
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
-    assert!(chat.bottom_pane.ctrl_c_quit_hint_visible());
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 }
 
 #[tokio::test]
-async fn ctrl_c_shutdown_ignores_caps_lock() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+async fn ctrl_c_shutdown_works_with_caps_lock() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL));
 
-    match op_rx.try_recv() {
-        Ok(Op::Shutdown) => {}
-        other => panic!("expected Op::Shutdown, got {other:?}"),
-    }
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn ctrl_d_quits_without_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
+}
+
+#[tokio::test]
+async fn ctrl_d_with_modal_open_does_not_quit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.open_approvals_popup();
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]
@@ -1077,7 +1128,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     assert!(chat.bottom_pane.composer_text().is_empty());
     assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-    assert!(chat.bottom_pane.ctrl_c_quit_hint_visible());
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
     let restored_text = chat.bottom_pane.composer_text();
@@ -1086,7 +1137,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
         "expected placeholder {placeholder:?} after history recall"
     );
     assert!(restored_text.starts_with("draft message "));
-    assert!(!chat.bottom_pane.ctrl_c_quit_hint_visible());
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 
     let images = chat.bottom_pane.take_recent_submission_images();
     assert!(
@@ -1277,13 +1328,111 @@ async fn slash_init_skips_when_project_doc_exists() {
     );
 }
 
+#[test]
+fn parse_collaboration_mode_selection_accepts_common_aliases() {
+    assert_eq!(
+        collaboration_modes::parse_selection("plan"),
+        Some(CollaborationModeSelection::Plan)
+    );
+    assert_eq!(
+        collaboration_modes::parse_selection("PAIR"),
+        Some(CollaborationModeSelection::PairProgramming)
+    );
+    assert_eq!(
+        collaboration_modes::parse_selection("pair_programming"),
+        Some(CollaborationModeSelection::PairProgramming)
+    );
+    assert_eq!(
+        collaboration_modes::parse_selection("pp"),
+        Some(CollaborationModeSelection::PairProgramming)
+    );
+    assert_eq!(
+        collaboration_modes::parse_selection(" exec "),
+        Some(CollaborationModeSelection::Execute)
+    );
+    assert_eq!(
+        collaboration_modes::parse_selection("execute"),
+        Some(CollaborationModeSelection::Execute)
+    );
+    assert_eq!(collaboration_modes::parse_selection("unknown"), None);
+}
+
+#[tokio::test]
+async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, false);
+
+    let initial = chat.collaboration_mode;
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.collaboration_mode, initial);
+
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.collaboration_mode, CollaborationModeSelection::Execute);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.collaboration_mode, CollaborationModeSelection::Plan);
+
+    chat.on_task_started();
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.collaboration_mode, CollaborationModeSelection::Plan);
+}
+
+#[tokio::test]
+async fn collab_slash_command_sets_mode_and_next_submit_sends_user_turn() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.conversation_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    chat.dispatch_command_with_args(SlashCommand::Collab, "plan".to_string());
+    assert_eq!(chat.collaboration_mode, CollaborationModeSelection::Plan);
+
+    chat.bottom_pane.set_composer_text("hello".to_string());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode: Some(CollaborationMode::Plan(_)),
+            ..
+        } => {}
+        other => panic!("expected Op::UserTurn with plan collab mode, got {other:?}"),
+    }
+
+    chat.bottom_pane.set_composer_text("follow up".to_string());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode: Some(CollaborationMode::Plan(_)),
+            ..
+        } => {}
+        other => panic!("expected Op::UserTurn with plan collab mode, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn collab_mode_defaults_to_pair_programming_when_enabled() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.conversation_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    chat.bottom_pane.set_composer_text("hello".to_string());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode: Some(CollaborationMode::PairProgramming(_)),
+            ..
+        } => {}
+        other => panic!("expected Op::UserTurn with pair programming collab mode, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn slash_quit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.dispatch_command(SlashCommand::Quit);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ExitRequest));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
 }
 
 #[tokio::test]
@@ -1292,7 +1441,7 @@ async fn slash_exit_requests_exit() {
 
     chat.dispatch_command(SlashCommand::Exit);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ExitRequest));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::ShutdownFirst)));
 }
 
 #[tokio::test]
@@ -1305,12 +1454,12 @@ async fn slash_resume_opens_picker() {
 }
 
 #[tokio::test]
-async fn slash_fork_opens_picker() {
+async fn slash_fork_requests_current_fork() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.dispatch_command(SlashCommand::Fork);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenForkPicker));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ForkCurrentSession));
 }
 
 #[tokio::test]
@@ -1749,6 +1898,7 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
 #[tokio::test]
 async fn model_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5-codex")).await;
+    chat.conversation_id = Some(ThreadId::new());
     chat.open_model_popup();
 
     let popup = render_bottom_popup(&chat, 80);
@@ -2031,6 +2181,7 @@ async fn feedback_upload_consent_popup_snapshot() {
 #[tokio::test]
 async fn reasoning_popup_escape_returns_to_model_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.conversation_id = Some(ThreadId::new());
     chat.open_model_popup();
 
     let preset = get_available_model(&chat, "gpt-5.1-codex-max");
@@ -2518,6 +2669,34 @@ async fn mcp_startup_header_booting_snapshot() {
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw chat widget");
     assert_snapshot!("mcp_startup_header_booting", terminal.backend());
+}
+
+#[tokio::test]
+async fn mcp_startup_complete_does_not_clear_running_task() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+        }),
+    });
+
+    // The bottom pane has a single "task running" indicator even though MCP startup and an agent
+    // turn are tracked independently, so a startup completion event must not clear an active turn.
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_indicator_visible());
+
+    chat.handle_codex_event(Event {
+        id: "mcp-1".into(),
+        msg: EventMsg::McpStartupComplete(McpStartupCompleteEvent {
+            ready: vec!["schaltwerk".into()],
+            ..Default::default()
+        }),
+    });
+
+    assert!(chat.bottom_pane.is_task_running());
+    assert!(chat.bottom_pane.status_indicator_visible());
 }
 
 #[tokio::test]
@@ -3413,6 +3592,7 @@ printf 'fenced within fenced\n'
 #[tokio::test]
 async fn chatwidget_tall() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.conversation_id = Some(ThreadId::new());
     chat.handle_codex_event(Event {
         id: "t1".into(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {

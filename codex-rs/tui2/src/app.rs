@@ -1,5 +1,6 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 #[cfg(target_os = "windows")]
@@ -49,9 +50,10 @@ use codex_core::config::Config;
 use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
-use codex_core::models_manager::manager::ModelsManager;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::ListSkillsResponseEvent;
@@ -97,6 +99,7 @@ pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub conversation_id: Option<ThreadId>,
     pub update_action: Option<UpdateAction>,
+    pub exit_reason: ExitReason,
     /// ANSI-styled transcript lines to print after the TUI exits.
     ///
     /// These lines are rendered against the same width as the final TUI
@@ -105,12 +108,29 @@ pub struct AppExitInfo {
     pub session_lines: Vec<String>,
 }
 
+#[derive(Debug)]
+pub(crate) enum AppRunControl {
+    Continue,
+    Exit(ExitReason),
+}
+
+#[derive(Debug, Clone)]
+pub enum ExitReason {
+    UserRequested,
+    Fatal(String),
+}
+
 impl From<AppExitInfo> for codex_tui::AppExitInfo {
     fn from(info: AppExitInfo) -> Self {
+        let exit_reason = match info.exit_reason {
+            ExitReason::UserRequested => codex_tui::ExitReason::UserRequested,
+            ExitReason::Fatal(message) => codex_tui::ExitReason::Fatal(message),
+        };
         codex_tui::AppExitInfo {
             token_usage: info.token_usage,
             thread_id: info.conversation_id,
             update_action: info.update_action.map(Into::into),
+            exit_reason,
         }
     }
 }
@@ -160,6 +180,15 @@ fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorI
             crate::history_cell::new_warning_event(format!("{path}: {message}")),
         )));
     }
+}
+
+fn emit_deprecation_notice(app_event_tx: &AppEventSender, notice: Option<DeprecationNoticeEvent>) {
+    let Some(DeprecationNoticeEvent { summary, details }) = notice else {
+        return;
+    };
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        crate::history_cell::new_deprecation_notice(summary, details),
+    )));
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -219,9 +248,8 @@ async fn handle_model_migration_prompt_if_needed(
     config: &mut Config,
     model: &str,
     app_event_tx: &AppEventSender,
-    models_manager: Arc<ModelsManager>,
+    available_models: Vec<ModelPreset>,
 ) -> Option<AppExitInfo> {
-    let available_models = models_manager.list_models(config).await;
     let upgrade = available_models
         .iter()
         .find(|preset| preset.model == model)
@@ -231,6 +259,7 @@ async fn handle_model_migration_prompt_if_needed(
         id: target_model,
         reasoning_effort_mapping,
         migration_config_key,
+        migration_markdown,
         ..
     }) = upgrade
     {
@@ -273,6 +302,7 @@ async fn handle_model_migration_prompt_if_needed(
             &target_model,
             heading_label,
             target_description,
+            migration_markdown.clone(),
             can_opt_out,
         );
         match run_model_migration_prompt(tui, prompt_copy).await {
@@ -314,6 +344,7 @@ async fn handle_model_migration_prompt_if_needed(
                     token_usage: TokenUsage::default(),
                     conversation_id: None,
                     update_action: None,
+                    exit_reason: ExitReason::UserRequested,
                     session_lines: Vec::new(),
                 });
             }
@@ -375,6 +406,11 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+    /// When set, the next draw re-renders the transcript into terminal scrollback once.
+    ///
+    /// This is used after a confirmed conversation rollback to ensure scrollback reflects the
+    /// trimmed transcript cells.
+    pub(crate) backtrack_render_pending: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
@@ -389,6 +425,8 @@ pub(crate) struct App {
 impl App {
     async fn shutdown_current_conversation(&mut self) {
         if let Some(conversation_id) = self.chat_widget.conversation_id() {
+            // Clear any in-flight rollback guard when switching conversations.
+            self.backtrack.pending_rollback = None;
             self.suppress_shutdown_complete = true;
             self.chat_widget.submit_op(Op::Shutdown);
             self.server.remove_thread(&conversation_id).await;
@@ -406,10 +444,12 @@ impl App {
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
+        ollama_chat_support_notice: Option<DeprecationNoticeEvent>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+        emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
 
         let thread_manager = Arc::new(ThreadManager::new(
             config.codex_home.clone(),
@@ -418,14 +458,18 @@ impl App {
         ));
         let mut model = thread_manager
             .get_models_manager()
-            .get_model(&config.model, &config)
+            .get_default_model(&config.model, &config, RefreshStrategy::Offline)
+            .await;
+        let available_models = thread_manager
+            .get_models_manager()
+            .list_models(&config, RefreshStrategy::Offline)
             .await;
         let exit_info = handle_model_migration_prompt_if_needed(
             tui,
             &mut config,
             model.as_str(),
             &app_event_tx,
-            thread_manager.get_models_manager(),
+            available_models,
         )
         .await;
         if let Some(exit_info) = exit_info {
@@ -449,7 +493,7 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: model.clone(),
+                    model: config.model.clone(),
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
@@ -472,7 +516,7 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: model.clone(),
+                    model: config.model.clone(),
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
@@ -495,7 +539,7 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: model.clone(),
+                    model: config.model.clone(),
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
@@ -550,6 +594,7 @@ impl App {
             scroll_config,
             scroll_state: MouseScrollState::default(),
             backtrack: BacktrackState::default(),
+            backtrack_render_pending: false,
             feedback: feedback.clone(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
@@ -582,14 +627,24 @@ impl App {
 
         #[cfg(not(debug_assertions))]
         if let Some(latest_version) = upgrade_version {
-            app.handle_event(
-                tui,
-                AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
-                    latest_version,
-                    crate::update_action::get_update_action(),
-                ))),
-            )
-            .await?;
+            let control = app
+                .handle_event(
+                    tui,
+                    AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
+                        latest_version,
+                        crate::update_action::get_update_action(),
+                    ))),
+                )
+                .await?;
+            if let AppRunControl::Exit(exit_reason) = control {
+                return Ok(AppExitInfo {
+                    token_usage: app.token_usage(),
+                    conversation_id: app.chat_widget.conversation_id(),
+                    update_action: app.pending_update_action,
+                    exit_reason,
+                    session_lines: Vec::new(),
+                });
+            }
         }
 
         let tui_events = tui.event_stream();
@@ -597,14 +652,20 @@ impl App {
 
         tui.frame_requester().schedule_frame();
 
-        while select! {
-            Some(event) = app_event_rx.recv() => {
-                app.handle_event(tui, event).await?
+        let exit_reason = loop {
+            let control = select! {
+                Some(event) = app_event_rx.recv() => {
+                    app.handle_event(tui, event).await?
+                }
+                Some(event) = tui_events.next() => {
+                    app.handle_tui_event(tui, event).await?
+                }
+            };
+            match control {
+                AppRunControl::Continue => {}
+                AppRunControl::Exit(reason) => break reason,
             }
-            Some(event) = tui_events.next() => {
-                app.handle_tui_event(tui, event).await?
-            }
-        } {}
+        };
         let width = tui.terminal.last_known_screen_size.width;
         let session_lines = if width == 0 {
             Vec::new()
@@ -625,6 +686,7 @@ impl App {
             token_usage: app.token_usage(),
             conversation_id: app.chat_widget.conversation_id(),
             update_action: app.pending_update_action,
+            exit_reason,
             session_lines,
         })
     }
@@ -633,7 +695,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         event: TuiEvent,
-    ) -> Result<bool> {
+    ) -> Result<AppRunControl> {
         if matches!(&event, TuiEvent::Draw) {
             self.handle_scroll_tick(tui);
         }
@@ -657,12 +719,16 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
+                    if self.backtrack_render_pending {
+                        self.backtrack_render_pending = false;
+                        self.render_transcript_once(tui);
+                    }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
                         .chat_widget
                         .handle_paste_burst_tick(tui.frame_requester())
                     {
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
                     let cells = self.transcript_cells.clone();
                     tui.draw(tui.terminal.size()?.height, |frame| {
@@ -722,7 +788,7 @@ impl App {
                 }
             }
         }
-        Ok(true)
+        Ok(AppRunControl::Continue)
     }
 
     pub(crate) fn render_transcript_cells(
@@ -1373,7 +1439,7 @@ impl App {
         Some(TranscriptSelectionPoint { line_index, column })
     }
 
-    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
+    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
                 let summary = session_summary(
@@ -1381,6 +1447,9 @@ impl App {
                     self.chat_widget.conversation_id(),
                 );
                 self.shutdown_current_conversation().await;
+                if let Err(err) = self.server.remove_and_close_all_threads().await {
+                    tracing::warn!(error = %err, "failed to close all threads");
+                }
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -1392,7 +1461,7 @@ impl App {
                     models_manager: self.server.get_models_manager(),
                     feedback: self.feedback.clone(),
                     is_first_run: false,
-                    model: self.current_model.clone(),
+                    model: Some(self.current_model.clone()),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 if let Some(summary) = summary {
@@ -1441,7 +1510,7 @@ impl App {
                                     models_manager: self.server.get_models_manager(),
                                     feedback: self.feedback.clone(),
                                     is_first_run: false,
-                                    model: self.current_model.clone(),
+                                    model: Some(self.current_model.clone()),
                                 };
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
@@ -1477,72 +1546,62 @@ impl App {
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::OpenForkPicker => {
-                match crate::resume_picker::run_fork_picker(
-                    tui,
-                    &self.config.codex_home,
-                    &self.config.model_provider_id,
-                    false,
-                )
-                .await?
-                {
-                    SessionSelection::Fork(path) => {
-                        let summary = session_summary(
-                            self.chat_widget.token_usage(),
-                            self.chat_widget.conversation_id(),
-                        );
-                        match self
-                            .server
-                            .fork_thread(usize::MAX, self.config.clone(), path.clone())
-                            .await
-                        {
-                            Ok(forked) => {
-                                self.shutdown_current_conversation().await;
-                                let init = crate::chatwidget::ChatWidgetInit {
-                                    config: self.config.clone(),
-                                    frame_requester: tui.frame_requester(),
-                                    app_event_tx: self.app_event_tx.clone(),
-                                    initial_prompt: None,
-                                    initial_images: Vec::new(),
-                                    enhanced_keys_supported: self.enhanced_keys_supported,
-                                    auth_manager: self.auth_manager.clone(),
-                                    models_manager: self.server.get_models_manager(),
-                                    feedback: self.feedback.clone(),
-                                    is_first_run: false,
-                                    model: self.current_model.clone(),
-                                };
-                                self.chat_widget = ChatWidget::new_from_existing(
-                                    init,
-                                    forked.thread,
-                                    forked.session_configured,
-                                );
-                                if let Some(summary) = summary {
-                                    let mut lines: Vec<Line<'static>> =
-                                        vec![summary.usage_line.clone().into()];
-                                    if let Some(command) = summary.resume_command {
-                                        let spans = vec![
-                                            "To continue this session, run ".into(),
-                                            command.cyan(),
-                                        ];
-                                        lines.push(spans.into());
-                                    }
-                                    self.chat_widget.add_plain_history_lines(lines);
+            AppEvent::ForkCurrentSession => {
+                let summary = session_summary(
+                    self.chat_widget.token_usage(),
+                    self.chat_widget.conversation_id(),
+                );
+                if let Some(path) = self.chat_widget.rollout_path() {
+                    match self
+                        .server
+                        .fork_thread(usize::MAX, self.config.clone(), path.clone())
+                        .await
+                    {
+                        Ok(forked) => {
+                            self.shutdown_current_conversation().await;
+                            let init = crate::chatwidget::ChatWidgetInit {
+                                config: self.config.clone(),
+                                frame_requester: tui.frame_requester(),
+                                app_event_tx: self.app_event_tx.clone(),
+                                initial_prompt: None,
+                                initial_images: Vec::new(),
+                                enhanced_keys_supported: self.enhanced_keys_supported,
+                                auth_manager: self.auth_manager.clone(),
+                                models_manager: self.server.get_models_manager(),
+                                feedback: self.feedback.clone(),
+                                is_first_run: false,
+                                model: Some(self.current_model.clone()),
+                            };
+                            self.chat_widget = ChatWidget::new_from_existing(
+                                init,
+                                forked.thread,
+                                forked.session_configured,
+                            );
+                            if let Some(summary) = summary {
+                                let mut lines: Vec<Line<'static>> =
+                                    vec![summary.usage_line.clone().into()];
+                                if let Some(command) = summary.resume_command {
+                                    let spans = vec![
+                                        "To continue this session, run ".into(),
+                                        command.cyan(),
+                                    ];
+                                    lines.push(spans.into());
                                 }
-                            }
-                            Err(err) => {
-                                let path_display = path.display();
-                                self.chat_widget.add_error_message(format!(
-                                    "Failed to fork session from {path_display}: {err}"
-                                ));
+                                self.chat_widget.add_plain_history_lines(lines);
                             }
                         }
+                        Err(err) => {
+                            let path_display = path.display();
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to fork current session from {path_display}: {err}"
+                            ));
+                        }
                     }
-                    SessionSelection::Exit
-                    | SessionSelection::StartFresh
-                    | SessionSelection::Resume(_) => {}
+                } else {
+                    self.chat_widget
+                        .add_error_message("Current session is not ready to fork yet.".to_string());
                 }
 
-                // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
@@ -1554,6 +1613,8 @@ impl App {
                 self.transcript_cells.push(cell.clone());
                 if self.overlay.is_some() {
                     self.deferred_history_cells.push(cell);
+                } else {
+                    tui.frame_requester().schedule_frame();
                 }
             }
             AppEvent::StartCommitAnimation => {
@@ -1583,20 +1644,27 @@ impl App {
                     && matches!(event.msg, EventMsg::ShutdownComplete)
                 {
                     self.suppress_shutdown_complete = false;
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
                 if let EventMsg::ListSkillsResponse(response) = &event.msg {
                     let cwd = self.chat_widget.config_ref().cwd.clone();
                     let errors = errors_for_cwd(&cwd, response);
                     emit_skill_load_warnings(&self.app_event_tx, &errors);
                 }
+                self.handle_backtrack_event(&event.msg);
                 self.chat_widget.handle_codex_event(event);
+                if self.backtrack_render_pending {
+                    tui.frame_requester().schedule_frame();
+                }
             }
-            AppEvent::ConversationHistory(ev) => {
-                self.on_conversation_history_for_backtrack(tui, ev).await?;
-            }
-            AppEvent::ExitRequest => {
-                return Ok(false);
+            AppEvent::Exit(mode) => match mode {
+                ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
+                ExitMode::Immediate => {
+                    return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                }
+            },
+            AppEvent::FatalExitRequest(message) => {
+                return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
             AppEvent::DiffResult(text) => {
@@ -1691,7 +1759,7 @@ impl App {
                             preset,
                             mode: WindowsSandboxEnableMode::Elevated,
                         });
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
 
                     self.chat_widget.show_windows_sandbox_setup_status();
@@ -1773,6 +1841,7 @@ impl App {
                                         model: None,
                                         effort: None,
                                         summary: None,
+                                        collaboration_mode: None,
                                     },
                                 ));
                                 self.app_event_tx
@@ -1860,7 +1929,7 @@ impl App {
                     tracing::warn!(%err, "failed to set sandbox policy on app config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
                 #[cfg(target_os = "windows")]
                 if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
@@ -1872,7 +1941,7 @@ impl App {
                     tracing::warn!(%err, "failed to set sandbox policy on chat config");
                     self.chat_widget
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
 
                 // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
@@ -1881,7 +1950,7 @@ impl App {
                     // One-shot suppression if the user just confirmed continue.
                     if self.skip_world_writable_scan_once {
                         self.skip_world_writable_scan_once = false;
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
 
                     let should_check = codex_core::get_platform_sandbox().is_some()
@@ -2029,7 +2098,7 @@ impl App {
                 }
             },
         }
-        Ok(true)
+        Ok(AppRunControl::Continue)
     }
 
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
@@ -2192,8 +2261,9 @@ impl App {
                 && self.backtrack.nth_user_message != usize::MAX
                 && self.chat_widget.composer_is_empty() =>
             {
-                // Delegate to helper for clarity; preserves behavior.
-                self.confirm_backtrack_from_main();
+                if let Some(selection) = self.confirm_backtrack_from_main() {
+                    self.apply_backtrack_selection(tui, selection);
+                }
             }
             KeyEvent {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
@@ -2314,6 +2384,7 @@ mod tests {
             scroll_config: ScrollConfig::default(),
             scroll_state: MouseScrollState::default(),
             backtrack: BacktrackState::default(),
+            backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
@@ -2367,6 +2438,7 @@ mod tests {
                 scroll_config: ScrollConfig::default(),
                 scroll_state: MouseScrollState::default(),
                 backtrack: BacktrackState::default(),
+                backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
@@ -2384,6 +2456,9 @@ mod tests {
     fn model_migration_copy_to_plain_text(
         copy: &crate::model_migration::ModelMigrationCopy,
     ) -> String {
+        if let Some(markdown) = copy.markdown.as_ref() {
+            return markdown.clone();
+        }
         let mut s = String::new();
         for span in &copy.heading {
             s.push_str(&span.content);
@@ -2478,6 +2553,7 @@ mod tests {
             &upgrade.id,
             target.display_name,
             target_description,
+            upgrade.migration_markdown.clone(),
             can_opt_out,
         );
 
@@ -2558,7 +2634,7 @@ mod tests {
 
     #[tokio::test]
     async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
-        let mut app = make_test_app().await;
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
         let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
@@ -2575,6 +2651,7 @@ mod tests {
         let make_header = |is_first| {
             let event = SessionConfiguredEvent {
                 session_id: ThreadId::new(),
+                forked_from_id: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
@@ -2594,9 +2671,8 @@ mod tests {
             )) as Arc<dyn HistoryCell>
         };
 
-        // Simulate the transcript after trimming for a fork, replaying history, and
-        // appending the edited turn. The session header separates the retained history
-        // from the forked conversation's replayed turns.
+        // Simulate a transcript with duplicated history (e.g., from prior backtracks)
+        // and an edited turn appended after a session header boundary.
         app.transcript_cells = vec![
             make_header(true),
             user_cell("first question"),
@@ -2612,15 +2688,45 @@ mod tests {
 
         assert_eq!(user_count(&app.transcript_cells), 2);
 
-        app.backtrack.base_id = Some(ThreadId::new());
+        let base_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: base_id,
+                forked_from_id: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: PathBuf::new(),
+            }),
+        });
+
+        app.backtrack.base_id = Some(base_id);
         app.backtrack.primed = true;
         app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
 
-        app.confirm_backtrack_from_main();
+        let selection = app
+            .confirm_backtrack_from_main()
+            .expect("backtrack selection");
+        assert_eq!(selection.nth_user_message, 1);
+        assert_eq!(selection.prefill, "follow-up (edited)");
 
-        let (_, nth, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
-        assert_eq!(nth, 1);
-        assert_eq!(prefill, "follow-up (edited)");
+        app.apply_backtrack_rollback(selection);
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+
+        assert_eq!(rollback_turns, Some(1));
     }
 
     #[tokio::test]
@@ -2870,6 +2976,7 @@ mod tests {
         let conversation_id = ThreadId::new();
         let event = SessionConfiguredEvent {
             session_id: conversation_id,
+            forked_from_id: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,

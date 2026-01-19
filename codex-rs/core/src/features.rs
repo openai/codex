@@ -8,6 +8,7 @@
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
 use codex_otel::OtelManager;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -15,6 +16,7 @@ use std::collections::BTreeSet;
 
 mod legacy;
 pub(crate) use legacy::LegacyFeatureToggles;
+pub(crate) use legacy::legacy_feature_keys;
 
 /// High-level lifecycle stage for a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,7 +89,7 @@ pub enum Feature {
     /// Experimental shell snapshotting.
     ShellSnapshot,
     /// Append additional AGENTS.md guidance to user instructions.
-    HierarchicalAgents,
+    ChildAgentsMd,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
     /// Enforce UTF8 output in Powershell.
@@ -98,6 +100,8 @@ pub enum Feature {
     Collab,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
+    /// Enable collaboration modes (Plan, Pair Programming, Execute).
+    CollaborationModes,
 }
 
 impl Feature {
@@ -294,7 +298,7 @@ pub fn is_known_feature_key(key: &str) -> bool {
 }
 
 /// Deserializable features table for TOML.
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 pub struct FeaturesToml {
     #[serde(flatten)]
     pub entries: BTreeMap<String, bool>,
@@ -357,8 +361,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::HierarchicalAgents,
-        key: "hierarchical_agents",
+        id: Feature::ChildAgentsMd,
+        key: "child_agents_md",
         stage: Stage::Experimental,
         default_enabled: false,
     },
@@ -401,7 +405,17 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::PowershellUtf8,
         key: "powershell_utf8",
+        #[cfg(windows)]
+        stage: Stage::Beta {
+            name: "Powershell UTF-8 support",
+            menu_description: "Enable UTF-8 output in Powershell.",
+            announcement: "Codex now supports UTF-8 output in Powershell. If you are seeing problems, disable in /experimental.",
+        },
+        #[cfg(windows)]
+        default_enabled: true,
+        #[cfg(not(windows))]
         stage: Stage::Experimental,
+        #[cfg(not(windows))]
         default_enabled: false,
     },
     FeatureSpec {
@@ -430,6 +444,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Enter submits immediately; Tab queues messages when a task is running.",
             announcement: "NEW! Try Steer mode: Enter submits immediately, Tab queues. Enable in /experimental!",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CollaborationModes,
+        key: "collaboration_modes",
+        stage: Stage::Experimental,
         default_enabled: false,
     },
 ];

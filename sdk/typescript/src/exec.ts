@@ -3,7 +3,12 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
-import { SandboxMode, ModelReasoningEffort, ApprovalMode } from "./threadOptions";
+import {
+  SandboxMode,
+  ModelReasoningEffort,
+  ApprovalMode,
+  WebSearchMode,
+} from "./threadOptions";
 
 export type CodexExecArgs = {
   input: string;
@@ -30,7 +35,9 @@ export type CodexExecArgs = {
   signal?: AbortSignal;
   // --config sandbox_workspace_write.network_access
   networkAccessEnabled?: boolean;
-  // --config features.web_search_request
+  // --config web_search
+  webSearchMode?: WebSearchMode;
+  // legacy --config features.web_search_request
   webSearchEnabled?: boolean;
   // --config approval_policy
   approvalPolicy?: ApprovalMode;
@@ -88,8 +95,12 @@ export class CodexExec {
       );
     }
 
-    if (args.webSearchEnabled !== undefined) {
-      commandArgs.push("--config", `features.web_search_request=${args.webSearchEnabled}`);
+    if (args.webSearchMode) {
+      commandArgs.push("--config", `web_search="${args.webSearchMode}"`);
+    } else if (args.webSearchEnabled === true) {
+      commandArgs.push("--config", `web_search="live"`);
+    } else if (args.webSearchEnabled === false) {
+      commandArgs.push("--config", `web_search="disabled"`);
     }
 
     if (args.approvalPolicy) {

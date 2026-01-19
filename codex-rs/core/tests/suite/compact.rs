@@ -159,6 +159,7 @@ async fn summarize_context_three_requests_and_instructions() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello world".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -180,6 +181,7 @@ async fn summarize_context_three_requests_and_instructions() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: THIRD_USER_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -576,6 +578,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: user_message.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1053,6 +1056,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1065,6 +1069,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1077,6 +1082,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: POST_AUTO_USER_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1277,6 +1283,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: follow_up_user.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: resumed.cwd.path().to_path_buf(),
@@ -1285,6 +1292,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             model: resumed.session_configured.model.clone(),
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await
         .unwrap();
@@ -1386,6 +1394,7 @@ async fn auto_compact_persists_rollout_entries() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1397,6 +1406,7 @@ async fn auto_compact_persists_rollout_entries() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1408,6 +1418,7 @@ async fn auto_compact_persists_rollout_entries() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: POST_AUTO_USER_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1500,6 +1511,7 @@ async fn manual_compact_retries_after_context_window_error() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "first turn".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1633,6 +1645,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: first_user_message.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1647,6 +1660,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: second_user_message.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1661,6 +1675,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: final_user_message.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1839,7 +1854,10 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     for user in [MULTI_AUTO_MSG, follow_up_user, final_user] {
         codex
             .submit(Op::UserInput {
-                items: vec![UserInput::Text { text: user.into() }],
+                items: vec![UserInput::Text {
+                    text: user.into(),
+                    text_elements: Vec::new(),
+                }],
                 final_output_json_schema: None,
             })
             .await
@@ -1952,6 +1970,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: FUNCTION_CALL_LIMIT_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1964,6 +1983,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: follow_up_user.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -2079,7 +2099,10 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     {
         codex
             .submit(Op::UserInput {
-                items: vec![UserInput::Text { text: user.into() }],
+                items: vec![UserInput::Text {
+                    text: user.into(),
+                    text_elements: Vec::new(),
+                }],
                 final_output_json_schema: None,
             })
             .await
