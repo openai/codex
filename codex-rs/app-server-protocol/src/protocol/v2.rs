@@ -2281,7 +2281,6 @@ pub struct FileChangeRequestApprovalResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ToolRequestUserInputOption {
-    pub value: String,
     pub label: String,
     pub description: String,
 }

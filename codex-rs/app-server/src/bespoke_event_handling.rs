@@ -277,7 +277,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                             options
                                 .into_iter()
                                 .map(|option| ToolRequestUserInputOption {
-                                    value: option.value,
                                     label: option.label,
                                     description: option.description,
                                 })

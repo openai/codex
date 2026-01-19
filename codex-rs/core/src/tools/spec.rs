@@ -538,12 +538,6 @@ fn create_wait_tool() -> ToolSpec {
 fn create_request_user_input_tool() -> ToolSpec {
     let mut option_props = BTreeMap::new();
     option_props.insert(
-        "value".to_string(),
-        JsonSchema::String {
-            description: Some("Machine-readable value (snake_case).".to_string()),
-        },
-    );
-    option_props.insert(
         "label".to_string(),
         JsonSchema::String {
             description: Some("User-facing label (1-5 words).".to_string()),
@@ -565,11 +559,7 @@ fn create_request_user_input_tool() -> ToolSpec {
         ),
         items: Box::new(JsonSchema::Object {
             properties: option_props,
-            required: Some(vec![
-                "value".to_string(),
-                "label".to_string(),
-                "description".to_string(),
-            ]),
+            required: Some(vec!["label".to_string(), "description".to_string()]),
             additional_properties: Some(false.into()),
         }),
     };

@@ -7,7 +7,6 @@ use ts_rs::TS;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputQuestionOption {
-    pub value: String,
     pub label: String,
     pub description: String,
 }

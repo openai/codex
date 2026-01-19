@@ -71,11 +71,9 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
             "header": "Confirm",
             "question": "Proceed with the plan?",
             "options": [{
-                "value": "yes",
                 "label": "Yes (Recommended)",
                 "description": "Continue the current plan."
             }, {
-                "value": "no",
                 "label": "No",
                 "description": "Stop and revisit the approach."
             }]

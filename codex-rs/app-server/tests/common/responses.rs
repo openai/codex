@@ -68,11 +68,9 @@ pub fn create_request_user_input_sse_response(call_id: &str) -> anyhow::Result<S
             "header": "Confirm",
             "question": "Proceed with the plan?",
             "options": [{
-                "value": "yes",
                 "label": "Yes (Recommended)",
                 "description": "Continue the current plan."
             }, {
-                "value": "no",
                 "label": "No",
                 "description": "Stop and revisit the approach."
             }]

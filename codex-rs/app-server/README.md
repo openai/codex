@@ -471,10 +471,7 @@ Invoke a skill by including `$<skill-name>` in the text input. Add a `skill` inp
   "params": {
     "threadId": "thread-1",
     "input": [
-      {
-        "type": "text",
-        "text": "$skill-creator Add a new skill for triaging flaky CI."
-      },
+      { "type": "skill", "name": "skill-creator", "path": "/Users/me/.codex/skills/skill-creator/SKILL.md" }
       {
         "type": "skill",
         "name": "skill-creator",
