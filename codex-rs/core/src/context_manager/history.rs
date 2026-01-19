@@ -124,6 +124,54 @@ impl ContextManager {
         }
     }
 
+    /// Remove the least important item from history, prioritizing preservation of
+    /// important items like user messages and critical decision points.
+    /// Falls back to removing the first item if no non-important items are found.
+    pub(crate) fn remove_least_important_item(&mut self) {
+        if self.items.is_empty() {
+            return;
+        }
+
+        // Identify important items that should be preserved
+        // Important items include: user messages, messages with critical keywords,
+        // and items that are part of critical call/output pairs
+        let important_indices: std::collections::HashSet<usize> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, item)| {
+                if is_important_item(item) {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Find the oldest non-important item that is not part of a critical call/output pair
+        let to_remove = self
+            .items
+            .iter()
+            .enumerate()
+            .find(|(idx, item)| {
+                !important_indices.contains(idx) && !is_call_output_pair_critical(item)
+            });
+
+        match to_remove {
+            Some((idx, _)) => {
+                // Remove the selected non-important item
+                let removed = self.items.remove(idx);
+                // If the removed item participates in a call/output pair, also remove
+                // its corresponding counterpart to keep the invariants intact
+                normalize::remove_corresponding_for(&mut self.items, &removed);
+            }
+            None => {
+                // No non-important items found, fall back to removing the first item
+                self.remove_first_item();
+            }
+        }
+    }
+
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
     }
@@ -369,6 +417,80 @@ fn user_message_positions(items: &[ResponseItem]) -> Vec<usize> {
         }
     }
     positions
+}
+
+/// Check if a ResponseItem is important and should be preserved during compaction.
+/// Important items include:
+/// - User messages (they represent user intent and instructions)
+/// - Messages containing critical keywords (important, critical, must, etc.)
+/// - Items that are part of critical decision points
+fn is_important_item(item: &ResponseItem) -> bool {
+    match item {
+        // User messages are always important as they represent user intent
+        ResponseItem::Message { role, .. } if role == "user" => true,
+        // Check for critical keywords in message content
+        ResponseItem::Message { content, .. } => {
+            content.iter().any(|c| {
+                match c {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                        let lower = text.to_lowercase();
+                        lower.contains("important")
+                            || lower.contains("critical")
+                            || lower.contains("must")
+                            || lower.contains("关键")
+                            || lower.contains("重要")
+                            || lower.contains("必须")
+                    }
+                    ContentItem::InputImage { .. } => false,
+                }
+            })
+        }
+        // Other item types are not considered important by default
+        _ => false,
+    }
+}
+
+/// Check if a ResponseItem is part of a critical call/output pair that should be preserved.
+/// Critical pairs include function calls with error outputs or failed executions.
+fn is_call_output_pair_critical(item: &ResponseItem) -> bool {
+    match item {
+        // Function call outputs with non-zero exit codes or error content are critical
+        ResponseItem::FunctionCallOutput { output, .. } => {
+            // Check if output contains error patterns
+            contains_error_patterns(&output.content)
+                || output
+                    .content_items
+                    .as_ref()
+                    .map(|items| {
+                        items.iter().any(|item| {
+                            if let FunctionCallOutputContentItem::InputText { text } = item {
+                                contains_error_patterns(text)
+                            } else {
+                                false
+                            }
+                        })
+                    })
+                    .unwrap_or(false)
+        }
+        // Local shell calls with non-completed status might be critical
+        ResponseItem::LocalShellCall { status, .. } => {
+            // Consider non-completed shell calls as potentially critical
+            matches!(status, codex_protocol::models::LocalShellStatus::Failed)
+        }
+        // Other items are not critical pairs
+        _ => false,
+    }
+}
+
+/// Check if text contains error patterns (used for identifying critical content).
+/// This is a simplified version for use in history management.
+fn contains_error_patterns(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("error")
+        || lower.contains("failed")
+        || lower.contains("exception")
+        || lower.contains("fatal")
+        || lower.contains("panic")
 }
 
 #[cfg(test)]

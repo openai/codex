@@ -126,11 +126,13 @@ async fn run_compact_task_inner(
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
                 if turn_input_len > 1 {
-                    // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
+                    // Use importance-aware removal to preserve critical items like user messages
+                    // and error information while removing less important items first.
+                    // This helps maintain context quality during compaction.
                     error!(
-                        "Context window exceeded while compacting; removing oldest history item. Error: {e}"
+                        "Context window exceeded while compacting; removing least important history item. Error: {e}"
                     );
-                    history.remove_first_item();
+                    history.remove_least_important_item();
                     truncated_count += 1;
                     retries = 0;
                     continue;

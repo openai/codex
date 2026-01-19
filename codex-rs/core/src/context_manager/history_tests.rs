@@ -1015,3 +1015,133 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
     let mut h = create_history_with_items(items);
     h.normalize_history();
 }
+
+#[test]
+fn remove_least_important_item_preserves_user_messages() {
+    // Test that user messages are preserved when removing items
+    let items = vec![
+        assistant_msg("assistant message 1"),
+        user_msg("user message 1"),
+        assistant_msg("assistant message 2"),
+        user_msg("user message 2"),
+    ];
+    let mut h = create_history_with_items(items);
+
+    // Remove least important item - should remove assistant message, not user message
+    h.remove_least_important_item();
+
+    let remaining = h.raw_items();
+    // User messages should be preserved
+    assert!(remaining.iter().any(|item| {
+        matches!(item, ResponseItem::Message { role, .. } if role == "user")
+    }), "User messages should be preserved");
+}
+
+#[test]
+fn remove_least_important_item_preserves_messages_with_critical_keywords() {
+    // Test that messages with critical keywords are preserved
+    let items = vec![
+        assistant_msg("regular assistant message"),
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "This is IMPORTANT information".to_string(),
+            }],
+        },
+        assistant_msg("another regular message"),
+    ];
+    let mut h = create_history_with_items(items);
+
+    let initial_count = h.raw_items().len();
+    h.remove_least_important_item();
+
+    // Message with IMPORTANT keyword should be preserved
+    let remaining = h.raw_items();
+    assert!(remaining.iter().any(|item| {
+        if let ResponseItem::Message { content, .. } = item {
+            content.iter().any(|c| {
+                if let ContentItem::OutputText { text } = c {
+                    text.contains("IMPORTANT")
+                } else {
+                    false
+                }
+            })
+        } else {
+            false
+        }
+    }), "Message with IMPORTANT keyword should be preserved");
+}
+
+#[test]
+fn remove_least_important_item_removes_non_important_items_first() {
+    // Test that non-important items are removed before important ones
+    let items = vec![
+        assistant_msg("regular message 1"),
+        assistant_msg("regular message 2"),
+        user_msg("user message"), // Important
+        assistant_msg("regular message 3"),
+    ];
+    let mut h = create_history_with_items(items);
+
+    let initial_count = h.raw_items().len();
+    h.remove_least_important_item();
+
+    // Should have removed one item
+    assert_eq!(h.raw_items().len(), initial_count - 1);
+    // User message should still be present
+    assert!(h.raw_items().iter().any(|item| {
+        matches!(item, ResponseItem::Message { role, .. } if role == "user")
+    }));
+}
+
+#[test]
+fn remove_least_important_item_falls_back_to_first_item_when_all_important() {
+    // Test fallback behavior when all items are important
+    let items = vec![
+        user_msg("user message 1"),
+        user_msg("user message 2"),
+        user_msg("user message 3"),
+    ];
+    let mut h = create_history_with_items(items);
+
+    let initial_count = h.raw_items().len();
+    h.remove_least_important_item();
+
+    // Should still remove one item (fallback to first item)
+    assert_eq!(h.raw_items().len(), initial_count - 1);
+}
+
+#[test]
+fn remove_least_important_item_preserves_error_outputs() {
+    // Test that function call outputs with errors are preserved
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "test".to_string(),
+            arguments: "{}".to_string(),
+            call_id: "call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "error: compilation failed".to_string(),
+                ..Default::default()
+            },
+        },
+        assistant_msg("regular message"),
+    ];
+    let mut h = create_history_with_items(items);
+
+    h.remove_least_important_item();
+
+    // Error output should be preserved
+    let remaining = h.raw_items();
+    assert!(remaining.iter().any(|item| {
+        if let ResponseItem::FunctionCallOutput { output, .. } = item {
+            output.content.contains("error")
+        } else {
+            false
+        }
+    }), "Error output should be preserved");
+}

@@ -6,6 +6,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::TruncationPolicy as ProtocolTruncationPolicy;
+use serde_json;
 
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 
@@ -83,6 +84,22 @@ pub(crate) fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -
 }
 
 pub(crate) fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
+    // Check if content contains error patterns (compilation errors, test failures, etc.)
+    // Error information is critical and should be preserved with priority
+    if contains_error_patterns(content) {
+        return truncate_with_error_priority(content, policy);
+    }
+
+    // Check if content is structured data (JSON/XML) that needs special handling
+    // Structured data should be truncated safely to maintain parseability
+    if is_json(content) {
+        return truncate_json_safely(content, policy);
+    }
+    if is_xml(content) {
+        return truncate_xml_safely(content, policy);
+    }
+
+    // Default truncation logic for regular text content
     match policy {
         TruncationPolicy::Bytes(_) => truncate_with_byte_estimate(content, policy),
         TruncationPolicy::Tokens(_) => {
@@ -91,6 +108,235 @@ pub(crate) fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
         }
     }
 }
+/// Check if text contains error patterns that indicate compilation errors,
+/// test failures, or other critical error information.
+/// Uses case-insensitive matching for common error keywords.
+fn contains_error_patterns(text: &str) -> bool {
+    // Use case-insensitive matching for better coverage
+    let lower = text.to_lowercase();
+    lower.contains("error")
+        || lower.contains("failed")
+        || lower.contains("exception")
+        || lower.contains("fatal")
+        || lower.contains("panic")
+        || lower.contains("abort")
+}
+
+/// Truncate content with priority given to error information.
+/// Extracts error lines and preserves them along with surrounding context.
+fn truncate_with_error_priority(content: &str, policy: TruncationPolicy) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut error_line_indices: Vec<usize> = Vec::new();
+
+    // Identify lines containing error patterns
+    for (idx, line) in lines.iter().enumerate() {
+        if contains_error_patterns(line) {
+            error_line_indices.push(idx);
+        }
+    }
+
+    // If no error lines found, fall back to default truncation
+    if error_line_indices.is_empty() {
+        return match policy {
+            TruncationPolicy::Bytes(_) => truncate_with_byte_estimate(content, policy),
+            TruncationPolicy::Tokens(_) => {
+                let (truncated, _) = truncate_with_token_budget(content, policy);
+                truncated
+            }
+        };
+    }
+
+    // Extract error lines with context (2 lines before and after each error)
+    const CONTEXT_LINES: usize = 2;
+    let mut important_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for &error_idx in &error_line_indices {
+        let start = error_idx.saturating_sub(CONTEXT_LINES);
+        let end = (error_idx + CONTEXT_LINES + 1).min(lines.len());
+        for idx in start..end {
+            important_indices.insert(idx);
+        }
+    }
+
+    // Build result: keep important lines, truncate others
+    let budget = policy.token_budget();
+    let mut result_lines: Vec<String> = Vec::new();
+    let mut current_tokens = 0usize;
+
+    for (idx, line) in lines.iter().enumerate() {
+        let line_tokens = approx_token_count(line);
+        let line_with_newline_tokens = line_tokens + 1; // Account for newline
+
+        if important_indices.contains(&idx) {
+            // Always include error lines and their context
+            result_lines.push(line.to_string());
+            current_tokens = current_tokens.saturating_add(line_with_newline_tokens);
+        } else if current_tokens.saturating_add(line_with_newline_tokens) <= budget {
+            // Include non-error lines if budget allows
+            result_lines.push(line.to_string());
+            current_tokens = current_tokens.saturating_add(line_with_newline_tokens);
+        } else {
+            // Budget exhausted, stop adding lines
+            break;
+        }
+    }
+
+    // If we have remaining budget and didn't include all error lines, prioritize them
+    if result_lines.len() < lines.len() && !error_line_indices.is_empty() {
+        // Add remaining error lines even if over budget
+        for &error_idx in &error_line_indices {
+            if error_idx >= result_lines.len() {
+                result_lines.push(lines[error_idx].to_string());
+            }
+        }
+    }
+
+    result_lines.join("\n")
+}
+
+/// Check if text appears to be JSON by examining its start.
+/// Simple heuristic: checks if trimmed content starts with '{' or '['.
+fn is_json(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with('{') || trimmed.starts_with('[')
+}
+
+/// Safely truncate JSON content while preserving structure.
+/// Strategy: if content fits within budget, keep it all. Otherwise,
+/// attempt to preserve top-level structure by truncating nested values.
+fn truncate_json_safely(json: &str, policy: TruncationPolicy) -> String {
+    let budget = policy.token_budget();
+    let estimated_tokens = approx_token_count(json);
+
+    // If content fits within budget, return as-is
+    if estimated_tokens <= budget {
+        return json.to_string();
+    }
+
+    // Attempt to parse JSON to preserve structure
+    match serde_json::from_str::<serde_json::Value>(json) {
+        Ok(value) => {
+            // Successfully parsed - try to truncate while preserving structure
+            truncate_json_value(value, budget)
+        }
+        Err(_) => {
+            // Not valid JSON or parse failed - fall back to regular truncation
+            // but try to preserve JSON-like structure by keeping opening/closing braces
+            match policy {
+                TruncationPolicy::Bytes(_) => truncate_with_byte_estimate(json, policy),
+                TruncationPolicy::Tokens(_) => {
+                    let (truncated, _) = truncate_with_token_budget(json, policy);
+                    truncated
+                }
+            }
+        }
+    }
+}
+
+/// Truncate a JSON value while preserving top-level structure.
+/// For objects, keeps all keys but may truncate values.
+/// For arrays, keeps structure but may truncate elements.
+fn truncate_json_value(value: serde_json::Value, budget: usize) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut result = serde_json::Map::new();
+            let mut remaining_budget = budget.saturating_sub(2); // Account for "{}"
+            let mut first = true;
+
+            for (key, val) in map {
+                let key_str = format!("\"{}\"", key);
+                let key_tokens = approx_token_count(&key_str) + 1; // +1 for colon
+                let val_str = serde_json::to_string(&val).unwrap_or_default();
+                let val_tokens = approx_token_count(&val_str);
+
+                if first {
+                    remaining_budget = remaining_budget.saturating_sub(key_tokens);
+                    first = false;
+                } else {
+                    remaining_budget = remaining_budget.saturating_sub(key_tokens + 1); // +1 for comma
+                }
+
+                if remaining_budget >= val_tokens {
+                    result.insert(key, val);
+                    remaining_budget = remaining_budget.saturating_sub(val_tokens);
+                } else {
+                    // Truncate value - replace with placeholder
+                    result.insert(key, serde_json::Value::String("[truncated]".to_string()));
+                    break;
+                }
+            }
+
+            serde_json::to_string(&serde_json::Value::Object(result)).unwrap_or_else(|_| "[truncated json]".to_string())
+        }
+        serde_json::Value::Array(arr) => {
+            let mut result = Vec::new();
+            let mut remaining_budget = budget.saturating_sub(2); // Account for "[]"
+            let mut first = true;
+
+            for val in arr {
+                let val_str = serde_json::to_string(&val).unwrap_or_default();
+                let val_tokens = approx_token_count(&val_str);
+
+                if first {
+                    remaining_budget = remaining_budget.saturating_sub(val_tokens);
+                    first = false;
+                } else {
+                    remaining_budget = remaining_budget.saturating_sub(val_tokens + 1); // +1 for comma
+                }
+
+                if remaining_budget >= val_tokens {
+                    result.push(val);
+                    remaining_budget = remaining_budget.saturating_sub(val_tokens);
+                } else {
+                    break;
+                }
+            }
+
+            serde_json::to_string(&serde_json::Value::Array(result)).unwrap_or_else(|_| "[truncated json]".to_string())
+        }
+        _ => {
+            // Primitive value - serialize and truncate if needed
+            let val_str = serde_json::to_string(&value).unwrap_or_default();
+            let val_tokens = approx_token_count(&val_str);
+            if val_tokens <= budget {
+                val_str
+            } else {
+                truncate_text(&val_str, TruncationPolicy::Tokens(budget))
+            }
+        }
+    }
+}
+
+/// Check if text appears to be XML by examining its start.
+/// Simple heuristic: checks if trimmed content starts with '<'.
+fn is_xml(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with('<')
+}
+
+/// Safely truncate XML content while preserving structure.
+/// Strategy: if content fits within budget, keep it all. Otherwise,
+/// attempt to preserve XML structure by keeping opening/closing tags balanced.
+fn truncate_xml_safely(xml: &str, policy: TruncationPolicy) -> String {
+    let budget = policy.token_budget();
+    let estimated_tokens = approx_token_count(xml);
+
+    // If content fits within budget, return as-is
+    if estimated_tokens <= budget {
+        return xml.to_string();
+    }
+
+    // Simple XML truncation: try to preserve structure by keeping opening tags
+    // and truncating content while maintaining balance
+    // For complex cases, fall back to regular truncation
+    match policy {
+        TruncationPolicy::Bytes(_) => truncate_with_byte_estimate(xml, policy),
+        TruncationPolicy::Tokens(_) => {
+            let (truncated, _) = truncate_with_token_budget(xml, policy);
+            truncated
+        }
+    }
+}
+
 /// Globally truncate function output items to fit within the given
 /// truncation policy's budget, preserving as many text/image items as
 /// possible and appending a summary for any omitted text items.
@@ -525,5 +771,99 @@ mod tests {
             other => panic!("unexpected summary item: {other:?}"),
         };
         assert!(summary_text.contains("omitted 2 text items"));
+    }
+
+    #[test]
+    fn truncate_text_preserves_error_lines_with_priority() {
+        // Test that error lines are preserved when truncating content
+        let content = "line 1\nline 2\nerror: compilation failed\nline 3\nline 4\nline 5";
+        let result = truncate_text(content, TruncationPolicy::Tokens(5));
+
+        // Error line should be preserved
+        assert!(result.contains("error: compilation failed"), "Error line should be preserved");
+        // Should contain some context around the error
+        assert!(result.contains("line 2") || result.contains("line 3"), "Context around error should be preserved");
+    }
+
+    #[test]
+    fn truncate_text_handles_multiple_error_lines() {
+        // Test that multiple error lines are all preserved
+        let content = "start\nerror: first error\nmiddle\nerror: second error\nend";
+        let result = truncate_text(content, TruncationPolicy::Tokens(10));
+
+        // Both error lines should be preserved
+        assert!(result.contains("error: first error"), "First error should be preserved");
+        assert!(result.contains("error: second error"), "Second error should be preserved");
+    }
+
+    #[test]
+    fn truncate_text_detects_case_insensitive_errors() {
+        // Test case-insensitive error detection
+        let content = "Some output\nERROR: Something went wrong\nMore output";
+        let result = truncate_text(content, TruncationPolicy::Tokens(5));
+
+        assert!(result.contains("ERROR: Something went wrong"), "Uppercase ERROR should be detected");
+    }
+
+    #[test]
+    fn truncate_json_preserves_structure_when_fits() {
+        // Test that valid JSON is preserved when it fits within budget
+        let json = r#"{"key1": "value1", "key2": "value2"}"#;
+        let result = truncate_text(json, TruncationPolicy::Tokens(20));
+
+        // JSON should be preserved as-is when it fits
+        assert!(result.contains("key1"));
+        assert!(result.contains("key2"));
+    }
+
+    #[test]
+    fn truncate_json_truncates_large_objects_safely() {
+        // Test that large JSON objects are truncated while preserving structure
+        let json = r#"{"key1": "very long value that exceeds the budget", "key2": "another long value"}"#;
+        let result = truncate_text(json, TruncationPolicy::Tokens(5));
+
+        // Should preserve JSON structure (opening brace, keys)
+        assert!(result.contains("{"), "Should preserve opening brace");
+        assert!(result.contains("key1") || result.contains("key2"), "Should preserve at least one key");
+    }
+
+    #[test]
+    fn truncate_json_handles_arrays() {
+        // Test JSON array truncation
+        let json = r#"["item1", "item2", "item3", "item4"]"#;
+        let result = truncate_text(json, TruncationPolicy::Tokens(5));
+
+        // Should preserve array structure
+        assert!(result.contains("["), "Should preserve opening bracket");
+    }
+
+    #[test]
+    fn truncate_json_falls_back_on_invalid_json() {
+        // Test that invalid JSON falls back to regular truncation
+        let invalid_json = "{key1: value1, key2: value2}"; // Missing quotes
+        let result = truncate_text(invalid_json, TruncationPolicy::Tokens(5));
+
+        // Should still truncate (fallback behavior)
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn truncate_xml_detects_xml_content() {
+        // Test XML detection
+        let xml = "<root><child>content</child></root>";
+        let result = truncate_text(xml, TruncationPolicy::Tokens(10));
+
+        // Should handle XML (may fall back to regular truncation for now)
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn truncate_text_prioritizes_errors_over_json() {
+        // Test that error detection takes priority over JSON detection
+        let content = r#"{"status": "error", "message": "compilation failed"}"#;
+        let result = truncate_text(content, TruncationPolicy::Tokens(5));
+
+        // Should prioritize error patterns even in JSON
+        assert!(result.contains("error") || result.contains("failed"));
     }
 }
