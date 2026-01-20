@@ -11,6 +11,7 @@ use crate::error::Result as CodexResult;
 use crate::features::Feature;
 use crate::protocol::CompactedItem;
 use crate::protocol::ContextCompactedEvent;
+use crate::protocol::ContextCompactionStartedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnContextItem;
 use crate::protocol::TurnStartedEvent;
@@ -70,6 +71,9 @@ async fn run_compact_task_inner(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
 ) {
+    let start_event = EventMsg::ContextCompactionStarted(ContextCompactionStartedEvent {});
+    sess.send_event(&turn_context, start_event).await;
+
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
