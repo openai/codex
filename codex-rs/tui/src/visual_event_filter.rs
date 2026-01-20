@@ -3,7 +3,8 @@ use codex_core::protocol::EventMsg;
 /// Returns true when a protocol event should be forwarded into the visual transcript.
 pub(crate) fn should_forward_visual_event(msg: &EventMsg) -> bool {
     matches!(
-        msg, EventMsg::AgentReasoning(_)
+        msg,
+        EventMsg::AgentReasoning(_)
             | EventMsg::AgentReasoningDelta(_)
             | EventMsg::AgentReasoningRawContent(_)
             | EventMsg::AgentReasoningRawContentDelta(_)
