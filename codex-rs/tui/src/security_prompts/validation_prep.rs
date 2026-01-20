@@ -10,12 +10,17 @@ Constraints
 
 Rules
 - Do not assume anything is already built.
+- This is an execution step, not a docs-writing step: keep trying until you either have runnable targets or you have a concrete, unfixable blocker.
 - Prefer standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.
+- Treat missing build tools as a solvable prerequisite:
+  - If you see `command not found` / missing compiler errors, try to install the missing tools either locally (system package manager) or inside the Docker target.
+  - Common tools to check for: `git`, `python3`, `pip`, `clang`, `gcc`, `make`, `cmake`, `ninja`, `pkg-config`, `node`, `npm`, `go`, `java` (JDK).
 - If the repo appears to use GN/Ninja (for example: `BUILD.gn`, `*.gn`, `tools/mb/mb.py`, `tools/dev/v8gen.py`), treat missing build tools as a solvable prerequisite:
   - Ensure `gn` and `ninja` are available.
   - Prefer repo-provided binaries/wrappers first (e.g., `./buildtools/**/gn`, `./buildtools/**/ninja`).
   - If not present, attempt to install them for the session (package manager or `depot_tools`) and record what you did.
   - If local install is not feasible, build a Docker-based target that provides `gn`/`ninja` and uses them to build+run the target in-container.
+  - On macOS, GN builds often require full Xcode (not just Command Line Tools). If you see `xcodebuild`/SDK errors, treat that as the likely prerequisite.
 
 Local/native target
 - First, check for already-built artifacts in common output dirs (for example: `out/`, `out.gn/`, `target/`, `build/`, `dist/`).
@@ -26,6 +31,7 @@ Local/native target
   - If the target is a server, start it and verify a health/root endpoint responds locally (then cleanly stop it).
 
 Docker target
+- First verify Docker is available (`docker --version`). If not available, record it as a prerequisite and mark the Docker half as unable.
 - If the repo provides a Dockerfile or compose config, prefer using it.
 - Otherwise, create a minimal Dockerfile under the provided output directory (not in the repo) that builds and runs the target.
 - Build the image and run it, then verify it starts:

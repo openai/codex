@@ -5,6 +5,7 @@ use crate::app_event::SecurityReviewAutoScopeSelection;
 use crate::app_event::SecurityReviewCommandState;
 use crate::app_event_sender::AppEventSender;
 use crate::diff_render::display_path_for;
+use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
 use crate::mermaid::fix_mermaid_blocks;
 use crate::security_prompts::*;
@@ -686,7 +687,7 @@ fn validation_target_prep_complete(output_root: &Path, repo_root: &Path) -> bool
         Ok(progress) => progress,
         Err(_) => return false,
     };
-    progress.version == 1 && progress.repo_root == repo_root.display().to_string()
+    progress.version == 2 && progress.repo_root == repo_root.display().to_string()
 }
 
 pub fn running_review_candidates(repo_path: &Path) -> Vec<RunningSecurityReviewCandidate> {
@@ -1131,6 +1132,21 @@ impl SecurityReviewPlanTracker {
             if self.snapshots_enabled {
                 self.emit_plan_snapshot();
             }
+        }
+    }
+
+    fn reset_step(&mut self, step: SecurityReviewPlanStep) {
+        let Some(entry) = self.steps.iter_mut().find(|item| item.kind == step) else {
+            return;
+        };
+
+        entry.status = StepStatus::Pending;
+        entry.started_at = None;
+        entry.completed_at = None;
+
+        self.emit_update();
+        if self.snapshots_enabled {
+            self.emit_plan_snapshot();
         }
     }
 
@@ -4597,22 +4613,31 @@ pub async fn run_security_review(
         plan_tracker.mark_complete(SecurityReviewPlanStep::DirTriage);
         plan_tracker.mark_complete(SecurityReviewPlanStep::FileTriage);
     }
-    if !checkpoint
-        .plan_statuses
-        .contains_key("prepare_validation_targets")
-        && matches!(
-            plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
-            Some(StepStatus::Completed | StepStatus::InProgress)
-        )
-    {
+    let validation_prep_complete =
+        validation_target_prep_complete(&request.output_root, &repo_path);
+    if validation_prep_complete {
+        push_progress_log(
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+            format!(
+                "Prepare runnable validation targets: existing prep marker found at {}; skipping.",
+                validation_target_prep_progress_path(&request.output_root).display()
+            ),
+        );
         plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
-    }
-    if !matches!(
+    } else if matches!(
         plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
-        Some(StepStatus::Completed)
-    ) && validation_target_prep_complete(&request.output_root, &repo_path)
-    {
-        plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
+        Some(StepStatus::Completed | StepStatus::InProgress)
+    ) {
+        push_progress_log(
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+            "Prepare runnable validation targets: checkpoint marked this step complete, but no valid prep marker was found; rerunning."
+                .to_string(),
+        );
+        plan_tracker.reset_step(SecurityReviewPlanStep::PrepareValidationTargets);
     }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
@@ -11737,7 +11762,7 @@ async fn persist_validation_target_prep_progress(
 ) {
     let progress_path = validation_target_prep_progress_path(output_root);
     let progress = ValidationTargetPrepProgress {
-        version: 1,
+        version: 2,
         repo_root: repo_root.display().to_string(),
     };
     let bytes = match serde_json::to_vec_pretty(&progress) {
@@ -19887,6 +19912,7 @@ async fn run_validation_target_prep_agent(
     }
 
     let mut last_agent_message: Option<String> = None;
+    let mut last_tool_log: Option<String> = None;
     loop {
         let event = match conversation.next_event().await {
             Ok(event) => event,
@@ -19909,6 +19935,41 @@ async fn run_validation_target_prep_agent(
             EventMsg::AgentMessage(msg) => last_agent_message = Some(msg.message.clone()),
             EventMsg::AgentReasoning(reason) => {
                 log_model_reasoning(&reason.text, &progress_sender, &log_sink, &mut logs);
+            }
+            EventMsg::McpToolCallBegin(begin) => {
+                let tool = begin.invocation.tool.clone();
+                let message = format!("Validation prep: tool → {tool}");
+                if last_tool_log.as_deref() != Some(message.as_str()) {
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                    last_tool_log = Some(message);
+                }
+            }
+            EventMsg::ExecCommandBegin(begin) => {
+                let command = strip_bash_lc_and_escape(&begin.command);
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    format!("Validation prep: run `{command}`"),
+                );
+            }
+            EventMsg::ExecCommandEnd(done) => {
+                if done.exit_code == 0 {
+                    continue;
+                }
+
+                let duration = fmt_elapsed_compact(done.duration.as_secs());
+                let summary = summarize_process_output(false, &done.stdout, &done.stderr);
+                let command = strip_bash_lc_and_escape(&done.command);
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    format!(
+                        "Validation prep: `{command}` exited {} ({duration}) · {summary}",
+                        done.exit_code
+                    ),
+                );
             }
             EventMsg::Warning(warn) => {
                 push_progress_log(&progress_sender, &log_sink, &mut logs, warn.message);
