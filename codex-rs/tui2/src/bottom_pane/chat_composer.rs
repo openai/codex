@@ -547,6 +547,23 @@ impl ChatComposer {
             .collect()
     }
 
+    fn prune_attached_images_for_submission(
+        &mut self,
+        text: &str,
+        text_elements: &[TextElement],
+    ) -> bool {
+        if self.attached_images.is_empty() {
+            return false;
+        }
+        let image_placeholders: HashSet<&str> = text_elements
+            .iter()
+            .filter_map(|elem| elem.placeholder(text))
+            .collect();
+        self.attached_images
+            .retain(|img| image_placeholders.contains(img.placeholder.as_str()));
+        !self.attached_images.is_empty()
+    }
+
     /// Insert an attachment placeholder and track it for the next submission.
     pub fn attach_image(&mut self, path: PathBuf) {
         let image_number = self.attached_images.len() + 1;
@@ -812,6 +829,10 @@ impl ChatComposer {
                         &self.textarea.text_elements(),
                     )
                 {
+                    self.prune_attached_images_for_submission(
+                        &expanded.text,
+                        &expanded.text_elements,
+                    );
                     self.textarea.set_text_clearing_elements("");
                     return (
                         InputResult::Submitted {
@@ -840,6 +861,10 @@ impl ChatComposer {
                                         text,
                                         text_elements,
                                     } => {
+                                        self.prune_attached_images_for_submission(
+                                            &text,
+                                            &text_elements,
+                                        );
                                         self.textarea.set_text_clearing_elements("");
                                         return (
                                             InputResult::Submitted {
@@ -1499,7 +1524,6 @@ impl ChatComposer {
         let expanded_input = text.clone();
 
         // If there is neither text nor attachments, suppress submission entirely.
-        let mut has_attachments = !self.attached_images.is_empty();
         text = text.trim().to_string();
         text_elements = Self::trim_text_elements(&expanded_input, &text, text_elements);
 
@@ -1558,17 +1582,9 @@ impl ChatComposer {
             text = expanded.text;
             text_elements = expanded.text_elements;
         }
-        if !self.attached_images.is_empty() {
-            // Custom prompt expansion can remove or rewrite image placeholders, so prune any
-            // attachments that no longer have a corresponding placeholder in the expanded text.
-            let image_placeholders: HashSet<&str> = text_elements
-                .iter()
-                .filter_map(|elem| elem.placeholder(&text))
-                .collect();
-            self.attached_images
-                .retain(|img| image_placeholders.contains(img.placeholder.as_str()));
-            has_attachments = !self.attached_images.is_empty();
-        }
+        // Custom prompt expansion can remove or rewrite image placeholders, so prune any
+        // attachments that no longer have a corresponding placeholder in the expanded text.
+        let has_attachments = self.prune_attached_images_for_submission(&text, &text_elements);
         if text.is_empty() && !has_attachments {
             return None;
         }
@@ -5386,6 +5402,45 @@ mod tests {
             result,
             InputResult::Submitted { text, .. } if text == expected
         ));
+    }
+
+    #[test]
+    fn popup_prompt_submission_prunes_unused_image_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Hello".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer.attach_image(PathBuf::from("/tmp/unused.png"));
+        composer.textarea.set_cursor(0);
+        composer.handle_paste(format!("/{PROMPTS_CMD_PREFIX}:my-prompt "));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(
+            result,
+            InputResult::Submitted { text, .. } if text == "Hello"
+        ));
+        assert!(
+            composer
+                .take_recent_submission_images_with_placeholders()
+                .is_empty()
+        );
     }
 
     #[test]
