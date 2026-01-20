@@ -272,23 +272,41 @@ pub fn extract_positional_args_for_prompt_line(
     text_elements: &[TextElement],
 ) -> Vec<PromptArg> {
     let trimmed = line.trim_start();
-    let Some(rest) = trimmed.strip_prefix('/') else {
+    let trim_offset = line.len() - trimmed.len();
+    let Some((name, rest, rest_offset)) = parse_slash_name(trimmed) else {
         return Vec::new();
     };
     // Require the explicit prompts prefix for custom prompt invocations.
-    let Some(after_prefix) = rest.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:")) else {
+    let Some(after_prefix) = name.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:")) else {
         return Vec::new();
     };
-    let mut parts = after_prefix.splitn(2, char::is_whitespace);
-    let cmd = parts.next().unwrap_or("");
-    if cmd != prompt_name {
+    if after_prefix != prompt_name {
         return Vec::new();
     }
-    let args_str = parts.next().unwrap_or("").trim();
+    let rest_trimmed_start = rest.trim_start();
+    let args_str = rest_trimmed_start.trim_end();
     if args_str.is_empty() {
         return Vec::new();
     }
-    parse_positional_args(args_str, text_elements)
+    let args_offset = trim_offset + rest_offset + (rest.len() - rest_trimmed_start.len());
+    let local_elements: Vec<TextElement> = text_elements
+        .iter()
+        .filter_map(|elem| {
+            let shifted = shift_text_element_left(elem, args_offset)?;
+            if shifted.byte_range.start >= args_str.len() {
+                return None;
+            }
+            let end = shifted.byte_range.end.min(args_str.len());
+            Some(TextElement {
+                byte_range: ByteRange {
+                    start: shifted.byte_range.start,
+                    end,
+                },
+                placeholder: shifted.placeholder,
+            })
+        })
+        .collect();
+    parse_positional_args(args_str, &local_elements)
 }
 
 /// If the prompt only uses numeric placeholders and the first line contains
@@ -556,6 +574,7 @@ pub fn prompt_command_with_arg_placeholders(name: &str, args: &[String]) -> (Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn expand_arguments_basic() {
@@ -678,6 +697,43 @@ mod tests {
         }];
 
         let args = parse_positional_args(&rest, &text_elements);
+        assert_eq!(
+            args,
+            vec![
+                PromptArg {
+                    text: "alpha".to_string(),
+                    text_elements: Vec::new(),
+                },
+                PromptArg {
+                    text: placeholder.to_string(),
+                    text_elements: vec![TextElement {
+                        byte_range: ByteRange {
+                            start: 0,
+                            end: placeholder.len(),
+                        },
+                        placeholder: Some(placeholder.to_string()),
+                    }],
+                },
+                PromptArg {
+                    text: "beta".to_string(),
+                    text_elements: Vec::new(),
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_positional_args_shifts_element_offsets_into_args_str() {
+        let placeholder = "[Image #1]";
+        let line = format!("  /{PROMPTS_CMD_PREFIX}:my-prompt  alpha {placeholder} beta   ");
+        let start = line.find(placeholder).expect("placeholder");
+        let end = start + placeholder.len();
+        let text_elements = vec![TextElement {
+            byte_range: ByteRange { start, end },
+            placeholder: Some(placeholder.to_string()),
+        }];
+
+        let args = extract_positional_args_for_prompt_line(&line, "my-prompt", &text_elements);
         assert_eq!(
             args,
             vec![
