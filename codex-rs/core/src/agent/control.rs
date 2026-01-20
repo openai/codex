@@ -66,7 +66,7 @@ impl AgentControl {
             agent_id,
             vec![UserInput::Text {
                 text: prompt,
-                // Plain text conversion has no UI element ranges.
+                // Agent control prompts are plain text with no UI text elements.
                 text_elements: Vec::new(),
             }],
         )

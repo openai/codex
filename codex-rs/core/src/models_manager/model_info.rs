@@ -86,6 +86,9 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
             }
         };
     }
+    if let Some(base_instructions) = &config.base_instructions {
+        model.base_instructions = base_instructions.clone();
+    }
     model
 }
 
