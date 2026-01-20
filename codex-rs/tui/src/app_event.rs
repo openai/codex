@@ -125,6 +125,7 @@ pub(crate) enum AppEvent {
     /// Open the confirmation prompt before enabling full access mode.
     OpenFullAccessConfirmation {
         preset: ApprovalPreset,
+        return_to_permissions: bool,
     },
 
     /// Open the Windows world-writable directories warning.
@@ -226,6 +227,9 @@ pub(crate) enum AppEvent {
 
     /// Notify that the manage skills popup was closed.
     ManageSkillsClosed,
+
+    /// Re-open the permissions presets popup.
+    OpenPermissionsPopup,
 
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),

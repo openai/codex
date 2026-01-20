@@ -3572,6 +3572,7 @@ impl ChatWidget {
         self.open_approval_mode_popup(
             "Update Model Permissions",
             true,
+            false,
             |preset, is_windows_degraded| {
                 if preset.id == "auto" && is_windows_degraded {
                     "Agent (non-elevated sandbox)".to_string()
@@ -3579,6 +3580,7 @@ impl ChatWidget {
                     preset.label.to_string()
                 }
             },
+            |preset| preset.description.to_string(),
         );
     }
 
@@ -3588,22 +3590,32 @@ impl ChatWidget {
         self.open_approval_mode_popup(
             "Update Model Permissions",
             include_read_only,
+            true,
             |preset, _| match preset.id {
                 "read-only" => "Read Only".to_string(),
                 "auto" => "Default".to_string(),
                 "full-access" => "Full Access".to_string(),
                 _ => preset.label.to_string(),
             },
+            |preset| match preset.id {
+                "auto" => {
+                    format!("{} Identical to Agent approvals.", preset.description)
+                }
+                _ => preset.description.to_string(),
+            },
         );
     }
 
-    fn open_approval_mode_popup<F>(
+    fn open_approval_mode_popup<F, D>(
         &mut self,
         title: &str,
         include_read_only: bool,
+        return_to_permissions: bool,
         label_for_preset: F,
+        description_for_preset: D,
     ) where
         F: Fn(&ApprovalPreset, bool) -> String,
+        D: Fn(&ApprovalPreset) -> String,
     {
         let current_approval = self.config.approval_policy.value();
         let current_sandbox = self.config.sandbox_policy.get();
@@ -3627,7 +3639,7 @@ impl ChatWidget {
             let is_current =
                 Self::preset_matches_current(current_approval, current_sandbox, &preset);
             let name = label_for_preset(&preset, windows_degraded_sandbox_enabled);
-            let description = Some(preset.description.to_string());
+            let description = Some(description_for_preset(&preset));
             let disabled_reason = match self.config.approval_policy.can_set(&preset.approval) {
                 Ok(()) => None,
                 Err(err) => Some(err.to_string()),
@@ -3643,6 +3655,7 @@ impl ChatWidget {
                 vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenFullAccessConfirmation {
                         preset: preset_clone.clone(),
+                        return_to_permissions,
                     });
                 })]
             } else if preset.id == "auto" {
@@ -3812,7 +3825,11 @@ impl ChatWidget {
         None
     }
 
-    pub(crate) fn open_full_access_confirmation(&mut self, preset: ApprovalPreset) {
+    pub(crate) fn open_full_access_confirmation(
+        &mut self,
+        preset: ApprovalPreset,
+        return_to_permissions: bool,
+    ) {
         let approval = preset.approval;
         let sandbox = preset.sandbox;
         let mut header_children: Vec<Box<dyn Renderable>> = Vec::new();
@@ -3840,8 +3857,12 @@ impl ChatWidget {
             tx.send(AppEvent::PersistFullAccessWarningAcknowledged);
         }));
 
-        let deny_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
-            tx.send(AppEvent::OpenApprovalsPopup);
+        let deny_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            if return_to_permissions {
+                tx.send(AppEvent::OpenPermissionsPopup);
+            } else {
+                tx.send(AppEvent::OpenApprovalsPopup);
+            }
         })];
 
         let items = vec![
