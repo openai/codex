@@ -1730,8 +1730,8 @@ impl From<CoreUserInput> for UserInput {
                 text,
                 text_elements,
             } => UserInput::Text {
-                text_elements: text_elements.into_iter().map(Into::into).collect(),
                 text,
+                text_elements: text_elements.into_iter().map(Into::into).collect(),
             },
             CoreUserInput::Image { image_url } => UserInput::Image { url: image_url },
             CoreUserInput::LocalImage { path } => UserInput::LocalImage { path },
