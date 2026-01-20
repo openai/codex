@@ -503,6 +503,14 @@ impl McpProcess {
         self.send_request("config/batchWrite", params).await
     }
 
+    pub async fn send_custom_prompts_list_request(
+        &mut self,
+        params: codex_app_server_protocol::CustomPromptsListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("custom-prompts/list", params).await
+    }
+
     /// Send an `account/logout` JSON-RPC request.
     pub async fn send_logout_account_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("account/logout", None).await

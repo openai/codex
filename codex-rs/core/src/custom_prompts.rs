@@ -1,4 +1,5 @@
 use codex_protocol::custom_prompts::CustomPrompt;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -75,6 +76,77 @@ pub async fn discover_prompts_in_excluding(
     out
 }
 
+pub async fn discover_layered_prompts_for_cwd(
+    cwd: &Path,
+    config_layer_stack: &crate::config_loader::ConfigLayerStack,
+) -> Vec<CustomPrompt> {
+    discover_layered_prompts_for_cwd_with_global(
+        cwd,
+        config_layer_stack,
+        default_prompts_dir().as_deref(),
+    )
+    .await
+}
+
+async fn discover_layered_prompts_for_cwd_with_global(
+    cwd: &Path,
+    config_layer_stack: &crate::config_loader::ConfigLayerStack,
+    global_prompt_dir: Option<&Path>,
+) -> Vec<CustomPrompt> {
+    let Ok(cwd) = AbsolutePathBuf::from_absolute_path(cwd) else {
+        return Vec::new();
+    };
+    let project_root =
+        match crate::config_loader::find_project_root_for_layer_stack(&cwd, config_layer_stack)
+            .await
+        {
+            Ok(root) => root,
+            Err(_) => return Vec::new(),
+        };
+
+    let project_prompt_dirs = cwd
+        .as_path()
+        .ancestors()
+        .scan(false, |done, ancestor| {
+            if *done {
+                return None;
+            }
+            if ancestor == project_root.as_path() {
+                *done = true;
+            }
+            Some(ancestor.join(".codex").join("prompts"))
+        })
+        .collect::<Vec<_>>();
+    discover_layered_prompts_from_dirs(&project_prompt_dirs, global_prompt_dir).await
+}
+
+async fn discover_layered_prompts_from_dirs(
+    project_prompt_dirs: &[PathBuf],
+    global_prompt_dir: Option<&Path>,
+) -> Vec<CustomPrompt> {
+    let mut out = Vec::new();
+    let mut exclude = HashSet::new();
+
+    for dir in project_prompt_dirs {
+        let found = discover_prompts_in_excluding(dir, &exclude).await;
+        for prompt in &found {
+            exclude.insert(prompt.name.clone());
+        }
+        out.extend(found);
+    }
+
+    if let Some(dir) = global_prompt_dir {
+        let found = discover_prompts_in_excluding(dir, &exclude).await;
+        for prompt in &found {
+            exclude.insert(prompt.name.clone());
+        }
+        out.extend(found);
+    }
+
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
 /// Parse optional YAML-like frontmatter at the beginning of `content`.
 /// Supported keys:
 /// - `description`: short description shown in the slash popup
@@ -147,6 +219,7 @@ fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>, String) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use std::fs;
     use tempfile::tempdir;
 
@@ -240,5 +313,61 @@ mod tests {
         assert_eq!(desc.as_deref(), Some("Line endings"));
         assert_eq!(hint.as_deref(), Some("[arg]"));
         assert_eq!(body, "First line\r\nSecond line\r\n");
+    }
+
+    #[tokio::test]
+    async fn layered_prompts_prefer_deeper_dirs_and_keep_globals_last() {
+        let tmp = tempdir().expect("create TempDir");
+        let root = tmp.path().join("root");
+        let child = root.join("child");
+        let grandchild = child.join("grandchild");
+        let global = tmp.path().join("global");
+
+        fs::create_dir_all(root.join(".codex/prompts")).unwrap();
+        fs::create_dir_all(child.join(".codex/prompts")).unwrap();
+        fs::create_dir_all(grandchild.join(".codex/prompts")).unwrap();
+        fs::create_dir_all(&global).unwrap();
+
+        fs::write(root.join(".codex/prompts/shared.md"), "root shared").unwrap();
+        fs::write(child.join(".codex/prompts/child-only.md"), "child only").unwrap();
+        fs::write(child.join(".codex/prompts/shared.md"), "child shared").unwrap();
+        fs::write(
+            grandchild.join(".codex/prompts/shared.md"),
+            "grandchild shared",
+        )
+        .unwrap();
+        fs::write(global.join("shared.md"), "global shared").unwrap();
+        fs::write(global.join("global-only.md"), "global only").unwrap();
+
+        let project_prompt_dirs = vec![
+            grandchild.join(".codex/prompts"),
+            child.join(".codex/prompts"),
+            root.join(".codex/prompts"),
+        ];
+
+        let prompts = discover_layered_prompts_from_dirs(&project_prompt_dirs, Some(&global)).await;
+        let prompt_map: std::collections::HashMap<String, CustomPrompt> = prompts
+            .into_iter()
+            .map(|prompt| (prompt.name.clone(), prompt))
+            .collect();
+
+        assert_eq!(
+            prompt_map.get("shared").expect("shared prompt").content,
+            "grandchild shared"
+        );
+        assert_eq!(
+            prompt_map
+                .get("child-only")
+                .expect("child-only prompt")
+                .content,
+            "child only"
+        );
+        assert_eq!(
+            prompt_map
+                .get("global-only")
+                .expect("global-only prompt")
+                .content,
+            "global only"
+        );
     }
 }

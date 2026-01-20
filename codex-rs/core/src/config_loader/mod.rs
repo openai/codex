@@ -388,6 +388,22 @@ fn default_project_root_markers() -> Vec<String> {
         .collect()
 }
 
+pub(crate) async fn find_project_root_for_layer_stack(
+    cwd: &AbsolutePathBuf,
+    config_layer_stack: &ConfigLayerStack,
+) -> io::Result<AbsolutePathBuf> {
+    let mut merged = TomlValue::Table(toml::map::Map::new());
+    for layer in config_layer_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst) {
+        if matches!(layer.name, ConfigLayerSource::Project { .. }) {
+            break;
+        }
+        merge_toml_values(&mut merged, &layer.config);
+    }
+    let project_root_markers =
+        project_root_markers_from_config(&merged)?.unwrap_or_else(default_project_root_markers);
+    find_project_root(cwd, &project_root_markers).await
+}
+
 /// Takes a `toml::Value` parsed from a config.toml file and walks through it,
 /// resolving any `AbsolutePathBuf` fields against `base_dir`, returning a new
 /// `toml::Value` with the same shape but with paths resolved.

@@ -380,6 +380,15 @@ impl CodexMessageProcessor {
             ClientRequest::Initialize { .. } => {
                 panic!("Initialize should be handled in MessageProcessor");
             }
+            ClientRequest::CustomPromptsList { request_id, .. } => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: "custom-prompts/list should be handled in MessageProcessor"
+                        .to_string(),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
             // === v2 Thread/Turn APIs ===
             ClientRequest::ThreadStart { request_id, params } => {
                 self.thread_start(request_id, params).await;

@@ -224,6 +224,11 @@ client_request_definitions! {
         response: v2::ConfigRequirementsReadResponse,
     },
 
+    CustomPromptsList => "custom-prompts/list" {
+        params: v2::CustomPromptsListParams,
+        response: v2::CustomPromptsListResponse,
+    },
+
     GetAccount => "account/read" {
         params: v2::GetAccountParams,
         response: v2::GetAccountResponse,

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::config_api::ConfigApi;
+use crate::custom_prompts_api::CustomPromptsApi;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::ClientInfo;
@@ -37,6 +38,7 @@ pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_message_processor: CodexMessageProcessor,
     config_api: ConfigApi,
+    custom_prompts_api: CustomPromptsApi,
     initialized: bool,
     config_warnings: Vec<ConfigWarningNotification>,
 }
@@ -73,12 +75,23 @@ impl MessageProcessor {
             cli_overrides.clone(),
             feedback,
         );
-        let config_api = ConfigApi::new(config.codex_home.clone(), cli_overrides, loader_overrides);
+        let loader_overrides_for_custom_prompts = loader_overrides.clone();
+        let config_api = ConfigApi::new(
+            config.codex_home.clone(),
+            cli_overrides.clone(),
+            loader_overrides,
+        );
+        let custom_prompts_api = CustomPromptsApi::new(
+            config.codex_home.clone(),
+            cli_overrides.clone(),
+            loader_overrides_for_custom_prompts,
+        );
 
         Self {
             outgoing,
             codex_message_processor,
             config_api,
+            custom_prompts_api,
             initialized: false,
             config_warnings,
         }
@@ -203,6 +216,9 @@ impl MessageProcessor {
             } => {
                 self.handle_config_requirements_read(request_id).await;
             }
+            ClientRequest::CustomPromptsList { request_id, params } => {
+                self.handle_custom_prompts_list(request_id, params).await;
+            }
             other => {
                 self.codex_message_processor.process_request(other).await;
             }
@@ -271,6 +287,17 @@ impl MessageProcessor {
 
     async fn handle_config_requirements_read(&self, request_id: RequestId) {
         match self.config_api.config_requirements_read().await {
+            Ok(response) => self.outgoing.send_response(request_id, response).await,
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_custom_prompts_list(
+        &self,
+        request_id: RequestId,
+        params: codex_app_server_protocol::CustomPromptsListParams,
+    ) {
+        match self.custom_prompts_api.list(params).await {
             Ok(response) => self.outgoing.send_response(request_id, response).await,
             Err(error) => self.outgoing.send_error(request_id, error).await,
         }

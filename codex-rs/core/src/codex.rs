@@ -2075,7 +2075,6 @@ mod handlers {
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
-    use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -2398,12 +2397,20 @@ mod handlers {
     }
 
     pub async fn list_custom_prompts(sess: &Session, sub_id: String) {
-        let custom_prompts: Vec<CustomPrompt> =
-            if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
-                crate::custom_prompts::discover_prompts_in(&dir).await
-            } else {
-                Vec::new()
-            };
+        let (cwd, config_layer_stack) = {
+            let state = sess.state.lock().await;
+            (
+                state.session_configuration.cwd.clone(),
+                state
+                    .session_configuration
+                    .original_config_do_not_use
+                    .config_layer_stack
+                    .clone(),
+            )
+        };
+        let custom_prompts =
+            crate::custom_prompts::discover_layered_prompts_for_cwd(&cwd, &config_layer_stack)
+                .await;
 
         let event = Event {
             id: sub_id,
