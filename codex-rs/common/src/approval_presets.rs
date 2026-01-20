@@ -38,7 +38,7 @@ pub fn builtin_approval_presets() -> Vec<ApprovalPreset> {
         ApprovalPreset {
             id: "full-access",
             label: "Agent (full access)",
-            description: "Codex can edit files outside this workspace and run commands with network access. Exercise caution when using.",
+            description: "Codex can edit files outside this workspace and access the internet. Exercise caution when using.",
             approval: AskForApproval::Never,
             sandbox: SandboxPolicy::DangerFullAccess,
         },
