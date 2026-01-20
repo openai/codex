@@ -339,10 +339,10 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::WebSearchCached,
-        key: "web_search_cached",
-        stage: Stage::Beta,
-        default_enabled: false,
+        id: Feature::ShellSnapshot,
+        key: "shell_snapshot",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     // Beta program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
@@ -356,13 +356,9 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ShellSnapshot,
-        key: "shell_snapshot",
-        stage: Stage::Experimental {
-            name: "Shell snapshot",
-            menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
-            announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
-        },
+        id: Feature::WebSearchCached,
+        key: "web_search_cached",
+        stage: Stage::Beta,
         default_enabled: false,
     },
     FeatureSpec {
