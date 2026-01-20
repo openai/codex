@@ -21,9 +21,9 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 ///   mount namespace to gain CAP_SYS_ADMIN inside the userns (bwrap-style).
 /// - Non-root path: unshare user+mount namespaces up front to gain the
 ///   capabilities needed for remounting.
-/// - If namespace setup is denied in either path, skip mount-based protections
-///   and continue with Landlock-only sandboxing, emitting a debug log when
-///   CODEX_SANDBOX_DEBUG=1.
+/// - If namespace or mount setup is denied in either path, skip mount-based
+///   protections and continue with Landlock-only sandboxing, emitting a debug
+///   log when CODEX_SANDBOX_DEBUG=1.
 ///
 /// Once in the namespace(s), we make mounts private, bind each protected
 /// target onto itself, remount read-only, and drop any userns-granted caps.
@@ -46,7 +46,13 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
                 let original_egid = unsafe { libc::getegid() };
                 match unshare_user_and_mount_namespaces() {
                     Ok(()) => {
-                        write_user_namespace_maps(original_euid, original_egid)?;
+                        if let Err(err) = write_user_namespace_maps(original_euid, original_egid) {
+                            if is_permission_denied(&err) {
+                                log_namespace_fallback(&err);
+                                return Ok(());
+                            }
+                            return Err(err);
+                        }
                         used_userns = true;
                     }
                     Err(err) if is_permission_denied(&err) => {
@@ -64,7 +70,13 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
         let original_egid = unsafe { libc::getegid() };
         match unshare_user_and_mount_namespaces() {
             Ok(()) => {
-                write_user_namespace_maps(original_euid, original_egid)?;
+                if let Err(err) = write_user_namespace_maps(original_euid, original_egid) {
+                    if is_permission_denied(&err) {
+                        log_namespace_fallback(&err);
+                        return Ok(());
+                    }
+                    return Err(err);
+                }
                 used_userns = true;
             }
             Err(err) if is_permission_denied(&err) => {
@@ -75,11 +87,29 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
             Err(err) => return Err(err),
         }
     }
-    make_mounts_private()?;
+    if let Err(err) = make_mounts_private() {
+        if is_permission_denied(&err) {
+            log_namespace_fallback(&err);
+            if used_userns {
+                drop_caps()?;
+            }
+            return Ok(());
+        }
+        return Err(err);
+    }
 
     for target in mount_targets {
         // Bind and remount read-only works for both files and directories.
-        bind_mount_read_only(target.as_path())?;
+        if let Err(err) = bind_mount_read_only(target.as_path()) {
+            if is_permission_denied(&err) {
+                log_namespace_fallback(&err);
+                if used_userns {
+                    drop_caps()?;
+                }
+                return Ok(());
+            }
+            return Err(err);
+        }
     }
 
     // Drop ambient capabilities acquired from the user namespace so the
@@ -220,6 +250,18 @@ static FORCE_UNSHARE_PERMISSION_DENIED: AtomicBool = AtomicBool::new(false);
 static FORCE_UNSHARE_USERNS_SUCCESS: AtomicBool = AtomicBool::new(false);
 #[cfg(test)]
 static FORCE_RUNNING_AS_ROOT: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static FORCE_WRITE_USER_NAMESPACE_MAPS_SUCCESS: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static FORCE_WRITE_USER_NAMESPACE_MAPS_PERMISSION_DENIED: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static FORCE_MAKE_MOUNTS_PRIVATE_SUCCESS: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static FORCE_MAKE_MOUNTS_PRIVATE_PERMISSION_DENIED: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static FORCE_BIND_MOUNT_PERMISSION_DENIED: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static FORCE_DROP_CAPS_SUCCESS: AtomicBool = AtomicBool::new(false);
 
 fn sandbox_debug_enabled() -> bool {
     matches!(
@@ -253,6 +295,14 @@ const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 
 /// Map the provided uid/gid to root inside the user namespace.
 fn write_user_namespace_maps(uid: libc::uid_t, gid: libc::gid_t) -> Result<()> {
+    #[cfg(test)]
+    if FORCE_WRITE_USER_NAMESPACE_MAPS_SUCCESS.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
+    #[cfg(test)]
+    if FORCE_WRITE_USER_NAMESPACE_MAPS_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+    }
     write_proc_file("/proc/self/setgroups", "deny\n")?;
 
     write_proc_file("/proc/self/uid_map", format!("0 {uid} 1\n"))?;
@@ -262,6 +312,10 @@ fn write_user_namespace_maps(uid: libc::uid_t, gid: libc::gid_t) -> Result<()> {
 
 /// Drop all capabilities in the current user namespace.
 fn drop_caps() -> Result<()> {
+    #[cfg(test)]
+    if FORCE_DROP_CAPS_SUCCESS.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
     let mut header = CapUserHeader {
         version: LINUX_CAPABILITY_VERSION_3,
         pid: 0,
@@ -295,6 +349,14 @@ fn write_proc_file(path: &str, contents: impl AsRef<[u8]>) -> Result<()> {
 
 /// Ensure mounts are private so remounting does not propagate outside the namespace.
 fn make_mounts_private() -> Result<()> {
+    #[cfg(test)]
+    if FORCE_MAKE_MOUNTS_PRIVATE_SUCCESS.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
+    #[cfg(test)]
+    if FORCE_MAKE_MOUNTS_PRIVATE_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+    }
     let root = CString::new("/").map_err(|_| {
         CodexErr::UnsupportedOperation("Sandbox mount path contains NUL byte: /".to_string())
     })?;
@@ -315,6 +377,10 @@ fn make_mounts_private() -> Result<()> {
 
 /// Bind-mount a path onto itself and remount read-only.
 fn bind_mount_read_only(path: &Path) -> Result<()> {
+    #[cfg(test)]
+    if FORCE_BIND_MOUNT_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+    }
     let c_path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
         CodexErr::UnsupportedOperation(format!(
             "Sandbox mount path contains NUL byte: {path}",
@@ -502,6 +568,101 @@ mod tests {
         FORCE_RUNNING_AS_ROOT.store(false, std::sync::atomic::Ordering::SeqCst);
         FORCE_UNSHARE_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
         FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn apply_read_only_mounts_falls_back_on_user_namespace_map_permission_denied() {
+        FORCE_UNSHARE_USERNS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
+        FORCE_WRITE_USER_NAMESPACE_MAPS_PERMISSION_DENIED
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let protected = tempdir.path().join("protected");
+        std::fs::create_dir_all(&protected).expect("create protected");
+        let root = AbsolutePathBuf::try_from(tempdir.path()).expect("root");
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![WritableRoot {
+                root,
+                read_only_subpaths: vec![
+                    AbsolutePathBuf::try_from(protected.as_path()).expect("protected"),
+                ],
+            }],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
+
+        FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
+        FORCE_WRITE_USER_NAMESPACE_MAPS_PERMISSION_DENIED
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn apply_read_only_mounts_falls_back_on_make_mounts_private_permission_denied() {
+        FORCE_UNSHARE_USERNS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
+        FORCE_WRITE_USER_NAMESPACE_MAPS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
+        FORCE_MAKE_MOUNTS_PRIVATE_PERMISSION_DENIED
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        FORCE_DROP_CAPS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let protected = tempdir.path().join("protected");
+        std::fs::create_dir_all(&protected).expect("create protected");
+        let root = AbsolutePathBuf::try_from(tempdir.path()).expect("root");
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![WritableRoot {
+                root,
+                read_only_subpaths: vec![
+                    AbsolutePathBuf::try_from(protected.as_path()).expect("protected"),
+                ],
+            }],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
+
+        FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
+        FORCE_WRITE_USER_NAMESPACE_MAPS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
+        FORCE_MAKE_MOUNTS_PRIVATE_PERMISSION_DENIED
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        FORCE_DROP_CAPS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn apply_read_only_mounts_falls_back_on_bind_mount_permission_denied() {
+        FORCE_UNSHARE_USERNS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
+        FORCE_WRITE_USER_NAMESPACE_MAPS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
+        FORCE_MAKE_MOUNTS_PRIVATE_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
+        FORCE_BIND_MOUNT_PERMISSION_DENIED.store(true, std::sync::atomic::Ordering::SeqCst);
+        FORCE_DROP_CAPS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let protected = tempdir.path().join("protected");
+        std::fs::create_dir_all(&protected).expect("create protected");
+        let root = AbsolutePathBuf::try_from(tempdir.path()).expect("root");
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![WritableRoot {
+                root,
+                read_only_subpaths: vec![
+                    AbsolutePathBuf::try_from(protected.as_path()).expect("protected"),
+                ],
+            }],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
+
+        FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
+        FORCE_WRITE_USER_NAMESPACE_MAPS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
+        FORCE_MAKE_MOUNTS_PRIVATE_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
+        FORCE_BIND_MOUNT_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
+        FORCE_DROP_CAPS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
         assert!(result.is_ok());
     }
 }

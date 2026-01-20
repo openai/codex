@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::error::Error;
 use std::path::Path;
 
 use codex_core::error::CodexErr;
@@ -59,8 +60,13 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
             .into_iter()
             .map(|writable_root| writable_root.root)
             .collect();
-        install_filesystem_landlock_rules_on_current_thread(writable_roots)
-            .map_err(SandboxSetupError::Landlock)?;
+        if let Err(err) = install_filesystem_landlock_rules_on_current_thread(writable_roots) {
+            if should_skip_landlock(&err) {
+                log_landlock_fallback(&err);
+            } else {
+                return Err(SandboxSetupError::Landlock(err));
+            }
+        }
     }
 
     // TODO(ragona): Add appropriate restrictions if
@@ -69,12 +75,69 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     Ok(())
 }
 
+fn should_skip_landlock(err: &CodexErr) -> bool {
+    matches!(err, CodexErr::Sandbox(SandboxErr::LandlockRestrict)) || is_permission_denied(err)
+}
+
+fn is_permission_denied(err: &CodexErr) -> bool {
+    let mut current: Option<&(dyn Error + 'static)> = Some(err);
+    while let Some(error) = current {
+        if let Some(io_error) = error.downcast_ref::<std::io::Error>()
+            && (io_error.kind() == std::io::ErrorKind::PermissionDenied
+                || io_error.raw_os_error() == Some(libc::EPERM))
+        {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
+fn sandbox_debug_enabled() -> bool {
+    matches!(
+        std::env::var("CODEX_SANDBOX_DEBUG").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
+}
+
+fn log_landlock_fallback(err: &CodexErr) {
+    if sandbox_debug_enabled() {
+        eprintln!(
+            "codex-linux-sandbox: falling back to no-Landlock sandboxing because Landlock is unavailable or not enforced: {err}"
+        );
+    }
+}
+
 fn set_no_new_privs() -> Result<()> {
     let result = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
     if result != 0 {
         return Err(std::io::Error::last_os_error().into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_skip_landlock_on_permission_denied() {
+        let err: CodexErr =
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "nope").into();
+        assert!(should_skip_landlock(&err));
+    }
+
+    #[test]
+    fn should_skip_landlock_on_restrict_not_enforced() {
+        let err = CodexErr::Sandbox(SandboxErr::LandlockRestrict);
+        assert!(should_skip_landlock(&err));
+    }
+
+    #[test]
+    fn should_skip_landlock_returns_false_for_other_errors() {
+        let err = CodexErr::UnsupportedOperation("nope".to_string());
+        assert!(!should_skip_landlock(&err));
+    }
 }
 
 /// Installs Landlock file-system rules on the current thread allowing read
