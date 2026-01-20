@@ -558,6 +558,8 @@ pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
 
 /// Returns a list of local git branches.
 /// Includes the default branch at the beginning of the list, if it exists.
+/// Note: The default branch is determined by consulting remote refs (e.g.,
+/// `refs/remotes/origin/HEAD`) for accuracy, but only local branches are returned.
 pub async fn local_git_branches(cwd: &Path) -> Vec<String> {
     let mut branches: Vec<String> = if let Some(out) =
         run_git_command_with_timeout(&["branch", "--format=%(refname:short)"], cwd).await
@@ -574,7 +576,7 @@ pub async fn local_git_branches(cwd: &Path) -> Vec<String> {
 
     branches.sort_unstable();
 
-    if let Some(base) = get_default_branch_local(cwd).await
+    if let Some(base) = get_default_branch(cwd).await
         && let Some(pos) = branches.iter().position(|name| name == &base)
     {
         let base_branch = branches.remove(pos);
