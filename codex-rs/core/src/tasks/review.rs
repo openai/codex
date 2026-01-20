@@ -19,7 +19,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use std::sync::Arc;
-use tokio::sync::watch;
+use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use super::SessionTask;
@@ -29,12 +29,16 @@ use super::SessionTaskContext;
 /// Task driver for review-mode turns.
 pub(crate) struct ReviewTask {
     review_request: ReviewRequest,
+    sub_agent_thread_id: Arc<Mutex<Option<ThreadId>>>,
 }
 
 impl ReviewTask {
     /// Creates a new review task with the already-resolved request details.
     pub(crate) fn new(review_request: ReviewRequest) -> Self {
-        Self { review_request }
+        Self {
+            review_request,
+            sub_agent_thread_id: Arc::new(Mutex::new(None)),
+        }
     }
 }
 
@@ -82,6 +86,10 @@ impl SessionTask for ReviewTask {
             .await
             .ok()?;
 
+        if let Ok(mut guard) = self.sub_agent_thread_id.lock() {
+            *guard = Some(thread_id);
+        }
+
         let mut status_rx = agent_control.subscribe_status(thread_id).await.ok()?;
 
         session
@@ -96,10 +104,7 @@ impl SessionTask for ReviewTask {
             .await;
 
         // Send input to the agent.
-        let output = match session
-            .agent_control()
-            .send_input(thread_id, input)
-            .await {
+        let output = match session.agent_control().send_input(thread_id, input).await {
             Ok(_) => {
                 let mut status = status_rx.borrow().clone();
                 let parse_output = |message: String| {
@@ -121,27 +126,25 @@ impl SessionTask for ReviewTask {
                 loop {
                     if is_final(&status) {
                         break match status {
-                            AgentStatus::Completed(Some(message)) => {
-                                Some(parse_output(message))
-                            }
+                            AgentStatus::Completed(Some(message)) => Some(parse_output(message)),
                             _ => None,
                         };
                     }
                     tokio::select! {
-                            _ = cancellation_token.cancelled() => break None,
-                            changed = status_rx.changed() => {
-                                if changed.is_err() {
-                                    break None;
-                                }
-                                status = status_rx.borrow().clone();
+                        _ = cancellation_token.cancelled() => break None,
+                        changed = status_rx.changed() => {
+                            if changed.is_err() {
+                                break None;
                             }
+                            status = status_rx.borrow().clone();
                         }
+                    }
                 }
-            },
+            }
             Err(err) => {
                 tracing::error!("Error while sending input to review agent {err:?}");
                 None
-            },
+            }
         };
 
         if !cancellation_token.is_cancelled() {
@@ -151,6 +154,14 @@ impl SessionTask for ReviewTask {
     }
 
     async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
+        let thread_id = self
+            .sub_agent_thread_id
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take());
+        if let Some(thread_id) = thread_id {
+            let _ = session.agent_control().interrupt_agent(thread_id).await;
+        }
         exit_review_mode(session.clone_session(), None, ctx).await;
     }
 }
