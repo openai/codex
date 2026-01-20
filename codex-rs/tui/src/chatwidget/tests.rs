@@ -480,6 +480,70 @@ async fn remap_placeholders_uses_attachment_labels() {
     );
 }
 
+#[tokio::test]
+async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
+    let placeholder_one = "[Image #1]";
+    let placeholder_two = "[Image #2]";
+    let text = format!("{placeholder_two} before {placeholder_one}");
+    let elements = vec![
+        TextElement {
+            byte_range: (0..placeholder_two.len()).into(),
+            placeholder: None,
+        },
+        TextElement {
+            byte_range: ("[Image #2] before ".len().."[Image #2] before [Image #1]".len()).into(),
+            placeholder: None,
+        },
+    ];
+
+    let attachments = vec![
+        LocalImageAttachment {
+            placeholder: placeholder_one.to_string(),
+            path: PathBuf::from("/tmp/one.png"),
+        },
+        LocalImageAttachment {
+            placeholder: placeholder_two.to_string(),
+            path: PathBuf::from("/tmp/two.png"),
+        },
+    ];
+    let message = UserMessage {
+        text,
+        text_elements: elements,
+        local_images: attachments,
+    };
+    let mut next_label = 3usize;
+    let remapped = remap_placeholders_for_message(message, &mut next_label);
+
+    assert_eq!(remapped.text, "[Image #4] before [Image #3]");
+    assert_eq!(
+        remapped.text_elements,
+        vec![
+            TextElement {
+                byte_range: (0.."[Image #4]".len()).into(),
+                placeholder: Some("[Image #4]".to_string()),
+            },
+            TextElement {
+                byte_range: ("[Image #4] before ".len().."[Image #4] before [Image #3]".len())
+                    .into(),
+                placeholder: Some("[Image #3]".to_string()),
+            },
+        ]
+    );
+    assert_eq!(
+        remapped.local_images,
+        vec![
+            LocalImageAttachment {
+                placeholder: "[Image #3]".to_string(),
+                path: PathBuf::from("/tmp/one.png"),
+            },
+            LocalImageAttachment {
+                placeholder: "[Image #4]".to_string(),
+                path: PathBuf::from("/tmp/two.png"),
+            },
+        ]
+    );
+}
+
 /// Entering review mode uses the hint provided by the review request.
 #[tokio::test]
 async fn entered_review_mode_uses_request_hint() {
