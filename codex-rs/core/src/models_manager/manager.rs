@@ -1,3 +1,16 @@
+use super::cache::ModelsCacheManager;
+use crate::api_bridge::auth_provider_from_auth;
+use crate::api_bridge::map_api_error;
+use crate::auth::AuthManager;
+use crate::config::Config;
+use crate::default_client::build_reqwest_client;
+use crate::error::CodexErr;
+use crate::error::Result as CoreResult;
+use crate::features::Feature;
+use crate::model_provider_info::ModelProviderInfo;
+use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
+use crate::models_manager::model_info;
+use crate::models_manager::model_presets::builtin_model_presets;
 use codex_api::ModelsClient;
 use codex_api::ReqwestTransport;
 use codex_app_server_protocol::AuthMode;
@@ -13,20 +26,6 @@ use tokio::sync::RwLock;
 use tokio::sync::TryLockError;
 use tokio::time::timeout;
 use tracing::error;
-
-use super::cache::ModelsCacheManager;
-use crate::api_bridge::auth_provider_from_auth;
-use crate::api_bridge::map_api_error;
-use crate::auth::AuthManager;
-use crate::config::Config;
-use crate::default_client::build_reqwest_client;
-use crate::error::CodexErr;
-use crate::error::Result as CoreResult;
-use crate::features::Feature;
-use crate::model_provider_info::ModelProviderInfo;
-use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
-use crate::models_manager::model_info;
-use crate::models_manager::model_presets::builtin_model_presets;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
@@ -211,6 +210,8 @@ impl ModelsManager {
     }
 
     async fn fetch_and_update_models(&self) -> CoreResult<()> {
+        let _timer =
+            codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
         let auth = self.auth_manager.auth().await;
         let api_provider = self.provider.to_api_provider(Some(AuthMode::ChatGPT))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
@@ -249,6 +250,8 @@ impl ModelsManager {
 
     /// Attempt to satisfy the refresh from the cache when it matches the provider and TTL.
     async fn try_load_cache(&self) -> bool {
+        let _timer =
+            codex_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
         let cache = match self.cache_manager.load_fresh().await {
             Some(cache) => cache,
             None => return false,
