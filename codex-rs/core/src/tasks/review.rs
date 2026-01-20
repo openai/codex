@@ -181,15 +181,14 @@ pub(crate) async fn exit_review_mode(
     review_thread_id: Option<ThreadId>,
 ) {
     // Close and drop the agent
-    if let Some(thread_id) = review_thread_id {
-        if let Err(e) = session
+    if let Some(thread_id) = review_thread_id
+        && let Err(e) = session
             .services
             .agent_control
             .shutdown_agent(thread_id)
             .await
-        {
-            tracing::error!("Error while shutting down review agent: {e:?}");
-        }
+    {
+        tracing::error!("Error while shutting down review agent: {e:?}");
     }
 
     // Build the message to add in the parent thread.
