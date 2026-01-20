@@ -217,7 +217,6 @@ v2_enum_from_core!(
     }
 );
 
-// TODO(mbolin): Support in-repo layer.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
@@ -449,6 +448,8 @@ pub enum ConfigWriteErrorCode {
 pub struct ConfigReadParams {
     #[serde(default)]
     pub include_layers: bool,
+    /// Optional working directory to resolve project config layers (e.g. .codex/config.toml).
+    pub cwd: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
