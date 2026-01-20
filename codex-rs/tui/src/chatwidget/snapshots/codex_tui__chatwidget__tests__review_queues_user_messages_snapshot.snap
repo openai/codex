@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 3840
 expression: term.backend().vt100().screen().contents()
 ---
 
@@ -13,9 +14,9 @@ expression: term.backend().vt100().screen().contents()
 
 
 • Working (0s • esc to interrupt)
-
   ↳ Queued while /review is running.
     ⌥ + ↑ edit
+
 
 › Ask Codex to do anything
 

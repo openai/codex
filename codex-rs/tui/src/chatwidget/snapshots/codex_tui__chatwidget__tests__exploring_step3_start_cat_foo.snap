@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
-expression: active_blob(&chat)
+expression: blob3
 ---
 • Exploring
   └ List ls -la
