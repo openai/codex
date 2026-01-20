@@ -865,15 +865,17 @@ pub struct SecurityReviewFailure {
     pub logs: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SecurityReviewCheckpointStatus {
+    #[default]
     Running,
     Complete,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SecurityReviewCheckpoint {
+    #[serde(default)]
     pub(crate) status: SecurityReviewCheckpointStatus,
     pub(crate) mode: SecurityReviewMode,
     pub(crate) include_paths: Vec<String>,
@@ -18295,6 +18297,34 @@ fn looks_like_build_failure(stdout: &str, stderr: &str) -> bool {
         .any(|needle| sources.iter().any(|source| source.contains(needle)))
 }
 
+fn parse_python_validation_outcome_marker(
+    stdout: &str,
+    stderr: &str,
+) -> Option<BugValidationStatus> {
+    const PREFIX: &str = "CODEX_VALIDATION_OUTCOME=";
+
+    let mut found: Option<BugValidationStatus> = None;
+    for line in stdout.lines().chain(stderr.lines()) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let upper = trimmed.to_ascii_uppercase();
+        let Some(rest) = upper.strip_prefix(PREFIX) else {
+            continue;
+        };
+        let rest = rest.trim();
+        let status = match rest {
+            "PASS" | "PASSED" => BugValidationStatus::Passed,
+            "FAIL" | "FAILED" => BugValidationStatus::Failed,
+            "UNABLE" | "UNABLE_TO_VALIDATE" => BugValidationStatus::UnableToValidate,
+            _ => continue,
+        };
+        found = Some(status);
+    }
+    found
+}
+
 fn classify_python_validation_status(
     expect_asan: bool,
     exit_code: Option<i32>,
@@ -18302,20 +18332,26 @@ fn classify_python_validation_status(
     stdout: &str,
     stderr: &str,
 ) -> BugValidationStatus {
+    let observed_asan =
+        expect_asan && (contains_asan_signature(stdout) || contains_asan_signature(stderr));
+    if observed_asan {
+        return BugValidationStatus::Passed;
+    }
+
+    if let Some(marker) = parse_python_validation_outcome_marker(stdout, stderr)
+        && (!expect_asan || !matches!(marker, BugValidationStatus::Passed))
+    {
+        return marker;
+    }
+
     let unable =
         matches!(exit_code, Some(2)) || (!success && looks_like_build_failure(stdout, stderr));
     if unable {
         return BugValidationStatus::UnableToValidate;
     }
 
-    let observed_asan =
-        expect_asan && (contains_asan_signature(stdout) || contains_asan_signature(stderr));
     if expect_asan {
-        if observed_asan {
-            BugValidationStatus::Passed
-        } else {
-            BugValidationStatus::Failed
-        }
+        BugValidationStatus::Failed
     } else if success {
         BugValidationStatus::Passed
     } else {
@@ -18843,7 +18879,11 @@ async fn execute_bug_command(
                             ));
                         }
                     } else {
-                        let summary_line = summarize_process_output(success, &stdout, &stderr);
+                        let summary_line = summarize_process_output(
+                            matches!(validation.status, BugValidationStatus::Passed),
+                            &stdout,
+                            &stderr,
+                        );
                         validation.summary = Some(format!("{summary_line} · {duration_label}"));
                     }
 
@@ -18855,7 +18895,7 @@ async fn execute_bug_command(
                         } else {
                             &stderr
                         }
-                    } else if success {
+                    } else if matches!(validation.status, BugValidationStatus::Passed) {
                         &stdout
                     } else {
                         &stderr
@@ -20060,6 +20100,204 @@ async fn write_validation_snapshot_and_reports(
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+struct ValidationBuildFailure {
+    command: String,
+    summary: String,
+    stdout_path: String,
+    stderr_path: String,
+    output_snippet: Option<String>,
+}
+
+async fn run_validation_build_preflight(
+    repo_root: &Path,
+    work_dir: &Path,
+    progress_sender: &Option<AppEventSender>,
+    logs: &mut Vec<String>,
+) -> Option<ValidationBuildFailure> {
+    fn has_build_script(package_json: &Value) -> bool {
+        package_json
+            .get("scripts")
+            .and_then(Value::as_object)
+            .and_then(|scripts| scripts.get("build"))
+            .and_then(Value::as_str)
+            .is_some_and(|script| !script.trim().is_empty())
+    }
+
+    fn file_stem_for_command(program: &str, args: &[String]) -> String {
+        let mut stem = format!("preflight_{program}");
+        for arg in args.iter().take(3) {
+            stem.push('_');
+            stem.push_str(arg);
+        }
+        stem.chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+            .collect()
+    }
+
+    let has_cargo = repo_root.join("Cargo.toml").exists();
+    let has_go = repo_root.join("go.mod").exists();
+    let has_package_json = repo_root.join("package.json").exists();
+
+    let mut attempts: Vec<Vec<(String, Vec<String>)>> = Vec::new();
+    if has_cargo {
+        attempts.push(vec![(
+            "cargo".to_string(),
+            vec!["build".to_string(), "--locked".to_string()],
+        )]);
+        attempts.push(vec![("cargo".to_string(), vec!["build".to_string()])]);
+    } else if has_go {
+        attempts.push(vec![(
+            "go".to_string(),
+            vec!["build".to_string(), "./...".to_string()],
+        )]);
+    } else if has_package_json {
+        let package_json = tokio_fs::read_to_string(repo_root.join("package.json"))
+            .await
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+        if package_json.as_ref().is_some_and(has_build_script) {
+            let install_cmd = if repo_root.join("package-lock.json").exists() {
+                vec!["ci".to_string()]
+            } else {
+                vec!["install".to_string()]
+            };
+            attempts.push(vec![
+                ("npm".to_string(), install_cmd),
+                (
+                    "npm".to_string(),
+                    vec!["run".to_string(), "build".to_string()],
+                ),
+            ]);
+        }
+    }
+
+    if attempts.is_empty() {
+        return None;
+    }
+
+    push_progress_log(
+        progress_sender,
+        &None,
+        logs,
+        "Validation preflight: compiling the target...".to_string(),
+    );
+
+    let mut last_failure: Option<ValidationBuildFailure> = None;
+    for attempt in attempts {
+        let mut attempt_failure: Option<ValidationBuildFailure> = None;
+        for (program, args) in &attempt {
+            let mut command = Command::new(program);
+            command.args(args).current_dir(repo_root);
+            let command_label = format!(
+                "{} {}",
+                program,
+                args.iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+            push_progress_log(
+                progress_sender,
+                &None,
+                logs,
+                format!("Run: `{command_label}`"),
+            );
+
+            let start = Instant::now();
+            let timeout = Duration::from_secs(VALIDATION_PREFLIGHT_TIMEOUT_SECS);
+            match command_output_with_timeout(command, timeout).await {
+                Ok(CommandOutputOutcome::Completed(output)) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    if !output.status.success() {
+                        let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
+                        let summary_line = summarize_process_output(false, &stdout, &stderr);
+                        let summary = format!("{summary_line} · {duration_label}");
+                        let snippet = if stderr.trim().is_empty() {
+                            stdout.trim()
+                        } else {
+                            stderr.trim()
+                        };
+                        let output_snippet = if snippet.is_empty() {
+                            None
+                        } else {
+                            Some(truncate_text(snippet, VALIDATION_OUTPUT_GRAPHEMES))
+                        };
+                        let file_stem = file_stem_for_command(program, args);
+                        let (stdout_path, stderr_path) = write_validation_output_files(
+                            work_dir, repo_root, &file_stem, "build", &stdout, &stderr,
+                        )
+                        .await;
+                        attempt_failure = Some(ValidationBuildFailure {
+                            command: command_label,
+                            summary,
+                            stdout_path,
+                            stderr_path,
+                            output_snippet,
+                        });
+                        break;
+                    }
+                }
+                Ok(CommandOutputOutcome::TimedOut) => {
+                    let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
+                    let message = format!(
+                        "Timed out after {duration_label} while running `{command_label}`."
+                    );
+                    let file_stem = file_stem_for_command(program, args);
+                    let (stdout_path, stderr_path) = write_validation_output_files(
+                        work_dir,
+                        repo_root,
+                        &file_stem,
+                        "build",
+                        "",
+                        message.as_str(),
+                    )
+                    .await;
+                    attempt_failure = Some(ValidationBuildFailure {
+                        command: command_label,
+                        summary: message,
+                        stdout_path,
+                        stderr_path,
+                        output_snippet: None,
+                    });
+                    break;
+                }
+                Err(err) => {
+                    let message = format!("Failed to run `{command_label}`: {err}");
+                    let file_stem = file_stem_for_command(program, args);
+                    let (stdout_path, stderr_path) = write_validation_output_files(
+                        work_dir, repo_root, &file_stem, "build", "", &message,
+                    )
+                    .await;
+                    attempt_failure = Some(ValidationBuildFailure {
+                        command: command_label,
+                        summary: message,
+                        stdout_path,
+                        stderr_path,
+                        output_snippet: None,
+                    });
+                    break;
+                }
+            }
+        }
+
+        if attempt_failure.is_none() {
+            push_progress_log(
+                progress_sender,
+                &None,
+                logs,
+                "Validation preflight succeeded.".to_string(),
+            );
+            return None;
+        }
+
+        last_failure = attempt_failure;
+    }
+
+    last_failure
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_asan_validation(
     repo_path: PathBuf,
@@ -20524,207 +20762,45 @@ async fn run_asan_validation(
     let mut verification_failed: Option<String> = None;
     if batch.requests.is_empty() {
         logs.push("No validation checks to execute.".to_string());
-    } else {
-        #[derive(Clone, Debug)]
-        struct ValidationBuildFailure {
-            command: String,
-            summary: String,
-            stdout_path: String,
-            stderr_path: String,
-            output_snippet: Option<String>,
-        }
-
-        async fn run_validation_build_preflight(
-            repo_root: &Path,
-            work_dir: &Path,
-            progress_sender: &Option<AppEventSender>,
-            logs: &mut Vec<String>,
-        ) -> Option<ValidationBuildFailure> {
-            fn has_build_script(package_json: &Value) -> bool {
-                package_json
-                    .get("scripts")
-                    .and_then(Value::as_object)
-                    .and_then(|scripts| scripts.get("build"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|s| !s.trim().is_empty())
-            }
-
-            fn file_stem_for_command(program: &str, args: &[String]) -> String {
-                let mut stem = format!("preflight_{program}");
-                for arg in args.iter().take(3) {
-                    stem.push('_');
-                    stem.push_str(arg);
-                }
-                stem.chars()
-                    .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-                    .collect()
-            }
-
-            let has_cargo = repo_root.join("Cargo.toml").exists();
-            let has_go = repo_root.join("go.mod").exists();
-            let has_package_json = repo_root.join("package.json").exists();
-
-            let mut attempts: Vec<Vec<(String, Vec<String>)>> = Vec::new();
-            if has_cargo {
-                attempts.push(vec![(
-                    "cargo".to_string(),
-                    vec!["build".to_string(), "--locked".to_string()],
-                )]);
-                attempts.push(vec![("cargo".to_string(), vec!["build".to_string()])]);
-            } else if has_go {
-                attempts.push(vec![(
-                    "go".to_string(),
-                    vec!["build".to_string(), "./...".to_string()],
-                )]);
-            } else if has_package_json {
-                let package_json = tokio_fs::read_to_string(repo_root.join("package.json"))
+        if !testing_md_additions.is_empty() {
+            let build_failure = if batch.web_validation.is_none() {
+                run_validation_build_preflight(
+                    batch.repo_path.as_path(),
+                    &batch.work_dir,
+                    &progress_sender,
+                    &mut logs,
+                )
+                .await
+            } else {
+                None
+            };
+            if let Some(build_failure) = build_failure {
+                push_progress_log(
+                    &progress_sender,
+                    &None,
+                    &mut logs,
+                    format!(
+                        "Skipping TESTING.md update: build preflight failed ({})",
+                        build_failure.summary
+                    ),
+                );
+            } else {
+                apply_validation_testing_md_additions(
+                    &testing_path,
+                    &repo_path,
+                    &testing_md_additions,
+                    &progress_sender,
+                    &mut logs,
+                )
+                .await;
+                let updated_testing_md = tokio_fs::read_to_string(&testing_path)
                     .await
-                    .ok()
-                    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
-                if package_json.as_ref().is_some_and(has_build_script) {
-                    let install_cmd = if repo_root.join("package-lock.json").exists() {
-                        vec!["ci".to_string()]
-                    } else {
-                        vec!["install".to_string()]
-                    };
-                    attempts.push(vec![
-                        ("npm".to_string(), install_cmd),
-                        (
-                            "npm".to_string(),
-                            vec!["run".to_string(), "build".to_string()],
-                        ),
-                    ]);
-                }
+                    .unwrap_or_default();
+                testing_md_context =
+                    trim_prompt_context(&updated_testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
             }
-
-            if attempts.is_empty() {
-                return None;
-            }
-
-            push_progress_log(
-                progress_sender,
-                &None,
-                logs,
-                "Validation preflight: compiling the target...".to_string(),
-            );
-
-            let mut last_failure: Option<ValidationBuildFailure> = None;
-            for attempt in attempts {
-                let mut attempt_failure: Option<ValidationBuildFailure> = None;
-                for (program, args) in &attempt {
-                    let mut command = Command::new(program);
-                    command.args(args).current_dir(repo_root);
-                    let command_label = format!(
-                        "{} {}",
-                        program,
-                        args.iter()
-                            .map(String::as_str)
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    );
-                    push_progress_log(
-                        progress_sender,
-                        &None,
-                        logs,
-                        format!("Run: `{command_label}`"),
-                    );
-
-                    let start = Instant::now();
-                    let timeout = Duration::from_secs(VALIDATION_PREFLIGHT_TIMEOUT_SECS);
-                    match command_output_with_timeout(command, timeout).await {
-                        Ok(CommandOutputOutcome::Completed(output)) => {
-                            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                            let success = output.status.success();
-                            if !success {
-                                let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
-                                let summary_line =
-                                    summarize_process_output(false, &stdout, &stderr);
-                                let summary = format!("{summary_line} · {duration_label}");
-                                let snippet = if stderr.trim().is_empty() {
-                                    stdout.trim()
-                                } else {
-                                    stderr.trim()
-                                };
-                                let output_snippet = if snippet.is_empty() {
-                                    None
-                                } else {
-                                    Some(truncate_text(snippet, VALIDATION_OUTPUT_GRAPHEMES))
-                                };
-                                let file_stem = file_stem_for_command(program, args);
-                                let (stdout_path, stderr_path) = write_validation_output_files(
-                                    work_dir, repo_root, &file_stem, "build", &stdout, &stderr,
-                                )
-                                .await;
-                                attempt_failure = Some(ValidationBuildFailure {
-                                    command: command_label,
-                                    summary,
-                                    stdout_path,
-                                    stderr_path,
-                                    output_snippet,
-                                });
-                                break;
-                            }
-                        }
-                        Ok(CommandOutputOutcome::TimedOut) => {
-                            let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
-                            let message = format!(
-                                "Timed out after {duration_label} while running `{command_label}`."
-                            );
-                            let file_stem = file_stem_for_command(program, args);
-                            let (stdout_path, stderr_path) = write_validation_output_files(
-                                work_dir,
-                                repo_root,
-                                &file_stem,
-                                "build",
-                                "",
-                                message.as_str(),
-                            )
-                            .await;
-                            attempt_failure = Some(ValidationBuildFailure {
-                                command: command_label,
-                                summary: message,
-                                stdout_path,
-                                stderr_path,
-                                output_snippet: None,
-                            });
-                            break;
-                        }
-                        Err(err) => {
-                            let message = format!("Failed to run `{command_label}`: {err}");
-                            let file_stem = file_stem_for_command(program, args);
-                            let (stdout_path, stderr_path) = write_validation_output_files(
-                                work_dir, repo_root, &file_stem, "build", "", &message,
-                            )
-                            .await;
-                            attempt_failure = Some(ValidationBuildFailure {
-                                command: command_label,
-                                summary: message,
-                                stdout_path,
-                                stderr_path,
-                                output_snippet: None,
-                            });
-                            break;
-                        }
-                    }
-                }
-
-                if attempt_failure.is_none() {
-                    push_progress_log(
-                        progress_sender,
-                        &None,
-                        logs,
-                        "Validation preflight succeeded.".to_string(),
-                    );
-                    return None;
-                }
-
-                last_failure = attempt_failure;
-            }
-
-            last_failure
         }
-
+    } else {
         if batch.web_validation.is_none()
             && let Some(build_failure) = run_validation_build_preflight(
                 batch.repo_path.as_path(),

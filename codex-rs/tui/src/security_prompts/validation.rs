@@ -1,4 +1,4 @@
-pub(crate) const VALIDATION_PLAN_SYSTEM_PROMPT: &str = "Validate that this bug exists.\n\n- Prefer validation against standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.\n- If a deployed target URL is provided, you may validate web/API findings against it using curl/playwright.\n- If you need to run the app to obtain a local target URL, prefer using an already released Docker image for the latest release (docker pull/run or docker compose pull/up) instead of building from source, unless you need an ASan build or no image exists.\n- For crash/memory-safety findings, validate by building an ASan-compiled version of the standard target and triggering the crash through a normal entrypoint, capturing the ASan stack trace.\n- Do not emit `tool:\"none\"` solely because an ASan build is not already present. Attempt a best-effort ASan build and record exactly what you tried.\n- For crypto/protocol/auth logic findings, validate by building/running a minimal, deterministic check that demonstrates the failure (ASan not required).\n\nPython script exit codes:\n- Exit 0 only when the bug is observed.\n- Exit 1 when the target runs but the bug is NOT observed (\"not validated\").\n- Exit 2 when validation cannot be completed due to environment/build/platform issues (\"not able to validate\").\n\nRespond ONLY with JSON Lines as requested; do not include markdown or prose.";
+pub(crate) const VALIDATION_PLAN_SYSTEM_PROMPT: &str = "Validate that this bug exists.\n\n- Prefer validation against standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.\n- If you include build/compile commands in `testing_md_additions`, ensure they are compatible with the repo (for example: only use `cargo build --locked` when `Cargo.lock` exists; prefer `npm ci` when `package-lock.json` exists).\n- If a deployed target URL is provided, you may validate web/API findings against it using curl/playwright.\n- If you need to run the app to obtain a local target URL, prefer using an already released Docker image for the latest release (docker pull/run or docker compose pull/up) instead of building from source, unless you need an ASan build or no image exists.\n- If you try both Docker-based and native/local reproduction strategies, do NOT treat Docker failures as fatal: attempt native/local anyway and consider validation successful if ANY strategy observes the bug.\n- For crash/memory-safety findings, validate by building an ASan-compiled version of the standard target and triggering the crash through a normal entrypoint, capturing the ASan stack trace.\n- Do not emit `tool:\"none\"` solely because an ASan build is not already present. Attempt a best-effort ASan build and record exactly what you tried.\n- For crypto/protocol/auth logic findings, validate by building/running a minimal, deterministic check that demonstrates the failure (ASan not required).\n\nPython script exit codes:\n- Exit 0 only when the bug is observed.\n- Exit 1 when the target runs but the bug is NOT observed (\"not validated\").\n- Exit 2 when validation cannot be completed due to environment/build/platform issues (\"not able to validate\").\n- Always print a final single-line marker before exiting: `CODEX_VALIDATION_OUTCOME=PASS|FAIL|UNABLE`.\n\nRespond ONLY with JSON Lines as requested; do not include markdown or prose.";
 pub(crate) const VALIDATION_PLAN_PROMPT_TEMPLATE: &str = r#"
 Validate that this bug exists.
 
@@ -8,6 +8,7 @@ Validate that this bug exists.
 Shared TESTING.md (read this first):
 - The worker will follow these shared build/install/run instructions before running any per-bug PoC scripts.
 - Do NOT repeat shared setup steps inside the python script unless it is required to produce the ASan build needed for validation (e.g., building an ASan-instrumented binary). If building is required, implement the build via subprocess calls in the python script and also record the same commands in `testing_md_additions`.
+- Any commands you add to `testing_md_additions` must be compatible with the repo (for example: only use `cargo build --locked` when `Cargo.lock` exists; prefer `npm ci` when `package-lock.json` exists).
 - If you discover missing prerequisites or better shared setup, include them in `testing_md_additions` (markdown bullets/commands, no heading).
 - For web validation, prefer using an already released Docker image for the latest release (docker pull/run or docker compose pull/up) instead of building from source, unless you need ASan builds or no image exists; record the exact commands in `testing_md_additions`.
 
@@ -32,11 +33,13 @@ For each finding listed in Context, emit exactly one JSON line keyed by its `id_
 - If you cannot validate safely (missing build instructions, unclear harness, requires complex dependencies), emit `tool:"none"` with a short `reason`.
 
 For python validations, the script must include both a CONTROL case and a TRIGGER case, and print the exact commands/inputs used with clear section headers.
+If you attempt multiple strategies (native/local + Docker), do not abort early on a Docker failure; keep going and treat validation as successful if ANY strategy observes the TRIGGER behavior.
 
 Exit codes for python validations:
 - Exit 0 only when the bug is observed.
 - Exit 1 when the target runs but the bug is NOT observed ("not validated").
 - Exit 2 when you cannot validate due to environment/build/platform issues ("not able to validate").
+- Always print a final single-line marker before exiting: `CODEX_VALIDATION_OUTCOME=PASS|FAIL|UNABLE`.
 
 Crash/memory-safety findings:
 - Use `crash_poc_category` from Context when present:
@@ -78,6 +81,7 @@ Goals:
 Shared TESTING.md (read first):
 - The worker will follow these shared build/install/run instructions before running per-bug Dockerfiles/PoCs.
 - If you discover missing prerequisites or better shared setup, include them in `testing_md_additions` (markdown bullets/commands, no heading).
+- Any commands you add to `testing_md_additions` must be compatible with the repo (for example: only use `cargo build --locked` when `Cargo.lock` exists; prefer `npm ci` when `package-lock.json` exists).
 
 Shared TESTING.md (may be truncated):
 {testing_md}
