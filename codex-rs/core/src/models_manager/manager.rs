@@ -283,16 +283,16 @@ impl ModelsManager {
         let chatgpt_mode = self.auth_manager.get_auth_mode() == Some(AuthMode::ChatGPT);
         merged_presets = ModelPreset::filter_by_auth(merged_presets, chatgpt_mode);
 
-        let has_default = merged_presets.iter().any(|preset| preset.is_default);
-        if !has_default {
-            if let Some(default) = merged_presets
-                .iter_mut()
-                .find(|preset| preset.show_in_picker)
-            {
-                default.is_default = true;
-            } else if let Some(default) = merged_presets.first_mut() {
-                default.is_default = true;
-            }
+        for preset in &mut merged_presets {
+            preset.is_default = false;
+        }
+        if let Some(default) = merged_presets
+            .iter_mut()
+            .find(|preset| preset.show_in_picker)
+        {
+            default.is_default = true;
+        } else if let Some(default) = merged_presets.first_mut() {
+            default.is_default = true;
         }
 
         merged_presets

@@ -1,4 +1,5 @@
 #![cfg(not(target_os = "windows"))]
+#![allow(clippy::expect_used)]
 // unified exec is not supported on Windows OS
 use std::sync::Arc;
 
@@ -434,8 +435,18 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
         .find(|model| model.model == "remote-alpha")
         .expect("remote model should be listed");
     let mut expected_remote: ModelPreset = remote_model.into();
-    expected_remote.is_default = true;
+    expected_remote.is_default = remote.is_default;
     assert_eq!(*remote, expected_remote);
+    let default_model = available
+        .iter()
+        .find(|model| model.show_in_picker)
+        .expect("default model should be set");
+    assert!(default_model.is_default);
+    assert_eq!(
+        available.iter().filter(|model| model.is_default).count(),
+        1,
+        "expected a single default model"
+    );
     assert!(
         available
             .iter()
