@@ -557,7 +557,12 @@ impl ChatComposer {
 
         let image_placeholders: HashSet<String> = text_elements
             .iter()
-            .filter_map(|elem| elem.placeholder.clone())
+            .filter_map(|elem| {
+                elem.placeholder.as_ref().cloned().or_else(|| {
+                    text.get(elem.byte_range.start..elem.byte_range.end)
+                        .map(str::to_string)
+                })
+            })
             .collect();
         for (idx, path) in local_image_paths.into_iter().enumerate() {
             let placeholder = local_image_label_text(idx + 1);
@@ -4240,6 +4245,31 @@ mod tests {
         }
         let imgs = composer.take_recent_submission_images();
         assert_eq!(vec![path], imgs);
+    }
+
+    #[test]
+    fn set_text_content_reattaches_images_without_placeholder_metadata() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let placeholder = local_image_label_text(1);
+        let text = format!("{placeholder} restored");
+        let text_elements = vec![TextElement {
+            byte_range: (0..placeholder.len()).into(),
+            placeholder: None,
+        }];
+        let path = PathBuf::from("/tmp/image1.png");
+
+        composer.set_text_content(text, text_elements, vec![path.clone()]);
+
+        assert_eq!(composer.local_image_paths(), vec![path]);
     }
 
     #[test]
