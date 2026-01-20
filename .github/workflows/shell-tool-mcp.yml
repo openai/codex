@@ -119,6 +119,14 @@ jobs:
             cxx="$(command -v clang++)"
             echo "CXXFLAGS=--target=${{ matrix.target }} -stdlib=libc++ -pthread" >> "$GITHUB_ENV"
             echo "CFLAGS=--target=${{ matrix.target }} -pthread" >> "$GITHUB_ENV"
+            if command -v clang >/dev/null; then
+              cc="$(command -v clang)"
+              echo "CC=${cc}" >> "$GITHUB_ENV"
+              echo "TARGET_CC=${cc}" >> "$GITHUB_ENV"
+              target_cc_var="CC_${{ matrix.target }}"
+              target_cc_var="${target_cc_var//-/_}"
+              echo "${target_cc_var}=${cc}" >> "$GITHUB_ENV"
+            fi
           elif command -v "${arch}-linux-musl-g++" >/dev/null; then
             cxx="$(command -v "${arch}-linux-musl-g++")"
           elif command -v musl-g++ >/dev/null; then
