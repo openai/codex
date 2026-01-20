@@ -12,10 +12,13 @@ mod tests;
 
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigToml;
+use crate::config::deserialize_config_toml_with_base;
 use crate::config_loader::config_requirements::ConfigRequirementsWithSources;
 use crate::config_loader::layer_io::LoadedConfigLayers;
+use crate::git_info::resolve_root_git_project_for_trust;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
@@ -64,9 +67,9 @@ const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 /// - admin:    managed preferences (*)
 /// - system    `/etc/codex/config.toml`
 /// - user      `${CODEX_HOME}/config.toml`
-/// - cwd       `${PWD}/config.toml`
-/// - tree      parent directories up to root looking for `./.codex/config.toml`
-/// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml`
+/// - cwd       `${PWD}/config.toml` (only when the directory is trusted)
+/// - tree      parent directories up to root looking for `./.codex/config.toml` (trusted only)
+/// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml` (trusted only)
 /// - runtime   e.g., --config flags, model selector in UI
 ///
 /// (*) Only available on macOS via managed device profiles.
@@ -114,6 +117,12 @@ pub async fn load_config_layers_state(
 
     let mut layers = Vec::<ConfigLayerEntry>::new();
 
+    let cli_overrides_layer = if cli_overrides.is_empty() {
+        None
+    } else {
+        Some(overrides::build_cli_overrides_layer(cli_overrides))
+    };
+
     // Include an entry for the "system" config folder, loading its config.toml,
     // if it exists.
     let system_config_toml_file = if cfg!(unix) {
@@ -158,17 +167,22 @@ pub async fn load_config_layers_state(
         for layer in &layers {
             merge_toml_values(&mut merged_so_far, &layer.config);
         }
+        if let Some(cli_overrides_layer) = cli_overrides_layer.as_ref() {
+            merge_toml_values(&mut merged_so_far, cli_overrides_layer);
+        }
+
         let project_root_markers = project_root_markers_from_config(&merged_so_far)?
             .unwrap_or_else(default_project_root_markers);
-
-        let project_root = find_project_root(&cwd, &project_root_markers).await?;
-        let project_layers = load_project_layers(&cwd, &project_root).await?;
-        layers.extend(project_layers);
+        if let Some(project_root) =
+            trusted_project_root(&merged_so_far, &cwd, &project_root_markers, codex_home).await?
+        {
+            let project_layers = load_project_layers(&cwd, &project_root).await?;
+            layers.extend(project_layers);
+        }
     }
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.
-    if !cli_overrides.is_empty() {
-        let cli_overrides_layer = overrides::build_cli_overrides_layer(cli_overrides);
+    if let Some(cli_overrides_layer) = cli_overrides_layer {
         layers.push(ConfigLayerEntry::new(
             ConfigLayerSource::SessionFlags,
             cli_overrides_layer,
@@ -386,6 +400,44 @@ fn default_project_root_markers() -> Vec<String> {
         .iter()
         .map(ToString::to_string)
         .collect()
+}
+
+async fn trusted_project_root(
+    merged_config: &TomlValue,
+    cwd: &AbsolutePathBuf,
+    project_root_markers: &[String],
+    config_base_dir: &Path,
+) -> io::Result<Option<AbsolutePathBuf>> {
+    let config_toml = deserialize_config_toml_with_base(merged_config.clone(), config_base_dir)?;
+
+    let project_root = find_project_root(cwd, project_root_markers).await?;
+    let projects = config_toml.projects.unwrap_or_default();
+
+    let cwd_key = cwd.as_path().to_string_lossy().to_string();
+    let project_root_key = project_root.as_path().to_string_lossy().to_string();
+    let repo_root_key = resolve_root_git_project_for_trust(cwd.as_path())
+        .map(|root| root.to_string_lossy().to_string());
+
+    let trust_level = projects
+        .get(&cwd_key)
+        .and_then(|project| project.trust_level)
+        .or_else(|| {
+            projects
+                .get(&project_root_key)
+                .and_then(|project| project.trust_level)
+        })
+        .or_else(|| {
+            repo_root_key
+                .as_ref()
+                .and_then(|root| projects.get(root))
+                .and_then(|project| project.trust_level)
+        });
+
+    if matches!(trust_level, Some(TrustLevel::Trusted)) {
+        Ok(Some(project_root))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Takes a `toml::Value` parsed from a config.toml file and walks through it,

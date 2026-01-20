@@ -170,3 +170,11 @@ impl OtelManager {
         Ok(())
     }
 }
+
+/// Start a metrics timer using the globally installed metrics client.
+pub fn start_global_timer(name: &str, tags: &[(&str, &str)]) -> MetricsResult<Timer> {
+    let Some(metrics) = crate::metrics::global() else {
+        return Err(MetricsError::ExporterDisabled);
+    };
+    metrics.start_timer(name, tags)
+}

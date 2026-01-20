@@ -728,9 +728,13 @@ fn prepend_config_flags(
 /// Run the interactive Codex TUI, dispatching to either the legacy implementation or the
 /// experimental TUI v2 shim based on feature flags resolved from config.
 async fn run_interactive_tui(
-    interactive: TuiCli,
+    mut interactive: TuiCli,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> std::io::Result<AppExitInfo> {
+    if let Some(prompt) = interactive.prompt.take() {
+        // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
+        interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
+    }
     if is_tui2_enabled(&interactive).await? {
         let result = tui2::run_main(interactive.into(), codex_linux_sandbox_exe).await?;
         Ok(result.into())
@@ -855,7 +859,8 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         interactive.add_dir.extend(subcommand_cli.add_dir);
     }
     if let Some(prompt) = subcommand_cli.prompt {
-        interactive.prompt = Some(prompt);
+        // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
+        interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
     }
 
     interactive
