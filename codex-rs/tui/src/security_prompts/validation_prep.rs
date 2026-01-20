@@ -11,6 +11,8 @@ Constraints
 Rules
 - Do not assume anything is already built.
 - This is an execution step, not a docs-writing step: keep trying until you either have runnable targets or you have a concrete, unfixable blocker.
+- Do NOT claim `*_build_ok` unless you successfully executed a build command in this run (even if artifacts already exist, do an incremental rebuild to prove compilation works).
+- The harness will cross-check `*_build_command`/`*_smoke_command` against observed command logs; if they are missing or do not match successful commands you ran, the corresponding `*_ok` flag will be treated as false.
 - Prefer standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.
 - Treat missing build tools as a solvable prerequisite:
   - If you see `command not found` / missing compiler errors, try to install the missing tools either locally (system package manager) or inside the Docker target.
@@ -26,6 +28,7 @@ Local/native target
 - First, check for already-built artifacts in common output dirs (for example: `out/`, `out.gn/`, `target/`, `build/`, `dist/`).
 - Identify the correct runnable entrypoint (CLI binary, server command, etc.).
 - If the required binary does not exist, attempt a best-effort build using the repo's build system.
+- Even if the required binary DOES exist, still run an incremental build (e.g., `ninja -C ... <target>`, `cargo build ...`, `make`, etc.) to prove the target can compile from this checkout.
 - After building, verify the artifact exists at the resolved path, is executable, and can run:
   - Prefer a cheap smoke test like `--help`/`--version` (exit 0).
   - If the target is a server, start it and verify a health/root endpoint responds locally (then cleanly stop it).
@@ -45,12 +48,22 @@ TESTING.md additions
 
 Output format
 Respond ONLY with a single JSON object (no markdown, no prose). Keys:
-- outcome: \"success\" | \"unable\" (use \"success\" only if BOTH local and Docker targets built AND ran)
+- outcome: \"success\" | \"partial\" | \"unable\"
+  - \"success\": local AND docker targets built AND ran
+  - \"partial\": local target built AND ran, but docker is unavailable/blocked (still include docker diagnostics + any Dockerfile you created)
+  - \"unable\": local target could not be built+run
 - summary: string
 - local_build_ok: bool
 - local_run_ok: bool
 - docker_build_ok: bool
 - docker_run_ok: bool
+- local_build_command: string|null — a build command you actually ran successfully (required if `local_build_ok=true`)
+- local_smoke_command: string|null — a run/smoke command you actually ran successfully (required if `local_run_ok=true`)
+- local_entrypoint: string|null — resolved path to the runnable local entrypoint binary/service command
+- dockerfile_path: string|null — path to a Dockerfile you used/created under `{output_root}` (if any)
+- docker_build_command: string|null — a `docker build` command you actually ran successfully (required if `docker_build_ok=true`)
+- docker_smoke_command: string|null — a `docker run ...` / smoke command you actually ran successfully (required if `docker_run_ok=true`)
+- docker_image_tag: string|null — docker image tag you built/ran (required if `docker_build_ok=true` or `docker_run_ok=true`)
 - testing_md_additions: string (markdown bullets/commands, no heading)"#;
 
 pub(crate) const VALIDATION_TARGET_PREP_PROMPT_TEMPLATE: &str = r#"

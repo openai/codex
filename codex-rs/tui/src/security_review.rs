@@ -102,9 +102,10 @@ const VALIDATION_PREFLIGHT_TIMEOUT_SECS: u64 = 30 * 60;
 const VALIDATION_CURL_TIMEOUT_SECS: u64 = 60;
 const VALIDATION_PLAYWRIGHT_TIMEOUT_SECS: u64 = 5 * 60;
 const VALIDATION_TESTING_CONTEXT_MAX_CHARS: usize = 12_000;
+const VALIDATION_TARGET_PREP_MAX_TURNS: usize = 3;
 
 const VALIDATION_TESTING_SECTION_HEADER: &str = "## Validation prerequisites";
-const VALIDATION_TESTING_SECTION_INTRO: &str = "This section is shared across findings; follow it before running per-bug validation scripts or Dockerfiles.";
+const VALIDATION_TESTING_SECTION_INTRO: &str = "This section is shared across findings; follow it before running per-bug validation scripts or Dockerfiles. Commands should only appear here after they have been executed successfully during validation target preparation.";
 const VALIDATION_TARGET_SECTION_HEADER: &str = "## Validation target";
 const VALIDATION_TARGET_SECTION_INTRO: &str =
     "This section records the deployed target URL and any credentials used for web validation.";
@@ -669,6 +670,30 @@ fn resume_bug_analysis_progress(output_root: &Path) -> Option<ResumeCountProgres
 struct ValidationTargetPrepProgress {
     version: i32,
     repo_root: String,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    local_build_ok: bool,
+    #[serde(default)]
+    local_run_ok: bool,
+    #[serde(default)]
+    docker_build_ok: bool,
+    #[serde(default)]
+    docker_run_ok: bool,
+    #[serde(default)]
+    local_entrypoint: Option<String>,
+    #[serde(default)]
+    local_build_command: Option<String>,
+    #[serde(default)]
+    local_smoke_command: Option<String>,
+    #[serde(default)]
+    dockerfile_path: Option<String>,
+    #[serde(default)]
+    docker_image_tag: Option<String>,
+    #[serde(default)]
+    docker_build_command: Option<String>,
+    #[serde(default)]
+    docker_smoke_command: Option<String>,
 }
 
 fn validation_target_prep_progress_path(output_root: &Path) -> PathBuf {
@@ -687,7 +712,10 @@ fn validation_target_prep_complete(output_root: &Path, repo_root: &Path) -> bool
         Ok(progress) => progress,
         Err(_) => return false,
     };
-    progress.version == 2 && progress.repo_root == repo_root.display().to_string()
+    progress.version == 3
+        && progress.repo_root == repo_root.display().to_string()
+        && progress.local_build_ok
+        && progress.local_run_ok
 }
 
 pub fn running_review_candidates(repo_path: &Path) -> Vec<RunningSecurityReviewCandidate> {
@@ -10077,6 +10105,89 @@ mod validation_target_selection_tests {
             vec![BugIdentifier::RiskRank(1), BugIdentifier::RiskRank(2)]
         );
     }
+
+    #[test]
+    fn includes_crash_poc_release_and_excludes_crash_poc_func() {
+        let snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: String::new(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![
+                make_bug_snapshot(
+                    1,
+                    1,
+                    "Standalone crash in a function",
+                    "High",
+                    vec!["crash_poc_func".to_string()],
+                ),
+                make_bug_snapshot(
+                    2,
+                    2,
+                    "Crash reachable from shipped entrypoint",
+                    "High",
+                    vec!["crash_poc_release".to_string()],
+                ),
+            ],
+        };
+
+        let targets = build_validation_findings_context(&snapshot, true);
+        assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(2)]);
+    }
+
+    #[test]
+    fn treats_crash_poc_release_bin_as_crash_poc_release() {
+        let bug = SecurityReviewBug {
+            summary_id: 1,
+            risk_rank: Some(1),
+            risk_score: Some(0.0),
+            title: "Crash".to_string(),
+            severity: "High".to_string(),
+            impact: "x".to_string(),
+            likelihood: "x".to_string(),
+            recommendation: "x".to_string(),
+            file: "x.rs#L1-L2".to_string(),
+            blame: None,
+            risk_reason: None,
+            verification_types: vec!["crash_poc_release_bin".to_string()],
+            vulnerability_tag: None,
+            validation: BugValidationState::default(),
+            assignee_github: None,
+        };
+
+        assert_eq!(crash_poc_category(&bug), Some("crash_poc_release"));
+    }
+
+    #[test]
+    fn includes_rce_bin_findings_even_without_vuln_tag() {
+        let snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: String::new(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![BugSnapshot {
+                bug: SecurityReviewBug {
+                    summary_id: 1,
+                    risk_rank: Some(1),
+                    risk_score: Some(0.0),
+                    title: "RCE via config".to_string(),
+                    severity: "High".to_string(),
+                    impact: "x".to_string(),
+                    likelihood: "x".to_string(),
+                    recommendation: "x".to_string(),
+                    file: "x.rs#L1-L2".to_string(),
+                    blame: None,
+                    risk_reason: None,
+                    verification_types: vec!["rce_bin".to_string()],
+                    vulnerability_tag: None,
+                    validation: BugValidationState::default(),
+                    assignee_github: None,
+                },
+                original_markdown: "# RCE\n\nDetails.\n".to_string(),
+            }],
+        };
+
+        let targets = build_validation_findings_context(&snapshot, true);
+        assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(1)]);
+    }
 }
 
 #[cfg(test)]
@@ -10204,7 +10315,7 @@ done
             file: "x.rs#L1-L2".to_string(),
             blame: None,
             risk_reason: None,
-            verification_types: vec!["crash_poc_release_bin".to_string()],
+            verification_types: vec!["crash_poc_release".to_string()],
             vulnerability_tag: None,
             validation,
             assignee_github: None,
@@ -11322,6 +11433,19 @@ struct ValidationTargetPrepOutcome {
     success: bool,
 }
 
+fn prep_exec_succeeded(
+    exec_commands: &[ValidationPrepExecCommand],
+    expected: Option<&str>,
+) -> bool {
+    let Some(expected) = expected.map(str::trim).filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    exec_commands
+        .iter()
+        .filter(|cmd| cmd.exit_code == 0)
+        .any(|cmd| cmd.command.contains(expected))
+}
+
 async fn prepare_validation_targets(
     config: &Config,
     provider: &ModelProviderInfo,
@@ -11380,6 +11504,23 @@ async fn prepare_validation_targets(
         .replace("{has_dockerfile}", &has_dockerfile.to_string())
         .replace("{compose_files}", &compose_files);
 
+    let mut progress = ValidationTargetPrepProgress {
+        version: 3,
+        repo_root: repo_root.display().to_string(),
+        summary: None,
+        local_build_ok: false,
+        local_run_ok: false,
+        docker_build_ok: false,
+        docker_run_ok: false,
+        local_entrypoint: None,
+        local_build_command: None,
+        local_smoke_command: None,
+        dockerfile_path: None,
+        docker_image_tag: None,
+        docker_build_command: None,
+        docker_smoke_command: None,
+    };
+
     let mut success = false;
     match run_validation_target_prep_agent(
         config,
@@ -11405,6 +11546,7 @@ async fn prepare_validation_targets(
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
                     {
+                        progress.summary = Some(summary.to_string());
                         push_progress_log(
                             &progress_sender,
                             &log_sink,
@@ -11421,14 +11563,108 @@ async fn prepare_validation_targets(
                         additions.push(addition.to_string());
                     }
 
-                    success = parsed
-                        .outcome
+                    progress.local_entrypoint = parsed
+                        .local_entrypoint
                         .as_deref()
-                        .is_some_and(|o| o.eq_ignore_ascii_case("success"))
-                        && parsed.local_build_ok
-                        && parsed.local_run_ok
-                        && parsed.docker_build_ok
-                        && parsed.docker_run_ok;
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    progress.local_build_command = parsed
+                        .local_build_command
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    progress.local_smoke_command = parsed
+                        .local_smoke_command
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    progress.dockerfile_path = parsed
+                        .dockerfile_path
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    progress.docker_image_tag = parsed
+                        .docker_image_tag
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    progress.docker_build_command = parsed
+                        .docker_build_command
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    progress.docker_smoke_command = parsed
+                        .docker_smoke_command
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+
+                    progress.local_build_ok = parsed.local_build_ok
+                        && prep_exec_succeeded(
+                            &output.exec_commands,
+                            progress.local_build_command.as_deref(),
+                        );
+                    progress.local_run_ok = parsed.local_run_ok
+                        && prep_exec_succeeded(
+                            &output.exec_commands,
+                            progress.local_smoke_command.as_deref(),
+                        );
+                    progress.docker_build_ok = parsed.docker_build_ok
+                        && prep_exec_succeeded(
+                            &output.exec_commands,
+                            progress.docker_build_command.as_deref(),
+                        );
+                    progress.docker_run_ok = parsed.docker_run_ok
+                        && prep_exec_succeeded(
+                            &output.exec_commands,
+                            progress.docker_smoke_command.as_deref(),
+                        );
+
+                    if parsed.local_build_ok && !progress.local_build_ok {
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            "Validation target prep: local_build_ok was true, but no successful local_build_command was observed; treating local build as not ready."
+                                .to_string(),
+                        );
+                    }
+                    if parsed.local_run_ok && !progress.local_run_ok {
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            "Validation target prep: local_run_ok was true, but no successful local_smoke_command was observed; treating local run as not ready."
+                                .to_string(),
+                        );
+                    }
+                    if parsed.docker_build_ok && !progress.docker_build_ok {
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            "Validation target prep: docker_build_ok was true, but no successful docker_build_command was observed; treating docker build as not ready."
+                                .to_string(),
+                        );
+                    }
+                    if parsed.docker_run_ok && !progress.docker_run_ok {
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            "Validation target prep: docker_run_ok was true, but no successful docker_smoke_command was observed; treating docker run as not ready."
+                                .to_string(),
+                        );
+                    }
+
+                    success = progress.local_build_ok && progress.local_run_ok;
                 }
                 None => {
                     push_progress_log(
@@ -11452,16 +11688,27 @@ async fn prepare_validation_targets(
         }
     }
 
-    if success {
-        persist_validation_target_prep_progress(
-            output_root,
-            repo_root,
-            &progress_sender,
-            &log_sink,
-            &mut logs,
-        )
-        .await;
-    }
+    push_progress_log(
+        &progress_sender,
+        &log_sink,
+        &mut logs,
+        format!(
+            "Validation target prep status: local_build_ok={}, local_run_ok={}, docker_build_ok={}, docker_run_ok={}",
+            progress.local_build_ok,
+            progress.local_run_ok,
+            progress.docker_build_ok,
+            progress.docker_run_ok
+        ),
+    );
+
+    persist_validation_target_prep_progress(
+        output_root,
+        &progress,
+        &progress_sender,
+        &log_sink,
+        &mut logs,
+    )
+    .await;
 
     ValidationTargetPrepOutcome {
         logs,
@@ -11540,16 +11787,12 @@ pub(crate) async fn rerun_prepare_validation_targets(
 
 async fn persist_validation_target_prep_progress(
     output_root: &Path,
-    repo_root: &Path,
+    progress: &ValidationTargetPrepProgress,
     progress_sender: &Option<AppEventSender>,
     log_sink: &Option<Arc<SecurityReviewLogSink>>,
     logs: &mut Vec<String>,
 ) {
     let progress_path = validation_target_prep_progress_path(output_root);
-    let progress = ValidationTargetPrepProgress {
-        version: 2,
-        repo_root: repo_root.display().to_string(),
-    };
     let bytes = match serde_json::to_vec_pretty(&progress) {
         Ok(bytes) => bytes,
         Err(err) => {
@@ -11613,8 +11856,19 @@ async fn persist_validation_target_prep_progress(
                     progress_path.display()
                 ),
             );
+            return;
         }
     }
+
+    push_progress_log(
+        progress_sender,
+        log_sink,
+        logs,
+        format!(
+            "Validation target prep: wrote progress marker at {}.",
+            progress_path.display()
+        ),
+    );
 }
 
 fn validation_testing_md_dedupe_key(line: &str) -> Option<String> {
@@ -19378,6 +19632,34 @@ fn is_crypto_validation_vuln_tag(tag: &str) -> bool {
         || tag.ends_with("-x509")
 }
 
+fn is_ssrf_validation_vuln_tag(tag: &str) -> bool {
+    let tag = tag.trim().to_ascii_lowercase();
+    if tag.is_empty() {
+        return false;
+    }
+
+    matches!(
+        tag.as_str(),
+        "ssrf" | "server-side-request-forgery" | "server_side_request_forgery"
+    ) || tag.starts_with("ssrf-")
+        || tag.contains("-ssrf-")
+        || tag.ends_with("-ssrf")
+}
+
+fn is_rce_validation_vuln_tag(tag: &str) -> bool {
+    let tag = tag.trim().to_ascii_lowercase();
+    if tag.is_empty() {
+        return false;
+    }
+
+    matches!(
+        tag.as_str(),
+        "rce" | "remote-code-execution" | "remote_code_execution" | "rce-bin" | "rce_bin"
+    ) || tag.starts_with("rce-")
+        || tag.contains("-rce-")
+        || tag.ends_with("-rce")
+}
+
 fn is_priority_validation_vuln_tag(tag: &str) -> bool {
     let tag = tag.trim().to_ascii_lowercase();
     if tag.is_empty() {
@@ -19392,8 +19674,14 @@ fn is_priority_validation_vuln_tag(tag: &str) -> bool {
             | "missing-authz-check"
             | "sql-injection"
             | "xxe"
+            | "ssrf"
+            | "rce"
+            | "rce-bin"
+            | "rce_bin"
     ) || tag.starts_with("path-traversal")
         || is_crypto_validation_vuln_tag(tag.as_str())
+        || is_ssrf_validation_vuln_tag(tag.as_str())
+        || is_rce_validation_vuln_tag(tag.as_str())
 }
 
 fn has_verification_type(bug: &SecurityReviewBug, needle: &str) -> bool {
@@ -19403,8 +19691,10 @@ fn has_verification_type(bug: &SecurityReviewBug, needle: &str) -> bool {
 }
 
 fn crash_poc_category(bug: &SecurityReviewBug) -> Option<&'static str> {
-    if has_verification_type(bug, "crash_poc_release_bin") {
-        Some("crash_poc_release_bin")
+    if has_verification_type(bug, "crash_poc_release")
+        || has_verification_type(bug, "crash_poc_release_bin")
+    {
+        Some("crash_poc_release")
     } else if has_verification_type(bug, "crash_poc_func") {
         Some("crash_poc_func")
     } else {
@@ -19412,11 +19702,37 @@ fn crash_poc_category(bug: &SecurityReviewBug) -> Option<&'static str> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ValidationPromptKind {
+    Crash,
+    RceBin,
+    Ssrf,
+    Crypto,
+    Generic,
+}
+
+fn validation_prompt_kind(bug: &SecurityReviewBug, vuln_tag: &str) -> ValidationPromptKind {
+    if crash_poc_category(bug).is_some() {
+        return ValidationPromptKind::Crash;
+    }
+    if has_verification_type(bug, "rce_bin") || is_rce_validation_vuln_tag(vuln_tag) {
+        return ValidationPromptKind::RceBin;
+    }
+    if has_verification_type(bug, "ssrf") || is_ssrf_validation_vuln_tag(vuln_tag) {
+        return ValidationPromptKind::Ssrf;
+    }
+    if has_verification_type(bug, "crypto") || is_crypto_validation_vuln_tag(vuln_tag) {
+        return ValidationPromptKind::Crypto;
+    }
+    ValidationPromptKind::Generic
+}
+
 #[derive(Clone, Debug)]
 struct ValidationFinding {
     id: BugIdentifier,
     label: String,
     context: String,
+    prompt_kind: ValidationPromptKind,
 }
 
 struct ValidationFindingsContext {
@@ -19440,9 +19756,15 @@ fn build_validation_findings_context(
             if !is_high {
                 return false;
             }
+            if has_verification_type(&b.bug, "rce_bin")
+                || has_verification_type(&b.bug, "ssrf")
+                || has_verification_type(&b.bug, "crypto")
+            {
+                return true;
+            }
             match crash_poc_category(&b.bug) {
                 Some("crash_poc_func") => return false,
-                Some("crash_poc_release_bin") => return true,
+                Some("crash_poc_release") => return true,
                 _ => {}
             }
             let tag = b.bug.vulnerability_tag.clone().or_else(|| {
@@ -19509,6 +19831,7 @@ fn build_validation_findings_context(
                 extract_vulnerability_tag_from_bug_markdown(item.original_markdown.as_str())
             })
             .unwrap_or_default();
+        let prompt_kind = validation_prompt_kind(&item.bug, vuln_tag.as_str());
         let crash_poc_category_line = crash_poc_category(&item.bug)
             .map(|category| format!("\n  crash_poc_category: {category}"))
             .unwrap_or_default();
@@ -19535,6 +19858,7 @@ fn build_validation_findings_context(
             id: identifier,
             label,
             context,
+            prompt_kind,
         });
     }
 
@@ -19587,6 +19911,20 @@ struct ValidationTargetPrepModelOutput {
     #[serde(default)]
     docker_run_ok: bool,
     #[serde(default)]
+    local_build_command: Option<String>,
+    #[serde(default)]
+    local_smoke_command: Option<String>,
+    #[serde(default)]
+    local_entrypoint: Option<String>,
+    #[serde(default)]
+    dockerfile_path: Option<String>,
+    #[serde(default)]
+    docker_image_tag: Option<String>,
+    #[serde(default)]
+    docker_build_command: Option<String>,
+    #[serde(default)]
+    docker_smoke_command: Option<String>,
+    #[serde(default)]
     testing_md_additions: Option<String>,
 }
 
@@ -19617,6 +19955,13 @@ struct ValidationPlanAgentOutput {
 struct ValidationTargetPrepAgentOutput {
     text: String,
     logs: Vec<String>,
+    exec_commands: Vec<ValidationPrepExecCommand>,
+}
+
+struct ValidationPrepExecCommand {
+    command: String,
+    exit_code: i32,
+    duration_secs: u64,
 }
 
 struct ValidationTargetPrepFailure {
@@ -19672,108 +20017,182 @@ async fn run_validation_target_prep_agent(
         }
     };
 
-    if let Err(err) = conversation
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text { text: prompt }],
-        })
-        .await
-    {
-        let message = format!("Failed to submit validation prep prompt: {err}");
-        push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
-        return Err(ValidationTargetPrepFailure { message, logs });
-    }
-
-    let mut last_agent_message: Option<String> = None;
+    let mut exec_commands: Vec<ValidationPrepExecCommand> = Vec::new();
+    let mut next_prompt = prompt;
+    let mut final_text: Option<String> = None;
     let mut last_tool_log: Option<String> = None;
-    loop {
-        let event = match conversation.next_event().await {
-            Ok(event) => event,
-            Err(err) => {
-                let message = format!("Validation prep agent terminated unexpectedly: {err}");
-                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
-                return Err(ValidationTargetPrepFailure { message, logs });
+
+    for turn in 0..VALIDATION_TARGET_PREP_MAX_TURNS {
+        if turn > 0 {
+            push_progress_log(
+                &progress_sender,
+                &log_sink,
+                &mut logs,
+                format!(
+                    "Validation prep: retrying (attempt {}/{})",
+                    turn + 1,
+                    VALIDATION_TARGET_PREP_MAX_TURNS
+                ),
+            );
+        }
+
+        if let Err(err) = conversation
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: next_prompt.clone(),
+                }],
+            })
+            .await
+        {
+            let message = format!("Failed to submit validation prep prompt: {err}");
+            push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+            return Err(ValidationTargetPrepFailure { message, logs });
+        }
+
+        let exec_len_before_turn = exec_commands.len();
+        let mut last_agent_message: Option<String> = None;
+
+        loop {
+            let event = match conversation.next_event().await {
+                Ok(event) => event,
+                Err(err) => {
+                    let message = format!("Validation prep agent terminated unexpectedly: {err}");
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                    return Err(ValidationTargetPrepFailure { message, logs });
+                }
+            };
+
+            record_tool_call_from_event(metrics.as_ref(), &event.msg);
+
+            match event.msg {
+                EventMsg::TaskComplete(done) => {
+                    if let Some(msg) = done.last_agent_message {
+                        last_agent_message = Some(msg);
+                    }
+                    break;
+                }
+                EventMsg::AgentMessage(msg) => last_agent_message = Some(msg.message.clone()),
+                EventMsg::AgentReasoning(reason) => {
+                    log_model_reasoning(&reason.text, &progress_sender, &log_sink, &mut logs);
+                }
+                EventMsg::McpToolCallBegin(begin) => {
+                    let tool = begin.invocation.tool.clone();
+                    let message = format!("Validation prep: tool → {tool}");
+                    if last_tool_log.as_deref() != Some(message.as_str()) {
+                        push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                        last_tool_log = Some(message);
+                    }
+                }
+                EventMsg::ExecCommandBegin(begin) => {
+                    let command = strip_bash_lc_and_escape(&begin.command);
+                    push_progress_log(
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                        format!("Validation prep: run `{command}`"),
+                    );
+                }
+                EventMsg::ExecCommandEnd(done) => {
+                    let command = strip_bash_lc_and_escape(&done.command);
+                    exec_commands.push(ValidationPrepExecCommand {
+                        command: command.clone(),
+                        exit_code: done.exit_code,
+                        duration_secs: done.duration.as_secs(),
+                    });
+
+                    let duration = fmt_elapsed_compact(done.duration.as_secs());
+                    if done.exit_code == 0 {
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            format!("Validation prep: ok ({duration}) · `{command}`"),
+                        );
+                        continue;
+                    }
+
+                    let summary = summarize_process_output(false, &done.stdout, &done.stderr);
+                    push_progress_log(
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                        format!(
+                            "Validation prep: `{command}` exited {} ({duration}) · {summary}",
+                            done.exit_code
+                        ),
+                    );
+                }
+                EventMsg::Warning(warn) => {
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, warn.message);
+                }
+                EventMsg::Error(err) => {
+                    let message = format!("Validation prep agent error: {}", err.message);
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                    return Err(ValidationTargetPrepFailure { message, logs });
+                }
+                EventMsg::TurnAborted(aborted) => {
+                    let message = format!("Validation prep agent aborted: {:?}", aborted.reason);
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                    return Err(ValidationTargetPrepFailure { message, logs });
+                }
+                EventMsg::TokenCount(count) => {
+                    if let Some(info) = count.info {
+                        metrics.record_model_call();
+                        metrics.record_usage(&info.last_token_usage);
+                    }
+                }
+                _ => {}
             }
+        }
+
+        let Some(text) = last_agent_message
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+        else {
+            final_text = None;
+            next_prompt = "Your previous message was empty. Respond ONLY with a single JSON object per the required schema (no markdown/prose).".to_string();
+            continue;
         };
 
-        record_tool_call_from_event(metrics.as_ref(), &event.msg);
+        final_text = Some(text.clone());
+        let parsed = parse_validation_target_prep_output(&text);
+        let exec_count_this_turn = exec_commands.len().saturating_sub(exec_len_before_turn);
 
-        match event.msg {
-            EventMsg::TaskComplete(done) => {
-                if let Some(msg) = done.last_agent_message {
-                    last_agent_message = Some(msg);
-                }
-                break;
-            }
-            EventMsg::AgentMessage(msg) => last_agent_message = Some(msg.message.clone()),
-            EventMsg::AgentReasoning(reason) => {
-                log_model_reasoning(&reason.text, &progress_sender, &log_sink, &mut logs);
-            }
-            EventMsg::McpToolCallBegin(begin) => {
-                let tool = begin.invocation.tool.clone();
-                let message = format!("Validation prep: tool → {tool}");
-                if last_tool_log.as_deref() != Some(message.as_str()) {
-                    push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
-                    last_tool_log = Some(message);
-                }
-            }
-            EventMsg::ExecCommandBegin(begin) => {
-                let command = strip_bash_lc_and_escape(&begin.command);
-                push_progress_log(
-                    &progress_sender,
-                    &log_sink,
-                    &mut logs,
-                    format!("Validation prep: run `{command}`"),
-                );
-            }
-            EventMsg::ExecCommandEnd(done) => {
-                if done.exit_code == 0 {
-                    continue;
-                }
+        let Some(parsed) = parsed else {
+            next_prompt = "Your previous message was not parseable JSON. Respond ONLY with a single JSON object per the required schema (no markdown/prose).".to_string();
+            continue;
+        };
 
-                let duration = fmt_elapsed_compact(done.duration.as_secs());
-                let summary = summarize_process_output(false, &done.stdout, &done.stderr);
-                let command = strip_bash_lc_and_escape(&done.command);
-                push_progress_log(
-                    &progress_sender,
-                    &log_sink,
-                    &mut logs,
-                    format!(
-                        "Validation prep: `{command}` exited {} ({duration}) · {summary}",
-                        done.exit_code
-                    ),
-                );
-            }
-            EventMsg::Warning(warn) => {
-                push_progress_log(&progress_sender, &log_sink, &mut logs, warn.message);
-            }
-            EventMsg::Error(err) => {
-                let message = format!("Validation prep agent error: {}", err.message);
-                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
-                return Err(ValidationTargetPrepFailure { message, logs });
-            }
-            EventMsg::TurnAborted(aborted) => {
-                let message = format!("Validation prep agent aborted: {:?}", aborted.reason);
-                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
-                return Err(ValidationTargetPrepFailure { message, logs });
-            }
-            EventMsg::TokenCount(count) => {
-                if let Some(info) = count.info {
-                    metrics.record_model_call();
-                    metrics.record_usage(&info.last_token_usage);
-                }
-            }
-            _ => {}
+        let local_ready = parsed.local_build_ok && parsed.local_run_ok;
+        let docker_ready = parsed.docker_build_ok && parsed.docker_run_ok;
+        let docker_attempted = exec_commands.iter().any(|cmd| {
+            cmd.command
+                .lines()
+                .any(|line| line.trim_start().starts_with("docker "))
+        });
+
+        if local_ready
+            && (docker_ready || docker_attempted || turn + 1 == VALIDATION_TARGET_PREP_MAX_TURNS)
+        {
+            break;
         }
+
+        if exec_count_this_turn == 0 {
+            next_prompt = "You finished without running any commands. This is an execution step: run commands to build and smoke-test a local target and attempt a Docker build+run (or conclusively identify an unfixable blocker), then respond with ONLY the required JSON object.".to_string();
+            continue;
+        }
+
+        if local_ready && !docker_attempted {
+            next_prompt = "Local validation target is ready. Now attempt the Docker-based build+run path (Dockerfile under the output directory). If Docker is unavailable/blocked, report outcome=partial and set docker_* flags accordingly. Respond with ONLY the required JSON object.".to_string();
+            continue;
+        }
+
+        next_prompt = "Not done yet. Keep iterating on build/runtime errors until you can (1) successfully build+run the local target and (2) successfully build+run the Docker target (or conclude Docker is unavailable/blocked and report outcome=partial). Then respond with ONLY the required JSON object.".to_string();
     }
 
-    let text = match last_agent_message.and_then(|s| {
-        let trimmed = s.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    }) {
+    let text = match final_text {
         Some(text) => text,
         None => {
             let message = "Validation prep agent produced an empty response.".to_string();
@@ -19784,7 +20203,11 @@ async fn run_validation_target_prep_agent(
 
     let _ = conversation.submit(Op::Shutdown).await;
 
-    Ok(ValidationTargetPrepAgentOutput { text, logs })
+    Ok(ValidationTargetPrepAgentOutput {
+        text,
+        logs,
+        exec_commands,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -20584,8 +21007,21 @@ async fn run_asan_validation(
         let testing_md_context = testing_md_context.clone();
         let web_validation_context = web_validation_context.clone();
         async move {
-            let ValidationFinding { id, label, context } = finding;
+            let ValidationFinding {
+                id,
+                label,
+                context,
+                prompt_kind,
+            } = finding;
+            let validation_focus = match prompt_kind {
+                ValidationPromptKind::Crash => VALIDATION_FOCUS_CRASH,
+                ValidationPromptKind::RceBin => VALIDATION_FOCUS_RCE_BIN,
+                ValidationPromptKind::Ssrf => VALIDATION_FOCUS_SSRF,
+                ValidationPromptKind::Crypto => VALIDATION_FOCUS_CRYPTO,
+                ValidationPromptKind::Generic => VALIDATION_FOCUS_GENERIC,
+            };
             let prompt = VALIDATION_PLAN_PROMPT_TEMPLATE
+                .replace("{validation_focus}", validation_focus)
                 .replace("{findings}", &context)
                 .replace("{testing_md}", &testing_md_context)
                 .replace("{web_validation}", &web_validation_context);

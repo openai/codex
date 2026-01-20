@@ -1,9 +1,61 @@
 pub(crate) const VALIDATION_PLAN_SYSTEM_PROMPT: &str = "Validate that this bug exists.\n\n- Prefer validation against standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.\n- For local/native validation, do not assume the target is already built:\n  - First, check for already-built artifacts in common output dirs (e.g., `out/`, `out.gn/`, `target/`, `build/`, `dist/`).\n  - If the required binary does not exist, attempt a best-effort build (and keep iterating on build errors until you either succeed or hit a clear unfixable prerequisite).\n  - After building, verify the binary exists at the resolved path (and is executable), print a short artifact check (e.g., `ls -l` and `file <path>`), and confirm it can run (e.g., `<bin> --help` exits 0) before running CONTROL/TRIGGER.\n  - Do not hardcode an output directory unless it is guaranteed by the build system; if uncertain, locate the binary deterministically and print where you found it.\n- Prefer repo-provided build tool wrappers (e.g. `./buildtools/**/gn`, `./gradlew`, `./mvnw`) over assuming tools are on PATH.\n- If the repo appears to use GN/Ninja, ensure `gn`/`ninja` are available (prefer repo-provided `./buildtools/**/gn`/`ninja` or install via depot_tools) before declaring UNABLE.\n- If you include build/compile commands in `testing_md_additions`, ensure they are compatible with the repo (for example: only use `cargo build --locked` when `Cargo.lock` exists; prefer `npm ci` when `package-lock.json` exists).\n- If a deployed target URL is provided, you may validate web/API findings against it using curl/playwright.\n- If you need to run the app to obtain a local target URL, prefer using an already released Docker image for the latest release (docker pull/run or docker compose pull/up) instead of building from source, unless you need an ASan build or no image exists.\n- If you try both Docker-based and native/local reproduction strategies, do NOT treat Docker failures as fatal: attempt native/local anyway and consider validation successful if ANY strategy observes the bug.\n- For crash/memory-safety findings, validate by building an ASan-compiled version of the standard target and triggering the crash through a normal entrypoint, capturing the ASan stack trace.\n- Do not emit `tool:\"none\"` solely because an ASan build is not already present. Attempt a best-effort ASan build and record exactly what you tried.\n- For crypto/protocol/auth logic findings, validate by building/running a minimal, deterministic check that demonstrates the failure (ASan not required).\n\nPython script exit codes:\n- Exit 0 only when the bug is observed.\n- Exit 1 when the target runs but the bug is NOT observed (\"not validated\").\n- Exit 2 when validation cannot be completed due to environment/build/platform issues (\"not able to validate\").\n- Always print a final single-line marker before exiting: `CODEX_VALIDATION_OUTCOME=PASS|FAIL|UNABLE`.\n\nRespond ONLY with JSON Lines as requested; do not include markdown or prose.";
+
+pub(crate) const VALIDATION_FOCUS_CRASH: &str = r#"
+Crash/memory-safety validation (ASan required):
+- Use `crash_poc_category` from Context when present:
+  - `crash_poc_release_bin`: proceed with ASan validation via a standard shipped entrypoint (release binary/service OR public SDK/API entrypoint).
+  - `crash_poc_func`: do NOT create a synthetic harness just to call the function; emit `tool:"none"` unless you can reproduce via a standard shipped entrypoint without adding code.
+- Validate against a standard, shipped target (existing binary/service entrypoint) rather than a synthetic harness that calls an internal function.
+- Use only “real” entrypoints (CLI args, config, input files, HTTP requests, etc.) that exercise the same surface area as typical releases.
+- Build an ASan-instrumented, ASan-compiled version of that standard target locally (best-effort).
+- Trigger the crash through that standard entrypoint against the ASan build.
+- Print the ASan stack trace.
+- Exit 0 only when an ASan signature is observed; otherwise exit non-zero.
+- If the ASan build is missing and requires a from-source build, still attempt it; if the build fails or times out, print what happened and exit 2.
+"#;
+
+pub(crate) const VALIDATION_FOCUS_RCE_BIN: &str = r#"
+RCE validation (shipped binary entrypoint):
+- Validate via a standard, shipped target/entrypoint (existing binary/service surface), not a synthetic harness.
+- Keep the proof-of-execution safe and non-destructive:
+  - Prefer printing a deterministic marker to stdout, or writing a marker file under a temporary directory and then proving it exists.
+  - Do NOT use reverse shells, persistence, crypto-miners, or data exfiltration.
+- If the RCE is command injection, prefer an innocuous command (e.g. `echo CODEX_RCE_OK`) and verify the marker.
+- Include CONTROL (benign input) and TRIGGER (malicious input) cases and show the delta.
+- Exit 0 only when the marker proves code execution; otherwise exit non-zero.
+"#;
+
+pub(crate) const VALIDATION_FOCUS_SSRF: &str = r#"
+SSRF validation:
+- Validate by proving the target makes an outbound request to an attacker-chosen URL/host.
+- Prefer a local-only canary to avoid contacting the public internet:
+  - Start a local canary HTTP server (e.g. in the python script) and use a `http://127.0.0.1:<port>/canary` URL as the SSRF target.
+  - Prove the request happened by capturing the canary server logs and/or reflected response content.
+- When validating against a deployed target, do not use external callback hosts; prefer loopback/localhost targets that keep traffic on the same machine/container.
+- Include CONTROL and TRIGGER and show the delta (no request vs canary request).
+- Exit 0 only when the SSRF request is observed; otherwise exit non-zero.
+"#;
+
+pub(crate) const VALIDATION_FOCUS_CRYPTO: &str = r#"
+Crypto/protocol/auth logic validation:
+- Build/run a minimal harness or test that deterministically demonstrates the bug (no ASan required).
+- Print the observed behavior for both CONTROL and TRIGGER.
+- Exit 0 only when the bug is observed; otherwise exit non-zero.
+"#;
+
+pub(crate) const VALIDATION_FOCUS_GENERIC: &str = r#"
+General validation:
+- Build/run a minimal, deterministic check that demonstrates the bug (no ASan required).
+- Prefer validating via a standard, shipped target/entrypoint.
+- Include CONTROL and TRIGGER and show the delta.
+- Exit 0 only when the bug is observed; otherwise exit non-zero.
+"#;
+
 pub(crate) const VALIDATION_PLAN_PROMPT_TEMPLATE: &str = r#"
 Validate that this bug exists.
 
-- If the finding is a crash/memory-safety issue (e.g., `verification_types` includes `crash_poc_release_bin` or `crash_poc_func`), validate it against an ASan-compiled build and capture the ASan stack trace.
-- If the finding is a crypto/protocol/auth logic issue, validate it with a minimal, deterministic harness (no ASan required).
+Validation focus:
+{validation_focus}
 
 Shared TESTING.md (read this first):
 - The worker will follow these shared build/install/run instructions before running any per-bug PoC scripts.
@@ -41,24 +93,6 @@ Exit codes for python validations:
 - Exit 1 when the target runs but the bug is NOT observed ("not validated").
 - Exit 2 when you cannot validate due to environment/build/platform issues ("not able to validate").
 - Always print a final single-line marker before exiting: `CODEX_VALIDATION_OUTCOME=PASS|FAIL|UNABLE`.
-
-Crash/memory-safety findings:
-- Use `crash_poc_category` from Context when present:
-  - `crash_poc_release_bin`: proceed with ASan validation via a standard shipped target/entrypoint.
-  - `crash_poc_func`: do NOT create a synthetic harness just to call the function; emit `tool:"none"` unless you can reproduce via a standard shipped entrypoint without adding code.
-- Validate against a standard, shipped target (existing binary/service entrypoint) rather than a synthetic harness that calls an internal function.
-- Use only “real” entrypoints (CLI args, config, input files, HTTP requests, etc.) that exercise the same surface area as typical releases.
-- Do not create a new harness/test binary solely to call a vulnerable function; if you cannot plausibly reach the crash from a standard target, emit `tool:"none"` with a short reason.
-- Build an ASan-instrumented, ASan-compiled version of that standard target locally (best-effort).
-- Trigger the crash through that standard entrypoint against the ASan build.
-- Print the ASan stack trace.
-- Exit 0 only when an ASan signature is observed; otherwise exit non-zero.
-- If the ASan build is missing and requires a from-source build, still attempt it (do NOT mark it "too heavy" without trying). If the build fails or times out, print what happened and exit 2.
-
-Crypto/protocol/auth logic findings:
-- Build/run a minimal harness or test that deterministically demonstrates the bug (no ASan required).
-- Print the observed behavior for both CONTROL and TRIGGER.
-- Exit 0 only when the bug is observed; otherwise exit non-zero.
 
 Context (findings):
 {findings}
