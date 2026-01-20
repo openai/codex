@@ -3,6 +3,7 @@
 use codex_core::config::types::ShellEnvironmentPolicy;
 use codex_core::error::CodexErr;
 use codex_core::error::SandboxErr;
+use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::exec_env::create_env;
@@ -13,6 +14,7 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
+use tokio_util::sync::CancellationToken;
 
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.
 
@@ -57,7 +59,7 @@ async fn run_cmd_output(
     let params = ExecParams {
         command: cmd.iter().copied().map(str::to_owned).collect(),
         cwd,
-        expiration: timeout_ms.into(),
+        expiration: ExecExpiration::from_timeout_ms(Some(timeout_ms), CancellationToken::new()),
         env: create_env_from_core_vars(),
         sandbox_permissions: SandboxPermissions::UseDefault,
         justification: None,
@@ -174,7 +176,10 @@ async fn assert_network_blocked(cmd: &[&str]) {
         cwd,
         // Give the tool a generous 2-second timeout so even slow DNS timeouts
         // do not stall the suite.
-        expiration: NETWORK_TIMEOUT_MS.into(),
+        expiration: ExecExpiration::from_timeout_ms(
+            Some(NETWORK_TIMEOUT_MS),
+            CancellationToken::new(),
+        ),
         env: create_env_from_core_vars(),
         sandbox_permissions: SandboxPermissions::UseDefault,
         justification: None,

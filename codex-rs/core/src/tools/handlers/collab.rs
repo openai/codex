@@ -615,6 +615,7 @@ mod tests {
     use std::time::Duration;
     use tokio::sync::Mutex;
     use tokio::time::timeout;
+    use tokio_util::sync::CancellationToken;
 
     fn invocation(
         session: Arc<crate::codex::Session>,
@@ -629,6 +630,7 @@ mod tests {
             call_id: "call-1".to_string(),
             tool_name: tool_name.to_string(),
             payload,
+            cancellation_token: CancellationToken::new(),
         }
     }
 

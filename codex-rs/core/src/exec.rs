@@ -35,6 +35,7 @@ use crate::text_encoding::bytes_to_string_smart;
 use codex_utils_pty::process_group::kill_child_process_group;
 
 pub const DEFAULT_EXEC_COMMAND_TIMEOUT_MS: u64 = 10_000;
+pub(crate) const EXEC_ABORTED_MESSAGE: &str = "command aborted by user";
 
 // Hardcode these since it does not seem worth including the libc crate just
 // for these.
@@ -64,47 +65,76 @@ pub struct ExecParams {
 
 /// Mechanism to terminate an exec invocation before it finishes naturally.
 #[derive(Debug)]
-pub enum ExecExpiration {
-    Timeout(Duration),
-    DefaultTimeout,
-    Cancellation(CancellationToken),
+pub struct ExecExpiration {
+    pub timeout: TimeoutSpec,
+    pub cancellation: CancellationToken,
 }
 
-impl From<Option<u64>> for ExecExpiration {
-    fn from(timeout_ms: Option<u64>) -> Self {
-        timeout_ms.map_or(ExecExpiration::DefaultTimeout, |timeout_ms| {
-            ExecExpiration::Timeout(Duration::from_millis(timeout_ms))
-        })
-    }
-}
-
-impl From<u64> for ExecExpiration {
-    fn from(timeout_ms: u64) -> Self {
-        ExecExpiration::Timeout(Duration::from_millis(timeout_ms))
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeoutSpec {
+    Default,
+    Explicit(Duration),
+    None,
 }
 
 impl ExecExpiration {
-    async fn wait(self) {
-        match self {
-            ExecExpiration::Timeout(duration) => tokio::time::sleep(duration).await,
-            ExecExpiration::DefaultTimeout => {
-                tokio::time::sleep(Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)).await
-            }
-            ExecExpiration::Cancellation(cancel) => {
-                cancel.cancelled().await;
+    pub fn new(timeout: TimeoutSpec, cancellation: CancellationToken) -> Self {
+        Self {
+            timeout,
+            cancellation,
+        }
+    }
+
+    pub fn default(cancellation: CancellationToken) -> Self {
+        Self::new(TimeoutSpec::Default, cancellation)
+    }
+
+    pub fn from_timeout(timeout: Duration, cancellation: CancellationToken) -> Self {
+        Self::new(TimeoutSpec::Explicit(timeout), cancellation)
+    }
+
+    pub fn from_timeout_ms(timeout_ms: Option<u64>, cancellation: CancellationToken) -> Self {
+        let timeout = timeout_ms.map_or(TimeoutSpec::Default, |timeout_ms| {
+            TimeoutSpec::Explicit(Duration::from_millis(timeout_ms))
+        });
+        Self::new(timeout, cancellation)
+    }
+
+    pub fn cancel_only(cancellation: CancellationToken) -> Self {
+        Self::new(TimeoutSpec::None, cancellation)
+    }
+
+    async fn wait(self) -> ExecExpirationOutcome {
+        match self.timeout {
+            TimeoutSpec::Explicit(duration) => tokio::select! {
+                _ = tokio::time::sleep(duration) => ExecExpirationOutcome::TimedOut,
+                _ = self.cancellation.cancelled() => ExecExpirationOutcome::Cancelled,
+            },
+            TimeoutSpec::Default => tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)) => ExecExpirationOutcome::TimedOut,
+                _ = self.cancellation.cancelled() => ExecExpirationOutcome::Cancelled,
+            },
+            TimeoutSpec::None => {
+                self.cancellation.cancelled().await;
+                ExecExpirationOutcome::Cancelled
             }
         }
     }
 
     /// If ExecExpiration is a timeout, returns the timeout in milliseconds.
     pub(crate) fn timeout_ms(&self) -> Option<u64> {
-        match self {
-            ExecExpiration::Timeout(duration) => Some(duration.as_millis() as u64),
-            ExecExpiration::DefaultTimeout => Some(DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
-            ExecExpiration::Cancellation(_) => None,
+        match self.timeout {
+            TimeoutSpec::Explicit(duration) => Some(duration.as_millis() as u64),
+            TimeoutSpec::Default => Some(DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
+            TimeoutSpec::None => None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExecExpirationOutcome {
+    TimedOut,
+    Cancelled,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -234,8 +264,7 @@ async fn exec_windows_sandbox(
         expiration,
         ..
     } = params;
-    // TODO(iceweasel-oai): run_windows_sandbox_capture should support all
-    // variants of ExecExpiration, not just timeout.
+    // TODO(iceweasel-oai): run_windows_sandbox_capture should respect cancellation tokens.
     let timeout_ms = expiration.timeout_ms();
 
     let policy_str = serde_json::to_string(sandbox_policy).map_err(|err| {
@@ -494,6 +523,13 @@ fn append_all(dst: &mut Vec<u8>, src: &[u8]) {
     dst.extend_from_slice(src);
 }
 
+pub(crate) fn append_abort_message(output: &mut Vec<u8>) {
+    if !output.is_empty() && !output.ends_with(b"\n") {
+        output.push(b'\n');
+    }
+    output.extend_from_slice(EXEC_ABORTED_MESSAGE.as_bytes());
+}
+
 #[derive(Clone, Debug)]
 pub struct ExecToolCallOutput {
     pub exit_code: i32,
@@ -599,20 +635,27 @@ async fn consume_truncated_output(
         Some(agg_tx.clone()),
     ));
 
-    let (exit_status, timed_out) = tokio::select! {
+    let (exit_status, timed_out, was_cancelled) = tokio::select! {
         status_result = child.wait() => {
             let exit_status = status_result?;
-            (exit_status, false)
+            (exit_status, false, false)
         }
-        _ = expiration.wait() => {
+        outcome = expiration.wait() => {
             kill_child_process_group(&mut child)?;
             child.start_kill()?;
-            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true)
+            match outcome {
+                ExecExpirationOutcome::TimedOut => {
+                    (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE), true, false)
+                }
+                ExecExpirationOutcome::Cancelled => {
+                    (synthetic_exit_status(0), false, true)
+                }
+            }
         }
         _ = tokio::signal::ctrl_c() => {
             kill_child_process_group(&mut child)?;
             child.start_kill()?;
-            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false)
+            (synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE), false, false)
         }
     };
 
@@ -624,7 +667,7 @@ async fn consume_truncated_output(
     // That would cause the `read_capped` tasks to block on `read()`
     // indefinitely, effectively hanging the whole agent.
 
-    const IO_DRAIN_TIMEOUT_MS: u64 = 2_000; // 2 s should be plenty for local pipes
+    const IO_DRAIN_TIMEOUT_MS: u64 = 10;
 
     // We need mutable bindings so we can `abort()` them on timeout.
     use tokio::task::JoinHandle;
@@ -669,6 +712,10 @@ async fn consume_truncated_output(
     while let Ok(chunk) = agg_rx.recv().await {
         append_all(&mut combined_buf, &chunk);
     }
+    if was_cancelled {
+        append_abort_message(&mut combined_buf);
+    }
+
     let aggregated_output = StreamOutput {
         text: combined_buf,
         truncated_after_lines: None,
@@ -845,7 +892,7 @@ mod tests {
         let params = ExecParams {
             command,
             cwd: std::env::current_dir()?,
-            expiration: 500.into(),
+            expiration: ExecExpiration::from_timeout_ms(Some(500), CancellationToken::new()),
             env,
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
@@ -890,7 +937,7 @@ mod tests {
         let params = ExecParams {
             command,
             cwd: cwd.clone(),
-            expiration: ExecExpiration::Cancellation(cancel_token),
+            expiration: ExecExpiration::cancel_only(cancel_token),
             env,
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
@@ -900,20 +947,17 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(1_000)).await;
             cancel_tx.cancel();
         });
-        let result = process_exec_tool_call(
+        let output = process_exec_tool_call(
             params,
             &SandboxPolicy::DangerFullAccess,
             cwd.as_path(),
             &None,
             None,
         )
-        .await;
-        let output = match result {
-            Err(CodexErr::Sandbox(SandboxErr::Timeout { output })) => output,
-            other => panic!("expected timeout error, got {other:?}"),
-        };
-        assert!(output.timed_out);
-        assert_eq!(output.exit_code, EXEC_TIMEOUT_EXIT_CODE);
+        .await?;
+        assert!(!output.timed_out);
+        assert_eq!(output.exit_code, 0);
+        assert!(output.aggregated_output.text.contains(EXEC_ABORTED_MESSAGE));
         Ok(())
     }
 

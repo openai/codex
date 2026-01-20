@@ -13,6 +13,7 @@ use mcp_types::CallToolResult;
 use std::borrow::Cow;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 pub type SharedTurnDiffTracker = Arc<Mutex<TurnDiffTracker>>;
 
@@ -24,6 +25,7 @@ pub struct ToolInvocation {
     pub call_id: String,
     pub tool_name: String,
     pub payload: ToolPayload,
+    pub cancellation_token: CancellationToken,
 }
 
 #[derive(Clone, Debug)]

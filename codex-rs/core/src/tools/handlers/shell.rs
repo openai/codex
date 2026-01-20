@@ -2,8 +2,10 @@ use async_trait::async_trait;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 use crate::codex::TurnContext;
+use crate::exec::ExecExpiration;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
@@ -29,11 +31,15 @@ pub struct ShellHandler;
 pub struct ShellCommandHandler;
 
 impl ShellHandler {
-    fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
+    fn to_exec_params(
+        params: ShellToolCallParams,
+        turn_context: &TurnContext,
+        cancellation_token: CancellationToken,
+    ) -> ExecParams {
         ExecParams {
             command: params.command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
-            expiration: params.timeout_ms.into(),
+            expiration: ExecExpiration::from_timeout_ms(params.timeout_ms, cancellation_token),
             env: create_env(&turn_context.shell_environment_policy),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             justification: params.justification,
@@ -52,6 +58,7 @@ impl ShellCommandHandler {
         params: ShellCommandToolCallParams,
         session: &crate::codex::Session,
         turn_context: &TurnContext,
+        cancellation_token: CancellationToken,
     ) -> ExecParams {
         let shell = session.user_shell();
         let command = Self::base_command(shell.as_ref(), &params.command, params.login);
@@ -59,7 +66,7 @@ impl ShellCommandHandler {
         ExecParams {
             command,
             cwd: turn_context.resolve_path(params.workdir.clone()),
-            expiration: params.timeout_ms.into(),
+            expiration: ExecExpiration::from_timeout_ms(params.timeout_ms, cancellation_token),
             env: create_env(&turn_context.shell_environment_policy),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             justification: params.justification,
@@ -101,32 +108,29 @@ impl ToolHandler for ShellHandler {
             call_id,
             tool_name,
             payload,
+            cancellation_token,
         } = invocation;
 
         match payload {
             ToolPayload::Function { arguments } => {
                 let params: ShellToolCallParams = parse_arguments(&arguments)?;
-                let exec_params = Self::to_exec_params(params, turn.as_ref());
+                let exec_params =
+                    Self::to_exec_params(params, turn.as_ref(), cancellation_token.child_token());
                 Self::run_exec_like(
                     tool_name.as_str(),
                     exec_params,
-                    session,
-                    turn,
-                    tracker,
-                    call_id,
+                    ShellExecContext::new(session, turn, tracker, call_id, cancellation_token),
                     false,
                 )
                 .await
             }
             ToolPayload::LocalShell { params } => {
-                let exec_params = Self::to_exec_params(params, turn.as_ref());
+                let exec_params =
+                    Self::to_exec_params(params, turn.as_ref(), cancellation_token.child_token());
                 Self::run_exec_like(
                     tool_name.as_str(),
                     exec_params,
-                    session,
-                    turn,
-                    tracker,
-                    call_id,
+                    ShellExecContext::new(session, turn, tracker, call_id, cancellation_token),
                     false,
                 )
                 .await
@@ -170,6 +174,7 @@ impl ToolHandler for ShellCommandHandler {
             call_id,
             tool_name,
             payload,
+            cancellation_token,
         } = invocation;
 
         let ToolPayload::Function { arguments } = payload else {
@@ -179,17 +184,45 @@ impl ToolHandler for ShellCommandHandler {
         };
 
         let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
-        let exec_params = Self::to_exec_params(params, session.as_ref(), turn.as_ref());
+        let exec_params = Self::to_exec_params(
+            params,
+            session.as_ref(),
+            turn.as_ref(),
+            cancellation_token.child_token(),
+        );
         ShellHandler::run_exec_like(
             tool_name.as_str(),
             exec_params,
+            ShellExecContext::new(session, turn, tracker, call_id, cancellation_token),
+            true,
+        )
+        .await
+    }
+}
+
+struct ShellExecContext {
+    session: Arc<crate::codex::Session>,
+    turn: Arc<TurnContext>,
+    tracker: crate::tools::context::SharedTurnDiffTracker,
+    call_id: String,
+    cancellation_token: CancellationToken,
+}
+
+impl ShellExecContext {
+    fn new(
+        session: Arc<crate::codex::Session>,
+        turn: Arc<TurnContext>,
+        tracker: crate::tools::context::SharedTurnDiffTracker,
+        call_id: String,
+        cancellation_token: CancellationToken,
+    ) -> Self {
+        Self {
             session,
             turn,
             tracker,
             call_id,
-            true,
-        )
-        .await
+            cancellation_token,
+        }
     }
 }
 
@@ -197,12 +230,16 @@ impl ShellHandler {
     async fn run_exec_like(
         tool_name: &str,
         exec_params: ExecParams,
-        session: Arc<crate::codex::Session>,
-        turn: Arc<TurnContext>,
-        tracker: crate::tools::context::SharedTurnDiffTracker,
-        call_id: String,
+        ctx: ShellExecContext,
         freeform: bool,
     ) -> Result<ToolOutput, FunctionCallError> {
+        let ShellExecContext {
+            session,
+            turn,
+            tracker,
+            call_id,
+            cancellation_token,
+        } = ctx;
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params
             .sandbox_permissions
@@ -212,9 +249,9 @@ impl ShellHandler {
                 codex_protocol::protocol::AskForApproval::OnRequest
             )
         {
+            let policy = turn.approval_policy;
             return Err(FunctionCallError::RespondToModel(format!(
-                "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
-                policy = turn.approval_policy
+                "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}"
             )));
         }
 
@@ -228,6 +265,7 @@ impl ShellHandler {
             Some(&tracker),
             &call_id,
             tool_name,
+            cancellation_token.child_token(),
         )
         .await?
         {
@@ -273,6 +311,7 @@ impl ShellHandler {
             turn: turn.as_ref(),
             call_id: call_id.clone(),
             tool_name: tool_name.to_string(),
+            cancellation_token,
         };
         let out = orchestrator
             .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
@@ -294,6 +333,7 @@ mod tests {
 
     use codex_protocol::models::ShellCommandToolCallParams;
     use pretty_assertions::assert_eq;
+    use tokio_util::sync::CancellationToken;
 
     use crate::codex::make_session_and_context;
     use crate::exec_env::create_env;
@@ -377,7 +417,12 @@ mod tests {
             justification: justification.clone(),
         };
 
-        let exec_params = ShellCommandHandler::to_exec_params(params, &session, &turn_context);
+        let exec_params = ShellCommandHandler::to_exec_params(
+            params,
+            &session,
+            &turn_context,
+            CancellationToken::new(),
+        );
 
         // ExecParams cannot derive Eq due to the CancellationToken field, so we manually compare the fields.
         assert_eq!(exec_params.command, expected_command);

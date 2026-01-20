@@ -84,7 +84,7 @@ impl EscalateServer {
                     command,
                 ],
                 cwd: PathBuf::from(&workdir),
-                expiration: ExecExpiration::Cancellation(cancel_rx),
+                expiration: ExecExpiration::cancel_only(cancel_rx),
                 env,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 justification: None,

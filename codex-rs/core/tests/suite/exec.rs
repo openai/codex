@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::string::ToString;
 
+use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
 use codex_core::exec::ExecToolCallOutput;
 use codex_core::exec::SandboxType;
@@ -15,6 +16,7 @@ use tempfile::TempDir;
 use codex_core::error::Result;
 
 use codex_core::get_platform_sandbox;
+use tokio_util::sync::CancellationToken;
 
 fn skip_test() -> bool {
     if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
@@ -33,7 +35,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
     let params = ExecParams {
         command: cmd.iter().map(ToString::to_string).collect(),
         cwd: tmp.path().to_path_buf(),
-        expiration: 1000.into(),
+        expiration: ExecExpiration::from_timeout_ms(Some(1000), CancellationToken::new()),
         env: HashMap::new(),
         sandbox_permissions: SandboxPermissions::UseDefault,
         justification: None,

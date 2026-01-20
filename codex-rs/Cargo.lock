@@ -1024,6 +1024,7 @@ dependencies = [
  "shlex",
  "tempfile",
  "tokio",
+ "tokio-util",
  "toml 0.9.5",
  "tracing",
  "tracing-subscriber",
@@ -1531,6 +1532,7 @@ dependencies = [
  "seccompiler",
  "tempfile",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

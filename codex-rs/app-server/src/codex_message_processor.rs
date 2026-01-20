@@ -140,6 +140,7 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::error::CodexErr;
+use codex_core::exec::ExecExpiration;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::features::Feature;
@@ -188,6 +189,7 @@ use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use tracing::error;
 use tracing::info;
@@ -1232,10 +1234,11 @@ impl CodexMessageProcessor {
         let timeout_ms = params
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
+        let cancellation_token = CancellationToken::new();
         let exec_params = ExecParams {
             command: params.command,
             cwd,
-            expiration: timeout_ms.into(),
+            expiration: ExecExpiration::from_timeout_ms(timeout_ms, cancellation_token),
             env,
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
