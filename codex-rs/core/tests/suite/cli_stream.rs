@@ -1,5 +1,6 @@
 use assert_cmd::Command as AssertCommand;
 use codex_core::RolloutRecorder;
+use codex_core::auth::CODEX_API_KEY_ENV_VAR;
 use codex_core::protocol::GitInfo;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::fs_wait;
@@ -239,7 +240,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg(&repo_root)
         .arg(&prompt);
     cmd.env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
+        .env(CODEX_API_KEY_ENV_VAR, "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         // Required for CLI arg parsing even though fixture short-circuits network usage.
         .env("OPENAI_BASE_URL", "http://unused.local");
