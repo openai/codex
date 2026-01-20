@@ -1665,10 +1665,12 @@ impl ChatComposer {
                 .next()
                 .unwrap_or("")
                 .starts_with('/');
-        if !self.disable_paste_burst && self.paste_burst.is_active() && !in_slash_context {
-            if self.paste_burst.append_newline_if_active(now) {
-                return (InputResult::None, true);
-            }
+        if !self.disable_paste_burst
+            && self.paste_burst.is_active()
+            && !in_slash_context
+            && self.paste_burst.append_newline_if_active(now)
+        {
+            return (InputResult::None, true);
         }
 
         // During a paste-like burst, treat Enter/Ctrl+Shift+Q as a newline instead of submit.
