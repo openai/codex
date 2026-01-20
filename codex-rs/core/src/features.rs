@@ -435,7 +435,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::Experimental {
             name: "Mult-agents",
             menu_description: "Allow Codex to spawn and collaborate with other agents on request (formerly named `collab`).",
-            announcement: "NEW! Codex can now spawn other agents and work with them to solve your problems. Enable in /experimental!"
+            announcement: "NEW! Codex can now spawn other agents and work with them to solve your problems. Enable in /experimental!",
         },
         default_enabled: false,
     },
