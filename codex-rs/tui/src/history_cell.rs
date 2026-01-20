@@ -949,6 +949,11 @@ pub(crate) fn new_session_info(
             ]),
             Line::from(vec![
                 "  ".into(),
+                "/permissions".into(),
+                " - choose what Codex is allowed to do".dim(),
+            ]),
+            Line::from(vec![
+                "  ".into(),
                 "/model".into(),
                 " - choose what model and reasoning effort to use".dim(),
             ]),

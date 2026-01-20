@@ -302,6 +302,7 @@ mod tests {
             cmds,
             vec![
                 "model",
+                "permissions",
                 "experimental",
                 "resume",
                 "compact",

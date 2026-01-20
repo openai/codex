@@ -2254,6 +2254,9 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
+            SlashCommand::Permissions => {
+                self.open_permissions_popup();
+            }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
                 {
@@ -3519,6 +3522,42 @@ impl ChatWidget {
 
     /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
     pub(crate) fn open_approvals_popup(&mut self) {
+        self.open_approval_mode_popup(
+            "Update Model Permissions",
+            true,
+            |preset, is_windows_degraded| {
+                if preset.id == "auto" && is_windows_degraded {
+                    "Agent (non-elevated sandbox)".to_string()
+                } else {
+                    preset.label.to_string()
+                }
+            },
+        );
+    }
+
+    /// Open a popup to choose the permissions mode (approval policy + sandbox policy).
+    pub(crate) fn open_permissions_popup(&mut self) {
+        let include_read_only = cfg!(target_os = "windows");
+        self.open_approval_mode_popup(
+            "Update Model Permissions",
+            include_read_only,
+            |preset, _| match preset.id {
+                "read-only" => "Read Only".to_string(),
+                "auto" => "Default".to_string(),
+                "full-access" => "Full Access".to_string(),
+                _ => preset.label.to_string(),
+            },
+        );
+    }
+
+    fn open_approval_mode_popup<F>(
+        &mut self,
+        title: &str,
+        include_read_only: bool,
+        label_for_preset: F,
+    ) where
+        F: Fn(&ApprovalPreset, bool) -> String,
+    {
         let current_approval = self.config.approval_policy.value();
         let current_sandbox = self.config.sandbox_policy.get();
         let mut items: Vec<SelectionItem> = Vec::new();
@@ -3535,13 +3574,12 @@ impl ChatWidget {
             && presets.iter().any(|preset| preset.id == "auto");
 
         for preset in presets.into_iter() {
+            if !include_read_only && preset.id == "read-only" {
+                continue;
+            }
             let is_current =
                 Self::preset_matches_current(current_approval, current_sandbox, &preset);
-            let name = if preset.id == "auto" && windows_degraded_sandbox_enabled {
-                "Agent (non-elevated sandbox)".to_string()
-            } else {
-                preset.label.to_string()
-            };
+            let name = label_for_preset(&preset, windows_degraded_sandbox_enabled);
             let description = Some(preset.description.to_string());
             let disabled_reason = match self.config.approval_policy.can_set(&preset.approval) {
                 Ok(()) => None,
@@ -3627,7 +3665,7 @@ impl ChatWidget {
         });
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Approval Mode".to_string()),
+            title: Some(title.to_string()),
             footer_note,
             footer_hint: Some(standard_popup_hint_line()),
             items,
