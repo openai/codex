@@ -1668,21 +1668,18 @@ pub struct TextElement {
     pub placeholder: Option<String>,
 }
 
-impl From<CoreTextElement> for TextElement {
-    fn from(value: CoreTextElement) -> Self {
+impl TextElement {
+    pub(crate) fn from_core(text: &str, value: CoreTextElement) -> Self {
         Self {
             byte_range: value.byte_range.into(),
-            placeholder: value.placeholder,
+            placeholder: value.placeholder(text).map(str::to_string),
         }
     }
 }
 
 impl From<TextElement> for CoreTextElement {
     fn from(value: TextElement) -> Self {
-        Self {
-            byte_range: value.byte_range.into(),
-            placeholder: value.placeholder,
-        }
+        Self::new(value.byte_range.into(), value.placeholder)
     }
 }
 
@@ -1733,8 +1730,11 @@ impl From<CoreUserInput> for UserInput {
                 text,
                 text_elements,
             } => UserInput::Text {
+                text_elements: text_elements
+                    .into_iter()
+                    .map(|elem| TextElement::from_core(&text, elem))
+                    .collect(),
                 text,
-                text_elements: text_elements.into_iter().map(Into::into).collect(),
             },
             CoreUserInput::Image { image_url } => UserInput::Image { url: image_url },
             CoreUserInput::LocalImage { path } => UserInput::LocalImage { path },

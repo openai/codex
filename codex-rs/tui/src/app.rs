@@ -2105,6 +2105,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn backtrack_prefill_preserves_text_elements_and_local_images() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        let placeholder = "[Image #1]";
+        let message = format!("{placeholder} backtrack");
+        let text_elements = vec![TextElement::new(
+            (0..placeholder.len()).into(),
+            Some(placeholder.to_string()),
+        )];
+        let local_images = vec![PathBuf::from("/tmp/backtrack.png")];
+
+        app.transcript_cells = vec![Arc::new(UserHistoryCell {
+            message: message.clone(),
+            text_elements: text_elements.clone(),
+            local_image_paths: local_images.clone(),
+        }) as Arc<dyn HistoryCell>];
+
+        let base_id = ThreadId::new();
+        let tempdir = tempdir().unwrap();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: base_id,
+                forked_from_id: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: tempdir.path().join("rollout.jsonl"),
+            }),
+        });
+
+        // Esc-Esc backtrack ends up here: confirm the selection prefill keeps UI elements/images.
+        app.backtrack.base_id = Some(base_id);
+        app.backtrack.primed = true;
+        app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
+        app.confirm_backtrack_from_main();
+
+        let (_, _, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
+        assert_eq!(prefill.text, message);
+        assert_eq!(prefill.text_elements, text_elements);
+        assert_eq!(prefill.local_image_paths, local_images);
+    }
+
+    #[tokio::test]
     async fn new_session_requests_shutdown_for_previous_conversation() {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
