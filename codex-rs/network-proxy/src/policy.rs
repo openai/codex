@@ -57,21 +57,24 @@ pub fn normalize_host(host: &str) -> String {
     if host.starts_with('[')
         && let Some(end) = host.find(']')
     {
-        return host[1..end].to_ascii_lowercase();
+        return normalize_dns_host(&host[1..end]);
     }
 
     // The proxy stack should typically hand us a host without a port, but be
     // defensive and strip `:port` when there is exactly one `:`.
     if host.bytes().filter(|b| *b == b':').count() == 1 {
-        return host
-            .split(':')
-            .next()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
+        let host = host.split(':').next().unwrap_or_default();
+        return normalize_dns_host(host);
     }
 
-    // Avoid mangling unbracketed IPv6 literals.
-    host.to_ascii_lowercase()
+    // Avoid mangling unbracketed IPv6 literals, but strip trailing dots so fully qualified domain
+    // names are treated the same as their dotless variants.
+    normalize_dns_host(host)
+}
+
+fn normalize_dns_host(host: &str) -> String {
+    let host = host.to_ascii_lowercase();
+    host.trim_end_matches('.').to_string()
 }
 
 #[cfg(test)]
@@ -136,6 +139,17 @@ mod tests {
     #[test]
     fn normalize_host_preserves_unbracketed_ipv6() {
         assert_eq!(normalize_host("2001:db8::1"), "2001:db8::1");
+    }
+
+    #[test]
+    fn normalize_host_strips_trailing_dot() {
+        assert_eq!(normalize_host("example.com."), "example.com");
+        assert_eq!(normalize_host("ExAmPlE.CoM."), "example.com");
+    }
+
+    #[test]
+    fn normalize_host_strips_trailing_dot_with_port() {
+        assert_eq!(normalize_host("example.com.:443"), "example.com");
     }
 
     #[test]

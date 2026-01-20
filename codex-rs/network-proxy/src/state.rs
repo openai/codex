@@ -75,6 +75,7 @@ struct ConfigState {
     allow_set: GlobSet,
     deny_set: GlobSet,
     mitm: Option<Arc<MitmState>>,
+    constraints: NetworkProxyConstraints,
     cfg_path: PathBuf,
     blocked: VecDeque<BlockedRequest>,
 }
@@ -253,6 +254,10 @@ impl AppState {
     pub async fn set_network_mode(&self, mode: NetworkMode) -> Result<()> {
         self.reload_if_needed().await?;
         let mut guard = self.state.write().await;
+        let mut candidate = guard.config.clone();
+        candidate.network_proxy.mode = mode;
+        validate_policy_against_constraints(&candidate, &guard.constraints)
+            .context("network_proxy.mode constrained by managed config")?;
         guard.config.network_proxy.mode = mode;
         info!("updated network mode to {mode:?}");
         Ok(())
@@ -330,7 +335,7 @@ async fn build_config_state() -> Result<ConfigState> {
 
     // Security boundary: user-controlled layers must not be able to widen restrictions set by
     // trusted/managed layers (e.g., MDM). Enforce this before building runtime state.
-    enforce_trusted_constraints(&codex_cfg.config_layer_stack, &config)?;
+    let constraints = enforce_trusted_constraints(&codex_cfg.config_layer_stack, &config)?;
 
     // Permit relative MITM paths for ergonomics; resolve them relative to the directory containing
     // `config.toml` so the config is relocatable.
@@ -352,6 +357,7 @@ async fn build_config_state() -> Result<ConfigState> {
         allow_set,
         deny_set,
         mitm,
+        constraints,
         cfg_path,
         blocked: VecDeque::new(),
     })
@@ -406,7 +412,7 @@ struct PartialNetworkPolicy {
     allow_local_binding: Option<bool>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct NetworkProxyConstraints {
     enabled: Option<bool>,
     mode: Option<NetworkMode>,
@@ -422,11 +428,11 @@ struct NetworkProxyConstraints {
 fn enforce_trusted_constraints(
     layers: &codex_core::config_loader::ConfigLayerStack,
     config: &Config,
-) -> Result<()> {
+) -> Result<NetworkProxyConstraints> {
     let constraints = network_proxy_constraints_from_trusted_layers(layers)?;
     validate_policy_against_constraints(config, &constraints)
         .context("network proxy constraints")?;
-    Ok(())
+    Ok(constraints)
 }
 
 fn network_proxy_constraints_from_trusted_layers(
@@ -886,6 +892,7 @@ pub(crate) fn app_state_for_policy(policy: crate::config::NetworkPolicy) -> AppS
         allow_set,
         deny_set,
         mitm: None,
+        constraints: NetworkProxyConstraints::default(),
         cfg_path: PathBuf::from("/nonexistent/config.toml"),
         blocked: VecDeque::new(),
     };
@@ -1027,6 +1034,24 @@ mod tests {
                     allowed_domains: vec!["example.com".to_string(), "evil.com".to_string()],
                     ..NetworkPolicy::default()
                 },
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_disallows_widening_mode() {
+        let constraints = NetworkProxyConstraints {
+            mode: Some(NetworkMode::Limited),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                mode: NetworkMode::Full,
                 ..NetworkProxyConfig::default()
             },
         };

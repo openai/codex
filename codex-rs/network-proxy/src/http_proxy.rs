@@ -11,10 +11,14 @@ use crate::responses::json_response;
 use crate::state::AppState;
 use crate::state::BlockedRequest;
 use crate::upstream::UpstreamClient;
+use crate::upstream::proxy_for_connect;
 use anyhow::Context as _;
 use anyhow::Result;
 use rama_core::Layer;
 use rama_core::Service;
+use rama_core::error::BoxError;
+use rama_core::error::ErrorExt as _;
+use rama_core::error::OpaqueError;
 use rama_core::extensions::ExtensionsMut;
 use rama_core::extensions::ExtensionsRef;
 use rama_core::layer::AddInputExtensionLayer;
@@ -28,14 +32,24 @@ use rama_http::StatusCode;
 use rama_http::layer::remove_header::RemoveRequestHeaderLayer;
 use rama_http::layer::remove_header::RemoveResponseHeaderLayer;
 use rama_http::matcher::MethodMatcher;
+use rama_http_backend::client::proxy::layer::HttpProxyConnector;
 use rama_http_backend::server::HttpServer;
 use rama_http_backend::server::layer::upgrade::UpgradeLayer;
 use rama_http_backend::server::layer::upgrade::Upgraded;
+use rama_net::Protocol;
+use rama_net::address::ProxyAddress;
+use rama_net::client::ConnectorService;
+use rama_net::client::EstablishedClientConnection;
 use rama_net::http::RequestContext;
+use rama_net::proxy::ProxyRequest;
 use rama_net::proxy::ProxyTarget;
+use rama_net::proxy::StreamForwardService;
 use rama_net::stream::SocketInfo;
-use rama_tcp::client::service::Forwarder;
+use rama_tcp::client::Request as TcpRequest;
+use rama_tcp::client::service::TcpConnector;
 use rama_tcp::server::TcpListener;
+use rama_tls_boring::client::TlsConnectorDataBuilder;
+use rama_tls_boring::client::TlsConnectorLayer;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -216,10 +230,11 @@ async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
     };
     let host = normalize_host(&target.host.to_string());
 
-    if upgraded
-        .extensions()
-        .get::<Arc<mitm::MitmState>>()
-        .is_some()
+    if mode == NetworkMode::Limited
+        && upgraded
+            .extensions()
+            .get::<Arc<mitm::MitmState>>()
+            .is_some()
     {
         let port = target.port;
         info!("CONNECT MITM enabled (host={host}, port={port}, mode={mode:?})");
@@ -229,11 +244,73 @@ async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
         return Ok(());
     }
 
-    let forwarder = Forwarder::ctx();
-    if let Err(err) = forwarder.serve(upgraded).await {
+    let allow_upstream_proxy = match upgraded.extensions().get::<Arc<AppState>>().cloned() {
+        Some(state) => match state.allow_upstream_proxy().await {
+            Ok(allowed) => allowed,
+            Err(err) => {
+                error!("failed to read upstream proxy setting: {err}");
+                false
+            }
+        },
+        None => {
+            error!("missing app state");
+            false
+        }
+    };
+
+    let proxy = if allow_upstream_proxy {
+        proxy_for_connect()
+    } else {
+        None
+    };
+
+    if let Err(err) = forward_connect_tunnel(upgraded, proxy).await {
         warn!("tunnel error: {err}");
     }
     Ok(())
+}
+
+async fn forward_connect_tunnel(
+    upgraded: Upgraded,
+    proxy: Option<ProxyAddress>,
+) -> Result<(), BoxError> {
+    let authority = upgraded
+        .extensions()
+        .get::<ProxyTarget>()
+        .map(|target| target.0.clone())
+        .ok_or_else(|| OpaqueError::from_display("missing forward authority").into_boxed())?;
+
+    let mut extensions = upgraded.extensions().clone();
+    if let Some(proxy) = proxy {
+        extensions.insert(proxy);
+    }
+
+    let req = TcpRequest::new_with_extensions(authority.clone(), extensions)
+        .with_protocol(Protocol::HTTPS);
+    let proxy_connector = HttpProxyConnector::optional(TcpConnector::new());
+    let tls_config = TlsConnectorDataBuilder::new_http_auto().into_shared_builder();
+    let connector = TlsConnectorLayer::tunnel(None)
+        .with_connector_data(tls_config)
+        .into_layer(proxy_connector);
+    let EstablishedClientConnection { conn: target, .. } =
+        connector.connect(req).await.map_err(|err| {
+            OpaqueError::from_boxed(err)
+                .with_context(|| format!("establish CONNECT tunnel to {authority}"))
+                .into_boxed()
+        })?;
+
+    let proxy_req = ProxyRequest {
+        source: upgraded,
+        target,
+    };
+    StreamForwardService::default()
+        .serve(proxy_req)
+        .await
+        .map_err(|err| {
+            OpaqueError::from_boxed(err.into())
+                .with_context(|| format!("forward CONNECT tunnel to {authority}"))
+                .into_boxed()
+        })
 }
 
 async fn http_plain_proxy(

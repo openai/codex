@@ -21,7 +21,8 @@ Example config:
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
 admin_url = "http://127.0.0.1:8080"
-# When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests (HTTP(S) proxies only).
+# When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests (HTTP(S) proxies only),
+# including CONNECT tunnels in full mode.
 allow_upstream_proxy = false
 # By default, non-loopback binds are clamped to loopback for safety.
 # If you want to expose these listeners beyond localhost, you must opt in explicitly.
@@ -104,7 +105,8 @@ When a request is blocked, the proxy responds with `403` and includes:
 
 In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. In addition, HTTPS `CONNECT`
 requires MITM to be enabled to allow read-only HTTPS; otherwise the proxy blocks CONNECT with
-reason `mitm_required`.
+reason `mitm_required`. In "full" mode, CONNECT is always a transparent tunnel even if MITM
+is enabled.
 
 ## Library API
 

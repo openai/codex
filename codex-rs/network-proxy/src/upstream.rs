@@ -43,6 +43,10 @@ impl ProxyConfig {
         let is_secure = RequestContext::try_from(req)
             .map(|ctx| ctx.protocol.is_secure())
             .unwrap_or(false);
+        self.proxy_for_protocol(is_secure)
+    }
+
+    fn proxy_for_protocol(&self, is_secure: bool) -> Option<ProxyAddress> {
         if is_secure {
             self.https
                 .clone()
@@ -81,6 +85,10 @@ fn read_proxy_env(keys: &[&str]) -> Option<ProxyAddress> {
         }
     }
     None
+}
+
+pub(crate) fn proxy_for_connect() -> Option<ProxyAddress> {
+    ProxyConfig::from_env().proxy_for_protocol(true)
 }
 
 #[derive(Clone)]
