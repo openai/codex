@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_core::features::Feature;
 use codex_protocol::config_types::WebSearchMode;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
@@ -36,7 +37,10 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     let mut builder = test_codex()
         .with_model(model)
         // Keep tool expectations stable when the default web_search mode changes.
-        .with_config(|config| config.web_search_mode = Some(WebSearchMode::Cached));
+        .with_config(|config| {
+            config.web_search_mode = Some(WebSearchMode::Cached);
+            config.features.enable(Feature::CollaborationModes);
+        });
     let test = builder
         .build(&server)
         .await
@@ -62,6 +66,7 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
+            "request_user_input".to_string(),
             "web_search".to_string(),
             "view_image".to_string()
         ],
@@ -77,6 +82,7 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
+            "request_user_input".to_string(),
             "apply_patch".to_string(),
             "web_search".to_string(),
             "view_image".to_string()
@@ -93,6 +99,7 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
+            "request_user_input".to_string(),
             "apply_patch".to_string(),
             "web_search".to_string(),
             "view_image".to_string()
@@ -109,6 +116,7 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
+            "request_user_input".to_string(),
             "web_search".to_string(),
             "view_image".to_string()
         ],
@@ -124,6 +132,7 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
+            "request_user_input".to_string(),
             "apply_patch".to_string(),
             "web_search".to_string(),
             "view_image".to_string()
@@ -140,6 +149,7 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
+            "request_user_input".to_string(),
             "apply_patch".to_string(),
             "web_search".to_string(),
             "view_image".to_string()

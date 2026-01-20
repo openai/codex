@@ -70,10 +70,6 @@ impl JsonSchema for ThreadId {
     }
 }
 
-/// Backward-compatible alias for the previous name.
-#[deprecated(note = "use ThreadId instead")]
-pub type ConversationId = ThreadId;
-
 #[cfg(test)]
 mod tests {
     use super::*;

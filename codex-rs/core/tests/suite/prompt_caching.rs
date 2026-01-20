@@ -92,6 +92,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             config.model = Some("gpt-5.1-codex-max".to_string());
             // Keep tool expectations stable when the default web_search mode changes.
             config.web_search_mode = Some(WebSearchMode::Cached);
+            config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
         .await?;
@@ -135,6 +136,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "list_mcp_resource_templates",
         "read_mcp_resource",
         "update_plan",
+        "request_user_input",
         "apply_patch",
         "web_search",
         "view_image",
@@ -176,6 +178,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.features.disable(Feature::ApplyPatchFreeform);
+            config.features.enable(Feature::CollaborationModes);
             config.model = Some("codex-mini-latest".to_string());
         })
         .build(&server)
@@ -240,6 +243,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let TestCodex { codex, config, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
+            config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
         .await?;
@@ -316,6 +320,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
+            config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
         .await?;
@@ -538,6 +543,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
+            config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
         .await?;
@@ -645,6 +651,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
+            config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
         .await?;
@@ -742,6 +749,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
+            config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
         .await?;
