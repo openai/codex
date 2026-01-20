@@ -4,13 +4,14 @@ use crate::responses::text_response;
 use crate::state::AppState;
 use anyhow::Context;
 use anyhow::Result;
-use rama::http::Body;
-use rama::http::Request;
-use rama::http::Response;
-use rama::http::StatusCode;
-use rama::http::server::HttpServer;
-use rama::service::service_fn;
-use rama::tcp::server::TcpListener;
+use rama_core::rt::Executor;
+use rama_core::service::service_fn;
+use rama_http::Body;
+use rama_http::Request;
+use rama_http::Response;
+use rama_http::StatusCode;
+use rama_http_backend::server::HttpServer;
+use rama_tcp::server::TcpListener;
 use serde::Deserialize;
 use serde::Serialize;
 use std::convert::Infallible;
@@ -26,12 +27,12 @@ pub async fn run_admin_api(state: Arc<AppState>, addr: SocketAddr) -> Result<()>
         .bind(addr)
         .await
         // See `http_proxy.rs` for details on why we wrap `BoxError` before converting to anyhow.
-        .map_err(rama::error::OpaqueError::from)
+        .map_err(rama_core::error::OpaqueError::from)
         .map_err(anyhow::Error::from)
         .with_context(|| format!("bind admin API: {addr}"))?;
 
     let server_state = state.clone();
-    let server = HttpServer::auto(rama::rt::Executor::new()).service(service_fn(move |req| {
+    let server = HttpServer::auto(Executor::new()).service(service_fn(move |req| {
         let state = server_state.clone();
         async move { handle_admin_request(state, req).await }
     }));

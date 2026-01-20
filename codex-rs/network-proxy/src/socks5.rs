@@ -9,20 +9,20 @@ use crate::state::AppState;
 use crate::state::BlockedRequest;
 use anyhow::Context as _;
 use anyhow::Result;
-use rama::Layer;
-use rama::Service;
-use rama::extensions::ExtensionsRef;
-use rama::layer::AddInputExtensionLayer;
-use rama::net::stream::SocketInfo;
-use rama::proxy::socks5::Socks5Acceptor;
-use rama::proxy::socks5::server::DefaultConnector;
-use rama::proxy::socks5::server::DefaultUdpRelay;
-use rama::proxy::socks5::server::udp::RelayRequest;
-use rama::proxy::socks5::server::udp::RelayResponse;
-use rama::service::service_fn;
-use rama::tcp::client::Request as TcpRequest;
-use rama::tcp::client::service::TcpConnector;
-use rama::tcp::server::TcpListener;
+use rama_core::Layer;
+use rama_core::Service;
+use rama_core::extensions::ExtensionsRef;
+use rama_core::layer::AddInputExtensionLayer;
+use rama_core::service::service_fn;
+use rama_net::stream::SocketInfo;
+use rama_socks5::Socks5Acceptor;
+use rama_socks5::server::DefaultConnector;
+use rama_socks5::server::DefaultUdpRelay;
+use rama_socks5::server::udp::RelayRequest;
+use rama_socks5::server::udp::RelayResponse;
+use rama_tcp::client::Request as TcpRequest;
+use rama_tcp::client::service::TcpConnector;
+use rama_tcp::server::TcpListener;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -40,7 +40,7 @@ pub async fn run_socks5(
         .bind(addr)
         .await
         // See `http_proxy.rs` for details on why we wrap `BoxError` before converting to anyhow.
-        .map_err(rama::error::OpaqueError::from)
+        .map_err(rama_core::error::OpaqueError::from)
         .map_err(anyhow::Error::from)
         .with_context(|| format!("bind SOCKS5 proxy: {addr}"))?;
 

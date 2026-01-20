@@ -5,38 +5,40 @@ use crate::policy::normalize_host;
 use crate::responses::blocked_text_response;
 use crate::state::AppState;
 use crate::state::BlockedRequest;
+use crate::upstream::UpstreamClient;
 use anyhow::Context as _;
 use anyhow::Result;
 use anyhow::anyhow;
-use rama::Layer;
-use rama::Service;
-use rama::bytes::Bytes;
-use rama::error::BoxError;
-use rama::error::OpaqueError;
-use rama::extensions::ExtensionsRef;
-use rama::futures::stream::Stream;
-use rama::http::Body;
-use rama::http::HeaderValue;
-use rama::http::Request;
-use rama::http::Response;
-use rama::http::StatusCode;
-use rama::http::Uri;
-use rama::http::client::EasyHttpWebClient;
-use rama::http::header::HOST;
-use rama::http::layer::remove_header::RemoveRequestHeaderLayer;
-use rama::http::layer::remove_header::RemoveResponseHeaderLayer;
-use rama::http::layer::upgrade::Upgraded;
-use rama::http::server::HttpServer;
-use rama::net::proxy::ProxyTarget;
-use rama::net::stream::SocketInfo;
-use rama::rt::Executor;
-use rama::service::service_fn;
-use rama::tls::rustls::dep::pki_types::CertificateDer;
-use rama::tls::rustls::dep::pki_types::PrivateKeyDer;
-use rama::tls::rustls::dep::pki_types::pem::PemObject;
-use rama::tls::rustls::server::TlsAcceptorData;
-use rama::tls::rustls::server::TlsAcceptorDataBuilder;
-use rama::tls::rustls::server::TlsAcceptorLayer;
+use rama_core::Layer;
+use rama_core::Service;
+use rama_core::bytes::Bytes;
+use rama_core::error::BoxError;
+use rama_core::extensions::ExtensionsRef;
+use rama_core::futures::stream::Stream;
+use rama_core::rt::Executor;
+use rama_core::service::service_fn;
+use rama_http::Body;
+use rama_http::BodyDataStream;
+use rama_http::HeaderValue;
+use rama_http::Request;
+use rama_http::Response;
+use rama_http::StatusCode;
+use rama_http::Uri;
+use rama_http::header::HOST;
+use rama_http::layer::remove_header::RemoveRequestHeaderLayer;
+use rama_http::layer::remove_header::RemoveResponseHeaderLayer;
+use rama_http_backend::server::HttpServer;
+use rama_http_backend::server::layer::upgrade::Upgraded;
+use rama_net::proxy::ProxyTarget;
+use rama_net::stream::SocketInfo;
+use rama_net::tls::ApplicationProtocol;
+use rama_net::tls::DataEncoding;
+use rama_net::tls::server::ServerAuth;
+use rama_net::tls::server::ServerAuthData;
+use rama_net::tls::server::ServerConfig;
+use rama_tls_boring::server::TlsAcceptorData;
+use rama_tls_boring::server::TlsAcceptorLayer;
+use rama_utils::str::NonEmptyStr;
 use std::fs;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -64,7 +66,7 @@ use rcgen_rama::SanType;
 
 pub struct MitmState {
     issuer: Issuer<'static, KeyPair>,
-    upstream: rama::service::BoxService<Request, Response, OpaqueError>,
+    upstream: UpstreamClient,
     inspect: bool,
     max_body_bytes: usize,
 }
@@ -89,22 +91,11 @@ impl MitmState {
         let issuer: Issuer<'static, KeyPair> =
             Issuer::from_ca_cert_pem(&ca_cert_pem, ca_key).context("failed to parse CA cert")?;
 
-        let upstream: rama::service::BoxService<Request, Response, OpaqueError> =
-            if allow_upstream_proxy {
-                EasyHttpWebClient::default().boxed()
-            } else {
-                let tls_config = rama::tls::rustls::client::TlsConnectorData::try_new_http_auto()
-                    .context("create upstream TLS config")?;
-                EasyHttpWebClient::connector_builder()
-                    // Use a direct transport connector (no upstream proxy) to avoid proxy loops.
-                    .with_default_transport_connector()
-                    .without_tls_proxy_support()
-                    .without_proxy_support()
-                    .with_tls_support_using_rustls(Some(tls_config))
-                    .with_default_http_connector()
-                    .build_client()
-                    .boxed()
-            };
+        let upstream = if allow_upstream_proxy {
+            UpstreamClient::from_env_proxy()
+        } else {
+            UpstreamClient::direct()
+        };
 
         Ok(Self {
             issuer,
@@ -116,20 +107,25 @@ impl MitmState {
 
     fn tls_acceptor_data_for_host(&self, host: &str) -> Result<TlsAcceptorData> {
         let (cert_pem, key_pem) = issue_host_certificate_pem(host, &self.issuer)?;
-        let cert_chain = CertificateDer::pem_slice_iter(cert_pem.as_bytes())
-            .collect::<Result<Vec<_>, _>>()
-            .context("failed to parse host cert PEM")?;
-        if cert_chain.is_empty() {
-            return Err(anyhow!("no certificates found"));
-        }
+        let cert_chain = DataEncoding::Pem(
+            NonEmptyStr::try_from(cert_pem.as_str()).context("failed to encode host cert PEM")?,
+        );
+        let private_key = DataEncoding::Pem(
+            NonEmptyStr::try_from(key_pem.as_str()).context("failed to encode host key PEM")?,
+        );
+        let auth = ServerAuthData {
+            private_key,
+            cert_chain,
+            ocsp: None,
+        };
 
-        let key_der = PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
-            .context("failed to parse host key PEM")?;
+        let mut server_config = ServerConfig::new(ServerAuth::Single(auth));
+        server_config.application_layer_protocol_negotiation = Some(vec![
+            ApplicationProtocol::HTTP_2,
+            ApplicationProtocol::HTTP_11,
+        ]);
 
-        Ok(TlsAcceptorDataBuilder::new(cert_chain, key_der)
-            .context("failed to build rustls acceptor config")?
-            .with_alpn_protocols_http_auto()
-            .build())
+        TlsAcceptorData::try_from(server_config).context("failed to build boring acceptor config")
     }
 
     pub fn inspect_enabled(&self) -> bool {
@@ -332,7 +328,7 @@ fn inspect_body<T: BodyLoggable + Send + 'static>(
 }
 
 struct InspectStream<T> {
-    inner: Pin<Box<rama::http::BodyDataStream>>,
+    inner: Pin<Box<BodyDataStream>>,
     ctx: Option<Box<T>>,
     len: usize,
     max_body_bytes: usize,
@@ -430,7 +426,7 @@ fn build_https_uri(authority: &str, path: &str) -> Result<Uri> {
 
 fn path_and_query(uri: &Uri) -> String {
     uri.path_and_query()
-        .map(rama::http::uri::PathAndQuery::as_str)
+        .map(rama_http::uri::PathAndQuery::as_str)
         .unwrap_or("/")
         .to_string()
 }

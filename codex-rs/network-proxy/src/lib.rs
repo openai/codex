@@ -9,6 +9,7 @@ mod proxy;
 mod responses;
 mod socks5;
 mod state;
+mod upstream;
 
 use anyhow::Result;
 pub use network_policy::NetworkDecision;

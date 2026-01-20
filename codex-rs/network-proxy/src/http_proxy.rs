@@ -10,31 +10,32 @@ use crate::responses::blocked_header_value;
 use crate::responses::json_response;
 use crate::state::AppState;
 use crate::state::BlockedRequest;
+use crate::upstream::UpstreamClient;
 use anyhow::Context as _;
 use anyhow::Result;
-use rama::Layer;
-use rama::Service;
-use rama::extensions::ExtensionsMut;
-use rama::extensions::ExtensionsRef;
-use rama::http::Body;
-use rama::http::HeaderValue;
-use rama::http::Request;
-use rama::http::Response;
-use rama::http::StatusCode;
-use rama::http::client::EasyHttpWebClient;
-use rama::http::layer::remove_header::RemoveRequestHeaderLayer;
-use rama::http::layer::remove_header::RemoveResponseHeaderLayer;
-use rama::http::layer::upgrade::UpgradeLayer;
-use rama::http::layer::upgrade::Upgraded;
-use rama::http::matcher::MethodMatcher;
-use rama::http::server::HttpServer;
-use rama::layer::AddInputExtensionLayer;
-use rama::net::http::RequestContext;
-use rama::net::proxy::ProxyTarget;
-use rama::net::stream::SocketInfo;
-use rama::service::service_fn;
-use rama::tcp::client::service::Forwarder;
-use rama::tcp::server::TcpListener;
+use rama_core::Layer;
+use rama_core::Service;
+use rama_core::extensions::ExtensionsMut;
+use rama_core::extensions::ExtensionsRef;
+use rama_core::layer::AddInputExtensionLayer;
+use rama_core::rt::Executor;
+use rama_core::service::service_fn;
+use rama_http::Body;
+use rama_http::HeaderValue;
+use rama_http::Request;
+use rama_http::Response;
+use rama_http::StatusCode;
+use rama_http::layer::remove_header::RemoveRequestHeaderLayer;
+use rama_http::layer::remove_header::RemoveResponseHeaderLayer;
+use rama_http::matcher::MethodMatcher;
+use rama_http_backend::server::HttpServer;
+use rama_http_backend::server::layer::upgrade::UpgradeLayer;
+use rama_http_backend::server::layer::upgrade::Upgraded;
+use rama_net::http::RequestContext;
+use rama_net::proxy::ProxyTarget;
+use rama_net::stream::SocketInfo;
+use rama_tcp::client::service::Forwarder;
+use rama_tcp::server::TcpListener;
 use serde::Serialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -55,11 +56,11 @@ pub async fn run_http_proxy(
         // lifetime bound, which means it doesn't satisfy `anyhow::Context`'s `StdError` constraint.
         // Wrap it in Rama's `OpaqueError` so we can preserve the original error as a source and
         // still use `anyhow` for chaining.
-        .map_err(rama::error::OpaqueError::from)
+        .map_err(rama_core::error::OpaqueError::from)
         .map_err(anyhow::Error::from)
         .with_context(|| format!("bind HTTP proxy: {addr}"))?;
 
-    let http_service = HttpServer::auto(rama::rt::Executor::new()).service(
+    let http_service = HttpServer::auto(Executor::new()).service(
         (
             UpgradeLayer::new(
                 MethodMatcher::CONNECT,
@@ -388,22 +389,9 @@ async fn http_plain_proxy(
         }
     };
     let client = if allow_upstream_proxy {
-        EasyHttpWebClient::default()
+        UpstreamClient::from_env_proxy()
     } else {
-        let tls_config = match rama::tls::rustls::client::TlsConnectorData::try_new_http_auto() {
-            Ok(config) => config,
-            Err(err) => {
-                error!("failed to create upstream TLS config: {err}");
-                return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
-            }
-        };
-        EasyHttpWebClient::connector_builder()
-            .with_default_transport_connector()
-            .without_tls_proxy_support()
-            .without_proxy_support()
-            .with_tls_support_using_rustls(Some(tls_config))
-            .with_default_http_connector()
-            .build_client()
+        UpstreamClient::direct()
     };
 
     match client.serve(req).await {
@@ -418,21 +406,13 @@ async fn http_plain_proxy(
 async fn proxy_via_unix_socket(req: Request, socket_path: &str) -> Result<Response> {
     #[cfg(target_os = "macos")]
     {
-        use rama::unix::client::UnixConnector;
-
-        let client = EasyHttpWebClient::connector_builder()
-            .with_custom_transport_connector(UnixConnector::fixed(socket_path))
-            .without_tls_proxy_support()
-            .without_proxy_support()
-            .without_tls_support()
-            .with_default_http_connector()
-            .build_client();
+        let client = UpstreamClient::unix_socket(socket_path);
 
         let (mut parts, body) = req.into_parts();
         let path = parts
             .uri
             .path_and_query()
-            .map(rama::http::uri::PathAndQuery::as_str)
+            .map(rama_http::uri::PathAndQuery::as_str)
             .unwrap_or("/");
         parts.uri = path
             .parse()
@@ -440,7 +420,7 @@ async fn proxy_via_unix_socket(req: Request, socket_path: &str) -> Result<Respon
         parts.headers.remove("x-unix-socket");
 
         let req = Request::from_parts(parts, body);
-        Ok(client.serve(req).await?)
+        client.serve(req).await.map_err(anyhow::Error::from)
     }
     #[cfg(not(target_os = "macos"))]
     {

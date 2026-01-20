@@ -21,7 +21,7 @@ Example config:
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
 admin_url = "http://127.0.0.1:8080"
-# When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests.
+# When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests (HTTP(S) proxies only).
 allow_upstream_proxy = false
 # By default, non-loopback binds are clamped to loopback for safety.
 # If you want to expose these listeners beyond localhost, you must opt in explicitly.
@@ -168,6 +168,8 @@ curl -sS -X POST http://127.0.0.1:8080/reload
 
 - Unix socket proxying via the `x-unix-socket` header is **macOS-only**; other platforms will
   reject unix socket requests.
+- MITM TLS termination uses BoringSSL via Rama's `rama-tls-boring`; building the proxy requires a
+  native toolchain and CMake on macOS/Linux/Windows.
 
 ## Security notes (important)
 

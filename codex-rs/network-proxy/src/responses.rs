@@ -1,6 +1,6 @@
-use rama::http::Body;
-use rama::http::Response;
-use rama::http::StatusCode;
+use rama_http::Body;
+use rama_http::Response;
+use rama_http::StatusCode;
 use serde::Serialize;
 
 pub fn text_response(status: StatusCode, body: &str) -> Response {
