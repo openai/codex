@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
@@ -39,6 +40,9 @@ use codex_protocol::protocol::SessionMetaLine;
 
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
+const MAX_TOPICS: usize = 5;
+const MIN_TOPIC_LEN: usize = 3;
+const MAX_TOPIC_WIDTH: usize = 24;
 
 #[derive(Debug, Clone)]
 pub enum SessionSelection {
@@ -312,6 +316,7 @@ impl SearchState {
 struct Row {
     path: PathBuf,
     preview: String,
+    topics: String,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
     cwd: Option<PathBuf>,
@@ -518,7 +523,9 @@ impl PickerState {
         } else {
             let q = self.query.to_lowercase();
             self.filtered_rows = base_iter
-                .filter(|r| r.preview.to_lowercase().contains(&q))
+                .filter(|r| {
+                    r.preview.to_lowercase().contains(&q) || r.topics.to_lowercase().contains(&q)
+                })
                 .cloned()
                 .collect();
         }
@@ -717,10 +724,12 @@ fn head_to_row(item: &ThreadItem) -> Row {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| String::from("(no message yet)"));
+    let topics = topics_from_head(&item.head);
 
     Row {
         path: item.path.clone(),
         preview,
+        topics,
         created_at,
         updated_at,
         cwd,
@@ -770,6 +779,72 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
             Some(TurnItem::UserMessage(user)) => Some(user.message()),
             _ => None,
         })
+}
+
+fn topics_from_head(head: &[serde_json::Value]) -> String {
+    let mut counts: HashMap<String, (usize, usize)> = HashMap::new();
+    let mut next_index = 0usize;
+
+    for value in head {
+        let Ok(item) = serde_json::from_value::<ResponseItem>(value.clone()) else {
+            continue;
+        };
+        let Some(TurnItem::UserMessage(user)) = codex_core::parse_turn_item(&item) else {
+            continue;
+        };
+        let message = user.message();
+        for token in tokenize_words(message.as_str()) {
+            if token.chars().count() < MIN_TOPIC_LEN {
+                continue;
+            }
+            let key = token.to_lowercase();
+            let entry = counts.entry(key).or_insert_with(|| {
+                let idx = next_index;
+                next_index = next_index.saturating_add(1);
+                (0, idx)
+            });
+            entry.0 = entry.0.saturating_add(1);
+        }
+    }
+
+    if counts.is_empty() {
+        return "-".to_string();
+    }
+
+    let mut ranked: Vec<(String, usize, usize)> = counts
+        .into_iter()
+        .map(|(word, (count, idx))| (word, count, idx))
+        .collect();
+    ranked.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| a.2.cmp(&b.2))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+
+    ranked
+        .into_iter()
+        .take(MAX_TOPICS)
+        .map(|(word, _, _)| word)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn tokenize_words(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+
+    for ch in input.chars() {
+        if ch.is_alphanumeric() {
+            current.push(ch);
+        } else if !current.is_empty() {
+            tokens.push(current.clone());
+            current.clear();
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
 }
 
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
@@ -851,8 +926,9 @@ fn render_list(
     let max_updated_width = metrics.max_updated_width;
     let max_branch_width = metrics.max_branch_width;
     let max_cwd_width = metrics.max_cwd_width;
+    let max_topics_width = metrics.max_topics_width;
 
-    for (idx, (row, (updated_label, branch_label, cwd_label))) in rows[start..end]
+    for (idx, (row, (updated_label, branch_label, cwd_label, topics_label))) in rows[start..end]
         .iter()
         .zip(labels[start..end].iter())
         .enumerate()
@@ -893,6 +969,20 @@ fn render_list(
         } else {
             Some(Span::from(format!("{cwd_label:<max_cwd_width$}")).dim())
         };
+        let topics_span = if max_topics_width == 0 {
+            None
+        } else if topics_label.is_empty() {
+            Some(
+                Span::from(format!(
+                    "{empty:<width$}",
+                    empty = "-",
+                    width = max_topics_width
+                ))
+                .dim(),
+            )
+        } else {
+            Some(Span::from(format!("{topics_label:<max_topics_width$}")).dim())
+        };
 
         let mut preview_width = area.width as usize;
         preview_width = preview_width.saturating_sub(marker_width);
@@ -905,7 +995,13 @@ fn render_list(
         if max_cwd_width > 0 {
             preview_width = preview_width.saturating_sub(max_cwd_width + 2);
         }
-        let add_leading_gap = max_updated_width == 0 && max_branch_width == 0 && max_cwd_width == 0;
+        if max_topics_width > 0 {
+            preview_width = preview_width.saturating_sub(max_topics_width + 2);
+        }
+        let add_leading_gap = max_updated_width == 0
+            && max_branch_width == 0
+            && max_cwd_width == 0
+            && max_topics_width == 0;
         if add_leading_gap {
             preview_width = preview_width.saturating_sub(2);
         }
@@ -921,6 +1017,10 @@ fn render_list(
         }
         if let Some(cwd) = cwd_span {
             spans.push(cwd);
+            spans.push("  ".into());
+        }
+        if let Some(topics) = topics_span {
+            spans.push(topics);
             spans.push("  ".into());
         }
         if add_leading_gap {
@@ -1049,6 +1149,15 @@ fn render_column_headers(
         spans.push(Span::from(label).bold());
         spans.push("  ".into());
     }
+    if metrics.max_topics_width > 0 {
+        let label = format!(
+            "{text:<width$}",
+            text = "Topics",
+            width = metrics.max_topics_width
+        );
+        spans.push(Span::from(label).bold());
+        spans.push("  ".into());
+    }
     spans.push("Conversation".bold());
     frame.render_widget_ref(Line::from(spans), area);
 }
@@ -1057,7 +1166,8 @@ struct ColumnMetrics {
     max_updated_width: usize,
     max_branch_width: usize,
     max_cwd_width: usize,
-    labels: Vec<(String, String, String)>,
+    max_topics_width: usize,
+    labels: Vec<(String, String, String, String)>,
 }
 
 fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
@@ -1080,7 +1190,19 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         format!("…{tail}")
     }
 
-    let mut labels: Vec<(String, String, String)> = Vec::with_capacity(rows.len());
+    fn left_elide(s: &str, max: usize) -> String {
+        if s.chars().count() <= max {
+            return s.to_string();
+        }
+        if max <= 3 {
+            return s.chars().take(max).collect();
+        }
+        let prefix_len = max - 3;
+        let prefix: String = s.chars().take(prefix_len).collect();
+        format!("{prefix}...")
+    }
+
+    let mut labels: Vec<(String, String, String, String)> = Vec::with_capacity(rows.len());
     let mut max_updated_width = UnicodeWidthStr::width("Updated");
     let mut max_branch_width = UnicodeWidthStr::width("Branch");
     let mut max_cwd_width = if include_cwd {
@@ -1088,6 +1210,7 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
     } else {
         0
     };
+    let mut max_topics_width = UnicodeWidthStr::width("Topics");
 
     for row in rows {
         let updated = format_updated_label(row);
@@ -1103,16 +1226,19 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         } else {
             String::new()
         };
+        let topics = left_elide(&row.topics, MAX_TOPIC_WIDTH);
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
         max_branch_width = max_branch_width.max(UnicodeWidthStr::width(branch.as_str()));
         max_cwd_width = max_cwd_width.max(UnicodeWidthStr::width(cwd.as_str()));
-        labels.push((updated, branch, cwd));
+        max_topics_width = max_topics_width.max(UnicodeWidthStr::width(topics.as_str()));
+        labels.push((updated, branch, cwd, topics));
     }
 
     ColumnMetrics {
         max_updated_width,
         max_branch_width,
         max_cwd_width,
+        max_topics_width,
         labels,
     }
 }
@@ -1209,6 +1335,15 @@ mod tests {
     }
 
     #[test]
+    fn topics_from_head_returns_keywords() {
+        let head = head_with_ts_and_user_text("2025-01-01T00:00:00Z", &[
+            "Fix resume picker timestamps",
+        ]);
+        let topics = topics_from_head(&head);
+        assert_eq!(topics, "fix resume picker timestamps");
+    }
+
+    #[test]
     fn rows_from_items_preserves_backend_order() {
         // Construct two items with different timestamps and real user text.
         let a = ThreadItem {
@@ -1275,6 +1410,7 @@ mod tests {
             Row {
                 path: PathBuf::from("/tmp/a.jsonl"),
                 preview: String::from("Fix resume picker timestamps"),
+                topics: String::from("fix resume picker timestamps"),
                 created_at: Some(now - Duration::minutes(16)),
                 updated_at: Some(now - Duration::seconds(42)),
                 cwd: None,
@@ -1283,6 +1419,7 @@ mod tests {
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
                 preview: String::from("Investigate lazy pagination cap"),
+                topics: String::from("investigate lazy pagination cap"),
                 created_at: Some(now - Duration::hours(1)),
                 updated_at: Some(now - Duration::minutes(35)),
                 cwd: None,
@@ -1291,6 +1428,7 @@ mod tests {
             Row {
                 path: PathBuf::from("/tmp/c.jsonl"),
                 preview: String::from("Explain the codebase"),
+                topics: String::from("explain the codebase"),
                 created_at: Some(now - Duration::hours(2)),
                 updated_at: Some(now - Duration::hours(2)),
                 cwd: None,
