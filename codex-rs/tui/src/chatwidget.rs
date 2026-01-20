@@ -614,7 +614,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         }
 
         let original = text.get(start..end).unwrap_or("");
-        let placeholder = elem.placeholder(text);
+        let placeholder = elem.placeholder(&text);
         let replacement = placeholder
             .and_then(|ph| mapping.get(ph))
             .map(String::as_str)
