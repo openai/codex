@@ -160,10 +160,6 @@ impl AppState {
             return Ok((true, "denied".to_string()));
         }
 
-        if allowed_domains_empty {
-            return Ok((true, "not_allowed".to_string()));
-        }
-
         if !allow_local_binding && !allow_set.is_match(host) {
             // If the intent is "prevent access to local/internal networks", we must not rely solely
             // on string checks like `localhost` / `127.0.0.1`. Attackers can use DNS rebinding or
@@ -174,6 +170,10 @@ impl AppState {
             if is_loopback_host(host) || host_resolves_to_non_public_ip(host, port).await? {
                 return Ok((true, "not_allowed_local".to_string()));
             }
+        }
+
+        if allowed_domains_empty {
+            return Ok((true, "not_allowed".to_string()));
         }
 
         if !allow_set.is_match(host) {
@@ -616,16 +616,20 @@ fn validate_policy_against_constraints(
     }
 
     if let Some(allowed_domains) = &constraints.allowed_domains {
-        let allowed_set: HashSet<String> = allowed_domains
+        let managed_patterns: Vec<DomainPattern> = allowed_domains
             .iter()
-            .map(|s| s.to_ascii_lowercase())
+            .map(|entry| DomainPattern::parse(entry))
             .collect();
         let _ = Constrained::new(
             config.network_proxy.policy.allowed_domains.clone(),
             move |candidate| {
                 let mut invalid = Vec::new();
                 for entry in candidate {
-                    if !allowed_set.contains(&entry.to_ascii_lowercase()) {
+                    let candidate_pattern = DomainPattern::parse(entry);
+                    if !managed_patterns
+                        .iter()
+                        .any(|managed| managed.allows(&candidate_pattern))
+                    {
                         invalid.push(entry.clone());
                     }
                 }
@@ -711,18 +715,16 @@ fn compile_globset(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     let mut seen = HashSet::new();
     for pattern in patterns {
-        // Operator ergonomics: `*.example.com` usually intends to include both `a.example.com` and
-        // the apex `example.com`. We expand that here so policy matches expectation.
-        let mut expanded = Vec::with_capacity(2);
-        expanded.push(pattern.as_str());
-        if let Some(apex) = pattern.strip_prefix("*.") {
-            expanded.push(apex);
-        }
-        for candidate in expanded {
-            if !seen.insert(candidate.to_string()) {
+        // Supported domain patterns:
+        // - "example.com": match the exact host
+        // - "*.example.com": match any subdomain (not the apex)
+        // - "**.example.com": match the apex and any subdomain
+        // - "*": match any host
+        for candidate in expand_domain_pattern(pattern) {
+            if !seen.insert(candidate.clone()) {
                 continue;
             }
-            let glob = GlobBuilder::new(candidate)
+            let glob = GlobBuilder::new(&candidate)
                 .case_insensitive(true)
                 .build()
                 .with_context(|| format!("invalid glob pattern: {candidate}"))?;
@@ -730,6 +732,94 @@ fn compile_globset(patterns: &[String]) -> Result<GlobSet> {
         }
     }
     Ok(builder.build()?)
+}
+
+#[derive(Debug, Clone)]
+enum DomainPattern {
+    Any,
+    ApexAndSubdomains(String),
+    SubdomainsOnly(String),
+    Exact(String),
+}
+
+impl DomainPattern {
+    fn parse(input: &str) -> Self {
+        if input == "*" {
+            Self::Any
+        } else if let Some(domain) = input.strip_prefix("**.") {
+            Self::ApexAndSubdomains(domain.to_string())
+        } else if let Some(domain) = input.strip_prefix("*.") {
+            Self::SubdomainsOnly(domain.to_string())
+        } else {
+            Self::Exact(input.to_string())
+        }
+    }
+
+    fn allows(&self, candidate: &DomainPattern) -> bool {
+        match self {
+            DomainPattern::Any => true,
+            DomainPattern::Exact(domain) => match candidate {
+                DomainPattern::Exact(candidate) => domain_eq(candidate, domain),
+                _ => false,
+            },
+            DomainPattern::SubdomainsOnly(domain) => match candidate {
+                DomainPattern::Any => false,
+                DomainPattern::Exact(candidate) => is_strict_subdomain(candidate, domain),
+                DomainPattern::SubdomainsOnly(candidate) => {
+                    is_subdomain_or_equal(candidate, domain)
+                }
+                DomainPattern::ApexAndSubdomains(candidate) => {
+                    is_strict_subdomain(candidate, domain)
+                }
+            },
+            DomainPattern::ApexAndSubdomains(domain) => match candidate {
+                DomainPattern::Any => false,
+                DomainPattern::Exact(candidate) => is_subdomain_or_equal(candidate, domain),
+                DomainPattern::SubdomainsOnly(candidate) => {
+                    is_subdomain_or_equal(candidate, domain)
+                }
+                DomainPattern::ApexAndSubdomains(candidate) => {
+                    is_subdomain_or_equal(candidate, domain)
+                }
+            },
+        }
+    }
+}
+
+fn expand_domain_pattern(pattern: &str) -> Vec<String> {
+    match DomainPattern::parse(pattern) {
+        DomainPattern::Any => vec![pattern.to_string()],
+        DomainPattern::Exact(domain) => vec![domain],
+        DomainPattern::SubdomainsOnly(domain) => {
+            vec![format!("?*.{domain}")]
+        }
+        DomainPattern::ApexAndSubdomains(domain) => {
+            vec![domain.clone(), format!("?*.{domain}")]
+        }
+    }
+}
+
+fn normalize_domain(domain: &str) -> String {
+    domain.trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn domain_eq(left: &str, right: &str) -> bool {
+    normalize_domain(left) == normalize_domain(right)
+}
+
+fn is_subdomain_or_equal(child: &str, parent: &str) -> bool {
+    let child = normalize_domain(child);
+    let parent = normalize_domain(parent);
+    if child == parent {
+        return true;
+    }
+    child.ends_with(&format!(".{parent}"))
+}
+
+fn is_strict_subdomain(child: &str, parent: &str) -> bool {
+    let child = normalize_domain(child);
+    let parent = normalize_domain(parent);
+    child != parent && child.ends_with(&format!(".{parent}"))
 }
 
 fn log_policy_changes(previous: &Config, next: &Config) {
@@ -847,19 +937,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn host_blocked_expands_apex_for_wildcard_patterns() {
+    async fn host_blocked_subdomain_wildcards_exclude_apex() {
         let state = app_state_for_policy(NetworkPolicy {
             allowed_domains: vec!["*.openai.com".to_string()],
             ..NetworkPolicy::default()
         });
 
         assert_eq!(
-            state.host_blocked("openai.com", 80).await.unwrap(),
+            state.host_blocked("api.openai.com", 80).await.unwrap(),
             (false, String::new())
         );
         assert_eq!(
-            state.host_blocked("api.openai.com", 80).await.unwrap(),
-            (false, String::new())
+            state.host_blocked("openai.com", 80).await.unwrap(),
+            (true, "not_allowed".to_string())
         );
     }
 
@@ -909,6 +999,20 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn host_blocked_rejects_loopback_when_allowlist_empty() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec![],
+            allow_local_binding: false,
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("127.0.0.1", 80).await.unwrap(),
+            (true, "not_allowed_local".to_string())
+        );
+    }
+
     #[test]
     fn validate_policy_against_constraints_disallows_widening_allowed_domains() {
         let constraints = NetworkProxyConstraints {
@@ -921,6 +1025,48 @@ mod tests {
                 enabled: true,
                 policy: NetworkPolicy {
                     allowed_domains: vec!["example.com".to_string(), "evil.com".to_string()],
+                    ..NetworkPolicy::default()
+                },
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_err());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_allows_narrowing_wildcard_allowlist() {
+        let constraints = NetworkProxyConstraints {
+            allowed_domains: Some(vec!["*.example.com".to_string()]),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                policy: NetworkPolicy {
+                    allowed_domains: vec!["api.example.com".to_string()],
+                    ..NetworkPolicy::default()
+                },
+                ..NetworkProxyConfig::default()
+            },
+        };
+
+        assert!(validate_policy_against_constraints(&config, &constraints).is_ok());
+    }
+
+    #[test]
+    fn validate_policy_against_constraints_rejects_widening_wildcard_allowlist() {
+        let constraints = NetworkProxyConstraints {
+            allowed_domains: Some(vec!["*.example.com".to_string()]),
+            ..NetworkProxyConstraints::default()
+        };
+
+        let config = Config {
+            network_proxy: NetworkProxyConfig {
+                enabled: true,
+                policy: NetworkPolicy {
+                    allowed_domains: vec!["**.example.com".to_string()],
                     ..NetworkPolicy::default()
                 },
                 ..NetworkProxyConfig::default()
@@ -1034,12 +1180,29 @@ mod tests {
     }
 
     #[test]
-    fn compile_globset_expands_apex_for_wildcard_patterns() {
+    fn compile_globset_excludes_apex_for_subdomain_patterns() {
         let patterns = vec!["*.openai.com".to_string()];
+        let set = compile_globset(&patterns).unwrap();
+        assert!(set.is_match("api.openai.com"));
+        assert!(!set.is_match("openai.com"));
+        assert!(!set.is_match("evilopenai.com"));
+    }
+
+    #[test]
+    fn compile_globset_includes_apex_for_double_wildcard_patterns() {
+        let patterns = vec!["**.openai.com".to_string()];
         let set = compile_globset(&patterns).unwrap();
         assert!(set.is_match("openai.com"));
         assert!(set.is_match("api.openai.com"));
         assert!(!set.is_match("evilopenai.com"));
+    }
+
+    #[test]
+    fn compile_globset_matches_all_with_star() {
+        let patterns = vec!["*".to_string()];
+        let set = compile_globset(&patterns).unwrap();
+        assert!(set.is_match("openai.com"));
+        assert!(set.is_match("api.openai.com"));
     }
 
     #[test]
