@@ -41,6 +41,7 @@ use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 
 /// Aggregates all backtrack-related state used by the App.
 #[derive(Default)]
@@ -88,6 +89,7 @@ pub(crate) struct BacktrackSelection {
 pub(crate) struct PendingBacktrackRollback {
     pub(crate) selection: BacktrackSelection,
     pub(crate) thread_id: Option<ThreadId>,
+    pub(crate) undo_after_rollback: bool,
 }
 
 impl App {
@@ -125,6 +127,15 @@ impl App {
                     ..
                 }) => {
                     self.overlay_step_backtrack_forward(tui, event)?;
+                    Ok(true)
+                }
+                TuiEvent::Key(KeyEvent {
+                    code: KeyCode::Enter,
+                    modifiers,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) if modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.overlay_confirm_backtrack_with_undo(tui);
                     Ok(true)
                 }
                 TuiEvent::Key(KeyEvent {
@@ -180,6 +191,18 @@ impl App {
     /// The composer prefill is applied immediately as a UX convenience; it does not imply that
     /// core has accepted the rollback.
     pub(crate) fn apply_backtrack_rollback(&mut self, selection: BacktrackSelection) {
+        self.apply_backtrack_rollback_internal(selection, false);
+    }
+
+    pub(crate) fn apply_backtrack_rollback_with_undo(&mut self, selection: BacktrackSelection) {
+        self.apply_backtrack_rollback_internal(selection, true);
+    }
+
+    fn apply_backtrack_rollback_internal(
+        &mut self,
+        selection: BacktrackSelection,
+        undo_after_rollback: bool,
+    ) {
         let user_total = user_count(&self.transcript_cells);
         if user_total == 0 {
             return;
@@ -201,6 +224,7 @@ impl App {
         self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
             selection,
             thread_id: self.chat_widget.thread_id(),
+            undo_after_rollback,
         });
         self.chat_widget.submit_op(Op::ThreadRollback { num_turns });
         if !prefill.is_empty() {
@@ -383,11 +407,27 @@ impl App {
 
     /// Handle Enter in overlay backtrack preview: confirm selection and reset state.
     fn overlay_confirm_backtrack(&mut self, tui: &mut tui::Tui) {
+        self.overlay_confirm_backtrack_internal(tui, false);
+    }
+
+    fn overlay_confirm_backtrack_with_undo(&mut self, tui: &mut tui::Tui) {
+        self.overlay_confirm_backtrack_internal(tui, true);
+    }
+
+    fn overlay_confirm_backtrack_internal(
+        &mut self,
+        tui: &mut tui::Tui,
+        undo_after_rollback: bool,
+    ) {
         let nth_user_message = self.backtrack.nth_user_message;
         let selection = self.backtrack_selection(nth_user_message);
         self.close_transcript_overlay(tui);
         if let Some(selection) = selection {
-            self.apply_backtrack_rollback(selection);
+            if undo_after_rollback {
+                self.apply_backtrack_rollback_with_undo(selection);
+            } else {
+                self.apply_backtrack_rollback(selection);
+            }
             tui.frame_requester().schedule_frame();
         }
     }
@@ -470,6 +510,9 @@ impl App {
         }
         self.trim_transcript_for_backtrack(pending.selection.nth_user_message);
         self.backtrack_render_pending = true;
+        if pending.undo_after_rollback {
+            self.chat_widget.submit_op(Op::Undo);
+        }
     }
 
     fn backtrack_selection(&self, nth_user_message: usize) -> Option<BacktrackSelection> {

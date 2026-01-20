@@ -1722,6 +1722,7 @@ mod tests {
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
+    use codex_core::protocol::ThreadRolledBackEvent;
     use codex_protocol::ThreadId;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -2090,6 +2091,83 @@ mod tests {
         }
 
         assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn backtrack_with_undo_requests_undo_after_rollback() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+
+        let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(UserHistoryCell {
+                message: text.to_string(),
+            }) as Arc<dyn HistoryCell>
+        };
+        let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
+            Arc::new(AgentMessageCell::new(
+                vec![Line::from(text.to_string())],
+                true,
+            )) as Arc<dyn HistoryCell>
+        };
+
+        app.transcript_cells = vec![
+            user_cell("first question"),
+            agent_cell("answer first"),
+            user_cell("follow-up"),
+            agent_cell("answer follow-up"),
+        ];
+
+        let base_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: base_id,
+                forked_from_id: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: PathBuf::new(),
+            }),
+        });
+
+        app.backtrack.base_id = Some(base_id);
+        app.backtrack.primed = true;
+        app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
+
+        let selection = app
+            .confirm_backtrack_from_main()
+            .expect("backtrack selection");
+        app.apply_backtrack_rollback_with_undo(selection);
+
+        let mut saw_rollback = false;
+        let mut saw_undo = false;
+        while let Ok(op) = op_rx.try_recv() {
+            match op {
+                Op::ThreadRollback { .. } => saw_rollback = true,
+                Op::Undo => saw_undo = true,
+                _ => {}
+            }
+        }
+
+        assert_eq!(saw_rollback, true);
+        assert_eq!(saw_undo, false);
+
+        app.handle_backtrack_event(&EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        }));
+
+        while let Ok(op) = op_rx.try_recv() {
+            if matches!(op, Op::Undo) {
+                saw_undo = true;
+            }
+        }
+
+        assert_eq!(saw_undo, true);
     }
 
     #[tokio::test]
