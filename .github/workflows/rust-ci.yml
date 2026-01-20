@@ -269,7 +269,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get -y update -o Acquire::Retries=3
-          sudo apt-get -y install --no-install-recommends musl-tools pkg-config g++
+          sudo apt-get -y install --no-install-recommends musl-tools pkg-config g++ clang libc++-dev libc++abi-dev lld
           case "${{ matrix.target }}" in
             x86_64-unknown-linux-musl)
               arch="x86_64"
@@ -282,7 +282,10 @@ jobs:
               exit 1
               ;;
           esac
-          if command -v "${arch}-linux-musl-g++" >/dev/null; then
+          if command -v clang++ >/dev/null; then
+            cxx="$(command -v clang++)"
+            echo "CXXFLAGS=--target=${{ matrix.target }} -stdlib=libc++" >> "$GITHUB_ENV"
+          elif command -v "${arch}-linux-musl-g++" >/dev/null; then
             cxx="$(command -v "${arch}-linux-musl-g++")"
           elif command -v musl-g++ >/dev/null; then
             cxx="$(command -v musl-g++)"
