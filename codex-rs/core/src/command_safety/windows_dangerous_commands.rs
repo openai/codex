@@ -239,19 +239,27 @@ fn has_force_delete_cmdlet(tokens: &[String]) -> bool {
         let mut cur = String::new();
         for ch in tok.chars() {
             if SEG_SEPS.contains(&ch) {
-                if !cur.trim().is_empty() {
-                    segments.last_mut().unwrap().push(cur.trim().to_string());
+                let s = cur.trim();
+                if let Some(msg) = segments.last_mut()
+                    && !s.is_empty()
+                {
+                    msg.push(s.to_string());
                 }
                 cur.clear();
-                if !segments.last().unwrap().is_empty() {
+                if let Some(last) = segments.last()
+                    && !last.is_empty()
+                {
                     segments.push(Vec::new());
                 }
             } else {
                 cur.push(ch);
             }
         }
-        if !cur.trim().is_empty() {
-            segments.last_mut().unwrap().push(cur.trim().to_string());
+        let s = cur.trim();
+        if let Some(segment) = segments.last_mut()
+            && !s.is_empty()
+        {
+            segment.push(s.to_string());
         }
     }
 
