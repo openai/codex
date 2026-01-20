@@ -112,6 +112,8 @@ pub enum Command {
 
 #[derive(Args, Debug)]
 struct ResumeArgsRaw {
+    // Note: This is the direct clap shape. We reinterpret the positional when --last is set
+    // so "codex resume --last <prompt>" treats the positional as a prompt, not a session id.
     /// Conversation/session id (UUID). When provided, resumes this session.
     /// If omitted, use --last to pick the most recent recorded session.
     #[arg(value_name = "SESSION_ID")]
@@ -161,6 +163,8 @@ pub struct ResumeArgs {
 
 impl From<ResumeArgsRaw> for ResumeArgs {
     fn from(raw: ResumeArgsRaw) -> Self {
+        // When --last is used without an explicit prompt, treat the positional as the prompt
+        // (clap can’t express this conditional positional meaning cleanly).
         let (session_id, prompt) = if raw.last && raw.prompt.is_none() {
             (None, raw.session_id)
         } else {
