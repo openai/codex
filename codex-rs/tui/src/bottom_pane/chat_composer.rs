@@ -1630,6 +1630,8 @@ impl ChatComposer {
             text_elements = expanded.text_elements;
         }
         if !self.attached_images.is_empty() {
+            // Custom prompt expansion can remove or rewrite image placeholders, so prune any
+            // attachments that no longer have a corresponding placeholder in the expanded text.
             let image_placeholders: HashSet<&str> = text_elements
                 .iter()
                 .filter_map(|elem| elem.placeholder.as_deref())
