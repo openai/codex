@@ -272,14 +272,10 @@ async fn submission_preserves_text_elements_and_local_images() {
         .set_composer_text(text.clone(), text_elements.clone(), local_images.clone());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let mut user_input_items = None;
-    while let Ok(op) = op_rx.try_recv() {
-        if let Op::UserInput { items, .. } = op {
-            user_input_items = Some(items);
-            break;
-        }
-    }
-    let items = user_input_items.expect("expected Op::UserInput");
+    let items = match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
     assert_eq!(items.len(), 2);
     assert_eq!(
         items[0],
