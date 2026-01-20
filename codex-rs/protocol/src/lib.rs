@@ -1,7 +1,5 @@
 pub mod account;
 mod thread_id;
-#[allow(deprecated)]
-pub use thread_id::ConversationId;
 pub use thread_id::ThreadId;
 pub mod approvals;
 pub mod config_types;

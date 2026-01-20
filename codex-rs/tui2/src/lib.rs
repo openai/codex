@@ -18,6 +18,7 @@ use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
@@ -729,7 +730,12 @@ async fn load_config_or_exit_with_fallback_cwd(
     fallback_cwd: Option<PathBuf>,
 ) -> Config {
     #[allow(clippy::print_stderr)]
-    match load_with_cli_overrides_and_fallback_cwd(cli_kv_overrides, overrides, fallback_cwd).await
+    match ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(overrides)
+        .fallback_cwd(fallback_cwd)
+        .build()
+        .await
     {
         Ok(config) => config,
         Err(err) => {
