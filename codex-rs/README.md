@@ -1,6 +1,7 @@
 # Codex CLI (Rust Implementation)
 
 We provide Codex CLI as a standalone, native executable to ensure a zero-dependency install.
+Test
 
 ## Installing Codex
 
