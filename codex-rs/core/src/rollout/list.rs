@@ -722,7 +722,9 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     .created_at
                     .clone()
                     .or_else(|| Some(rollout_line.timestamp.clone()));
-                if summary.head.len() < head_limit && let Ok(val) = serde_json::to_value(item) {
+                if summary.head.len() < head_limit
+                    && let Ok(val) = serde_json::to_value(item)
+                {
                     summary.head.push(val);
                 }
             }
