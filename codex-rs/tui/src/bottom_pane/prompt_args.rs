@@ -130,16 +130,15 @@ pub fn prompt_argument_names(content: &str) -> Vec<String> {
 }
 
 /// Shift a text element's byte range left by `offset`, returning `None` if empty.
+///
+/// `offset` is the byte length of the prefix removed from the original text.
 fn shift_text_element_left(elem: &TextElement, offset: usize) -> Option<TextElement> {
     if elem.byte_range.end <= offset {
         return None;
     }
     let start = elem.byte_range.start.saturating_sub(offset);
     let end = elem.byte_range.end.saturating_sub(offset);
-    (start < end).then_some(TextElement {
-        byte_range: ByteRange { start, end },
-        placeholder: elem.placeholder.clone(),
-    })
+    (start < end).then_some(elem.map_range(|_| ByteRange { start, end }))
 }
 
 /// Parses the `key=value` pairs that follow a custom prompt name.
@@ -212,18 +211,13 @@ pub fn expand_custom_prompt(
     let local_elements: Vec<TextElement> = text_elements
         .iter()
         .filter_map(|elem| {
-            let shifted = shift_text_element_left(elem, rest_offset)?;
+            let mut shifted = shift_text_element_left(elem, rest_offset)?;
             if shifted.byte_range.start >= rest.len() {
                 return None;
             }
             let end = shifted.byte_range.end.min(rest.len());
-            Some(TextElement {
-                byte_range: ByteRange {
-                    start: shifted.byte_range.start,
-                    end,
-                },
-                placeholder: shifted.placeholder,
-            })
+            shifted.byte_range.end = end;
+            (shifted.byte_range.start < shifted.byte_range.end).then_some(shifted)
         })
         .collect();
     if !required.is_empty() {
@@ -305,18 +299,13 @@ pub fn extract_positional_args_for_prompt_line(
     let local_elements: Vec<TextElement> = text_elements
         .iter()
         .filter_map(|elem| {
-            let shifted = shift_text_element_left(elem, args_offset)?;
+            let mut shifted = shift_text_element_left(elem, args_offset)?;
             if shifted.byte_range.start >= args_str.len() {
                 return None;
             }
             let end = shifted.byte_range.end.min(args_str.len());
-            Some(TextElement {
-                byte_range: ByteRange {
-                    start: shifted.byte_range.start,
-                    end,
-                },
-                placeholder: shifted.placeholder,
-            })
+            shifted.byte_range.end = end;
+            (shifted.byte_range.start < shifted.byte_range.end).then_some(shifted)
         })
         .collect();
     parse_positional_args(args_str, &local_elements)
@@ -402,7 +391,7 @@ fn parse_tokens_with_elements(rest: &str, text_elements: &[TextElement]) -> Vec<
 struct ElementReplacement {
     sentinel: String,
     text: String,
-    element: TextElement,
+    placeholder: Option<String>,
 }
 
 /// Replace each text element range with a unique sentinel token.
@@ -429,7 +418,7 @@ fn replace_text_elements_with_sentinels(
         replacements.push(ElementReplacement {
             sentinel,
             text: rest[start..end].to_string(),
-            element: elem.clone(),
+            placeholder: elem.placeholder(rest).map(str::to_string),
         });
         cursor = end;
     }
@@ -463,10 +452,10 @@ fn apply_replacements_to_token(token: String, replacements: &[ElementReplacement
         out.push_str(&replacement.text);
         let end = out.len();
         if start < end {
-            out_elements.push(TextElement {
-                byte_range: ByteRange { start, end },
-                placeholder: replacement.element.placeholder.clone(),
-            });
+            out_elements.push(TextElement::new(
+                ByteRange { start, end },
+                replacement.placeholder.clone(),
+            ));
         }
         cursor = start_in_token + replacement.sentinel.len();
     }
@@ -534,12 +523,11 @@ fn append_arg_with_elements(
     if arg.text_elements.is_empty() {
         return;
     }
-    out_elements.extend(arg.text_elements.iter().map(|elem| TextElement {
-        byte_range: ByteRange {
-            start: start + elem.byte_range.start,
-            end: start + elem.byte_range.end,
-        },
-        placeholder: elem.placeholder.clone(),
+    out_elements.extend(arg.text_elements.iter().map(|elem| {
+        elem.map_range(|range| ByteRange {
+            start: start + range.start,
+            end: start + range.end,
+        })
     }));
 }
 
@@ -691,10 +679,10 @@ mod tests {
         let rest = format!("alpha {placeholder} beta");
         let start = rest.find(placeholder).expect("placeholder");
         let end = start + placeholder.len();
-        let text_elements = vec![TextElement {
-            byte_range: ByteRange { start, end },
-            placeholder: Some(placeholder.to_string()),
-        }];
+        let text_elements = vec![TextElement::new(
+            ByteRange { start, end },
+            Some(placeholder.to_string()),
+        )];
 
         let args = parse_positional_args(&rest, &text_elements);
         assert_eq!(
@@ -706,13 +694,13 @@ mod tests {
                 },
                 PromptArg {
                     text: placeholder.to_string(),
-                    text_elements: vec![TextElement {
-                        byte_range: ByteRange {
+                    text_elements: vec![TextElement::new(
+                        ByteRange {
                             start: 0,
                             end: placeholder.len(),
                         },
-                        placeholder: Some(placeholder.to_string()),
-                    }],
+                        Some(placeholder.to_string()),
+                    )],
                 },
                 PromptArg {
                     text: "beta".to_string(),
@@ -728,10 +716,10 @@ mod tests {
         let line = format!("  /{PROMPTS_CMD_PREFIX}:my-prompt  alpha {placeholder} beta   ");
         let start = line.find(placeholder).expect("placeholder");
         let end = start + placeholder.len();
-        let text_elements = vec![TextElement {
-            byte_range: ByteRange { start, end },
-            placeholder: Some(placeholder.to_string()),
-        }];
+        let text_elements = vec![TextElement::new(
+            ByteRange { start, end },
+            Some(placeholder.to_string()),
+        )];
 
         let args = extract_positional_args_for_prompt_line(&line, "my-prompt", &text_elements);
         assert_eq!(
@@ -743,13 +731,13 @@ mod tests {
                 },
                 PromptArg {
                     text: placeholder.to_string(),
-                    text_elements: vec![TextElement {
-                        byte_range: ByteRange {
+                    text_elements: vec![TextElement::new(
+                        ByteRange {
                             start: 0,
                             end: placeholder.len(),
                         },
-                        placeholder: Some(placeholder.to_string()),
-                    }],
+                        Some(placeholder.to_string()),
+                    )],
                 },
                 PromptArg {
                     text: "beta".to_string(),
@@ -765,23 +753,23 @@ mod tests {
         let rest = format!("IMG={placeholder} NOTE=hello");
         let start = rest.find(placeholder).expect("placeholder");
         let end = start + placeholder.len();
-        let text_elements = vec![TextElement {
-            byte_range: ByteRange { start, end },
-            placeholder: Some(placeholder.to_string()),
-        }];
+        let text_elements = vec![TextElement::new(
+            ByteRange { start, end },
+            Some(placeholder.to_string()),
+        )];
 
         let args = parse_prompt_inputs(&rest, &text_elements).expect("inputs");
         assert_eq!(
             args.get("IMG"),
             Some(&PromptArg {
                 text: placeholder.to_string(),
-                text_elements: vec![TextElement {
-                    byte_range: ByteRange {
+                text_elements: vec![TextElement::new(
+                    ByteRange {
                         start: 0,
                         end: placeholder.len(),
                     },
-                    placeholder: Some(placeholder.to_string()),
-                }],
+                    Some(placeholder.to_string()),
+                )],
             })
         );
         assert_eq!(
@@ -799,10 +787,10 @@ mod tests {
         let rest = format!("alpha \"see {placeholder} here\" beta");
         let start = rest.find(placeholder).expect("placeholder");
         let end = start + placeholder.len();
-        let text_elements = vec![TextElement {
-            byte_range: ByteRange { start, end },
-            placeholder: Some(placeholder.to_string()),
-        }];
+        let text_elements = vec![TextElement::new(
+            ByteRange { start, end },
+            Some(placeholder.to_string()),
+        )];
 
         let args = parse_positional_args(&rest, &text_elements);
         assert_eq!(
@@ -814,13 +802,13 @@ mod tests {
                 },
                 PromptArg {
                     text: format!("see {placeholder} here"),
-                    text_elements: vec![TextElement {
-                        byte_range: ByteRange {
+                    text_elements: vec![TextElement::new(
+                        ByteRange {
                             start: "see ".len(),
                             end: "see ".len() + placeholder.len(),
                         },
-                        placeholder: Some(placeholder.to_string()),
-                    }],
+                        Some(placeholder.to_string()),
+                    )],
                 },
                 PromptArg {
                     text: "beta".to_string(),
@@ -836,23 +824,23 @@ mod tests {
         let rest = format!("IMG=\"see {placeholder} here\" NOTE=ok");
         let start = rest.find(placeholder).expect("placeholder");
         let end = start + placeholder.len();
-        let text_elements = vec![TextElement {
-            byte_range: ByteRange { start, end },
-            placeholder: Some(placeholder.to_string()),
-        }];
+        let text_elements = vec![TextElement::new(
+            ByteRange { start, end },
+            Some(placeholder.to_string()),
+        )];
 
         let args = parse_prompt_inputs(&rest, &text_elements).expect("inputs");
         assert_eq!(
             args.get("IMG"),
             Some(&PromptArg {
                 text: format!("see {placeholder} here"),
-                text_elements: vec![TextElement {
-                    byte_range: ByteRange {
+                text_elements: vec![TextElement::new(
+                    ByteRange {
                         start: "see ".len(),
                         end: "see ".len() + placeholder.len(),
                     },
-                    placeholder: Some(placeholder.to_string()),
-                }],
+                    Some(placeholder.to_string()),
+                )],
             })
         );
         assert_eq!(

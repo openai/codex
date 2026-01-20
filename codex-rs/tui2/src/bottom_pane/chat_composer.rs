@@ -1563,7 +1563,7 @@ impl ChatComposer {
             // attachments that no longer have a corresponding placeholder in the expanded text.
             let image_placeholders: HashSet<&str> = text_elements
                 .iter()
-                .filter_map(|elem| elem.placeholder.as_deref())
+                .filter_map(|elem| elem.placeholder(&text))
                 .collect();
             self.attached_images
                 .retain(|img| image_placeholders.contains(img.placeholder.as_str()));
@@ -4927,13 +4927,13 @@ mod tests {
                 assert_eq!(text, format!("Review {placeholder}"));
                 assert_eq!(
                     text_elements,
-                    vec![TextElement {
-                        byte_range: ByteRange {
+                    vec![TextElement::new(
+                        ByteRange {
                             start: "Review ".len(),
                             end: "Review ".len() + placeholder.len(),
                         },
-                        placeholder: Some(placeholder),
-                    }]
+                        Some(placeholder),
+                    )]
                 );
             }
             _ => panic!("expected Submitted"),
@@ -4984,13 +4984,13 @@ mod tests {
                 assert_eq!(text, format!("Review {placeholder}"));
                 assert_eq!(
                     text_elements,
-                    vec![TextElement {
-                        byte_range: ByteRange {
+                    vec![TextElement::new(
+                        ByteRange {
                             start: "Review ".len(),
                             end: "Review ".len() + placeholder.len(),
                         },
-                        placeholder: Some(placeholder),
-                    }]
+                        Some(placeholder),
+                    )]
                 );
             }
             _ => panic!("expected Submitted"),
@@ -5157,13 +5157,13 @@ mod tests {
                 assert_eq!(text, format!("Review {placeholder}\n\n{large_content}"));
                 assert_eq!(
                     text_elements,
-                    vec![TextElement {
-                        byte_range: ByteRange {
+                    vec![TextElement::new(
+                        ByteRange {
                             start: "Review ".len(),
                             end: "Review ".len() + placeholder.len(),
                         },
-                        placeholder: Some(placeholder),
-                    }]
+                        Some(placeholder),
+                    )]
                 );
             }
             _ => panic!("expected Submitted"),
