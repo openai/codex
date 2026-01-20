@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::protocol::common::AuthMode;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
@@ -916,6 +917,20 @@ pub struct ModelListResponse {
     pub next_cursor: Option<String>,
 }
 
+/// EXPERIMENTAL - list collaboration mode presets.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CollaborationModeListParams {}
+
+/// EXPERIMENTAL - collaboration mode presets response.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CollaborationModeListResponse {
+    pub data: Vec<CollaborationMode>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -1182,9 +1197,19 @@ pub struct ThreadListParams {
     pub cursor: Option<String>,
     /// Optional page size; defaults to a reasonable server-side value.
     pub limit: Option<u32>,
+    /// Optional sort key; defaults to created_at.
+    pub sort_key: Option<ThreadSortKey>,
     /// Optional provider filter; when set, only sessions recorded under these
     /// providers are returned. When present but empty, includes all providers.
     pub model_providers: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum ThreadSortKey {
+    CreatedAt,
+    UpdatedAt,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1264,6 +1289,7 @@ pub struct SkillMetadata {
     pub interface: Option<SkillInterface>,
     pub path: PathBuf,
     pub scope: SkillScope,
+    pub enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1301,6 +1327,21 @@ pub struct SkillsListEntry {
     pub errors: Vec<SkillErrorInfo>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsConfigWriteParams {
+    pub path: PathBuf,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillsConfigWriteResponse {
+    pub effective_enabled: bool,
+}
+
 impl From<CoreSkillMetadata> for SkillMetadata {
     fn from(value: CoreSkillMetadata) -> Self {
         Self {
@@ -1310,6 +1351,7 @@ impl From<CoreSkillMetadata> for SkillMetadata {
             interface: value.interface.map(SkillInterface::from),
             path: value.path,
             scope: value.scope.into(),
+            enabled: true,
         }
     }
 }
@@ -1359,6 +1401,9 @@ pub struct Thread {
     /// Unix timestamp (in seconds) when the thread was created.
     #[ts(type = "number")]
     pub created_at: i64,
+    /// Unix timestamp (in seconds) when the thread was last updated.
+    #[ts(type = "number")]
+    pub updated_at: i64,
     /// [UNSTABLE] Path to the thread on disk.
     pub path: PathBuf,
     /// Working directory captured for the thread.
@@ -1508,6 +1553,10 @@ pub struct TurnStartParams {
     pub summary: Option<ReasoningSummary>,
     /// Optional JSON Schema used to constrain the final assistant message for this turn.
     pub output_schema: Option<JsonValue>,
+
+    /// EXPERIMENTAL - set a pre-set collaboration mode.
+    /// Takes precedence over model, reasoning_effort, and developer instructions if set.
+    pub collaboration_mode: Option<CollaborationMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1616,24 +1665,38 @@ pub struct TextElement {
     /// Byte range in the parent `text` buffer that this element occupies.
     pub byte_range: ByteRange,
     /// Optional human-readable placeholder for the element, displayed in the UI.
-    pub placeholder: Option<String>,
+    placeholder: Option<String>,
+}
+
+impl TextElement {
+    pub fn new(byte_range: ByteRange, placeholder: Option<String>) -> Self {
+        Self {
+            byte_range,
+            placeholder,
+        }
+    }
+
+    pub fn set_placeholder(&mut self, placeholder: Option<String>) {
+        self.placeholder = placeholder;
+    }
+
+    pub fn placeholder(&self) -> Option<&str> {
+        self.placeholder.as_deref()
+    }
 }
 
 impl From<CoreTextElement> for TextElement {
     fn from(value: CoreTextElement) -> Self {
-        Self {
-            byte_range: value.byte_range.into(),
-            placeholder: value.placeholder,
-        }
+        Self::new(
+            value.byte_range.into(),
+            value._placeholder_for_conversion_only().map(str::to_string),
+        )
     }
 }
 
 impl From<TextElement> for CoreTextElement {
     fn from(value: TextElement) -> Self {
-        Self {
-            byte_range: value.byte_range.into(),
-            placeholder: value.placeholder,
-        }
+        Self::new(value.byte_range.into(), value.placeholder)
     }
 }
 
@@ -1771,12 +1834,12 @@ pub enum ThreadItem {
         /// Thread ID of the agent issuing the collab request.
         sender_thread_id: String,
         /// Thread ID of the receiving agent, when applicable. In case of spawn operation,
-        /// this correspond to the newly spawned agent.
-        receiver_thread_id: Option<String>,
+        /// this corresponds to the newly spawned agent.
+        receiver_thread_ids: Vec<String>,
         /// Prompt text sent as part of the collab tool call, when available.
         prompt: Option<String>,
-        /// Last known status of the target agent, when available.
-        agent_state: Option<CollabAgentState>,
+        /// Last known status of the target agents, when available.
+        agents_states: HashMap<String, CollabAgentState>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -2226,6 +2289,54 @@ pub struct FileChangeRequestApprovalParams {
 #[ts(export_to = "v2/")]
 pub struct FileChangeRequestApprovalResponse {
     pub decision: FileChangeApprovalDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Defines a single selectable option for request_user_input.
+pub struct ToolRequestUserInputOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Represents one request_user_input question and its optional options.
+pub struct ToolRequestUserInputQuestion {
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    pub options: Option<Vec<ToolRequestUserInputOption>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Params sent with a request_user_input event.
+pub struct ToolRequestUserInputParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub questions: Vec<ToolRequestUserInputQuestion>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Captures a user's answer to a request_user_input question.
+pub struct ToolRequestUserInputAnswer {
+    pub selected: Vec<String>,
+    pub other: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// EXPERIMENTAL. Response payload mapping question ids to answers.
+pub struct ToolRequestUserInputResponse {
+    pub answers: HashMap<String, ToolRequestUserInputAnswer>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -15,6 +15,8 @@ use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
+#[cfg(not(debug_assertions))]
+use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
@@ -37,6 +39,7 @@ use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::protocol::DeprecationNoticeEvent;
+use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::ListSkillsResponseEvent;
@@ -58,6 +61,8 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -66,10 +71,8 @@ use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 use tokio::select;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc::unbounded_channel;
-
-#[cfg(not(debug_assertions))]
-use crate::history_cell::UpdateAvailableHistoryCell;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 
@@ -269,7 +272,6 @@ async fn handle_model_migration_prompt_if_needed(
                     from_model: model.to_string(),
                     to_model: target_model.clone(),
                 });
-                config.model = Some(target_model.clone());
 
                 let mapped_effort = if let Some(reasoning_effort_mapping) = reasoning_effort_mapping
                     && let Some(reasoning_effort) = config.model_reasoning_effort
@@ -282,8 +284,8 @@ async fn handle_model_migration_prompt_if_needed(
                     config.model_reasoning_effort
                 };
 
+                config.model = Some(target_model.clone());
                 config.model_reasoning_effort = mapped_effort;
-
                 app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
                 app_event_tx.send(AppEvent::UpdateReasoningEffort(mapped_effort));
                 app_event_tx.send(AppEvent::PersistModelSelection {
@@ -318,7 +320,6 @@ pub(crate) struct App {
     pub(crate) auth_manager: Arc<AuthManager>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
-    pub(crate) current_model: String,
     pub(crate) active_profile: Option<String>,
 
     pub(crate) file_search: FileSearchManager,
@@ -337,6 +338,11 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+    /// When set, the next draw re-renders the transcript into terminal scrollback once.
+    ///
+    /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
+    /// transcript cells.
+    pub(crate) backtrack_render_pending: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
@@ -347,11 +353,40 @@ pub(crate) struct App {
 
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
+
+    // TODO(jif) drop once new UX is here.
+    // Track external agent approvals spawned via AgentControl.
+    /// Map routed approval IDs to their originating external threads and original IDs.
+    external_approval_routes: HashMap<String, (ThreadId, String)>,
+    /// Buffered Codex events while external approvals are pending.
+    paused_codex_events: VecDeque<Event>,
 }
 
 impl App {
+    pub fn chatwidget_init_for_forked_or_resumed_thread(
+        &self,
+        tui: &mut tui::Tui,
+        cfg: codex_core::config::Config,
+    ) -> crate::chatwidget::ChatWidgetInit {
+        crate::chatwidget::ChatWidgetInit {
+            config: cfg,
+            frame_requester: tui.frame_requester(),
+            app_event_tx: self.app_event_tx.clone(),
+            // Fork/resume bootstraps here don't carry any prefilled message content.
+            initial_user_message: None,
+            enhanced_keys_supported: self.enhanced_keys_supported,
+            auth_manager: self.auth_manager.clone(),
+            models_manager: self.server.get_models_manager(),
+            feedback: self.feedback.clone(),
+            is_first_run: false,
+            model: Some(self.chat_widget.current_model().to_string()),
+        }
+    }
+
     async fn shutdown_current_thread(&mut self) {
         if let Some(thread_id) = self.chat_widget.thread_id() {
+            // Clear any in-flight rollback guard when switching threads.
+            self.backtrack.pending_rollback = None;
             self.suppress_shutdown_complete = true;
             self.chat_widget.submit_op(Op::Shutdown);
             self.server.remove_thread(&thread_id).await;
@@ -411,14 +446,18 @@ impl App {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
-                    initial_prompt: initial_prompt.clone(),
-                    initial_images: initial_images.clone(),
+                    initial_user_message: crate::chatwidget::create_initial_user_message(
+                        initial_prompt.clone(),
+                        initial_images.clone(),
+                        // CLI prompt args are plain strings, so they don't provide element ranges.
+                        Vec::new(),
+                    ),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: config.model.clone(),
+                    model: Some(model.clone()),
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
@@ -434,8 +473,12 @@ impl App {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
-                    initial_prompt: initial_prompt.clone(),
-                    initial_images: initial_images.clone(),
+                    initial_user_message: crate::chatwidget::create_initial_user_message(
+                        initial_prompt.clone(),
+                        initial_images.clone(),
+                        // CLI prompt args are plain strings, so they don't provide element ranges.
+                        Vec::new(),
+                    ),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     models_manager: thread_manager.get_models_manager(),
@@ -457,8 +500,12 @@ impl App {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
-                    initial_prompt: initial_prompt.clone(),
-                    initial_images: initial_images.clone(),
+                    initial_user_message: crate::chatwidget::create_initial_user_message(
+                        initial_prompt.clone(),
+                        initial_images.clone(),
+                        // CLI prompt args are plain strings, so they don't provide element ranges.
+                        Vec::new(),
+                    ),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     models_manager: thread_manager.get_models_manager(),
@@ -482,7 +529,6 @@ impl App {
             chat_widget,
             auth_manager: auth_manager.clone(),
             config,
-            current_model: model.clone(),
             active_profile,
             file_search,
             enhanced_keys_supported,
@@ -492,10 +538,13 @@ impl App {
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            backtrack_render_pending: false,
             feedback: feedback.clone(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            external_approval_routes: HashMap::new(),
+            paused_codex_events: VecDeque::new(),
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -548,6 +597,9 @@ impl App {
 
         tui.frame_requester().schedule_frame();
 
+        let mut thread_created_rx = thread_manager.subscribe_thread_created();
+        let mut listen_for_threads = true;
+
         let exit_reason = loop {
             let control = select! {
                 Some(event) = app_event_rx.recv() => {
@@ -555,6 +607,21 @@ impl App {
                 }
                 Some(event) = tui_events.next() => {
                     app.handle_tui_event(tui, event).await?
+                }
+                // Listen on new thread creation due to collab tools.
+                created = thread_created_rx.recv(), if listen_for_threads => {
+                    match created {
+                        Ok(thread_id) => {
+                            app.handle_thread_created(thread_id).await?;
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            tracing::warn!("thread_created receiver lagged; skipping resync");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            listen_for_threads = false;
+                        }
+                    }
+                    AppRunControl::Continue
                 }
             };
             match control {
@@ -592,6 +659,10 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
+                    if self.backtrack_render_pending {
+                        self.backtrack_render_pending = false;
+                        self.render_transcript_once(tui);
+                    }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
                         .chat_widget
@@ -620,31 +691,29 @@ impl App {
     }
 
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
-        let model_info = self
-            .server
-            .get_models_manager()
-            .get_model_info(self.current_model.as_str(), &self.config)
-            .await;
         match event {
             AppEvent::NewSession => {
+                let model = self.chat_widget.current_model().to_string();
                 let summary =
                     session_summary(self.chat_widget.token_usage(), self.chat_widget.thread_id());
                 self.shutdown_current_thread().await;
+                if let Err(err) = self.server.remove_and_close_all_threads().await {
+                    tracing::warn!(error = %err, "failed to close all threads");
+                }
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: self.app_event_tx.clone(),
-                    initial_prompt: None,
-                    initial_images: Vec::new(),
+                    // New sessions start without prefilled message content.
+                    initial_user_message: None,
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
                     models_manager: self.server.get_models_manager(),
                     feedback: self.feedback.clone(),
                     is_first_run: false,
-                    model: Some(self.current_model.clone()),
+                    model: Some(model),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
-                self.current_model = model_info.slug.clone();
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
@@ -680,25 +749,15 @@ impl App {
                         {
                             Ok(resumed) => {
                                 self.shutdown_current_thread().await;
-                                let init = crate::chatwidget::ChatWidgetInit {
-                                    config: self.config.clone(),
-                                    frame_requester: tui.frame_requester(),
-                                    app_event_tx: self.app_event_tx.clone(),
-                                    initial_prompt: None,
-                                    initial_images: Vec::new(),
-                                    enhanced_keys_supported: self.enhanced_keys_supported,
-                                    auth_manager: self.auth_manager.clone(),
-                                    models_manager: self.server.get_models_manager(),
-                                    feedback: self.feedback.clone(),
-                                    is_first_run: false,
-                                    model: Some(self.current_model.clone()),
-                                };
+                                let init = self.chatwidget_init_for_forked_or_resumed_thread(
+                                    tui,
+                                    self.config.clone(),
+                                );
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
                                     resumed.thread,
                                     resumed.session_configured,
                                 );
-                                self.current_model = model_info.slug.clone();
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
@@ -728,73 +787,51 @@ impl App {
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::OpenForkPicker => {
-                match crate::resume_picker::run_fork_picker(
-                    tui,
-                    &self.config.codex_home,
-                    &self.config.model_provider_id,
-                    false,
-                )
-                .await?
-                {
-                    SessionSelection::Fork(path) => {
-                        let summary = session_summary(
-                            self.chat_widget.token_usage(),
-                            self.chat_widget.thread_id(),
-                        );
-                        match self
-                            .server
-                            .fork_thread(usize::MAX, self.config.clone(), path.clone())
-                            .await
-                        {
-                            Ok(forked) => {
-                                self.shutdown_current_thread().await;
-                                let init = crate::chatwidget::ChatWidgetInit {
-                                    config: self.config.clone(),
-                                    frame_requester: tui.frame_requester(),
-                                    app_event_tx: self.app_event_tx.clone(),
-                                    initial_prompt: None,
-                                    initial_images: Vec::new(),
-                                    enhanced_keys_supported: self.enhanced_keys_supported,
-                                    auth_manager: self.auth_manager.clone(),
-                                    models_manager: self.server.get_models_manager(),
-                                    feedback: self.feedback.clone(),
-                                    is_first_run: false,
-                                    model: Some(self.current_model.clone()),
-                                };
-                                self.chat_widget = ChatWidget::new_from_existing(
-                                    init,
-                                    forked.thread,
-                                    forked.session_configured,
-                                );
-                                self.current_model = model_info.slug.clone();
-                                if let Some(summary) = summary {
-                                    let mut lines: Vec<Line<'static>> =
-                                        vec![summary.usage_line.clone().into()];
-                                    if let Some(command) = summary.resume_command {
-                                        let spans = vec![
-                                            "To continue this session, run ".into(),
-                                            command.cyan(),
-                                        ];
-                                        lines.push(spans.into());
-                                    }
-                                    self.chat_widget.add_plain_history_lines(lines);
+            AppEvent::ForkCurrentSession => {
+                let summary =
+                    session_summary(self.chat_widget.token_usage(), self.chat_widget.thread_id());
+                if let Some(path) = self.chat_widget.rollout_path() {
+                    match self
+                        .server
+                        .fork_thread(usize::MAX, self.config.clone(), path.clone())
+                        .await
+                    {
+                        Ok(forked) => {
+                            self.shutdown_current_thread().await;
+                            let init = self.chatwidget_init_for_forked_or_resumed_thread(
+                                tui,
+                                self.config.clone(),
+                            );
+                            self.chat_widget = ChatWidget::new_from_existing(
+                                init,
+                                forked.thread,
+                                forked.session_configured,
+                            );
+                            if let Some(summary) = summary {
+                                let mut lines: Vec<Line<'static>> =
+                                    vec![summary.usage_line.clone().into()];
+                                if let Some(command) = summary.resume_command {
+                                    let spans = vec![
+                                        "To continue this session, run ".into(),
+                                        command.cyan(),
+                                    ];
+                                    lines.push(spans.into());
                                 }
-                            }
-                            Err(err) => {
-                                let path_display = path.display();
-                                self.chat_widget.add_error_message(format!(
-                                    "Failed to fork session from {path_display}: {err}"
-                                ));
+                                self.chat_widget.add_plain_history_lines(lines);
                             }
                         }
+                        Err(err) => {
+                            let path_display = path.display();
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to fork current session from {path_display}: {err}"
+                            ));
+                        }
                     }
-                    SessionSelection::Exit
-                    | SessionSelection::StartFresh
-                    | SessionSelection::Resume(_) => {}
+                } else {
+                    self.chat_widget
+                        .add_error_message("Current session is not ready to fork yet.".to_string());
                 }
 
-                // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
@@ -846,18 +883,18 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::CodexEvent(event) => {
-                if self.suppress_shutdown_complete
-                    && matches!(event.msg, EventMsg::ShutdownComplete)
-                {
-                    self.suppress_shutdown_complete = false;
+                if !self.external_approval_routes.is_empty() {
+                    // Store the events while the approval is pending.
+                    self.paused_codex_events.push_back(event);
                     return Ok(AppRunControl::Continue);
                 }
-                if let EventMsg::ListSkillsResponse(response) = &event.msg {
-                    let cwd = self.chat_widget.config_ref().cwd.clone();
-                    let errors = errors_for_cwd(&cwd, response);
-                    emit_skill_load_warnings(&self.app_event_tx, &errors);
+                self.handle_codex_event_now(event);
+                if self.backtrack_render_pending {
+                    tui.frame_requester().schedule_frame();
                 }
-                self.chat_widget.handle_codex_event(event);
+            }
+            AppEvent::ExternalApprovalRequest { thread_id, event } => {
+                self.handle_external_approval_request(thread_id, event);
             }
             AppEvent::Exit(mode) => match mode {
                 ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
@@ -868,7 +905,54 @@ impl App {
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
-            AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
+            AppEvent::CodexOp(op) => match op {
+                // Catch potential approvals coming from an external thread and treat them
+                // directly. This support both command and patch approval. In such case
+                // the approval get transferred to the corresponding thread and the external
+                // approval map (`external_approval_routes`) is updated.
+                Op::ExecApproval { id, decision } => {
+                    if let Some((thread_id, original_id)) =
+                        self.external_approval_routes.remove(&id)
+                    {
+                        // Approval of a sub-agent.
+                        self.forward_external_op(
+                            thread_id,
+                            Op::ExecApproval {
+                                id: original_id,
+                                decision,
+                            },
+                        )
+                        .await;
+                        self.finish_external_approval();
+                    } else {
+                        // This is an approval but not external.
+                        self.chat_widget
+                            .submit_op(Op::ExecApproval { id, decision });
+                    }
+                }
+                Op::PatchApproval { id, decision } => {
+                    if let Some((thread_id, original_id)) =
+                        self.external_approval_routes.remove(&id)
+                    {
+                        // Approval of a sub-agent.
+                        self.forward_external_op(
+                            thread_id,
+                            Op::PatchApproval {
+                                id: original_id,
+                                decision,
+                            },
+                        )
+                        .await;
+                        self.finish_external_approval();
+                    } else {
+                        // This is an approval but not external.
+                        self.chat_widget
+                            .submit_op(Op::PatchApproval { id, decision });
+                    }
+                }
+                // Standard path where this is not an external approval response.
+                _ => self.chat_widget.submit_op(op),
+            },
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();
@@ -901,7 +985,11 @@ impl App {
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
-                self.current_model = model;
+            }
+            AppEvent::UpdateCollaborationMode(mode) => {
+                let model = mode.model().to_string();
+                self.chat_widget.set_collaboration_mode(mode);
+                self.chat_widget.set_model(&model);
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
@@ -1048,6 +1136,7 @@ impl App {
                                         model: None,
                                         effort: None,
                                         summary: None,
+                                        collaboration_mode: None,
                                     },
                                 ));
                                 self.app_event_tx
@@ -1343,6 +1432,90 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
+    fn handle_codex_event_now(&mut self, event: Event) {
+        if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
+            self.suppress_shutdown_complete = false;
+            return;
+        }
+        if let EventMsg::ListSkillsResponse(response) = &event.msg {
+            let cwd = self.chat_widget.config_ref().cwd.clone();
+            let errors = errors_for_cwd(&cwd, response);
+            emit_skill_load_warnings(&self.app_event_tx, &errors);
+        }
+        self.handle_backtrack_event(&event.msg);
+        self.chat_widget.handle_codex_event(event);
+    }
+
+    /// Routes external approval request events through the chat widget by
+    /// rewriting the event id to include the originating thread.
+    ///
+    /// `thread_id` is the external thread that issued the approval request.
+    /// `event` is the approval request event whose id is rewritten so replies
+    /// can be routed back to the correct thread.
+    fn handle_external_approval_request(&mut self, thread_id: ThreadId, mut event: Event) {
+        match &mut event.msg {
+            EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_) => {
+                let original_id = event.id.clone();
+                let routing_id = format!("{thread_id}:{original_id}");
+                self.external_approval_routes
+                    .insert(routing_id.clone(), (thread_id, original_id));
+                event.id = routing_id;
+            }
+            _ => return,
+        }
+        self.chat_widget.handle_codex_event(event);
+    }
+
+    async fn forward_external_op(&self, thread_id: ThreadId, op: Op) {
+        let thread = match self.server.get_thread(thread_id).await {
+            Ok(thread) => thread,
+            Err(err) => {
+                tracing::warn!("failed to find thread {thread_id} for approval response: {err}");
+                return;
+            }
+        };
+        if let Err(err) = thread.submit(op).await {
+            tracing::warn!("failed to submit approval response to thread {thread_id}: {err}");
+        }
+    }
+
+    fn finish_external_approval(&mut self) {
+        if self.external_approval_routes.is_empty() {
+            while let Some(event) = self.paused_codex_events.pop_front() {
+                self.handle_codex_event_now(event);
+            }
+        }
+    }
+
+    async fn handle_thread_created(&mut self, thread_id: ThreadId) -> Result<()> {
+        let thread = match self.server.get_thread(thread_id).await {
+            Ok(thread) => thread,
+            Err(err) => {
+                tracing::warn!("failed to attach listener for thread {thread_id}: {err}");
+                return Ok(());
+            }
+        };
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                let event = match thread.next_event().await {
+                    Ok(event) => event,
+                    Err(err) => {
+                        tracing::debug!("external thread {thread_id} listener stopped: {err}");
+                        break;
+                    }
+                };
+                match event.msg {
+                    EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_) => {
+                        app_event_tx.send(AppEvent::ExternalApprovalRequest { thread_id, event });
+                    }
+                    _ => {}
+                }
+            }
+        });
+        Ok(())
+    }
+
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
         match reasoning_effort {
             Some(ReasoningEffortConfig::Minimal) => "minimal",
@@ -1366,8 +1539,10 @@ impl App {
     }
 
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.chat_widget.set_reasoning_effort(effort);
+        // TODO(aibrahim): Remove this and don't use config as a state object.
+        // Instead, explicitly pass the stored collaboration mode's effort into new sessions.
         self.config.model_reasoning_effort = effort;
+        self.chat_widget.set_reasoning_effort(effort);
     }
 
     async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
@@ -1569,7 +1744,6 @@ mod tests {
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let current_model = "gpt-5.2-codex".to_string();
         let server = Arc::new(ThreadManager::with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
@@ -1584,7 +1758,6 @@ mod tests {
             chat_widget,
             auth_manager,
             config,
-            current_model,
             active_profile: None,
             file_search,
             transcript_cells: Vec::new(),
@@ -1594,10 +1767,13 @@ mod tests {
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            external_approval_routes: HashMap::new(),
+            paused_codex_events: VecDeque::new(),
         }
     }
 
@@ -1608,7 +1784,6 @@ mod tests {
     ) {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let current_model = "gpt-5.2-codex".to_string();
         let server = Arc::new(ThreadManager::with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
@@ -1624,7 +1799,6 @@ mod tests {
                 chat_widget,
                 auth_manager,
                 config,
-                current_model,
                 active_profile: None,
                 file_search,
                 transcript_cells: Vec::new(),
@@ -1634,10 +1808,13 @@ mod tests {
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
                 backtrack: BacktrackState::default(),
+                backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 skip_world_writable_scan_once: false,
+                external_approval_routes: HashMap::new(),
+                paused_codex_events: VecDeque::new(),
             },
             rx,
             op_rx,
@@ -1806,20 +1983,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_reasoning_effort_updates_config() {
+    async fn update_reasoning_effort_updates_collaboration_mode() {
         let mut app = make_test_app().await;
-        app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
 
         app.on_update_reasoning_effort(Some(ReasoningEffortConfig::High));
 
         assert_eq!(
-            app.config.model_reasoning_effort,
+            app.chat_widget.current_reasoning_effort(),
             Some(ReasoningEffortConfig::High)
         );
         assert_eq!(
-            app.chat_widget.config_ref().model_reasoning_effort,
+            app.config.model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
     }
@@ -1831,6 +2007,8 @@ mod tests {
         let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
                 message: text.to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
@@ -1843,6 +2021,7 @@ mod tests {
         let make_header = |is_first| {
             let event = SessionConfiguredEvent {
                 session_id: ThreadId::new(),
+                forked_from_id: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
@@ -1856,9 +2035,14 @@ mod tests {
             };
             Arc::new(new_session_info(
                 app.chat_widget.config_ref(),
-                app.current_model.as_str(),
+                app.chat_widget.current_model(),
                 event,
                 is_first,
+                app.chat_widget
+                    .config_ref()
+                    .features
+                    .enabled(codex_core::features::Feature::CollaborationModes),
+                app.chat_widget.stored_collaboration_mode().clone(),
             )) as Arc<dyn HistoryCell>
         };
 
@@ -1884,6 +2068,7 @@ mod tests {
             id: String::new(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: base_id,
+                forked_from_id: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
@@ -1926,6 +2111,7 @@ mod tests {
         let thread_id = ThreadId::new();
         let event = SessionConfiguredEvent {
             session_id: thread_id,
+            forked_from_id: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,

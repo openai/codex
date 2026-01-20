@@ -6,6 +6,7 @@ Lightweight helpers for spawning interactive processes either under a PTY (pseud
 
 - `spawn_pty_process(program, args, cwd, env, arg0)` → `SpawnedProcess`
 - `spawn_pipe_process(program, args, cwd, env, arg0)` → `SpawnedProcess`
+- `spawn_pipe_process_no_stdin(program, args, cwd, env, arg0)` → `SpawnedProcess`
 - `conpty_supported()` → `bool` (Windows only; always true elsewhere)
 - `ProcessHandle` exposes:
   - `writer_sender()` → `mpsc::Sender<Vec<u8>>` (stdin)
@@ -46,6 +47,7 @@ let exit_code = spawned.exit_rx.await.unwrap_or(-1);
 ```
 
 Swap in `spawn_pipe_process` for a non-TTY subprocess; the rest of the API stays the same.
+Use `spawn_pipe_process_no_stdin` to force stdin closed (commands that read stdin will see EOF immediately).
 
 ## Tests
 

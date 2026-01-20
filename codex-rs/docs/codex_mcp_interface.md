@@ -20,6 +20,7 @@ At a glance:
 - Configuration and info
   - `getUserSavedConfig`, `setDefaultModel`, `getUserAgent`, `userInfo`
   - `model/list` → enumerate available models and reasoning options
+  - `collaborationMode/list` → enumerate collaboration mode presets (experimental)
 - Auth
   - `account/read`, `account/login/start`, `account/login/cancel`, `account/logout`, `account/rateLimits/read`
   - notifications: `account/login/completed`, `account/updated`, `account/rateLimits/updated`
@@ -95,6 +96,12 @@ Each response yields:
   - `defaultReasoningEffort` – suggested effort for the UI
   - `isDefault` – whether the model is recommended for most users
 - `nextCursor` – pass into the next request to continue paging (optional)
+
+## Collaboration modes (experimental)
+
+Fetch the built-in collaboration mode presets with `collaborationMode/list`. This endpoint does not accept pagination and returns the full list in one response:
+
+- `data` – ordered list of collaboration mode presets
 
 ## Event stream
 

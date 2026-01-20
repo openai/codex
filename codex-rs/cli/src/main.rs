@@ -14,11 +14,9 @@ use codex_cli::login::run_login_status;
 use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_login_with_device_code;
-use codex_cli::login::run_login_with_device_code_fallback_to_browser;
 use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
-use codex_core::env::is_headless_environment;
 use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
@@ -461,8 +459,8 @@ enum FeaturesSubcommand {
 fn stage_str(stage: codex_core::features::Stage) -> &'static str {
     use codex_core::features::Stage;
     match stage {
-        Stage::Experimental => "experimental",
-        Stage::Beta { .. } => "beta",
+        Stage::Beta => "experimental",
+        Stage::Experimental { .. } => "beta",
         Stage::Stable => "stable",
         Stage::Deprecated => "deprecated",
         Stage::Removed => "removed",
@@ -600,13 +598,6 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     } else if login_cli.with_api_key {
                         let api_key = read_api_key_from_stdin();
                         run_login_with_api_key(login_cli.config_overrides, api_key).await;
-                    } else if is_headless_environment() {
-                        run_login_with_device_code_fallback_to_browser(
-                            login_cli.config_overrides,
-                            login_cli.issuer_base_url,
-                            login_cli.client_id,
-                        )
-                        .await;
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;
                     }
@@ -737,9 +728,13 @@ fn prepend_config_flags(
 /// Run the interactive Codex TUI, dispatching to either the legacy implementation or the
 /// experimental TUI v2 shim based on feature flags resolved from config.
 async fn run_interactive_tui(
-    interactive: TuiCli,
+    mut interactive: TuiCli,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> std::io::Result<AppExitInfo> {
+    if let Some(prompt) = interactive.prompt.take() {
+        // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
+        interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
+    }
     if is_tui2_enabled(&interactive).await? {
         let result = tui2::run_main(interactive.into(), codex_linux_sandbox_exe).await?;
         Ok(result.into())
@@ -864,7 +859,8 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         interactive.add_dir.extend(subcommand_cli.add_dir);
     }
     if let Some(prompt) = subcommand_cli.prompt {
-        interactive.prompt = Some(prompt);
+        // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
+        interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
     }
 
     interactive

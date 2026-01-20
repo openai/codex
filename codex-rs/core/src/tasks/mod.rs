@@ -24,9 +24,13 @@ use crate::protocol::EventMsg;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::protocol::TurnCompleteEvent;
+use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 
 pub(crate) use compact::CompactTask;
@@ -37,6 +41,7 @@ pub(crate) use undo::UndoTask;
 pub(crate) use user_shell::UserShellCommandTask;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
+const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn. Do not continue or repeat work from that turn unless the user explicitly asks. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
 #[derive(Clone)]
@@ -144,6 +149,12 @@ impl Session {
             })
         };
 
+        let timer = turn_context
+            .client
+            .get_otel_manager()
+            .start_timer("codex.turn.e2e_duration_ms", &[])
+            .ok();
+
         let running_task = RunningTask {
             done,
             handle: Arc::new(AbortOnDropHandle::new(handle)),
@@ -151,6 +162,7 @@ impl Session {
             task,
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
+            _timer: timer,
         };
         self.register_new_active_task(running_task).await;
     }
@@ -234,6 +246,25 @@ impl Session {
         session_task
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
+
+        if reason == TurnAbortReason::Interrupted {
+            let marker = ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: format!(
+                        "{TURN_ABORTED_OPEN_TAG}\n  <turn_id>{sub_id}</turn_id>\n  <reason>interrupted</reason>\n  <guidance>{TURN_ABORTED_INTERRUPTED_GUIDANCE}</guidance>\n</turn_aborted>"
+                    ),
+                }],
+            };
+            self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
+                .await;
+            self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
+                .await;
+            // Ensure the marker is durably visible before emitting TurnAborted: some clients
+            // synchronously re-read the rollout on receipt of the abort event.
+            self.flush_rollout().await;
+        }
 
         let event = EventMsg::TurnAborted(TurnAbortedEvent { reason });
         self.send_event(task.turn_context.as_ref(), event).await;

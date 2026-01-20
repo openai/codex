@@ -80,6 +80,7 @@ async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -157,6 +158,7 @@ async fn run_shell_command_snapshot(command: &str) -> Result<SnapshotRun> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -295,6 +297,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
             model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 

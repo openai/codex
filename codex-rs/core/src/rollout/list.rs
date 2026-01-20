@@ -1,11 +1,13 @@
 use std::cmp::Reverse;
 use std::io::{self};
 use std::num::NonZero;
+use std::ops::ControlFlow;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
+use async_trait::async_trait;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
@@ -18,6 +20,7 @@ use crate::protocol::EventMsg;
 use codex_file_search as file_search;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 
 /// Returned page of thread (thread) summaries.
@@ -41,8 +44,10 @@ pub struct ThreadItem {
     /// First up to `HEAD_RECORD_LIMIT` JSONL records parsed as JSON (includes meta line).
     pub head: Vec<serde_json::Value>,
     /// RFC3339 timestamp string for when the session was created, if available.
+    /// created_at comes from the filename timestamp with second precision.
     pub created_at: Option<String>,
     /// RFC3339 timestamp string for the most recent update (from file mtime).
+    /// updated_at is truncated to second precision to match created_at.
     pub updated_at: Option<String>,
 }
 
@@ -68,6 +73,12 @@ struct HeadTailSummary {
 const MAX_SCAN_FILES: usize = 10000;
 const HEAD_RECORD_LIMIT: usize = 10;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadSortKey {
+    CreatedAt,
+    UpdatedAt,
+}
+
 /// Pagination cursor identifying a file by timestamp and UUID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cursor {
@@ -78,6 +89,135 @@ pub struct Cursor {
 impl Cursor {
     fn new(ts: OffsetDateTime, id: Uuid) -> Self {
         Self { ts, id }
+    }
+}
+
+/// Keeps track of where a paginated listing left off. As the file scan goes newest -> oldest,
+/// it ignores everything until it reaches the last seen item from the previous page, then
+/// starts returning results after that. This makes paging stable even if new files show up during
+/// pagination.
+struct AnchorState {
+    ts: OffsetDateTime,
+    id: Uuid,
+    passed: bool,
+}
+
+impl AnchorState {
+    fn new(anchor: Option<Cursor>) -> Self {
+        match anchor {
+            Some(cursor) => Self {
+                ts: cursor.ts,
+                id: cursor.id,
+                passed: false,
+            },
+            None => Self {
+                ts: OffsetDateTime::UNIX_EPOCH,
+                id: Uuid::nil(),
+                passed: true,
+            },
+        }
+    }
+
+    fn should_skip(&mut self, ts: OffsetDateTime, id: Uuid) -> bool {
+        if self.passed {
+            return false;
+        }
+        if ts < self.ts || (ts == self.ts && id < self.id) {
+            self.passed = true;
+            false
+        } else {
+            true
+        }
+    }
+}
+
+/// Visitor interface to customize behavior when visiting each rollout file
+/// in `walk_rollout_files`.
+///
+/// We need to apply different logic if we're ultimately going to be returning
+/// threads ordered by created_at or updated_at.
+#[async_trait]
+trait RolloutFileVisitor {
+    async fn visit(
+        &mut self,
+        ts: OffsetDateTime,
+        id: Uuid,
+        path: PathBuf,
+        scanned: usize,
+    ) -> ControlFlow<()>;
+}
+
+/// Collects thread items during directory traversal in created_at order,
+/// applying pagination and filters inline.
+struct FilesByCreatedAtVisitor<'a> {
+    items: &'a mut Vec<ThreadItem>,
+    page_size: usize,
+    anchor_state: AnchorState,
+    more_matches_available: bool,
+    allowed_sources: &'a [SessionSource],
+    provider_matcher: Option<&'a ProviderMatcher<'a>>,
+}
+
+#[async_trait]
+impl<'a> RolloutFileVisitor for FilesByCreatedAtVisitor<'a> {
+    async fn visit(
+        &mut self,
+        ts: OffsetDateTime,
+        id: Uuid,
+        path: PathBuf,
+        scanned: usize,
+    ) -> ControlFlow<()> {
+        if scanned >= MAX_SCAN_FILES && self.items.len() >= self.page_size {
+            self.more_matches_available = true;
+            return ControlFlow::Break(());
+        }
+        if self.anchor_state.should_skip(ts, id) {
+            return ControlFlow::Continue(());
+        }
+        if self.items.len() == self.page_size {
+            self.more_matches_available = true;
+            return ControlFlow::Break(());
+        }
+        let updated_at = file_modified_time(&path)
+            .await
+            .unwrap_or(None)
+            .and_then(format_rfc3339);
+        if let Some(item) = build_thread_item(
+            path,
+            self.allowed_sources,
+            self.provider_matcher,
+            updated_at,
+        )
+        .await
+        {
+            self.items.push(item);
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+/// Collects lightweight file candidates (path + id + mtime).
+/// Sorting after mtime happens after all files are collected.
+struct FilesByUpdatedAtVisitor<'a> {
+    candidates: &'a mut Vec<ThreadCandidate>,
+}
+
+#[async_trait]
+impl<'a> RolloutFileVisitor for FilesByUpdatedAtVisitor<'a> {
+    async fn visit(
+        &mut self,
+        _ts: OffsetDateTime,
+        id: Uuid,
+        path: PathBuf,
+        _scanned: usize,
+    ) -> ControlFlow<()> {
+        let updated_at = file_modified_time(&path).await.unwrap_or(None);
+        self.candidates.push(ThreadCandidate {
+            path,
+            id,
+            updated_at,
+        });
+        ControlFlow::Continue(())
     }
 }
 
@@ -108,11 +248,13 @@ impl<'de> serde::Deserialize<'de> for Cursor {
 
 /// Retrieve recorded thread file paths with token pagination. The returned `next_cursor`
 /// can be supplied on the next call to resume after the last returned item, resilient to
-/// concurrent new sessions being appended. Ordering is stable by timestamp desc, then UUID desc.
+/// concurrent new sessions being appended. Ordering is stable by the requested sort key
+/// (timestamp desc, then UUID desc).
 pub(crate) async fn get_threads(
     codex_home: &Path,
     page_size: usize,
     cursor: Option<&Cursor>,
+    sort_key: ThreadSortKey,
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
     default_provider: &str,
@@ -138,6 +280,7 @@ pub(crate) async fn get_threads(
         root.clone(),
         page_size,
         anchor,
+        sort_key,
         allowed_sources,
         provider_matcher.as_ref(),
     )
@@ -148,8 +291,46 @@ pub(crate) async fn get_threads(
 /// Load thread file paths from disk using directory traversal.
 ///
 /// Directory layout: `~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl`
-/// Returned newest (latest) first.
+/// Returned newest (based on sort key) first.
 async fn traverse_directories_for_paths(
+    root: PathBuf,
+    page_size: usize,
+    anchor: Option<Cursor>,
+    sort_key: ThreadSortKey,
+    allowed_sources: &[SessionSource],
+    provider_matcher: Option<&ProviderMatcher<'_>>,
+) -> io::Result<ThreadsPage> {
+    match sort_key {
+        ThreadSortKey::CreatedAt => {
+            traverse_directories_for_paths_created(
+                root,
+                page_size,
+                anchor,
+                allowed_sources,
+                provider_matcher,
+            )
+            .await
+        }
+        ThreadSortKey::UpdatedAt => {
+            traverse_directories_for_paths_updated(
+                root,
+                page_size,
+                anchor,
+                allowed_sources,
+                provider_matcher,
+            )
+            .await
+        }
+    }
+}
+
+/// Walk the rollout directory tree in reverse chronological order and
+/// collect items until the page fills or the scan cap is hit.
+///
+/// Ordering comes from directory/filename sorting, so created_at is derived
+/// from the filename timestamp. Pagination is handled by the anchor cursor
+/// so we resume strictly after the last returned `(ts, id)` pair.
+async fn traverse_directories_for_paths_created(
     root: PathBuf,
     page_size: usize,
     anchor: Option<Cursor>,
@@ -158,98 +339,17 @@ async fn traverse_directories_for_paths(
 ) -> io::Result<ThreadsPage> {
     let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
-    let mut anchor_passed = anchor.is_none();
-    let (anchor_ts, anchor_id) = match anchor {
-        Some(c) => (c.ts, c.id),
-        None => (OffsetDateTime::UNIX_EPOCH, Uuid::nil()),
-    };
     let mut more_matches_available = false;
-
-    let year_dirs = collect_dirs_desc(&root, |s| s.parse::<u16>().ok()).await?;
-
-    'outer: for (_year, year_path) in year_dirs.iter() {
-        if scanned_files >= MAX_SCAN_FILES {
-            break;
-        }
-        let month_dirs = collect_dirs_desc(year_path, |s| s.parse::<u8>().ok()).await?;
-        for (_month, month_path) in month_dirs.iter() {
-            if scanned_files >= MAX_SCAN_FILES {
-                break 'outer;
-            }
-            let day_dirs = collect_dirs_desc(month_path, |s| s.parse::<u8>().ok()).await?;
-            for (_day, day_path) in day_dirs.iter() {
-                if scanned_files >= MAX_SCAN_FILES {
-                    break 'outer;
-                }
-                let mut day_files = collect_files(day_path, |name_str, path| {
-                    if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
-                        return None;
-                    }
-
-                    parse_timestamp_uuid_from_filename(name_str)
-                        .map(|(ts, id)| (ts, id, name_str.to_string(), path.to_path_buf()))
-                })
-                .await?;
-                // Stable ordering within the same second: (timestamp desc, uuid desc)
-                day_files.sort_by_key(|(ts, sid, _name_str, _path)| (Reverse(*ts), Reverse(*sid)));
-                for (ts, sid, _name_str, path) in day_files.into_iter() {
-                    scanned_files += 1;
-                    if scanned_files >= MAX_SCAN_FILES && items.len() >= page_size {
-                        more_matches_available = true;
-                        break 'outer;
-                    }
-                    if !anchor_passed {
-                        if ts < anchor_ts || (ts == anchor_ts && sid < anchor_id) {
-                            anchor_passed = true;
-                        } else {
-                            continue;
-                        }
-                    }
-                    if items.len() == page_size {
-                        more_matches_available = true;
-                        break 'outer;
-                    }
-                    // Read head and detect message events; stop once meta + user are found.
-                    let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
-                        .await
-                        .unwrap_or_default();
-                    if !allowed_sources.is_empty()
-                        && !summary
-                            .source
-                            .is_some_and(|source| allowed_sources.iter().any(|s| s == &source))
-                    {
-                        continue;
-                    }
-                    if let Some(matcher) = provider_matcher
-                        && !matcher.matches(summary.model_provider.as_deref())
-                    {
-                        continue;
-                    }
-                    // Apply filters: must have session meta and at least one user message event
-                    if summary.saw_session_meta && summary.saw_user_event {
-                        let HeadTailSummary {
-                            head,
-                            created_at,
-                            mut updated_at,
-                            ..
-                        } = summary;
-                        if updated_at.is_none() {
-                            updated_at = file_modified_rfc3339(&path)
-                                .await
-                                .unwrap_or(None)
-                                .or_else(|| created_at.clone());
-                        }
-                        items.push(ThreadItem {
-                            path,
-                            head,
-                            created_at,
-                            updated_at,
-                        });
-                    }
-                }
-            }
-        }
-    }
+    let mut visitor = FilesByCreatedAtVisitor {
+        items: &mut items,
+        page_size,
+        anchor_state: AnchorState::new(anchor),
+        more_matches_available,
+        allowed_sources,
+        provider_matcher,
+    };
+    walk_rollout_files(&root, &mut scanned_files, &mut visitor).await?;
+    more_matches_available = visitor.more_matches_available;
 
     let reached_scan_cap = scanned_files >= MAX_SCAN_FILES;
     if reached_scan_cap && !items.is_empty() {
@@ -257,7 +357,7 @@ async fn traverse_directories_for_paths(
     }
 
     let next = if more_matches_available {
-        build_next_cursor(&items)
+        build_next_cursor(&items, ThreadSortKey::CreatedAt)
     } else {
         None
     };
@@ -269,9 +369,77 @@ async fn traverse_directories_for_paths(
     })
 }
 
-/// Pagination cursor token format: "<file_ts>|<uuid>" where `file_ts` matches the
-/// filename timestamp portion (YYYY-MM-DDThh-mm-ss) used in rollout filenames.
-/// The cursor orders files by timestamp desc, then UUID desc.
+/// Walk the rollout directory tree to collect files by updated_at, then sort by
+/// file mtime (updated_at) and apply pagination/filtering in that order.
+///
+/// Because updated_at is not encoded in filenames, this path must scan all
+/// files up to the scan cap, then sort and filter by the anchor cursor.
+///
+/// NOTE: This can be optimized in the future if we store additional state on disk
+/// to cache updated_at timestamps.
+async fn traverse_directories_for_paths_updated(
+    root: PathBuf,
+    page_size: usize,
+    anchor: Option<Cursor>,
+    allowed_sources: &[SessionSource],
+    provider_matcher: Option<&ProviderMatcher<'_>>,
+) -> io::Result<ThreadsPage> {
+    let mut items: Vec<ThreadItem> = Vec::with_capacity(page_size);
+    let mut scanned_files = 0usize;
+    let mut anchor_state = AnchorState::new(anchor);
+    let mut more_matches_available = false;
+
+    let candidates = collect_files_by_updated_at(&root, &mut scanned_files).await?;
+    let mut candidates = candidates;
+    candidates.sort_by_key(|candidate| {
+        let ts = candidate.updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        (Reverse(ts), Reverse(candidate.id))
+    });
+
+    for candidate in candidates.into_iter() {
+        let ts = candidate.updated_at.unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        if anchor_state.should_skip(ts, candidate.id) {
+            continue;
+        }
+        if items.len() == page_size {
+            more_matches_available = true;
+            break;
+        }
+
+        let updated_at_fallback = candidate.updated_at.and_then(format_rfc3339);
+        if let Some(item) = build_thread_item(
+            candidate.path,
+            allowed_sources,
+            provider_matcher,
+            updated_at_fallback,
+        )
+        .await
+        {
+            items.push(item);
+        }
+    }
+
+    let reached_scan_cap = scanned_files >= MAX_SCAN_FILES;
+    if reached_scan_cap && !items.is_empty() {
+        more_matches_available = true;
+    }
+
+    let next = if more_matches_available {
+        build_next_cursor(&items, ThreadSortKey::UpdatedAt)
+    } else {
+        None
+    };
+    Ok(ThreadsPage {
+        items,
+        next_cursor: next,
+        num_scanned_files: scanned_files,
+        reached_scan_cap,
+    })
+}
+
+/// Pagination cursor token format: "<ts>|<uuid>" where `ts` uses
+/// YYYY-MM-DDThh-mm-ss (UTC, second precision).
+/// The cursor orders files by the requested sort key (timestamp desc, then UUID desc).
 pub fn parse_cursor(token: &str) -> Option<Cursor> {
     let (file_ts, uuid_str) = token.split_once('|')?;
 
@@ -286,11 +454,61 @@ pub fn parse_cursor(token: &str) -> Option<Cursor> {
     Some(Cursor::new(ts, uuid))
 }
 
-fn build_next_cursor(items: &[ThreadItem]) -> Option<Cursor> {
+fn build_next_cursor(items: &[ThreadItem], sort_key: ThreadSortKey) -> Option<Cursor> {
     let last = items.last()?;
     let file_name = last.path.file_name()?.to_string_lossy();
-    let (ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
+    let (created_ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
+    let ts = match sort_key {
+        ThreadSortKey::CreatedAt => created_ts,
+        ThreadSortKey::UpdatedAt => {
+            let updated_at = last.updated_at.as_deref()?;
+            OffsetDateTime::parse(updated_at, &Rfc3339).ok()?
+        }
+    };
     Some(Cursor::new(ts, id))
+}
+
+async fn build_thread_item(
+    path: PathBuf,
+    allowed_sources: &[SessionSource],
+    provider_matcher: Option<&ProviderMatcher<'_>>,
+    updated_at: Option<String>,
+) -> Option<ThreadItem> {
+    // Read head and detect message events; stop once meta + user are found.
+    let summary = read_head_summary(&path, HEAD_RECORD_LIMIT)
+        .await
+        .unwrap_or_default();
+    if !allowed_sources.is_empty()
+        && !summary
+            .source
+            .is_some_and(|source| allowed_sources.contains(&source))
+    {
+        return None;
+    }
+    if let Some(matcher) = provider_matcher
+        && !matcher.matches(summary.model_provider.as_deref())
+    {
+        return None;
+    }
+    // Apply filters: must have session meta and at least one user message event
+    if summary.saw_session_meta && summary.saw_user_event {
+        let HeadTailSummary {
+            head,
+            created_at,
+            updated_at: mut summary_updated_at,
+            ..
+        } = summary;
+        if summary_updated_at.is_none() {
+            summary_updated_at = updated_at.or_else(|| created_at.clone());
+        }
+        return Some(ThreadItem {
+            path,
+            head,
+            created_at,
+            updated_at: summary_updated_at,
+        });
+    }
+    None
 }
 
 /// Collects immediate subdirectories of `parent`, parses their (string) names with `parse`,
@@ -340,6 +558,22 @@ where
     Ok(collected)
 }
 
+async fn collect_rollout_day_files(
+    day_path: &Path,
+) -> io::Result<Vec<(OffsetDateTime, Uuid, PathBuf)>> {
+    let mut day_files = collect_files(day_path, |name_str, path| {
+        if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
+            return None;
+        }
+
+        parse_timestamp_uuid_from_filename(name_str).map(|(ts, id)| (ts, id, path.to_path_buf()))
+    })
+    .await?;
+    // Stable ordering within the same second: (timestamp desc, uuid desc)
+    day_files.sort_by_key(|(ts, sid, _path)| (Reverse(*ts), Reverse(*sid)));
+    Ok(day_files)
+}
+
 fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uuid)> {
     // Expected: rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl
     let core = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
@@ -355,6 +589,65 @@ fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uui
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let ts = PrimitiveDateTime::parse(ts_str, format).ok()?.assume_utc();
     Some((ts, uuid))
+}
+
+struct ThreadCandidate {
+    path: PathBuf,
+    id: Uuid,
+    updated_at: Option<OffsetDateTime>,
+}
+
+async fn collect_files_by_updated_at(
+    root: &Path,
+    scanned_files: &mut usize,
+) -> io::Result<Vec<ThreadCandidate>> {
+    let mut candidates = Vec::new();
+    let mut visitor = FilesByUpdatedAtVisitor {
+        candidates: &mut candidates,
+    };
+    walk_rollout_files(root, scanned_files, &mut visitor).await?;
+
+    Ok(candidates)
+}
+
+async fn walk_rollout_files(
+    root: &Path,
+    scanned_files: &mut usize,
+    visitor: &mut impl RolloutFileVisitor,
+) -> io::Result<()> {
+    let year_dirs = collect_dirs_desc(root, |s| s.parse::<u16>().ok()).await?;
+
+    'outer: for (_year, year_path) in year_dirs.iter() {
+        if *scanned_files >= MAX_SCAN_FILES {
+            break;
+        }
+        let month_dirs = collect_dirs_desc(year_path, |s| s.parse::<u8>().ok()).await?;
+        for (_month, month_path) in month_dirs.iter() {
+            if *scanned_files >= MAX_SCAN_FILES {
+                break 'outer;
+            }
+            let day_dirs = collect_dirs_desc(month_path, |s| s.parse::<u8>().ok()).await?;
+            for (_day, day_path) in day_dirs.iter() {
+                if *scanned_files >= MAX_SCAN_FILES {
+                    break 'outer;
+                }
+                let day_files = collect_rollout_day_files(day_path).await?;
+                for (ts, id, path) in day_files.into_iter() {
+                    *scanned_files += 1;
+                    if *scanned_files > MAX_SCAN_FILES {
+                        break 'outer;
+                    }
+                    if let ControlFlow::Break(()) =
+                        visitor.visit(ts, id, path, *scanned_files).await
+                    {
+                        break 'outer;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 struct ProviderMatcher<'a> {
@@ -452,14 +745,42 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
     Ok(summary.head)
 }
 
-async fn file_modified_rfc3339(path: &Path) -> io::Result<Option<String>> {
+/// Read the SessionMetaLine from the head of a rollout file for reuse by
+/// callers that need the session metadata (e.g. to derive a cwd for config).
+pub async fn read_session_meta_line(path: &Path) -> io::Result<SessionMetaLine> {
+    let head = read_head_for_summary(path).await?;
+    let Some(first) = head.first() else {
+        return Err(io::Error::other(format!(
+            "rollout at {} is empty",
+            path.display()
+        )));
+    };
+    serde_json::from_value::<SessionMetaLine>(first.clone()).map_err(|_| {
+        io::Error::other(format!(
+            "rollout at {} does not start with session metadata",
+            path.display()
+        ))
+    })
+}
+
+async fn file_modified_time(path: &Path) -> io::Result<Option<OffsetDateTime>> {
     let meta = tokio::fs::metadata(path).await?;
     let modified = meta.modified().ok();
     let Some(modified) = modified else {
         return Ok(None);
     };
     let dt = OffsetDateTime::from(modified);
-    Ok(dt.format(&Rfc3339).ok())
+    // Truncate to seconds so ordering and cursor comparisons align with the
+    // cursor timestamp format (which exposes seconds), keeping pagination stable.
+    Ok(truncate_to_seconds(dt))
+}
+
+fn format_rfc3339(dt: OffsetDateTime) -> Option<String> {
+    dt.format(&Rfc3339).ok()
+}
+
+fn truncate_to_seconds(dt: OffsetDateTime) -> Option<OffsetDateTime> {
+    dt.replace_nanosecond(0).ok()
 }
 
 /// Locate a recorded thread rollout file by its UUID string using the existing

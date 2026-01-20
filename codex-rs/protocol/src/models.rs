@@ -10,8 +10,11 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
+use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
 use crate::protocol::AskForApproval;
+use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
+use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
 use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
@@ -164,6 +167,23 @@ pub enum ResponseItem {
     Other,
 }
 
+pub const BASE_INSTRUCTIONS_DEFAULT: &str = include_str!("prompts/base_instructions/default.md");
+
+/// Base instructions for the model in a thread. Corresponds to the `instructions` field in the ResponsesAPI.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(rename = "base_instructions", rename_all = "snake_case")]
+pub struct BaseInstructions {
+    pub text: String,
+}
+
+impl Default for BaseInstructions {
+    fn default() -> Self {
+        Self {
+            text: BASE_INSTRUCTIONS_DEFAULT.to_string(),
+        }
+    }
+}
+
 /// Developer-provided guidance that is injected into a turn as a developer role
 /// message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
@@ -228,6 +248,25 @@ impl DeveloperInstructions {
             approval_policy,
             writable_roots,
         )
+    }
+
+    /// Returns developer instructions from a collaboration mode if they exist and are non-empty.
+    pub fn from_collaboration_mode(collaboration_mode: &CollaborationMode) -> Option<Self> {
+        let settings = match collaboration_mode {
+            CollaborationMode::Plan(settings)
+            | CollaborationMode::PairProgramming(settings)
+            | CollaborationMode::Execute(settings)
+            | CollaborationMode::Custom(settings) => settings,
+        };
+        settings
+            .developer_instructions
+            .as_ref()
+            .filter(|instructions| !instructions.is_empty())
+            .map(|instructions| {
+                DeveloperInstructions::new(format!(
+                    "{COLLABORATION_MODE_OPEN_TAG}{instructions}{COLLABORATION_MODE_CLOSE_TAG}"
+                ))
+            })
     }
 
     fn from_permissions_with_network(

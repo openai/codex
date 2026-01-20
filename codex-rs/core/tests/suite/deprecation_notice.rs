@@ -48,3 +48,46 @@ async fn emits_deprecation_notice_for_legacy_feature_flag() -> anyhow::Result<()
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn emits_deprecation_notice_for_experimental_instructions_file() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_pre_build_hook(|home| {
+        let config_path = home.join("config.toml");
+        std::fs::write(
+            config_path,
+            "experimental_instructions_file = \"legacy.md\"\n",
+        )
+        .expect("write config.toml");
+    });
+
+    let TestCodex { codex, .. } = builder.build(&server).await?;
+
+    let notice = wait_for_event_match(&codex, |event| match event {
+        EventMsg::DeprecationNotice(ev)
+            if ev.summary.contains("experimental_instructions_file") =>
+        {
+            Some(ev.clone())
+        }
+        _ => None,
+    })
+    .await;
+
+    let DeprecationNoticeEvent { summary, details } = notice;
+    assert_eq!(
+        summary,
+        "`experimental_instructions_file` is deprecated and ignored. Use `model_instructions` instead."
+            .to_string(),
+    );
+    assert_eq!(
+        details.as_deref(),
+        Some(
+            "Move the setting to `model_instructions` in config.toml (or under a profile) to load instructions from a file."
+        ),
+    );
+
+    Ok(())
+}
