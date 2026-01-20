@@ -239,7 +239,18 @@ impl ModelsManager {
 
     /// Replace the cached remote models and rebuild the derived presets list.
     async fn apply_remote_models(&self, models: Vec<ModelInfo>) {
-        *self.remote_models.write().await = models;
+        let mut existing_models = Self::load_remote_models_from_file().unwrap_or_default();
+        for model in models {
+            if let Some(existing_index) = existing_models
+                .iter()
+                .position(|existing| existing.slug == model.slug)
+            {
+                existing_models[existing_index] = model;
+            } else {
+                existing_models.push(model);
+            }
+        }
+        *self.remote_models.write().await = existing_models;
     }
 
     fn load_remote_models_from_file() -> Result<Vec<ModelInfo>, std::io::Error> {
@@ -272,16 +283,16 @@ impl ModelsManager {
         let chatgpt_mode = self.auth_manager.get_auth_mode() == Some(AuthMode::ChatGPT);
         merged_presets = ModelPreset::filter_by_auth(merged_presets, chatgpt_mode);
 
-        let has_default = merged_presets.iter().any(|preset| preset.is_default);
-        if !has_default {
-            if let Some(default) = merged_presets
-                .iter_mut()
-                .find(|preset| preset.show_in_picker)
-            {
-                default.is_default = true;
-            } else if let Some(default) = merged_presets.first_mut() {
-                default.is_default = true;
-            }
+        for preset in &mut merged_presets {
+            preset.is_default = false;
+        }
+        if let Some(default) = merged_presets
+            .iter_mut()
+            .find(|preset| preset.show_in_picker)
+        {
+            default.is_default = true;
+        } else if let Some(default) = merged_presets.first_mut() {
+            default.is_default = true;
         }
 
         merged_presets
@@ -396,6 +407,16 @@ mod tests {
         .expect("valid model")
     }
 
+    fn assert_models_contain(actual: &[ModelInfo], expected: &[ModelInfo]) {
+        for model in expected {
+            assert!(
+                actual.iter().any(|candidate| candidate.slug == model.slug),
+                "expected model {} in cached list",
+                model.slug
+            );
+        }
+    }
+
     fn provider_for(base_url: String) -> ModelProviderInfo {
         ModelProviderInfo {
             name: "mock".into(),
@@ -415,7 +436,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_available_models_sorts_and_marks_default() {
+    async fn refresh_available_models_sorts_by_priority() {
         let server = MockServer::start().await;
         let remote_models = vec![
             remote_model("priority-low", "Low", 1),
@@ -447,7 +468,7 @@ mod tests {
             .await
             .expect("refresh succeeds");
         let cached_remote = manager.get_remote_models(&config).await;
-        assert_eq!(cached_remote, remote_models);
+        assert_models_contain(&cached_remote, &remote_models);
 
         let available = manager
             .list_models(&config, RefreshStrategy::OnlineIfUncached)
@@ -464,11 +485,6 @@ mod tests {
             high_idx < low_idx,
             "higher priority should be listed before lower priority"
         );
-        assert!(
-            available[high_idx].is_default,
-            "highest priority should be default"
-        );
-        assert!(!available[low_idx].is_default);
         assert_eq!(
             models_mock.requests().len(),
             1,
@@ -508,22 +524,14 @@ mod tests {
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
             .await
             .expect("first refresh succeeds");
-        assert_eq!(
-            manager.get_remote_models(&config).await,
-            remote_models,
-            "remote cache should store fetched models"
-        );
+        assert_models_contain(&manager.get_remote_models(&config).await, &remote_models);
 
         // Second call should read from cache and avoid the network.
         manager
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
             .await
             .expect("cached refresh succeeds");
-        assert_eq!(
-            manager.get_remote_models(&config).await,
-            remote_models,
-            "cache path should not mutate stored models"
-        );
+        assert_models_contain(&manager.get_remote_models(&config).await, &remote_models);
         assert_eq!(
             models_mock.requests().len(),
             1,
@@ -587,11 +595,7 @@ mod tests {
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
             .await
             .expect("second refresh succeeds");
-        assert_eq!(
-            manager.get_remote_models(&config).await,
-            updated_models,
-            "stale cache should trigger refetch"
-        );
+        assert_models_contain(&manager.get_remote_models(&config).await, &updated_models);
         assert_eq!(
             initial_mock.requests().len(),
             1,

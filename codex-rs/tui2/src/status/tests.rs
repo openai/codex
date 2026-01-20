@@ -95,7 +95,6 @@ async fn status_snapshot_includes_reasoning_details() {
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
-    config.model_reasoning_effort = Some(ReasoningEffort::High);
     config.model_reasoning_summary = ReasoningSummary::Detailed;
     config
         .sandbox_policy
@@ -141,6 +140,7 @@ async fn status_snapshot_includes_reasoning_details() {
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
 
+    let reasoning_effort_override = Some(Some(ReasoningEffort::High));
     let composite = new_status_output(
         &config,
         &auth_manager,
@@ -153,6 +153,7 @@ async fn status_snapshot_includes_reasoning_details() {
         captured_at,
         &model_slug,
         None,
+        reasoning_effort_override,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
@@ -204,6 +205,7 @@ async fn status_snapshot_includes_forked_from() {
         None,
         captured_at,
         &model_slug,
+        None,
         None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
@@ -263,6 +265,7 @@ async fn status_snapshot_includes_monthly_limit() {
         captured_at,
         &model_slug,
         None,
+        None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
@@ -307,6 +310,7 @@ async fn status_snapshot_shows_unlimited_credits() {
         None,
         captured_at,
         &model_slug,
+        None,
         None,
     );
     let rendered = render_lines(&composite.display_lines(120));
@@ -353,6 +357,7 @@ async fn status_snapshot_shows_positive_credits() {
         captured_at,
         &model_slug,
         None,
+        None,
     );
     let rendered = render_lines(&composite.display_lines(120));
     assert!(
@@ -398,6 +403,7 @@ async fn status_snapshot_hides_zero_credits() {
         captured_at,
         &model_slug,
         None,
+        None,
     );
     let rendered = render_lines(&composite.display_lines(120));
     assert!(
@@ -440,6 +446,7 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
         None,
         captured_at,
         &model_slug,
+        None,
         None,
     );
     let rendered = render_lines(&composite.display_lines(120));
@@ -484,6 +491,7 @@ async fn status_card_token_usage_excludes_cached_tokens() {
         now,
         &model_slug,
         None,
+        None,
     );
     let rendered = render_lines(&composite.display_lines(120));
 
@@ -499,7 +507,6 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.model_provider_id = "openai".to_string();
-    config.model_reasoning_effort = Some(ReasoningEffort::High);
     config.model_reasoning_summary = ReasoningSummary::Detailed;
     config.cwd = PathBuf::from("/workspace/tests");
 
@@ -530,6 +537,7 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
 
     let model_slug = ModelsManager::get_model_offline(config.model.as_deref());
     let token_info = token_info_for(&model_slug, &config, &usage);
+    let reasoning_effort_override = Some(Some(ReasoningEffort::High));
     let composite = new_status_output(
         &config,
         &auth_manager,
@@ -542,6 +550,7 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
         captured_at,
         &model_slug,
         None,
+        reasoning_effort_override,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(70));
     if cfg!(windows) {
@@ -588,6 +597,7 @@ async fn status_snapshot_shows_missing_limits_message() {
         None,
         now,
         &model_slug,
+        None,
         None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
@@ -653,6 +663,7 @@ async fn status_snapshot_includes_credits_and_limits() {
         captured_at,
         &model_slug,
         None,
+        None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
@@ -705,6 +716,7 @@ async fn status_snapshot_shows_empty_limits_message() {
         None,
         captured_at,
         &model_slug,
+        None,
         None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
@@ -767,6 +779,7 @@ async fn status_snapshot_shows_stale_limits_message() {
         None,
         now,
         &model_slug,
+        None,
         None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
@@ -834,6 +847,7 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
         now,
         &model_slug,
         None,
+        None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
@@ -889,6 +903,7 @@ async fn status_context_window_uses_last_usage() {
         None,
         now,
         &model_slug,
+        None,
         None,
     );
     let rendered_lines = render_lines(&composite.display_lines(80));

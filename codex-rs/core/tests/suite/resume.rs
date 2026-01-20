@@ -35,10 +35,10 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
     ]);
     mount_sse_once(&server, initial_sse).await;
 
-    let text_elements = vec![TextElement {
-        byte_range: ByteRange { start: 0, end: 6 },
-        placeholder: Some("<note>".into()),
-    }];
+    let text_elements = vec![TextElement::new(
+        ByteRange { start: 0, end: 6 },
+        Some("<note>".into()),
+    )];
 
     codex
         .submit(Op::UserInput {
