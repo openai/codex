@@ -1,25 +1,23 @@
-use async_trait::async_trait;
-use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::AgentMessageContentDeltaEvent;
-use codex_protocol::protocol::AgentMessageDeltaEvent;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ExitedReviewModeEvent;
-use codex_protocol::protocol::ItemCompletedEvent;
-use codex_protocol::protocol::ReviewOutputEvent;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
-use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
+use crate::agent::AgentStatus;
+use crate::agent::status::is_final;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
+use async_trait::async_trait;
+use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
+use std::sync::Arc;
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 use super::SessionTask;
 use super::SessionTaskContext;
@@ -52,16 +50,11 @@ impl SessionTask for ReviewTask {
             .otel_manager
             .counter("codex.task.review", 1, &[]);
 
-        // Start sub-codex conversation and get the receiver for events.
-        let output = match start_review_conversation(
-            session.clone(),
-            ctx.clone(),
-            input,
-            cancellation_token.clone(),
-        )
-        .await
-        {
-            Some(receiver) => process_review_events(session.clone(), ctx.clone(), receiver).await,
+        // Start sub-codex conversation and await its final status.
+        let output = match start_review_conversation(session.clone(), ctx.clone(), input).await {
+            Some(sub_agent) => {
+                wait_for_review_output(sub_agent.status_rx, cancellation_token.clone()).await
+            }
             None => None,
         };
         if !cancellation_token.is_cancelled() {
@@ -79,8 +72,7 @@ async fn start_review_conversation(
     session: Arc<SessionTaskContext>,
     ctx: Arc<TurnContext>,
     input: Vec<UserInput>,
-    cancellation_token: CancellationToken,
-) -> Option<async_channel::Receiver<Event>> {
+) -> Option<ReviewSubAgent> {
     let config = ctx.client.config();
     let mut sub_agent_config = config.as_ref().clone();
     // Carry over review-only feature restrictions so the sub-agent cannot
@@ -108,58 +100,38 @@ async fn start_review_conversation(
 
     agent_control.send_input(thread_id, input).await.ok()?;
 
-    // todo this part is not done yet and won't be easy
-    None
+    let status_rx = agent_control.subscribe_status(thread_id).await.ok()?;
+    Some(ReviewSubAgent { status_rx })
 }
 
-async fn process_review_events(
-    session: Arc<SessionTaskContext>,
-    ctx: Arc<TurnContext>,
-    receiver: async_channel::Receiver<Event>,
+struct ReviewSubAgent {
+    status_rx: watch::Receiver<AgentStatus>,
+}
+
+async fn wait_for_review_output(
+    mut status_rx: watch::Receiver<AgentStatus>,
+    cancellation_token: CancellationToken,
 ) -> Option<ReviewOutputEvent> {
-    let mut prev_agent_message: Option<Event> = None;
-    while let Ok(event) = receiver.recv().await {
-        match event.clone().msg {
-            EventMsg::AgentMessage(_) => {
-                if let Some(prev) = prev_agent_message.take() {
-                    session
-                        .clone_session()
-                        .send_event(ctx.as_ref(), prev.msg)
-                        .await;
+    let mut status = status_rx.borrow().clone();
+    while !is_final(&status) {
+        tokio::select! {
+            _ = cancellation_token.cancelled() => return None,
+            changed = status_rx.changed() => {
+                if changed.is_err() {
+                    break;
                 }
-                prev_agent_message = Some(event);
-            }
-            // Suppress ItemCompleted only for assistant messages: forwarding it
-            // would trigger legacy AgentMessage via as_legacy_events(), which this
-            // review flow intentionally hides in favor of structured output.
-            EventMsg::ItemCompleted(ItemCompletedEvent {
-                item: TurnItem::AgentMessage(_),
-                ..
-            })
-            | EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { .. })
-            | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. }) => {}
-            EventMsg::TurnComplete(task_complete) => {
-                // Parse review output from the last agent message (if present).
-                let out = task_complete
-                    .last_agent_message
-                    .as_deref()
-                    .map(parse_review_output_event);
-                return out;
-            }
-            EventMsg::TurnAborted(_) => {
-                // Cancellation or abort: consumer will finalize with None.
-                return None;
-            }
-            other => {
-                session
-                    .clone_session()
-                    .send_event(ctx.as_ref(), other)
-                    .await;
+                status = status_rx.borrow().clone();
             }
         }
     }
-    // Channel closed without TurnComplete: treat as interrupted.
-    None
+    review_output_from_status(status)
+}
+
+fn review_output_from_status(status: AgentStatus) -> Option<ReviewOutputEvent> {
+    match status {
+        AgentStatus::Completed(Some(message)) => Some(parse_review_output_event(&message)),
+        _ => None,
+    }
 }
 
 /// Parse a ReviewOutputEvent from a text blob returned by the reviewer model.

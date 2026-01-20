@@ -3209,8 +3209,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
 pub(crate) use tests::make_session_and_context;
 
 use crate::git_info::get_git_repo_root;
-#[cfg(test)]
-pub(crate) use tests::make_session_and_context_with_rx;
 
 #[cfg(test)]
 mod tests {

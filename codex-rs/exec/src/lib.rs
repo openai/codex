@@ -326,7 +326,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
         if let Some(path) = resume_path {
             thread_manager
-                .resume_thread_from_rollout(config.clone(), path, auth_manager.clone())
+                .resume_thread_from_rollout(config.clone(), path)
                 .await?
         } else {
             thread_manager.start_thread(config.clone()).await?

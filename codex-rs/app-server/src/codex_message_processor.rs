@@ -1860,7 +1860,7 @@ impl CodexMessageProcessor {
 
         match self
             .thread_manager
-            .resume_thread_with_history(config, thread_history, self.auth_manager.clone())
+            .resume_thread_with_history(config, thread_history)
             .await
         {
             Ok(NewThread {
@@ -2783,7 +2783,7 @@ impl CodexMessageProcessor {
 
         match self
             .thread_manager
-            .resume_thread_with_history(config, thread_history, self.auth_manager.clone())
+            .resume_thread_with_history(config, thread_history)
             .await
         {
             Ok(NewThread {

@@ -1,7 +1,6 @@
 use crate::agent::AgentStatus;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::protocol::Event;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::InitialHistory;

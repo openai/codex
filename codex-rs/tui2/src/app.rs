@@ -499,7 +499,7 @@ impl App {
             }
             SessionSelection::Resume(path) => {
                 let resumed = thread_manager
-                    .resume_thread_from_rollout(config.clone(), path.clone(), auth_manager.clone())
+                    .resume_thread_from_rollout(config.clone(), path.clone())
                     .await
                     .wrap_err_with(|| {
                         let path_display = path.display();
@@ -1490,11 +1490,7 @@ impl App {
                         );
                         match self
                             .server
-                            .resume_thread_from_rollout(
-                                self.config.clone(),
-                                path.clone(),
-                                self.auth_manager.clone(),
-                            )
+                            .resume_thread_from_rollout(self.config.clone(), path.clone())
                             .await
                         {
                             Ok(resumed) => {
