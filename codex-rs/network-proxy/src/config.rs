@@ -132,6 +132,45 @@ fn clamp_non_loopback(addr: SocketAddr, allow_non_loopback: bool, name: &str) ->
     SocketAddr::from(([127, 0, 0, 1], addr.port()))
 }
 
+pub(crate) fn clamp_bind_addrs(
+    http_addr: SocketAddr,
+    admin_addr: SocketAddr,
+    cfg: &NetworkProxyConfig,
+) -> (SocketAddr, SocketAddr) {
+    let http_addr = clamp_non_loopback(
+        http_addr,
+        cfg.dangerously_allow_non_loopback_proxy,
+        "HTTP proxy",
+    );
+    let admin_addr = clamp_non_loopback(
+        admin_addr,
+        cfg.dangerously_allow_non_loopback_admin,
+        "admin API",
+    );
+    if cfg.policy.allow_unix_sockets.is_empty() {
+        return (http_addr, admin_addr);
+    }
+
+    // `x-unix-socket` is intentionally a local escape hatch. If the proxy (or admin API) is
+    // reachable from outside the machine, it can become a remote bridge into local daemons
+    // (e.g. docker.sock). To avoid footguns, enforce loopback binding whenever unix sockets
+    // are enabled.
+    if cfg.dangerously_allow_non_loopback_proxy && !http_addr.ip().is_loopback() {
+        warn!(
+            "unix socket proxying is enabled; ignoring dangerously_allow_non_loopback_proxy and clamping HTTP proxy to loopback"
+        );
+    }
+    if cfg.dangerously_allow_non_loopback_admin && !admin_addr.ip().is_loopback() {
+        warn!(
+            "unix socket proxying is enabled; ignoring dangerously_allow_non_loopback_admin and clamping admin API to loopback"
+        );
+    }
+    (
+        SocketAddr::from(([127, 0, 0, 1], http_addr.port())),
+        SocketAddr::from(([127, 0, 0, 1], admin_addr.port())),
+    )
+}
+
 pub struct RuntimeConfig {
     pub http_addr: SocketAddr,
     pub socks_addr: SocketAddr,
@@ -141,39 +180,7 @@ pub struct RuntimeConfig {
 pub fn resolve_runtime(cfg: &Config) -> RuntimeConfig {
     let http_addr = resolve_addr(&cfg.network_proxy.proxy_url, 3128);
     let admin_addr = resolve_addr(&cfg.network_proxy.admin_url, 8080);
-    let http_addr = clamp_non_loopback(
-        http_addr,
-        cfg.network_proxy.dangerously_allow_non_loopback_proxy,
-        "HTTP proxy",
-    );
-    let admin_addr = clamp_non_loopback(
-        admin_addr,
-        cfg.network_proxy.dangerously_allow_non_loopback_admin,
-        "admin API",
-    );
-    let (http_addr, admin_addr) = if cfg.network_proxy.policy.allow_unix_sockets.is_empty() {
-        (http_addr, admin_addr)
-    } else {
-        // `x-unix-socket` is intentionally a local escape hatch. If the proxy (or admin API) is
-        // reachable from outside the machine, it can become a remote bridge into local daemons
-        // (e.g. docker.sock). To avoid footguns, enforce loopback binding whenever unix sockets
-        // are enabled.
-        if cfg.network_proxy.dangerously_allow_non_loopback_proxy && !http_addr.ip().is_loopback() {
-            warn!(
-                "unix socket proxying is enabled; ignoring dangerously_allow_non_loopback_proxy and clamping HTTP proxy to loopback"
-            );
-        }
-        if cfg.network_proxy.dangerously_allow_non_loopback_admin && !admin_addr.ip().is_loopback()
-        {
-            warn!(
-                "unix socket proxying is enabled; ignoring dangerously_allow_non_loopback_admin and clamping admin API to loopback"
-            );
-        }
-        (
-            SocketAddr::from(([127, 0, 0, 1], http_addr.port())),
-            SocketAddr::from(([127, 0, 0, 1], admin_addr.port())),
-        )
-    };
+    let (http_addr, admin_addr) = clamp_bind_addrs(http_addr, admin_addr, &cfg.network_proxy);
     let socks_addr = SocketAddr::from(([127, 0, 0, 1], 8081));
 
     RuntimeConfig {
@@ -370,5 +377,41 @@ mod tests {
             resolve_addr("http://example.com:5555", 3128),
             "127.0.0.1:5555".parse::<SocketAddr>().unwrap()
         );
+    }
+
+    #[test]
+    fn clamp_bind_addrs_allows_non_loopback_when_enabled() {
+        let cfg = NetworkProxyConfig {
+            dangerously_allow_non_loopback_proxy: true,
+            dangerously_allow_non_loopback_admin: true,
+            ..Default::default()
+        };
+        let http_addr = "0.0.0.0:3128".parse::<SocketAddr>().unwrap();
+        let admin_addr = "0.0.0.0:8080".parse::<SocketAddr>().unwrap();
+
+        let (http_addr, admin_addr) = clamp_bind_addrs(http_addr, admin_addr, &cfg);
+
+        assert_eq!(http_addr, "0.0.0.0:3128".parse::<SocketAddr>().unwrap());
+        assert_eq!(admin_addr, "0.0.0.0:8080".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn clamp_bind_addrs_forces_loopback_when_unix_sockets_enabled() {
+        let cfg = NetworkProxyConfig {
+            dangerously_allow_non_loopback_proxy: true,
+            dangerously_allow_non_loopback_admin: true,
+            policy: NetworkPolicy {
+                allow_unix_sockets: vec!["/tmp/docker.sock".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let http_addr = "0.0.0.0:3128".parse::<SocketAddr>().unwrap();
+        let admin_addr = "0.0.0.0:8080".parse::<SocketAddr>().unwrap();
+
+        let (http_addr, admin_addr) = clamp_bind_addrs(http_addr, admin_addr, &cfg);
+
+        assert_eq!(http_addr, "127.0.0.1:3128".parse::<SocketAddr>().unwrap());
+        assert_eq!(admin_addr, "127.0.0.1:8080".parse::<SocketAddr>().unwrap());
     }
 }

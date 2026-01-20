@@ -91,12 +91,18 @@ impl NetworkProxyBuilder {
             None => Arc::new(AppState::new().await?),
         };
         let runtime = config::resolve_runtime(&state.current_cfg().await?);
+        let current_cfg = state.current_cfg().await?;
+        let (http_addr, admin_addr) = config::clamp_bind_addrs(
+            self.http_addr.unwrap_or(runtime.http_addr),
+            self.admin_addr.unwrap_or(runtime.admin_addr),
+            &current_cfg.network_proxy,
+        );
 
         Ok(NetworkProxy {
             state,
-            http_addr: self.http_addr.unwrap_or(runtime.http_addr),
+            http_addr,
             socks_addr: self.socks_addr.unwrap_or(runtime.socks_addr),
-            admin_addr: self.admin_addr.unwrap_or(runtime.admin_addr),
+            admin_addr,
             policy_decider: self.policy_decider,
             enable_socks5_udp: self.enable_socks5_udp,
         })
