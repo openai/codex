@@ -148,7 +148,13 @@ impl SessionTask for ReviewTask {
         };
 
         if !cancellation_token.is_cancelled() {
-            exit_review_mode(session.clone_session(), output.clone(), ctx.clone()).await;
+            exit_review_mode(
+                session.clone_session(),
+                output.clone(),
+                ctx.clone(),
+                Some(thread_id),
+            )
+            .await;
         }
         None
     }
@@ -162,17 +168,31 @@ impl SessionTask for ReviewTask {
         if let Some(thread_id) = thread_id {
             let _ = session.agent_control().interrupt_agent(thread_id).await;
         }
-        exit_review_mode(session.clone_session(), None, ctx).await;
+        exit_review_mode(session.clone_session(), None, ctx, thread_id).await;
     }
 }
 
-/// Emits an ExitedReviewMode Event with optional ReviewOutput,
-/// and records a developer message with the review output.
+/// Emits an ExitedReviewMode Event with optional ReviewOutput, close the review
+/// agent and records a developer message with the review output.
 pub(crate) async fn exit_review_mode(
     session: Arc<Session>,
     review_output: Option<ReviewOutputEvent>,
     ctx: Arc<TurnContext>,
+    review_thread_id: Option<ThreadId>,
 ) {
+    // Close and drop the agent
+    if let Some(thread_id) = review_thread_id {
+        if let Err(e) = session
+            .services
+            .agent_control
+            .shutdown_agent(thread_id)
+            .await
+        {
+            tracing::error!("Error while shutting down review agent: {e:?}");
+        }
+    }
+
+    // Build the message to add in the parent thread.
     const REVIEW_USER_MESSAGE_ID: &str = "review_rollout_user";
     const REVIEW_ASSISTANT_MESSAGE_ID: &str = "review_rollout_assistant";
     let (user_message, assistant_message) = if let Some(out) = review_output.clone() {
