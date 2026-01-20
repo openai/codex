@@ -1798,7 +1798,8 @@ impl ChatWidget {
             model,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
-        let config = config;
+        let mut config = config;
+        config.model = model.clone();
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
