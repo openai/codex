@@ -29,14 +29,18 @@ Local/native target
 - Identify the correct runnable entrypoint (CLI binary, server command, etc.).
 - If the required binary does not exist, attempt a best-effort build using the repo's build system.
 - Even if the required binary DOES exist, still run an incremental build (e.g., `ninja -C ... <target>`, `cargo build ...`, `make`, etc.) to prove the target can compile from this checkout.
-- After building, verify the artifact exists at the resolved path, is executable, and can run:
-  - Prefer a cheap smoke test like `--help`/`--version` (exit 0).
+- Do NOT build test-only or utility binaries yet (e.g. `cargo test`, `ninja cctest`, fuzzers, benchmarks). Build only the primary shipped entrypoint(s) needed for validation (main CLI/server/etc.).
+- Prefer a debug build (symbols) and/or ASan build of the primary shipped entrypoint(s), when feasible, so later validation has richer traces/log output.
+- After building, run a cheap smoke test that exits 0:
+  - Prefer `--help`/`--version`.
   - If the target is a server, start it and verify a health/root endpoint responds locally (then cleanly stop it).
 
 Docker target
 - First verify Docker is available (`docker --version`). If not available, record it as a prerequisite and mark the Docker half as unable.
 - If the repo provides a Dockerfile or compose config, prefer using it.
 - Otherwise, create a minimal Dockerfile under the provided output directory (not in the repo) that builds and runs the target.
+- Do NOT build test-only or utility binaries in Docker yet (fuzzers, tests, benchmarks). Build only the primary shipped entrypoint(s).
+- Prefer a debug (symbols) and/or ASan build in Docker when feasible, so crash validations capture useful stack traces.
 - Build the image and run it, then verify it starts:
   - Prefer a cheap smoke test (container exits 0 for `--help`/`--version`) or an HTTP check on a published port.
 
