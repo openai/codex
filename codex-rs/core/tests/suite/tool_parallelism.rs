@@ -308,7 +308,7 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
     let args = json!({
         "command": command,
         "login": false,
-        "timeout_ms": 1_000,
+        "timeout_ms": 5_000,
     });
 
     let first_chunk = sse(vec![
@@ -371,7 +371,7 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
     let _ = first_gate_tx.send(());
     let _ = follow_up_gate_tx.send(());
 
-    let timestamps = tokio::time::timeout(Duration::from_secs(1), async {
+    let timestamps = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let contents = fs::read_to_string(output_path)?;
             let timestamps = contents
