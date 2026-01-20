@@ -395,6 +395,7 @@ pub struct ConfigBuilder {
     cli_overrides: Option<Vec<(String, TomlValue)>>,
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
+    fallback_cwd: Option<PathBuf>,
 }
 
 impl ConfigBuilder {
@@ -418,17 +419,26 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn fallback_cwd(mut self, fallback_cwd: Option<PathBuf>) -> Self {
+        self.fallback_cwd = fallback_cwd;
+        self
+    }
+
     pub async fn build(self) -> std::io::Result<Config> {
         let Self {
             codex_home,
             cli_overrides,
             harness_overrides,
             loader_overrides,
+            fallback_cwd,
         } = self;
         let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
         let cli_overrides = cli_overrides.unwrap_or_default();
-        let harness_overrides = harness_overrides.unwrap_or_default();
+        let mut harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
+        if harness_overrides.cwd.is_none() {
+            harness_overrides.cwd = fallback_cwd;
+        }
         let cwd = match harness_overrides.cwd.as_deref() {
             Some(path) => AbsolutePathBuf::try_from(path)?,
             None => AbsolutePathBuf::current_dir()?,
@@ -504,18 +514,6 @@ impl Config {
             .build()
             .await
     }
-}
-
-/// Load config with CLI overrides and apply a fallback cwd when none is specified in overrides.
-pub async fn load_with_cli_overrides_and_fallback_cwd(
-    cli_overrides: Vec<(String, TomlValue)>,
-    mut overrides: ConfigOverrides,
-    fallback_cwd: Option<PathBuf>,
-) -> std::io::Result<Config> {
-    if overrides.cwd.is_none() {
-        overrides.cwd = fallback_cwd;
-    }
-    Config::load_with_cli_overrides_and_harness_overrides(cli_overrides, overrides).await
 }
 
 /// DEPRECATED: Use [Config::load_with_cli_overrides()] instead because working
