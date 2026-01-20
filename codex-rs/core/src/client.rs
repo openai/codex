@@ -221,7 +221,7 @@ impl ModelClient {
         let payload = ApiCompactionInput {
             model: &self.state.model_info.slug,
             input: &prompt.input,
-            instructions: instructions.as_ref(),
+            instructions: &instructions,
         };
 
         let mut extra_headers = ApiHeaderMap::new();

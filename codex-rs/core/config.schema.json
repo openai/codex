@@ -108,9 +108,6 @@
         "include_apply_patch_tool": {
           "type": "boolean"
         },
-        "personality": {
-          "type": "boolean"
-        },
         "powershell_utf8": {
           "type": "boolean"
         },
@@ -370,12 +367,12 @@
     },
     "shell_environment_policy": {
       "default": {
-        "inherit": null,
-        "ignore_default_excludes": null,
         "exclude": null,
-        "set": null,
+        "experimental_use_profile": null,
+        "ignore_default_excludes": null,
         "include_only": null,
-        "experimental_use_profile": null
+        "inherit": null,
+        "set": null
       },
       "allOf": [
         {
@@ -596,9 +593,6 @@
               "type": "boolean"
             },
             "include_apply_patch_tool": {
-              "type": "boolean"
-            },
-            "personality": {
               "type": "boolean"
             },
             "powershell_utf8": {
