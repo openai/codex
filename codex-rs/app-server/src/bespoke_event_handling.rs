@@ -697,7 +697,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::ItemCompleted(completed))
                 .await;
         }
-        EventMsg::EnteredReviewMode(review_request) => {
+        EventMsg::EnteredReviewMode(event) => {
+            let review_request = event.review_request;
             let review = review_request
                 .user_facing_hint
                 .unwrap_or_else(|| review_prompts::user_facing_hint(&review_request.target));

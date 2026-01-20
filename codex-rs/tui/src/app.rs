@@ -27,6 +27,7 @@ use crate::resume_picker::SessionSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
+use crate::visual_event_filter::should_forward_visual_event;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
@@ -62,6 +63,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
@@ -362,6 +364,8 @@ pub(crate) struct App {
     external_approval_routes: HashMap<String, (ThreadId, String)>,
     /// Buffered Codex events while external approvals are pending.
     paused_codex_events: VecDeque<Event>,
+
+    review_thread_ids: HashSet<ThreadId>,
 }
 
 impl App {
@@ -386,6 +390,7 @@ impl App {
     }
 
     async fn shutdown_current_thread(&mut self) {
+        self.review_thread_ids.clear();
         if let Some(thread_id) = self.chat_widget.thread_id() {
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
@@ -548,6 +553,7 @@ impl App {
             skip_world_writable_scan_once: false,
             external_approval_routes: HashMap::new(),
             paused_codex_events: VecDeque::new(),
+            review_thread_ids: HashSet::new(),
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -899,8 +905,26 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
             }
-            AppEvent::ExternalApprovalRequest { thread_id, event } => {
-                self.handle_external_approval_request(thread_id, event);
+            AppEvent::ExternalThreadEvent { thread_id, event } => {
+                if matches!(
+                    event.msg,
+                    EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_)
+                ) {
+                    self.handle_external_approval_request(thread_id, event);
+                    return Ok(AppRunControl::Continue);
+                }
+                if self.review_thread_ids.contains(&thread_id)
+                    && should_forward_visual_event(&event.msg)
+                {
+                    if !self.external_approval_routes.is_empty() {
+                        self.paused_codex_events.push_back(event);
+                        return Ok(AppRunControl::Continue);
+                    }
+                    self.handle_codex_event_now(event);
+                    if self.backtrack_render_pending {
+                        tui.frame_requester().schedule_frame();
+                    }
+                }
             }
             AppEvent::Exit(mode) => match mode {
                 ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
@@ -1439,6 +1463,15 @@ impl App {
             self.suppress_shutdown_complete = false;
             return;
         }
+        match &event.msg {
+            EventMsg::EnteredReviewMode(ev) => {
+                self.review_thread_ids.insert(ev.review_thread_id);
+            }
+            EventMsg::ExitedReviewMode(_) => {
+                self.review_thread_ids.clear();
+            }
+            _ => {}
+        }
         if let EventMsg::ListSkillsResponse(response) = &event.msg {
             let cwd = self.chat_widget.config_ref().cwd.clone();
             let errors = errors_for_cwd(&cwd, response);
@@ -1507,12 +1540,7 @@ impl App {
                         break;
                     }
                 };
-                match event.msg {
-                    EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_) => {
-                        app_event_tx.send(AppEvent::ExternalApprovalRequest { thread_id, event });
-                    }
-                    _ => {}
-                }
+                app_event_tx.send(AppEvent::ExternalThreadEvent { thread_id, event });
             }
         });
         Ok(())
@@ -1776,6 +1804,7 @@ mod tests {
             skip_world_writable_scan_once: false,
             external_approval_routes: HashMap::new(),
             paused_codex_events: VecDeque::new(),
+            review_thread_ids: HashSet::new(),
         }
     }
 
@@ -1819,6 +1848,7 @@ mod tests {
                 skip_world_writable_scan_once: false,
                 external_approval_routes: HashMap::new(),
                 paused_codex_events: VecDeque::new(),
+                review_thread_ids: HashSet::new(),
             },
             rx,
             op_rx,

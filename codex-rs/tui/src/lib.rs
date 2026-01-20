@@ -89,6 +89,7 @@ pub mod update_action;
 mod update_prompt;
 mod updates;
 mod version;
+mod visual_event_filter;
 
 mod wrapping;
 
