@@ -11,6 +11,7 @@ mod setup;
 mod spec;
 mod threat_model;
 mod validation;
+mod validation_prep;
 
 pub(crate) use auto_scope::*;
 pub(crate) use bug_rerank::*;
@@ -22,3 +23,4 @@ pub(crate) use setup::*;
 pub(crate) use spec::*;
 pub(crate) use threat_model::*;
 pub(crate) use validation::*;
+pub(crate) use validation_prep::*;

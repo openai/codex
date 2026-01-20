@@ -5159,16 +5159,28 @@ pub async fn run_security_review(
         Some(StepStatus::Completed)
     ) && validation_target_prep_task.is_none()
     {
+        let config = request.config.clone();
+        let provider = request.provider.clone();
+        let auth_manager = request.auth_manager.clone();
+        let model = request.validation_model.clone();
+        let reasoning_effort = validation_reasoning_effort;
         let repo_for_task = repo_path.clone();
         let output_root_for_task = request.output_root.clone();
         let progress_for_task = progress_sender.clone();
         let log_sink_for_task = log_sink.clone();
+        let metrics_for_task = metrics.clone();
         validation_target_prep_task = Some(tokio::spawn(async move {
             prepare_validation_targets(
+                &config,
+                &provider,
+                auth_manager,
+                model.as_str(),
+                reasoning_effort,
                 &repo_for_task,
                 &output_root_for_task,
                 progress_for_task,
                 log_sink_for_task,
+                metrics_for_task,
             )
             .await
         }));
@@ -6222,11 +6234,13 @@ pub async fn run_security_review(
     }
 
     let mut validation_target_additions: Vec<String> = Vec::new();
+    let mut validation_target_prep_succeeded = false;
     if let Some(task) = validation_target_prep_task.take() {
         match task.await {
             Ok(outcome) => {
                 logs.extend(outcome.logs);
                 validation_target_additions = outcome.testing_md_additions;
+                validation_target_prep_succeeded = outcome.success;
             }
             Err(join_err) => {
                 record(
@@ -6262,13 +6276,17 @@ pub async fn run_security_review(
         plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
         Some(StepStatus::Completed | StepStatus::InProgress)
     );
-    if validate_was_started {
-        plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
-    } else {
-        plan_tracker.complete_and_start_next(
-            SecurityReviewPlanStep::PrepareValidationTargets,
-            Some(SecurityReviewPlanStep::ValidateFindings),
-        );
+    if validation_target_prep_succeeded {
+        if validate_was_started {
+            plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
+        } else {
+            plan_tracker.complete_and_start_next(
+                SecurityReviewPlanStep::PrepareValidationTargets,
+                Some(SecurityReviewPlanStep::ValidateFindings),
+            );
+        }
+    } else if !validate_was_started {
+        plan_tracker.start_step(SecurityReviewPlanStep::ValidateFindings);
     }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
@@ -11455,6 +11473,7 @@ async fn write_testing_instructions(
 struct ValidationTargetPrepOutcome {
     logs: Vec<String>,
     testing_md_additions: Vec<String>,
+    success: bool,
 }
 
 fn extract_compose_image_refs(contents: &str) -> Vec<String> {
@@ -11476,15 +11495,22 @@ fn extract_compose_image_refs(contents: &str) -> Vec<String> {
 }
 
 async fn prepare_validation_targets(
+    config: &Config,
+    provider: &ModelProviderInfo,
+    auth_manager: Arc<AuthManager>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     repo_root: &Path,
     output_root: &Path,
     progress_sender: Option<AppEventSender>,
     log_sink: Option<Arc<SecurityReviewLogSink>>,
+    metrics: Arc<ReviewMetrics>,
 ) -> ValidationTargetPrepOutcome {
     let mut logs: Vec<String> = Vec::new();
     let mut additions: Vec<String> = Vec::new();
 
     let (has_cargo, has_package_json, _, _, _, default_port, _) = guess_testing_defaults(repo_root);
+    let has_go = repo_root.join("go.mod").exists();
 
     let compose_candidates = [
         "docker-compose.yml",
@@ -11501,52 +11527,189 @@ async fn prepare_validation_targets(
 
     let specs_root = output_root.join("specs");
     let testing_path = specs_root.join("TESTING.md");
-    if compose_paths.is_empty() && !has_dockerfile {
-        push_progress_log(
-            &progress_sender,
-            &log_sink,
-            &mut logs,
-            format!(
-                "Validation target prep: no Dockerfile/compose config detected; adding native build guidance to {}.",
-                display_path_for(&testing_path, repo_root)
-            ),
-        );
-        if has_cargo {
-            additions.push("- Native build (Cargo): run `cargo build --locked` (or `cargo build` if no lockfile), then build/rerun any per-finding validation scripts against the produced binaries.".to_string());
-        }
-        if has_package_json {
-            additions.push(format!(
-                "- Native build (Node/Web): run `npm install` + `npm run build`, then start the app (for example: `npm run dev -- --port {default_port}`) before running validation checks."
-            ));
-        }
-        if !has_cargo && !has_package_json {
-            additions.push("- Native build: no Docker config found. Build and run the project with its native build system (cargo/make/cmake/npm/etc) before attempting validation.".to_string());
-        }
-        if tokio_fs::read_to_string(&testing_path)
+    let mut testing_md = tokio_fs::read_to_string(&testing_path)
+        .await
+        .unwrap_or_default();
+    if testing_md.trim().is_empty() {
+        write_testing_instructions(
+            repo_root,
+            &specs_root,
+            progress_sender.clone(),
+            log_sink.clone(),
+        )
+        .await;
+        testing_md = tokio_fs::read_to_string(&testing_path)
             .await
-            .unwrap_or_default()
-            .trim()
-            .is_empty()
-        {
-            write_testing_instructions(
-                repo_root,
-                &specs_root,
-                progress_sender.clone(),
-                log_sink.clone(),
-            )
-            .await;
-        }
-        if !additions.is_empty() {
-            apply_validation_testing_md_additions(
-                &testing_path,
-                repo_root,
-                &additions,
-                &progress_sender,
-                &mut logs,
-            )
-            .await;
-        }
+            .unwrap_or_default();
+    }
+    let testing_md_context = trim_prompt_context(&testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
 
+    let compose_files = if compose_paths.is_empty() {
+        "none".to_string()
+    } else {
+        compose_paths
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|name| name.to_str()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    let prompt = VALIDATION_TARGET_PREP_PROMPT_TEMPLATE
+        .replace("{repo_root}", &repo_root.display().to_string())
+        .replace("{output_root}", &output_root.display().to_string())
+        .replace("{testing_md}", &testing_md_context)
+        .replace("{has_cargo}", &has_cargo.to_string())
+        .replace("{has_go}", &has_go.to_string())
+        .replace("{has_package_json}", &has_package_json.to_string())
+        .replace("{has_dockerfile}", &has_dockerfile.to_string())
+        .replace("{compose_files}", &compose_files);
+
+    let mut success = false;
+    match run_validation_target_prep_agent(
+        config,
+        provider,
+        auth_manager,
+        repo_root,
+        prompt,
+        progress_sender.clone(),
+        metrics.clone(),
+        model,
+        reasoning_effort,
+    )
+    .await
+    {
+        Ok(output) => {
+            logs.extend(output.logs);
+            match parse_validation_target_prep_output(output.text.as_str()) {
+                Some(parsed) => {
+                    if let Some(summary) = parsed
+                        .summary
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            format!("Validation target prep: {summary}"),
+                        );
+                    }
+                    if let Some(addition) = parsed
+                        .testing_md_additions
+                        .as_deref()
+                        .map(str::trim_end)
+                        .filter(|s| !s.trim().is_empty())
+                    {
+                        additions.push(addition.to_string());
+                    }
+
+                    success = parsed
+                        .outcome
+                        .as_deref()
+                        .is_some_and(|o| o.eq_ignore_ascii_case("success"))
+                        && parsed.local_build_ok
+                        && parsed.local_run_ok
+                        && parsed.docker_build_ok
+                        && parsed.docker_run_ok;
+                }
+                None => {
+                    push_progress_log(
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                        "Validation target prep agent returned unparseable output; falling back to generic guidance."
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        Err(err) => {
+            logs.extend(err.logs);
+            push_progress_log(
+                &progress_sender,
+                &log_sink,
+                &mut logs,
+                format!("Validation target prep agent failed: {}", err.message),
+            );
+        }
+    }
+
+    if !success && additions.is_empty() {
+        if compose_paths.is_empty() && !has_dockerfile {
+            if has_cargo {
+                additions.push("- Native build (Cargo): run `cargo build` (or `cargo build --locked` if `Cargo.lock` exists), then build/rerun any per-finding validation scripts against the produced binaries.".to_string());
+            }
+            if has_go {
+                additions.push("- Native build (Go): run `go build ./...` then run the primary entrypoint binary (or `go test ./...` for a smoke test).".to_string());
+            }
+            if has_package_json {
+                additions.push(format!(
+                    "- Native build (Node/Web): run `npm ci` (or `npm install`), then `npm run build` when available, then start the app (for example: `npm run dev -- --port {default_port}`) before running validation checks."
+                ));
+            }
+            if !has_cargo && !has_go && !has_package_json {
+                additions.push("- Native build: no Docker config found. Build and run the project with its native build system (cargo/make/cmake/npm/etc) before attempting validation.".to_string());
+            }
+        } else {
+            if compose_paths.is_empty() {
+                additions.push(
+                    "- Docker (prefer released images): if the project publishes an image for the latest release, prefer `docker pull <image>:latest` + `docker run ...`; fall back to `docker build` only when no published image exists or you need ASan builds."
+                        .to_string(),
+                );
+            } else {
+                additions.push(
+                    "- Docker (prefer released images): try `docker compose pull` then `docker compose up` (avoids local builds); fall back to `docker compose up --build` if needed."
+                        .to_string(),
+                );
+            }
+            if has_dockerfile {
+                additions.push(
+                    "- Note: crash PoCs that require ASan generally need a from-source build; released images are usually not ASan-instrumented."
+                        .to_string(),
+                );
+            }
+
+            let mut images: Vec<String> = Vec::new();
+            for path in &compose_paths {
+                match tokio_fs::read_to_string(path).await {
+                    Ok(contents) => images.extend(extract_compose_image_refs(&contents)),
+                    Err(err) => {
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            format!(
+                                "Validation target prep: failed to read {}: {err}.",
+                                display_path_for(path, repo_root)
+                            ),
+                        );
+                    }
+                }
+            }
+
+            images.sort();
+            images.dedup();
+            if !images.is_empty() {
+                let rendered = images
+                    .iter()
+                    .take(8)
+                    .map(|image| format!("`{image}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let suffix = if images.len() > 8 {
+                    format!(", … (+{} more)", images.len().saturating_sub(8))
+                } else {
+                    String::new()
+                };
+                additions.push(format!(
+                    "- Candidate images referenced by compose config: {rendered}{suffix}"
+                ));
+            }
+        }
+    }
+
+    if success {
         persist_validation_target_prep_progress(
             output_root,
             repo_root,
@@ -11555,116 +11718,12 @@ async fn prepare_validation_targets(
             &mut logs,
         )
         .await;
-
-        return ValidationTargetPrepOutcome {
-            logs,
-            testing_md_additions: additions,
-        };
     }
-
-    push_progress_log(
-        &progress_sender,
-        &log_sink,
-        &mut logs,
-        format!(
-            "Validation target prep: collecting Docker guidance to append to {}.",
-            display_path_for(&testing_path, repo_root)
-        ),
-    );
-
-    if compose_paths.is_empty() {
-        additions.push(
-            "- Docker (prefer released images): if the project publishes an image for the latest release, prefer `docker pull <image>:latest` + `docker run ...`; fall back to `docker build` only when no published image exists or you need ASan builds."
-                .to_string(),
-        );
-    } else {
-        additions.push(
-            "- Docker (prefer released images): try `docker compose pull` then `docker compose up` (avoids local builds); fall back to `docker compose up --build` if needed."
-                .to_string(),
-        );
-    }
-
-    if has_dockerfile {
-        additions.push(
-            "- Note: crash PoCs that require ASan generally need a from-source build; released images are usually not ASan-instrumented."
-                .to_string(),
-        );
-    }
-
-    let mut images: Vec<String> = Vec::new();
-    for path in &compose_paths {
-        match tokio_fs::read_to_string(path).await {
-            Ok(contents) => images.extend(extract_compose_image_refs(&contents)),
-            Err(err) => {
-                push_progress_log(
-                    &progress_sender,
-                    &log_sink,
-                    &mut logs,
-                    format!(
-                        "Validation target prep: failed to read {}: {err}.",
-                        display_path_for(path, repo_root)
-                    ),
-                );
-            }
-        }
-    }
-
-    images.sort();
-    images.dedup();
-    if !images.is_empty() {
-        let rendered = images
-            .iter()
-            .take(8)
-            .map(|image| format!("`{image}`"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let suffix = if images.len() > 8 {
-            format!(", … (+{} more)", images.len().saturating_sub(8))
-        } else {
-            String::new()
-        };
-        additions.push(format!(
-            "- Candidate images referenced by compose config: {rendered}{suffix}"
-        ));
-    }
-
-    if tokio_fs::read_to_string(&testing_path)
-        .await
-        .unwrap_or_default()
-        .trim()
-        .is_empty()
-    {
-        write_testing_instructions(
-            repo_root,
-            &specs_root,
-            progress_sender.clone(),
-            log_sink.clone(),
-        )
-        .await;
-    }
-    if !additions.is_empty() {
-        apply_validation_testing_md_additions(
-            &testing_path,
-            repo_root,
-            &additions,
-            &progress_sender,
-            &mut logs,
-        )
-        .await;
-    }
-
-    persist_validation_target_prep_progress(
-        output_root,
-        repo_root,
-        &progress_sender,
-        &log_sink,
-        &mut logs,
-    )
-    .await;
 
     ValidationTargetPrepOutcome {
         logs,
         testing_md_additions: additions,
+        success,
     }
 }
 
@@ -19717,9 +19776,180 @@ fn parse_validation_plan_item(raw: &str) -> Option<ValidationPlanItem> {
     None
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ValidationTargetPrepModelOutput {
+    outcome: Option<String>,
+    summary: Option<String>,
+    #[serde(default)]
+    local_build_ok: bool,
+    #[serde(default)]
+    local_run_ok: bool,
+    #[serde(default)]
+    docker_build_ok: bool,
+    #[serde(default)]
+    docker_run_ok: bool,
+    #[serde(default)]
+    testing_md_additions: Option<String>,
+}
+
+fn parse_validation_target_prep_output(raw: &str) -> Option<ValidationTargetPrepModelOutput> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(item) = serde_json::from_str::<ValidationTargetPrepModelOutput>(trimmed) {
+        return Some(item);
+    }
+
+    for snippet in extract_json_objects(trimmed) {
+        if let Ok(item) = serde_json::from_str::<ValidationTargetPrepModelOutput>(&snippet) {
+            return Some(item);
+        }
+    }
+
+    None
+}
+
 struct ValidationPlanAgentOutput {
     text: String,
     logs: Vec<String>,
+}
+
+struct ValidationTargetPrepAgentOutput {
+    text: String,
+    logs: Vec<String>,
+}
+
+struct ValidationTargetPrepFailure {
+    message: String,
+    logs: Vec<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_validation_target_prep_agent(
+    config: &Config,
+    provider: &ModelProviderInfo,
+    auth_manager: Arc<AuthManager>,
+    repo_root: &Path,
+    prompt: String,
+    progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+) -> Result<ValidationTargetPrepAgentOutput, ValidationTargetPrepFailure> {
+    let mut logs: Vec<String> = Vec::new();
+    push_progress_log(
+        &progress_sender,
+        &None,
+        &mut logs,
+        "Preparing runnable validation targets...".to_string(),
+    );
+
+    let mut prep_config = config.clone();
+    prep_config.model = Some(model.to_string());
+    prep_config.model_reasoning_effort =
+        normalize_reasoning_effort_for_model(model, reasoning_effort);
+    prep_config.model_provider = provider.clone();
+    prep_config.base_instructions = Some(VALIDATION_TARGET_PREP_SYSTEM_PROMPT.to_string());
+    prep_config.user_instructions = None;
+    prep_config.developer_instructions = None;
+    prep_config.compact_prompt = None;
+    prep_config.cwd = repo_root.to_path_buf();
+
+    let manager = ConversationManager::new(
+        auth_manager,
+        SessionSource::SubAgent(SubAgentSource::Other(
+            "security_review_validation_prep".to_string(),
+        )),
+    );
+
+    let conversation = match manager.new_conversation(prep_config).await {
+        Ok(new_conversation) => new_conversation.conversation,
+        Err(err) => {
+            let message = format!("Failed to start validation prep agent: {err}");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(ValidationTargetPrepFailure { message, logs });
+        }
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text { text: prompt }],
+        })
+        .await
+    {
+        let message = format!("Failed to submit validation prep prompt: {err}");
+        push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+        return Err(ValidationTargetPrepFailure { message, logs });
+    }
+
+    let mut last_agent_message: Option<String> = None;
+    loop {
+        let event = match conversation.next_event().await {
+            Ok(event) => event,
+            Err(err) => {
+                let message = format!("Validation prep agent terminated unexpectedly: {err}");
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(ValidationTargetPrepFailure { message, logs });
+            }
+        };
+
+        record_tool_call_from_event(metrics.as_ref(), &event.msg);
+
+        match event.msg {
+            EventMsg::TaskComplete(done) => {
+                if let Some(msg) = done.last_agent_message {
+                    last_agent_message = Some(msg);
+                }
+                break;
+            }
+            EventMsg::AgentMessage(msg) => last_agent_message = Some(msg.message.clone()),
+            EventMsg::AgentReasoning(reason) => {
+                log_model_reasoning(&reason.text, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::Warning(warn) => {
+                push_progress_log(&progress_sender, &None, &mut logs, warn.message);
+            }
+            EventMsg::Error(err) => {
+                let message = format!("Validation prep agent error: {}", err.message);
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(ValidationTargetPrepFailure { message, logs });
+            }
+            EventMsg::TurnAborted(aborted) => {
+                let message = format!("Validation prep agent aborted: {:?}", aborted.reason);
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(ValidationTargetPrepFailure { message, logs });
+            }
+            EventMsg::TokenCount(count) => {
+                if let Some(info) = count.info {
+                    metrics.record_model_call();
+                    metrics.record_usage(&info.last_token_usage);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let text = match last_agent_message.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }) {
+        Some(text) => text,
+        None => {
+            let message = "Validation prep agent produced an empty response.".to_string();
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(ValidationTargetPrepFailure { message, logs });
+        }
+    };
+
+    let _ = conversation.submit(Op::Shutdown).await;
+
+    Ok(ValidationTargetPrepAgentOutput { text, logs })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -20550,7 +20780,7 @@ async fn run_asan_validation(
     .collect::<Vec<_>>()
     .await;
 
-    let mut testing_md_additions: Vec<String> = Vec::new();
+    let mut testing_md_additions: HashMap<BugIdentifier, String> = HashMap::new();
     for (id, label, result) in planning_results {
         let Some(index) = find_bug_index(&snapshot, id) else {
             continue;
@@ -20578,7 +20808,7 @@ async fn run_asan_validation(
                     .map(str::trim_end)
                     .filter(|s| !s.trim().is_empty())
                 {
-                    testing_md_additions.push(additions.to_string());
+                    testing_md_additions.insert(id, additions.to_string());
                 }
                 let Some(tool_raw) = parsed
                     .tool
@@ -20762,44 +20992,6 @@ async fn run_asan_validation(
     let mut verification_failed: Option<String> = None;
     if batch.requests.is_empty() {
         logs.push("No validation checks to execute.".to_string());
-        if !testing_md_additions.is_empty() {
-            let build_failure = if batch.web_validation.is_none() {
-                run_validation_build_preflight(
-                    batch.repo_path.as_path(),
-                    &batch.work_dir,
-                    &progress_sender,
-                    &mut logs,
-                )
-                .await
-            } else {
-                None
-            };
-            if let Some(build_failure) = build_failure {
-                push_progress_log(
-                    &progress_sender,
-                    &None,
-                    &mut logs,
-                    format!(
-                        "Skipping TESTING.md update: build preflight failed ({})",
-                        build_failure.summary
-                    ),
-                );
-            } else {
-                apply_validation_testing_md_additions(
-                    &testing_path,
-                    &repo_path,
-                    &testing_md_additions,
-                    &progress_sender,
-                    &mut logs,
-                )
-                .await;
-                let updated_testing_md = tokio_fs::read_to_string(&testing_path)
-                    .await
-                    .unwrap_or_default();
-                testing_md_context =
-                    trim_prompt_context(&updated_testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
-            }
-        }
     } else {
         if batch.web_validation.is_none()
             && let Some(build_failure) = run_validation_build_preflight(
@@ -20855,20 +21047,6 @@ async fn run_asan_validation(
             return Ok(());
         }
 
-        apply_validation_testing_md_additions(
-            &testing_path,
-            &repo_path,
-            &testing_md_additions,
-            &progress_sender,
-            &mut logs,
-        )
-        .await;
-        let updated_testing_md = tokio_fs::read_to_string(&testing_path)
-            .await
-            .unwrap_or_default();
-        testing_md_context =
-            trim_prompt_context(&updated_testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
-
         if let Some(tx) = progress_sender.as_ref() {
             tx.send(AppEvent::SecurityReviewLog(
                 "Executing validation checks...".to_string(),
@@ -20900,6 +21078,45 @@ async fn run_asan_validation(
         .as_deref()
         .and_then(|bytes| serde_json::from_slice(bytes).ok())
         .unwrap_or_else(|| planned_snapshot.clone());
+
+    if verification_failed.is_none() {
+        let mut applied_testing_md_additions: Vec<String> = Vec::new();
+        for request in &batch.requests {
+            if !matches!(request.tool, BugVerificationTool::Python) {
+                continue;
+            }
+            let Some(index) = find_bug_index(&snapshot, request.id) else {
+                continue;
+            };
+            let status = snapshot.bugs[index].bug.validation.status;
+            if !matches!(
+                status,
+                BugValidationStatus::Passed | BugValidationStatus::Failed
+            ) {
+                continue;
+            }
+            let Some(additions) = testing_md_additions.get(&request.id) else {
+                continue;
+            };
+            applied_testing_md_additions.push(additions.to_string());
+        }
+
+        if !applied_testing_md_additions.is_empty() {
+            apply_validation_testing_md_additions(
+                &testing_path,
+                &repo_path,
+                &applied_testing_md_additions,
+                &progress_sender,
+                &mut logs,
+            )
+            .await;
+            let updated_testing_md = tokio_fs::read_to_string(&testing_path)
+                .await
+                .unwrap_or_default();
+            testing_md_context =
+                trim_prompt_context(&updated_testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
+        }
+    }
 
     for id in &findings.ids {
         let Some(planned_index) = find_bug_index(&planned_snapshot, *id) else {
