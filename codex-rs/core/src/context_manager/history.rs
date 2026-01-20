@@ -25,6 +25,7 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
+    server_reasoning_included: bool,
     codex_home: PathBuf,
 }
 
@@ -33,6 +34,7 @@ impl ContextManager {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            server_reasoning_included: false,
             codex_home: codex_home.to_path_buf(),
         }
     }
@@ -52,6 +54,14 @@ impl ContextManager {
                 self.token_info = Some(TokenUsageInfo::full_context_window(context_window));
             }
         }
+    }
+
+    pub(crate) fn set_server_reasoning_included(&mut self, included: bool) {
+        self.server_reasoning_included = included;
+    }
+
+    pub(crate) fn total_token_usage(&self) -> i64 {
+        self.get_total_token_usage(self.server_reasoning_included)
     }
 
     /// `items` is ordered from oldest to newest.
@@ -321,7 +331,8 @@ impl ContextManager {
             return item.clone();
         };
 
-        let mut remaining = context_window.saturating_sub(self.get_total_token_usage());
+        let mut remaining = context_window
+            .saturating_sub(self.get_total_token_usage(self.server_reasoning_included));
         let offloader = ContextOffloader::new(&self.codex_home);
         let mut new_content = Vec::with_capacity(content.len().saturating_add(1));
         for item in content {

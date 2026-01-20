@@ -14,7 +14,6 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
-    pub(crate) server_reasoning_included: bool,
 }
 
 impl SessionState {
@@ -25,7 +24,6 @@ impl SessionState {
             session_configuration,
             history,
             latest_rate_limits: None,
-            server_reasoning_included: false,
         }
     }
 
@@ -80,17 +78,12 @@ impl SessionState {
         self.history.set_token_usage_full(context_window);
     }
 
-    pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {
-        self.history
-            .get_total_token_usage(server_reasoning_included)
+    pub(crate) fn get_total_token_usage(&self) -> i64 {
+        self.history.total_token_usage()
     }
 
     pub(crate) fn set_server_reasoning_included(&mut self, included: bool) {
-        self.server_reasoning_included = included;
-    }
-
-    pub(crate) fn server_reasoning_included(&self) -> bool {
-        self.server_reasoning_included
+        self.history.set_server_reasoning_included(included);
     }
 }
 
