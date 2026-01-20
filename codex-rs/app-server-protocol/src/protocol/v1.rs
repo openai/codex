@@ -503,7 +503,7 @@ impl From<CoreTextElement> for V1TextElement {
     fn from(value: CoreTextElement) -> Self {
         Self {
             byte_range: value.byte_range.into(),
-            placeholder: value.placeholder("").map(str::to_string),
+            placeholder: value._placeholder_for_conversion_only().map(str::to_string),
         }
     }
 }

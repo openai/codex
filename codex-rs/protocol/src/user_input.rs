@@ -51,6 +51,15 @@ impl TextElement {
         self.placeholder = placeholder;
     }
 
+    /// Returns the stored placeholder without falling back to the text buffer.
+    ///
+    /// This is intended only for protocol conversions where the full text is not
+    /// available; prefer `placeholder(text)` for UI logic.
+    #[doc(hidden)]
+    pub fn _placeholder_for_conversion_only(&self) -> Option<&str> {
+        self.placeholder.as_deref()
+    }
+
     pub fn placeholder<'a>(&'a self, text: &'a str) -> Option<&'a str> {
         self.placeholder
             .as_deref()
