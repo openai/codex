@@ -6,6 +6,7 @@ use crate::codex::TurnContext;
 use crate::error::Result as CodexResult;
 use crate::protocol::CompactedItem;
 use crate::protocol::ContextCompactedEvent;
+use crate::protocol::ContextCompactionStartedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TurnStartedEvent;
@@ -40,6 +41,9 @@ async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
 ) -> CodexResult<()> {
+    let start_event = EventMsg::ContextCompactionStarted(ContextCompactionStartedEvent {});
+    sess.send_event(turn_context, start_event).await;
+
     let history = sess.clone_history().await;
 
     // Required to keep `/undo` available after compaction
