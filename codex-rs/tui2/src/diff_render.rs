@@ -361,7 +361,7 @@ fn push_wrapped_diff_line(
     line_number_width: usize,
 ) -> Vec<RtLine<'static>> {
     let ln_str = line_number.to_string();
-    let mut remaining_text: &str = text;
+    let mut remaining_text: &str = text.trim_end_matches('\r');
 
     // Reserve a fixed number of spaces (equal to the widest line number plus a
     // trailing spacer) so the sign column stays aligned across the diff block.
@@ -610,6 +610,48 @@ mod tests {
 
         let lines = diff_summary_for_tests(&changes);
         snapshot_lines("apply_delete_block", lines, 80, 12);
+    }
+
+    #[test]
+    fn trims_crlf_in_diff_output() {
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        let original = "one\r\ntwo\r\n";
+        let modified = "one\r\nTWO\r\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        changes.insert(
+            PathBuf::from("crlf_update.txt"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+        changes.insert(
+            PathBuf::from("crlf_add.txt"),
+            FileChange::Add {
+                content: "alpha\r\nbeta\r\n".to_string(),
+            },
+        );
+        changes.insert(
+            PathBuf::from("crlf_delete.txt"),
+            FileChange::Delete {
+                content: "gamma\r\ndelta\r\n".to_string(),
+            },
+        );
+
+        let lines = diff_summary_for_tests(&changes);
+        let text = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(text.contains('\r'), false);
     }
 
     #[test]
