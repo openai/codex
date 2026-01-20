@@ -775,6 +775,7 @@ impl ChatComposer {
                                     prompt,
                                     first_line,
                                     PromptSelectionMode::Completion,
+                                    &self.textarea.text_elements(),
                                 ) {
                                     PromptSelectionAction::Insert { text, cursor } => {
                                         let target = cursor.unwrap_or(text.len());
@@ -833,6 +834,7 @@ impl ChatComposer {
                                     prompt,
                                     first_line,
                                     PromptSelectionMode::Submit,
+                                    &self.textarea.text_elements(),
                                 ) {
                                     PromptSelectionAction::Submit {
                                         text,
@@ -2481,6 +2483,7 @@ fn prompt_selection_action(
     prompt: &CustomPrompt,
     first_line: &str,
     mode: PromptSelectionMode,
+    text_elements: &[TextElement],
 ) -> PromptSelectionAction {
     let named_args = prompt_argument_names(&prompt.content);
     let has_numeric = prompt_has_numeric_placeholders(&prompt.content);
@@ -2512,11 +2515,9 @@ fn prompt_selection_action(
                 };
             }
             if has_numeric {
-                if let Some(expanded) = expand_if_numeric_with_positional_args(
-                    prompt,
-                    first_line,
-                    &self.textarea.text_elements(),
-                ) {
+                if let Some(expanded) =
+                    expand_if_numeric_with_positional_args(prompt, first_line, text_elements)
+                {
                     return PromptSelectionAction::Submit {
                         text: expanded.text,
                         text_elements: expanded.text_elements,
@@ -5401,6 +5402,7 @@ mod tests {
             &prompt,
             "/prompts:my-prompt foo bar",
             PromptSelectionMode::Submit,
+            &[],
         );
         match action {
             PromptSelectionAction::Submit {
