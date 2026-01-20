@@ -820,6 +820,12 @@ pub struct ConfigToml {
     #[serde(default)]
     pub developer_instructions: Option<String>,
 
+    /// Optional path to a file containing model instructions that will override
+    /// the built-in instructions for the selected model. Users are STRONGLY
+    /// DISCOURAGED from using this field, as deviating from the instructions
+    /// sanctioned by Codex will likely degrade model performance.
+    pub model_instructions_file: Option<AbsolutePathBuf>,
+
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
@@ -965,6 +971,8 @@ pub struct ConfigToml {
     pub notice: Option<Notice>,
 
     /// Legacy, now use features
+    /// Deprecated: ignored. Use `model_instructions_file`.
+    #[schemars(skip)]
     pub experimental_instructions_file: Option<AbsolutePathBuf>,
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub experimental_use_unified_exec_tool: Option<bool>,
@@ -1432,14 +1440,12 @@ impl Config {
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
         // behaviour matches other path-like config values.
-        let experimental_instructions_path = config_profile
-            .experimental_instructions_file
+        let model_instructions_path = config_profile
+            .model_instructions_file
             .as_ref()
-            .or(cfg.experimental_instructions_file.as_ref());
-        let file_base_instructions = Self::try_read_non_empty_file(
-            experimental_instructions_path,
-            "experimental instructions file",
-        )?;
+            .or(cfg.model_instructions_file.as_ref());
+        let file_base_instructions =
+            Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
         let base_instructions = base_instructions.or(file_base_instructions);
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
 
@@ -1680,6 +1686,30 @@ impl Config {
             self.features.disable(Feature::WindowsSandboxElevated);
         }
     }
+}
+
+pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayerStack) -> bool {
+    config_layer_stack
+        .layers_high_to_low()
+        .into_iter()
+        .any(|layer| toml_uses_deprecated_instructions_file(&layer.config))
+}
+
+fn toml_uses_deprecated_instructions_file(value: &TomlValue) -> bool {
+    let Some(table) = value.as_table() else {
+        return false;
+    };
+    if table.contains_key("experimental_instructions_file") {
+        return true;
+    }
+    let Some(profiles) = table.get("profiles").and_then(TomlValue::as_table) else {
+        return false;
+    };
+    profiles.values().any(|profile| {
+        profile.as_table().is_some_and(|profile_table| {
+            profile_table.contains_key("experimental_instructions_file")
+        })
+    })
 }
 
 /// Returns the path to the Codex configuration directory, which can be

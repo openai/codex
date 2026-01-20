@@ -666,6 +666,19 @@ impl Session {
                 msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }),
             });
         }
+        if crate::config::uses_deprecated_instructions_file(&config.config_layer_stack) {
+            post_session_configured_events.push(Event {
+                id: INITIAL_SUBMIT_ID.to_owned(),
+                msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
+                    summary: "`experimental_instructions_file` is deprecated and ignored. Use `model_instructions_file` instead."
+                        .to_string(),
+                    details: Some(
+                        "Move the setting to `model_instructions_file` in config.toml (or under a profile) to load instructions from a file."
+                            .to_string(),
+                    ),
+                }),
+            });
+        }
         maybe_push_chat_wire_api_deprecation(&config, &mut post_session_configured_events);
 
         let auth = auth_manager.auth().await;
