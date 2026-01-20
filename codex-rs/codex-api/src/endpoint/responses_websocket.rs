@@ -150,7 +150,7 @@ async fn connect_websocket(
     turn_state: Option<Arc<OnceLock<String>>>,
 ) -> Result<(WsStream, bool), ApiError> {
     let mut request = url
-        .clone()
+        .as_str()
         .into_client_request()
         .map_err(|err| ApiError::Stream(format!("failed to build websocket request: {err}")))?;
     request.headers_mut().extend(headers);
@@ -209,7 +209,7 @@ async fn run_websocket_response_stream(
         }
     };
 
-    if let Err(err) = ws_stream.send(Message::Text(request_text)).await {
+    if let Err(err) = ws_stream.send(Message::Text(request_text.into())).await {
         return Err(ApiError::Stream(format!(
             "failed to send websocket request: {err}"
         )));
