@@ -725,6 +725,8 @@ impl ChatWidget {
             &model_for_header,
             event,
             self.show_welcome_banner,
+            self.collaboration_modes_enabled(),
+            self.stored_collaboration_mode.clone(),
         );
         self.apply_session_info_cell(session_info_cell);
 
@@ -1804,12 +1806,6 @@ impl ChatWidget {
         let model_for_header = model
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
-        let active_cell = if model.is_none() {
-            Some(Self::placeholder_session_header_cell(&config))
-        } else {
-            None
-        };
-
         let stored_collaboration_mode = if config.features.enabled(Feature::CollaborationModes) {
             collaboration_modes::default_mode(models_manager.as_ref()).unwrap_or_else(|| {
                 CollaborationMode::Custom(Settings {
@@ -1824,6 +1820,16 @@ impl ChatWidget {
                 reasoning_effort: None,
                 developer_instructions: None,
             })
+        };
+
+        let active_cell = if model.is_none() {
+            Some(Self::placeholder_session_header_cell(
+                &config,
+                config.features.enabled(Feature::CollaborationModes),
+                stored_collaboration_mode.clone(),
+            ))
+        } else {
+            None
         };
 
         let mut widget = Self {
@@ -4258,6 +4264,11 @@ impl ChatWidget {
         self.stored_collaboration_mode.model()
     }
 
+    #[allow(dead_code)] // Used in tests
+    pub(crate) fn stored_collaboration_mode(&self) -> &CollaborationMode {
+        &self.stored_collaboration_mode
+    }
+
     #[cfg(test)]
     pub(crate) fn current_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         self.stored_collaboration_mode.reasoning_effort()
@@ -4333,7 +4344,11 @@ impl ChatWidget {
     }
 
     /// Build a placeholder header cell while the session is configuring.
-    fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
+    fn placeholder_session_header_cell(
+        config: &Config,
+        is_collaboration: bool,
+        collaboration_mode: CollaborationMode,
+    ) -> Box<dyn HistoryCell> {
         let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
         Box::new(history_cell::SessionHeaderHistoryCell::new_with_style(
             DEFAULT_MODEL_DISPLAY_NAME.to_string(),
@@ -4341,6 +4356,8 @@ impl ChatWidget {
             None,
             config.cwd.clone(),
             CODEX_CLI_VERSION,
+            is_collaboration,
+            collaboration_mode,
         ))
     }
 
