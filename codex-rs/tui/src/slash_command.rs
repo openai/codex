@@ -19,6 +19,7 @@ pub enum SlashCommand {
     Review,
     #[strum(serialize = "secreview")]
     SecReview,
+    Rerun,
     New,
     Resume,
     Init,
@@ -47,6 +48,7 @@ impl SlashCommand {
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::SecReview => "run an AppSec security review over the repo",
+            SlashCommand::Rerun => "rerun a security review step in follow-up mode",
             SlashCommand::Resume => "resume a saved chat",
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
@@ -84,6 +86,7 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::SecReview
+            | SlashCommand::Rerun
             | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Mention

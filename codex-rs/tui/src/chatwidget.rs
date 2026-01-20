@@ -134,9 +134,12 @@ use crate::security_review::SecurityReviewLogSink;
 use crate::security_review::SecurityReviewMetadata;
 use crate::security_review::SecurityReviewMode;
 use crate::security_review::SecurityReviewRequest;
+use crate::security_review::SecurityReviewRerunResult;
+use crate::security_review::SecurityReviewRerunTarget;
 use crate::security_review::SecurityReviewResult;
 use crate::security_review::build_follow_up_user_prompt;
 use crate::security_review::read_security_review_metadata;
+use crate::security_review::rerun_prepare_validation_targets;
 use crate::security_review::run_security_review;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
@@ -395,6 +398,7 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
 
     security_review_task: Option<JoinHandle<()>>,
+    security_review_rerun_task: Option<JoinHandle<()>>,
     security_review_context: Option<SecurityReviewContext>,
     security_review_artifacts: Option<SecurityReviewArtifactsState>,
     security_review_follow_up: Option<SecurityReviewFollowUpState>,
@@ -2202,6 +2206,7 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             security_review_task: None,
+            security_review_rerun_task: None,
             security_review_context: None,
             security_review_artifacts: None,
             security_review_follow_up: None,
@@ -2298,6 +2303,7 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             security_review_task: None,
+            security_review_rerun_task: None,
             security_review_context: None,
             security_review_artifacts: None,
             security_review_follow_up: None,
@@ -2474,6 +2480,12 @@ impl ChatWidget {
             }
             SlashCommand::SecReview => {
                 self.open_security_review_popup();
+            }
+            SlashCommand::Rerun => {
+                self.add_info_message(
+                    "Usage: /rerun <target>".to_string(),
+                    Some("Available targets:\n- prepare-validation-targets".to_string()),
+                );
             }
             SlashCommand::Model => {
                 self.open_model_popup();
@@ -2687,6 +2699,36 @@ impl ChatWidget {
             self.submit_op(Op::RunUserShellCommand {
                 command: cmd.to_string(),
             });
+            return;
+        }
+
+        // Special-case: "/rerun <target>" reruns a security review step locally.
+        if let Some(rest) = text.strip_prefix("/rerun")
+            && (rest.is_empty() || rest.starts_with(|ch: char| ch.is_whitespace()))
+        {
+            let args = rest.trim();
+            if args.is_empty() {
+                self.add_info_message(
+                    "Usage: /rerun <target>".to_string(),
+                    Some("Available targets:\n- prepare-validation-targets".to_string()),
+                );
+                return;
+            }
+
+            if !image_paths.is_empty() {
+                self.add_error_message("'/rerun' does not support image attachments.".to_string());
+                return;
+            }
+
+            let target_raw = args.split_whitespace().next().unwrap_or_default();
+            let Some(target) = Self::parse_security_review_rerun_target(target_raw) else {
+                self.add_error_message(format!(
+                    "Unknown rerun target '{target_raw}'. Available targets: prepare-validation-targets"
+                ));
+                return;
+            };
+
+            self.start_security_review_rerun(target);
             return;
         }
 
@@ -4064,6 +4106,147 @@ impl ChatWidget {
         ))
     }
 
+    fn parse_security_review_rerun_target(raw: &str) -> Option<SecurityReviewRerunTarget> {
+        let normalized = raw
+            .trim()
+            .trim_matches(|ch| matches!(ch, '"' | '\''))
+            .to_ascii_lowercase()
+            .replace('_', "-");
+        match normalized.as_str() {
+            "prepare-validation-targets" | "prepare-validation-target" => {
+                Some(SecurityReviewRerunTarget::PrepareValidationTargets)
+            }
+            _ => None,
+        }
+    }
+
+    fn security_review_output_root_for_follow_up_path(follow_up_path: &Path) -> Option<PathBuf> {
+        let parent = follow_up_path.parent()?;
+        let parent_name = parent
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if parent_name.eq_ignore_ascii_case("context") {
+            parent.parent().map(PathBuf::from)
+        } else {
+            Some(parent.to_path_buf())
+        }
+    }
+
+    fn start_security_review_rerun(&mut self, target: SecurityReviewRerunTarget) {
+        if self.bottom_pane.is_task_running() || self.security_review_context.is_some() {
+            self.add_error_message(
+                "A task is already running. Wait for it to finish before rerunning.".to_string(),
+            );
+            return;
+        }
+
+        let Some((mode, scope_paths, repo_root, follow_up_path)) =
+            self.security_review_follow_up.as_ref().map(|state| {
+                (
+                    state.mode,
+                    state.scope_paths.clone(),
+                    state.repo_root.clone(),
+                    state.follow_up_path.clone(),
+                )
+            })
+        else {
+            self.add_error_message(
+                "'/rerun' is only available in security review follow-up mode (run /secreview first)."
+                    .to_string(),
+            );
+            return;
+        };
+
+        let Some(output_root) =
+            Self::security_review_output_root_for_follow_up_path(&follow_up_path)
+        else {
+            self.add_error_message(format!(
+                "Failed to infer security review output root from {}.",
+                follow_up_path.display()
+            ));
+            return;
+        };
+
+        if !output_root.exists() {
+            self.add_error_message(format!(
+                "Security review output root {} does not exist.",
+                output_root.display()
+            ));
+            return;
+        }
+
+        self.bottom_pane.set_task_running(true);
+        self.bottom_pane
+            .update_status_header(format!("Security review rerun — {}", target.title()));
+
+        let mut model_for_display = self
+            .config
+            .security_review_models
+            .validation
+            .clone()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if model_for_display.is_empty() {
+            model_for_display = "gpt-5.2".to_string();
+        }
+
+        self.security_review_context = Some(SecurityReviewContext {
+            mode,
+            include_paths: scope_paths,
+            output_root: output_root.clone(),
+            repo_path: repo_root.clone(),
+            model: model_for_display,
+            provider_name: self.config.model_provider.name.clone(),
+            started_at: Instant::now(),
+            last_log: None,
+            thinking_lines: Vec::new(),
+            log_lines: Vec::new(),
+            progress_percent: Some(0),
+        });
+
+        self.add_info_message(
+            format!(
+                ">> Rerun started: {} ({}) <<",
+                target.title(),
+                display_path_for(&output_root, &repo_root)
+            ),
+            None,
+        );
+
+        let log_sink = SecurityReviewLogSink::new(&output_root.join("sec-review.log"))
+            .map(Arc::new)
+            .ok();
+
+        let config = self.config.clone();
+        let provider = self.config.model_provider.clone();
+        let auth_manager = self.auth_manager.clone();
+        let repo_for_task = repo_root;
+        let output_root_for_task = output_root;
+        let tx = self.app_event_tx.clone();
+        let progress_sender = Some(tx.clone());
+
+        let handle = tokio::spawn(async move {
+            let result = match target {
+                SecurityReviewRerunTarget::PrepareValidationTargets => {
+                    rerun_prepare_validation_targets(
+                        &config,
+                        &provider,
+                        auth_manager,
+                        &repo_for_task,
+                        &output_root_for_task,
+                        progress_sender,
+                        log_sink,
+                    )
+                    .await
+                }
+            };
+            tx.send(AppEvent::SecurityReviewRerunComplete { result });
+        });
+        self.security_review_rerun_task = Some(handle);
+    }
+
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
         self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
@@ -4110,6 +4293,15 @@ impl ChatWidget {
     }
 
     fn cancel_security_review(&mut self) -> bool {
+        if let Some(handle) = self.security_review_rerun_task.take() {
+            handle.abort();
+            self.bottom_pane.set_task_running(false);
+            self.bottom_pane
+                .update_status_header(String::from("Working"));
+            self.security_review_context = None;
+            self.add_info_message("Security review rerun cancelled.".to_string(), None);
+            return true;
+        }
         if let Some(handle) = self.security_review_task.take() {
             handle.abort();
             self.bottom_pane.set_task_running(false);
@@ -5011,6 +5203,79 @@ impl ChatWidget {
             self.add_error_message(line);
         }
         self.add_error_message(error.message);
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_security_review_rerun_complete(&mut self, result: SecurityReviewRerunResult) {
+        self.bottom_pane.set_task_running(false);
+        self.bottom_pane
+            .update_status_header(String::from("Working"));
+        self.security_review_rerun_task = None;
+        self.security_review_context = None;
+
+        let repo_root = result.repo_root.clone();
+        let output_root_display = display_path_for(&result.output_root, &repo_root);
+        let testing_display = display_path_for(&result.testing_md_path, &repo_root);
+        let log_display = display_path_for(&result.output_root.join("sec-review.log"), &repo_root);
+
+        let mut summary_lines: Vec<Line<'static>> = Vec::new();
+        summary_lines.push(vec!["Rerun complete".bold()].into());
+        summary_lines.push(
+            vec![
+                "  • ".into(),
+                format!("Target: {}", result.target.as_str()).into(),
+            ]
+            .into(),
+        );
+        summary_lines.push(
+            vec![
+                "  • ".into(),
+                format!(
+                    "Outcome: {}",
+                    if result.success {
+                        "success"
+                    } else {
+                        "incomplete (no runnable targets)"
+                    }
+                )
+                .into(),
+            ]
+            .into(),
+        );
+        summary_lines.push(
+            vec![
+                "  • ".into(),
+                format!("Testing instructions: {testing_display}").into(),
+            ]
+            .into(),
+        );
+        summary_lines.push(
+            vec![
+                "  • ".into(),
+                format!("Artifacts: {output_root_display}").into(),
+            ]
+            .into(),
+        );
+        summary_lines.push(vec!["  • ".into(), format!("Log file: {log_display}").into()].into());
+        summary_lines.push(
+            vec![
+                "  • ".into(),
+                format!("Log entries: {}", result.logs.len()).dim(),
+            ]
+            .into(),
+        );
+        self.add_to_history(PlainHistoryCell::new(summary_lines));
+
+        if !result.logs.is_empty() {
+            let mut log_lines: Vec<Line<'static>> = Vec::new();
+            log_lines.push(vec!["Logs".bold()].into());
+            for entry in &result.logs {
+                let prefix = security_review_log_prefix(entry);
+                log_lines.push(vec![prefix.dim(), entry.clone().into()].into());
+            }
+            self.add_to_history(PlainHistoryCell::new(log_lines));
+        }
+
         self.request_redraw();
     }
 

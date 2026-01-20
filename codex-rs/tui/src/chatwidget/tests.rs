@@ -410,6 +410,7 @@ async fn make_chatwidget_manual(
         pre_review_token_info: None,
         needs_final_message_separator: false,
         security_review_task: None,
+        security_review_rerun_task: None,
         security_review_context: None,
         security_review_artifacts: None,
         security_review_follow_up: None,

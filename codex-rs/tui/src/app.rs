@@ -1310,6 +1310,9 @@ impl App {
             AppEvent::SecurityReviewComplete { result } => {
                 self.chat_widget.on_security_review_complete(result);
             }
+            AppEvent::SecurityReviewRerunComplete { result } => {
+                self.chat_widget.on_security_review_rerun_complete(result);
+            }
             AppEvent::SecurityReviewSetupComplete { logs } => {
                 self.chat_widget.on_security_review_setup_complete(logs);
             }

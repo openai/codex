@@ -17,6 +17,7 @@ use crate::history_cell::HistoryCell;
 use crate::security_review::SecurityReviewFailure;
 use crate::security_review::SecurityReviewMetadata;
 use crate::security_review::SecurityReviewMode;
+use crate::security_review::SecurityReviewRerunResult;
 use crate::security_review::SecurityReviewResult;
 
 #[derive(Clone, Debug)]
@@ -257,6 +258,11 @@ pub(crate) enum AppEvent {
     /// Security review completed successfully.
     SecurityReviewComplete {
         result: SecurityReviewResult,
+    },
+
+    /// A security review `/rerun` command completed.
+    SecurityReviewRerunComplete {
+        result: SecurityReviewRerunResult,
     },
 
     /// Security review setup completed successfully.

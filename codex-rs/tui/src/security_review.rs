@@ -841,6 +841,35 @@ pub struct SecurityReviewSetupResult {
     pub logs: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SecurityReviewRerunTarget {
+    PrepareValidationTargets,
+}
+
+impl SecurityReviewRerunTarget {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            SecurityReviewRerunTarget::PrepareValidationTargets => "prepare_validation_targets",
+        }
+    }
+
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            SecurityReviewRerunTarget::PrepareValidationTargets => "Prepare validation targets",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SecurityReviewRerunResult {
+    pub target: SecurityReviewRerunTarget,
+    pub repo_root: PathBuf,
+    pub output_root: PathBuf,
+    pub testing_md_path: PathBuf,
+    pub success: bool,
+    pub logs: Vec<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct SecurityReviewResult {
     pub findings_summary: String,
@@ -11438,6 +11467,74 @@ async fn prepare_validation_targets(
         logs,
         testing_md_additions: additions,
         success,
+    }
+}
+
+pub(crate) async fn rerun_prepare_validation_targets(
+    config: &Config,
+    provider: &ModelProviderInfo,
+    auth_manager: Arc<AuthManager>,
+    repo_root: &Path,
+    output_root: &Path,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
+) -> SecurityReviewRerunResult {
+    let provider = provider_with_beta_features(provider, config);
+
+    let mut model = config
+        .security_review_models
+        .validation
+        .clone()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if model.is_empty() {
+        model = DEFAULT_VALIDATION_MODEL.to_string();
+    }
+
+    let reasoning_effort = config
+        .security_review_reasoning_efforts
+        .validation
+        .or(config.model_reasoning_effort)
+        .or(Some(ReasoningEffort::XHigh));
+
+    let metrics = Arc::new(ReviewMetrics::default());
+    let outcome = prepare_validation_targets(
+        config,
+        &provider,
+        auth_manager,
+        model.as_str(),
+        reasoning_effort,
+        repo_root,
+        output_root,
+        progress_sender.clone(),
+        log_sink,
+        metrics,
+    )
+    .await;
+
+    let specs_root = output_root.join("specs");
+    let testing_path = specs_root.join("TESTING.md");
+
+    let mut logs = outcome.logs;
+    if !outcome.testing_md_additions.is_empty() {
+        apply_validation_testing_md_additions(
+            &testing_path,
+            repo_root,
+            &outcome.testing_md_additions,
+            &progress_sender,
+            &mut logs,
+        )
+        .await;
+    }
+
+    SecurityReviewRerunResult {
+        target: SecurityReviewRerunTarget::PrepareValidationTargets,
+        repo_root: repo_root.to_path_buf(),
+        output_root: output_root.to_path_buf(),
+        testing_md_path: testing_path,
+        success: outcome.success,
+        logs,
     }
 }
 
