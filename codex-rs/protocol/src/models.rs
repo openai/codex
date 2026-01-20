@@ -835,6 +835,7 @@ mod tests {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: true,
+            local_network: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         };

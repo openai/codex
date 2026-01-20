@@ -102,6 +102,7 @@ async fn status_snapshot_includes_reasoning_details() {
         .set(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
             network_access: false,
+            local_network: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         })

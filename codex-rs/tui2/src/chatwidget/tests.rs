@@ -1880,6 +1880,7 @@ async fn preset_matching_ignores_extra_writable_roots() {
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![AbsolutePathBuf::try_from("C:\\extra").unwrap()],
         network_access: false,
+        local_network: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };

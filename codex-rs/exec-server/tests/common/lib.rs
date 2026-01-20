@@ -110,6 +110,7 @@ where
             // when the sandbox policy is expanded.
             writable_roots: vec![],
             network_access: false,
+            local_network: false,
             // Disable writes to temp dir because this is a test, so
             // writable_folder is likely also under /tmp and we want to be
             // strict about what is writable.

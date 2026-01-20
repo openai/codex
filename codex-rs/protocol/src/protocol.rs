@@ -353,6 +353,11 @@ pub enum SandboxPolicy {
         #[serde(default)]
         network_access: bool,
 
+        /// When set to `true`, loopback-only local network access is allowed.
+        /// `false` by default.
+        #[serde(default)]
+        local_network: bool,
+
         /// When set to `true`, will NOT include the per-user `TMPDIR`
         /// environment variable among the default writable roots. Defaults to
         /// `false`.
@@ -418,6 +423,7 @@ impl SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: false,
+            local_network: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         }
@@ -458,6 +464,7 @@ impl SandboxPolicy {
                 writable_roots,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
+                local_network: _,
                 network_access: _,
             } => {
                 // Start from explicitly configured writable roots.

@@ -12,6 +12,8 @@ use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
+const MACOS_SEATBELT_LOCAL_NETWORK_POLICY: &str =
+    include_str!("seatbelt_local_network_policy.sbpl");
 const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
@@ -117,9 +119,17 @@ pub(crate) fn create_seatbelt_command_args(
     } else {
         ""
     };
+    let local_network_policy = match sandbox_policy {
+        SandboxPolicy::WorkspaceWrite {
+            local_network: true,
+            network_access: false,
+            ..
+        } => MACOS_SEATBELT_LOCAL_NETWORK_POLICY,
+        _ => "",
+    };
 
     let full_policy = format!(
-        "{MACOS_SEATBELT_BASE_POLICY}\n{file_read_policy}\n{file_write_policy}\n{network_policy}"
+        "{MACOS_SEATBELT_BASE_POLICY}\n{file_read_policy}\n{file_write_policy}\n{local_network_policy}\n{network_policy}"
     );
 
     let dir_params = [file_write_dir_params, macos_dir_params()].concat();
@@ -163,6 +173,7 @@ fn macos_dir_params() -> Vec<(String, PathBuf)> {
 #[cfg(test)]
 mod tests {
     use super::MACOS_SEATBELT_BASE_POLICY;
+    use super::MACOS_SEATBELT_LOCAL_NETWORK_POLICY;
     use super::create_seatbelt_command_args;
     use super::macos_dir_params;
     use crate::protocol::SandboxPolicy;
@@ -181,6 +192,42 @@ mod tests {
             stderr == expected
                 || stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted"),
             "unexpected stderr: {stderr}"
+        );
+    }
+
+    #[test]
+    fn seatbelt_policy_includes_local_network_when_enabled() {
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            local_network: true,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let args = create_seatbelt_command_args(vec!["true".to_string()], &policy, Path::new("/"));
+        let policy_text = args.get(1).expect("policy").as_str();
+
+        assert_eq!(
+            policy_text.contains(MACOS_SEATBELT_LOCAL_NETWORK_POLICY),
+            true
+        );
+    }
+
+    #[test]
+    fn seatbelt_policy_skips_local_network_when_disabled() {
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            local_network: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let args = create_seatbelt_command_args(vec!["true".to_string()], &policy, Path::new("/"));
+        let policy_text = args.get(1).expect("policy").as_str();
+
+        assert_eq!(
+            policy_text.contains(MACOS_SEATBELT_LOCAL_NETWORK_POLICY),
+            false
         );
     }
 
@@ -208,6 +255,7 @@ mod tests {
                 .map(|p| p.try_into().unwrap())
                 .collect(),
             network_access: false,
+            local_network: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
@@ -392,6 +440,7 @@ mod tests {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![worktree_root.try_into().expect("worktree_root is absolute")],
             network_access: false,
+            local_network: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         };
@@ -475,6 +524,7 @@ mod tests {
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: false,
+            local_network: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         };

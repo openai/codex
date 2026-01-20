@@ -1,0 +1,7 @@
+; When local network access is enabled, allow loopback-only sockets for local servers/clients.
+(allow network-bind
+  (local ip "localhost:*"))
+(allow network-inbound
+  (local ip "localhost:*"))
+(allow network-outbound
+  (remote ip "localhost:*"))

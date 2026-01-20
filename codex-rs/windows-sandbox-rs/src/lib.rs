@@ -442,6 +442,7 @@ mod windows_impl {
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: Vec::new(),
                 network_access,
+                local_network: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
             }
