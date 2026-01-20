@@ -77,20 +77,39 @@ impl SessionTask for ReviewTask {
 
         // Spawn the review agent.
         let agent_control = session.agent_control();
-        let thread_id = agent_control
+        let thread_id = match agent_control
             .spawn_agent(
                 sub_agent_config,
                 None,
                 Some(SessionSource::SubAgent(SubAgentSource::Review)),
             )
             .await
-            .ok()?;
+        {
+            Ok(thread_id) => thread_id,
+            Err(err) => {
+                tracing::error!("Error while spawning review agent: {err:?}");
+                if !cancellation_token.is_cancelled() {
+                    exit_review_mode(session.clone_session(), None, ctx.clone(), None).await;
+                }
+                return None;
+            }
+        };
 
         if let Ok(mut guard) = self.sub_agent_thread_id.lock() {
             *guard = Some(thread_id);
         }
 
-        let mut status_rx = agent_control.subscribe_status(thread_id).await.ok()?;
+        let mut status_rx = match agent_control.subscribe_status(thread_id).await {
+            Ok(status_rx) => status_rx,
+            Err(err) => {
+                tracing::error!("Error while subscribing to review agent status: {err:?}");
+                if !cancellation_token.is_cancelled() {
+                    exit_review_mode(session.clone_session(), None, ctx.clone(), Some(thread_id))
+                        .await;
+                }
+                return None;
+            }
+        };
 
         session
             .session
