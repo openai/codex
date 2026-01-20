@@ -58,7 +58,7 @@ impl AgentControl {
                 Op::UserInput {
                     items: vec![UserInput::Text {
                         text: prompt,
-                        // Plain text conversion has no UI element ranges.
+                        // Agent control prompts are plain text with no UI text elements.
                         text_elements: Vec::new(),
                     }],
                     final_output_json_schema: None,
@@ -85,7 +85,6 @@ impl AgentControl {
         result
     }
 
-    #[allow(dead_code)] // Will be used for collab tools.
     /// Fetch the last known status for `agent_id`, returning `NotFound` when unavailable.
     pub(crate) async fn get_status(&self, agent_id: ThreadId) -> AgentStatus {
         let Ok(state) = self.upgrade() else {

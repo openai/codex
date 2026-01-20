@@ -25,6 +25,8 @@ use tokio_util::io::ReaderStream;
 use tracing::debug;
 use tracing::trace;
 
+const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
+
 /// Streams SSE events from an on-disk fixture for tests.
 pub fn stream_from_fixture(
     path: impl AsRef<Path>,
@@ -58,6 +60,10 @@ pub fn spawn_response_stream(
         .get("X-Models-Etag")
         .and_then(|v| v.to_str().ok())
         .map(ToString::to_string);
+    let reasoning_included = stream_response
+        .headers
+        .get(X_REASONING_INCLUDED_HEADER)
+        .is_some();
     if let Some(turn_state) = turn_state.as_ref()
         && let Some(header_value) = stream_response
             .headers
@@ -73,6 +79,11 @@ pub fn spawn_response_stream(
         }
         if let Some(etag) = models_etag {
             let _ = tx_event.send(Ok(ResponseEvent::ModelsEtag(etag))).await;
+        }
+        if reasoning_included {
+            let _ = tx_event
+                .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
+                .await;
         }
         process_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
     });

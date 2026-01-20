@@ -6,6 +6,7 @@ use std::fs::{self};
 use std::io::Write;
 use std::path::Path;
 
+use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use time::Duration;
 use time::OffsetDateTime;
@@ -89,6 +90,7 @@ fn write_session_file_with_provider(
         "cwd": ".",
         "originator": "test_originator",
         "cli_version": "test_version",
+        "base_instructions": null,
     });
 
     if let Some(source) = source {
@@ -127,6 +129,48 @@ fn write_session_file_with_provider(
     let times = FileTimes::new().set_modified(dt.into());
     file.set_times(times)?;
     Ok((dt, uuid))
+}
+
+fn write_session_file_with_meta_payload(
+    root: &Path,
+    ts_str: &str,
+    uuid: Uuid,
+    payload: serde_json::Value,
+) -> std::io::Result<()> {
+    let format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+    let dt = PrimitiveDateTime::parse(ts_str, format)
+        .unwrap()
+        .assume_utc();
+    let dir = root
+        .join("sessions")
+        .join(format!("{:04}", dt.year()))
+        .join(format!("{:02}", u8::from(dt.month())))
+        .join(format!("{:02}", dt.day()));
+    fs::create_dir_all(&dir)?;
+
+    let filename = format!("rollout-{ts_str}-{uuid}.jsonl");
+    let file_path = dir.join(filename);
+    let mut file = File::create(file_path)?;
+
+    let meta = serde_json::json!({
+        "timestamp": ts_str,
+        "type": "session_meta",
+        "payload": payload,
+    });
+    writeln!(file, "{meta}")?;
+
+    let user_event = serde_json::json!({
+        "timestamp": ts_str,
+        "type": "event_msg",
+        "payload": {"type": "user_message", "message": "Hello from user", "kind": "plain"}
+    });
+    writeln!(file, "{user_event}")?;
+
+    let times = FileTimes::new().set_modified(dt.into());
+    file.set_times(times)?;
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -206,6 +250,7 @@ async fn test_list_conversations_latest_first() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let head_2 = vec![serde_json::json!({
         "id": u2,
@@ -215,6 +260,7 @@ async fn test_list_conversations_latest_first() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let head_1 = vec![serde_json::json!({
         "id": u1,
@@ -224,6 +270,7 @@ async fn test_list_conversations_latest_first() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
 
     let updated_times: Vec<Option<String>> =
@@ -344,6 +391,7 @@ async fn test_pagination_cursor() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let head_4 = vec![serde_json::json!({
         "id": u4,
@@ -353,6 +401,7 @@ async fn test_pagination_cursor() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let updated_page1: Vec<Option<String>> =
         page1.items.iter().map(|i| i.updated_at.clone()).collect();
@@ -410,6 +459,7 @@ async fn test_pagination_cursor() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let head_2 = vec![serde_json::json!({
         "id": u2,
@@ -419,6 +469,7 @@ async fn test_pagination_cursor() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let updated_page2: Vec<Option<String>> =
         page2.items.iter().map(|i| i.updated_at.clone()).collect();
@@ -470,6 +521,7 @@ async fn test_pagination_cursor() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let updated_page3: Vec<Option<String>> =
         page3.items.iter().map(|i| i.updated_at.clone()).collect();
@@ -527,6 +579,7 @@ async fn test_get_thread_contents() {
         "cli_version": "test_version",
         "source": "vscode",
         "model_provider": "test-provider",
+        "base_instructions": null,
     })];
     let expected_page = ThreadsPage {
         items: vec![ThreadItem {
@@ -551,6 +604,7 @@ async fn test_get_thread_contents() {
             "cwd": ".",
             "originator": "test_originator",
             "cli_version": "test_version",
+            "base_instructions": null,
             "source": "vscode",
             "model_provider": "test-provider",
         }
@@ -564,6 +618,93 @@ async fn test_get_thread_contents() {
     let rec1 = serde_json::json!({"record_type": "response", "index": 1});
     let expected_content = format!("{meta}\n{user_event}\n{rec0}\n{rec1}\n");
     assert_eq!(content, expected_content);
+}
+
+#[tokio::test]
+async fn test_base_instructions_missing_in_meta_defaults_to_null() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let ts = "2025-04-02T10-30-00";
+    let uuid = Uuid::from_u128(101);
+    let payload = serde_json::json!({
+        "id": uuid,
+        "timestamp": ts,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version",
+        "source": "vscode",
+        "model_provider": "test-provider",
+    });
+    write_session_file_with_meta_payload(home, ts, uuid, payload).unwrap();
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        1,
+        None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    let head = page
+        .items
+        .first()
+        .and_then(|item| item.head.first())
+        .expect("session meta head");
+    assert_eq!(
+        head.get("base_instructions"),
+        Some(&serde_json::Value::Null)
+    );
+}
+
+#[tokio::test]
+async fn test_base_instructions_present_in_meta_is_preserved() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let ts = "2025-04-03T10-30-00";
+    let uuid = Uuid::from_u128(102);
+    let base_text = "Custom base instructions";
+    let payload = serde_json::json!({
+        "id": uuid,
+        "timestamp": ts,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version",
+        "source": "vscode",
+        "model_provider": "test-provider",
+        "base_instructions": {"text": base_text},
+    });
+    write_session_file_with_meta_payload(home, ts, uuid, payload).unwrap();
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        1,
+        None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    let head = page
+        .items
+        .first()
+        .and_then(|item| item.head.first())
+        .expect("session meta head");
+    let base = head
+        .get("base_instructions")
+        .and_then(|value| value.get("text"))
+        .and_then(serde_json::Value::as_str);
+    assert_eq!(base, Some(base_text));
 }
 
 #[tokio::test]
@@ -637,6 +778,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 cli_version: "test_version".into(),
                 source: SessionSource::VSCode,
                 model_provider: Some("test-provider".into()),
+                base_instructions: None,
             },
             git: None,
         }),
@@ -744,6 +886,7 @@ async fn test_stable_ordering_same_second_pagination() {
             "cli_version": "test_version",
             "source": "vscode",
             "model_provider": "test-provider",
+            "base_instructions": null,
         })]
     };
     let updated_page1: Vec<Option<String>> =

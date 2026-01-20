@@ -48,13 +48,14 @@ impl ComposerInput {
 
     /// Clear the input text.
     pub fn clear(&mut self) {
-        self.inner.set_text_content(String::new());
+        self.inner
+            .set_text_content(String::new(), Vec::new(), Vec::new());
     }
 
     /// Feed a key event into the composer and return a high-level action.
     pub fn input(&mut self, key: KeyEvent) -> ComposerAction {
         let action = match self.inner.handle_key_event(key).0 {
-            InputResult::Submitted(text) => ComposerAction::Submitted(text),
+            InputResult::Submitted { text, .. } => ComposerAction::Submitted(text),
             _ => ComposerAction::None,
         };
         self.drain_app_events();

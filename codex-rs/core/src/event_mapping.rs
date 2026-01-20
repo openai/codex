@@ -52,7 +52,7 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 }
                 content.push(UserInput::Text {
                     text: text.clone(),
-                    // Plain text conversion has no UI element ranges.
+                    // Model input content does not carry UI element ranges.
                     text_elements: Vec::new(),
                 });
             }

@@ -135,6 +135,13 @@ async fn run_shell_script_with_timeout(
     // returns a ref of handler.
     let mut handler = Command::new(&args[0]);
     handler.args(&args[1..]);
+    #[cfg(unix)]
+    unsafe {
+        handler.pre_exec(|| {
+            codex_utils_pty::process_group::detach_from_tty()?;
+            Ok(())
+        });
+    }
     handler.kill_on_drop(true);
     let output = timeout(snapshot_timeout, handler.output())
         .await

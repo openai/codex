@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use codex_protocol::ThreadId;
+use codex_protocol::models::BaseInstructions;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
@@ -59,6 +60,7 @@ pub enum RolloutRecorderParams {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
+        base_instructions: BaseInstructions,
     },
     Resume {
         path: PathBuf,
@@ -81,11 +83,13 @@ impl RolloutRecorderParams {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
+        base_instructions: BaseInstructions,
     ) -> Self {
         Self::Create {
             conversation_id,
             forked_from_id,
             source,
+            base_instructions,
         }
     }
 
@@ -160,6 +164,7 @@ impl RolloutRecorder {
                 conversation_id,
                 forked_from_id,
                 source,
+                base_instructions,
             } => {
                 let LogFileInfo {
                     file,
@@ -188,6 +193,7 @@ impl RolloutRecorder {
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         source,
                         model_provider: Some(config.model_provider_id.clone()),
+                        base_instructions: Some(base_instructions),
                     }),
                 )
             }

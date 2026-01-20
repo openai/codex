@@ -66,12 +66,12 @@ pub(crate) async fn spawn_child_async(
 
     #[cfg(unix)]
     unsafe {
-        let set_process_group = matches!(stdio_policy, StdioPolicy::RedirectForShellTool);
+        let detach_from_tty = matches!(stdio_policy, StdioPolicy::RedirectForShellTool);
         #[cfg(target_os = "linux")]
         let parent_pid = libc::getpid();
         cmd.pre_exec(move || {
-            if set_process_group {
-                codex_utils_pty::process_group::set_process_group()?;
+            if detach_from_tty {
+                codex_utils_pty::process_group::detach_from_tty()?;
             }
 
             // This relies on prctl(2), so it only works on Linux.

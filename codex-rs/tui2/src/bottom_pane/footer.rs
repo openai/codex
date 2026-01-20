@@ -38,6 +38,7 @@ pub(crate) struct FooterProps {
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
     pub(crate) steer_enabled: bool,
+    pub(crate) collaboration_modes_enabled: bool,
     /// Which key the user must press again to quit.
     ///
     /// This is rendered when `mode` is `FooterMode::QuitShortcutReminder`.
@@ -109,6 +110,31 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
     .render(area, buf);
 }
 
+pub(crate) fn inset_footer_hint_area(mut area: Rect) -> Rect {
+    if area.width > 2 {
+        area.x += 2;
+        area.width = area.width.saturating_sub(2);
+    }
+    area
+}
+
+pub(crate) fn render_footer_hint_items(area: Rect, buf: &mut Buffer, items: &[(String, String)]) {
+    if items.is_empty() {
+        return;
+    }
+
+    let mut spans = Vec::with_capacity(items.len() * 4);
+    for (idx, (key, label)) in items.iter().enumerate() {
+        spans.push(" ".into());
+        spans.push(key.clone().bold());
+        spans.push(format!(" {label}").into());
+        if idx + 1 != items.len() {
+            spans.push("   ".into());
+        }
+    }
+    Line::from(spans).render(inset_footer_hint_area(area), buf);
+}
+
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
     fn apply_copy_feedback(lines: &mut [Line<'static>], feedback: Option<TranscriptCopyFeedback>) {
         let Some(line) = lines.first_mut() else {
@@ -176,6 +202,7 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 use_shift_enter_hint: props.use_shift_enter_hint,
                 esc_backtrack_hint: props.esc_backtrack_hint,
                 is_wsl,
+                collaboration_modes_enabled: props.collaboration_modes_enabled,
             };
             shortcut_overlay_lines(state)
         }
@@ -202,6 +229,7 @@ struct ShortcutsState {
     use_shift_enter_hint: bool,
     esc_backtrack_hint: bool,
     is_wsl: bool,
+    collaboration_modes_enabled: bool,
 }
 
 fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
@@ -233,6 +261,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut edit_previous = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
+    let mut change_mode = Line::from("");
 
     for descriptor in SHORTCUTS {
         if let Some(text) = descriptor.overlay_entry(state) {
@@ -246,11 +275,12 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
+                ShortcutId::ChangeMode => change_mode = text,
             }
         }
     }
 
-    let ordered = vec![
+    let mut ordered = vec![
         commands,
         shell_commands,
         newline,
@@ -259,9 +289,12 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         paste_image,
         edit_previous,
         quit,
-        Line::from(""),
-        show_transcript,
     ];
+    if change_mode.width() > 0 {
+        ordered.push(change_mode);
+    }
+    ordered.push(Line::from(""));
+    ordered.push(show_transcript);
 
     build_columns(ordered)
 }
@@ -338,6 +371,7 @@ enum ShortcutId {
     EditPrevious,
     Quit,
     ShowTranscript,
+    ChangeMode,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -358,6 +392,7 @@ enum DisplayCondition {
     WhenShiftEnterHint,
     WhenNotShiftEnterHint,
     WhenUnderWSL,
+    WhenCollaborationModesEnabled,
 }
 
 impl DisplayCondition {
@@ -367,6 +402,7 @@ impl DisplayCondition {
             DisplayCondition::WhenShiftEnterHint => state.use_shift_enter_hint,
             DisplayCondition::WhenNotShiftEnterHint => !state.use_shift_enter_hint,
             DisplayCondition::WhenUnderWSL => state.is_wsl,
+            DisplayCondition::WhenCollaborationModesEnabled => state.collaboration_modes_enabled,
         }
     }
 }
@@ -500,6 +536,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         prefix: "",
         label: " to view transcript",
     },
+    ShortcutDescriptor {
+        id: ShortcutId::ChangeMode,
+        bindings: &[ShortcutBinding {
+            key: key_hint::shift(KeyCode::Tab),
+            condition: DisplayCondition::WhenCollaborationModesEnabled,
+        }],
+        prefix: "",
+        label: " to change mode",
+    },
 ];
 
 #[cfg(test)]
@@ -531,6 +576,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -550,6 +596,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -569,6 +616,27 @@ mod tests {
                 use_shift_enter_hint: true,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+                context_window_percent: None,
+                context_window_used_tokens: None,
+                transcript_scrolled: false,
+                transcript_selection_active: false,
+                transcript_scroll_position: None,
+                transcript_copy_selection_key: key_hint::ctrl_shift(KeyCode::Char('c')),
+                transcript_copy_feedback: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_shortcuts_collaboration_modes_enabled",
+            FooterProps {
+                mode: FooterMode::ShortcutOverlay,
+                esc_backtrack_hint: true,
+                use_shift_enter_hint: true,
+                is_task_running: false,
+                steer_enabled: false,
+                collaboration_modes_enabled: true,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -588,6 +656,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -607,6 +676,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -626,6 +696,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -645,6 +716,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -664,6 +736,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
@@ -683,6 +756,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
@@ -702,6 +776,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -721,6 +796,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: true,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -740,6 +816,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,

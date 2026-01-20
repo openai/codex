@@ -4,6 +4,8 @@
 //! command can be cleaned up reliably:
 //! - `set_process_group` is called in `pre_exec` so the child starts its own
 //!   process group.
+//! - `detach_from_tty` starts a new session so non-interactive children do not
+//!   inherit the controlling TTY.
 //! - `kill_process_group_by_pid` targets the whole group (children/grandchildren)
 //! - `kill_process_group` targets a known process group ID directly
 //!   instead of a single PID.
@@ -39,6 +41,26 @@ pub fn set_parent_death_signal(parent_pid: libc::pid_t) -> io::Result<()> {
 #[cfg(not(target_os = "linux"))]
 /// No-op on non-Linux platforms.
 pub fn set_parent_death_signal(_parent_pid: i32) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+/// Detach from the controlling TTY by starting a new session.
+pub fn detach_from_tty() -> io::Result<()> {
+    let result = unsafe { libc::setsid() };
+    if result == -1 {
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::EPERM) {
+            return set_process_group();
+        }
+        return Err(err);
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+/// No-op on non-Unix platforms.
+pub fn detach_from_tty() -> io::Result<()> {
     Ok(())
 }
 

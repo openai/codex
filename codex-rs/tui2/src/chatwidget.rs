@@ -90,7 +90,9 @@ use codex_core::skills::model::SkillMetadata;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
+use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -122,6 +124,7 @@ use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::InputResult;
+use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
@@ -130,6 +133,7 @@ use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::collab;
+use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
@@ -298,8 +302,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) config: Config,
     pub(crate) frame_requester: FrameRequester,
     pub(crate) app_event_tx: AppEventSender,
-    pub(crate) initial_prompt: Option<String>,
-    pub(crate) initial_images: Vec<PathBuf>,
+    pub(crate) initial_user_message: Option<UserMessage>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
@@ -315,6 +318,8 @@ enum RateLimitSwitchPromptState {
     Pending,
     Shown,
 }
+
+type CollaborationModeSelection = collaboration_modes::Selection;
 
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
@@ -345,6 +350,11 @@ pub(crate) struct ChatWidget {
     active_cell_revision: u64,
     config: Config,
     model: Option<String>,
+    /// Current UI selection for collaboration modes.
+    ///
+    /// This selection is only meaningful when `Feature::CollaborationModes` is enabled; when the
+    /// feature is disabled, the value is effectively inert.
+    collaboration_mode: CollaborationModeSelection,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     session_header: SessionHeader,
@@ -449,16 +459,19 @@ pub(crate) struct ActiveCellTranscriptKey {
     pub(crate) animation_tick: Option<u64>,
 }
 
-struct UserMessage {
+pub(crate) struct UserMessage {
     text: String,
-    image_paths: Vec<PathBuf>,
+    local_images: Vec<LocalImageAttachment>,
+    text_elements: Vec<TextElement>,
 }
 
 impl From<String> for UserMessage {
     fn from(text: String) -> Self {
         Self {
             text,
-            image_paths: Vec::new(),
+            local_images: Vec::new(),
+            // Plain text conversion has no UI element ranges.
+            text_elements: Vec::new(),
         }
     }
 }
@@ -467,16 +480,107 @@ impl From<&str> for UserMessage {
     fn from(text: &str) -> Self {
         Self {
             text: text.to_string(),
-            image_paths: Vec::new(),
+            local_images: Vec::new(),
+            // Plain text conversion has no UI element ranges.
+            text_elements: Vec::new(),
         }
     }
 }
 
-fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Option<UserMessage> {
-    if text.is_empty() && image_paths.is_empty() {
+pub(crate) fn create_initial_user_message(
+    text: Option<String>,
+    local_image_paths: Vec<PathBuf>,
+    text_elements: Vec<TextElement>,
+) -> Option<UserMessage> {
+    let text = text.unwrap_or_default();
+    if text.is_empty() && local_image_paths.is_empty() {
         None
     } else {
-        Some(UserMessage { text, image_paths })
+        let local_images = local_image_paths
+            .into_iter()
+            .enumerate()
+            .map(|(idx, path)| LocalImageAttachment {
+                placeholder: local_image_label_text(idx + 1),
+                path,
+            })
+            .collect();
+        Some(UserMessage {
+            text,
+            local_images,
+            text_elements,
+        })
+    }
+}
+
+// When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
+// its attachments at [Image #1]. Reassign placeholder labels based on the attachment list so
+// the combined local_image_paths order matches the labels, even if placeholders were moved
+// in the text (e.g., [Image #2] appearing before [Image #1]).
+fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) -> UserMessage {
+    let UserMessage {
+        text,
+        text_elements,
+        local_images,
+    } = message;
+    if local_images.is_empty() {
+        return UserMessage {
+            text,
+            text_elements,
+            local_images,
+        };
+    }
+
+    let mut mapping: HashMap<String, String> = HashMap::new();
+    let mut remapped_images = Vec::new();
+    for attachment in local_images {
+        let new_placeholder = local_image_label_text(*next_label);
+        *next_label += 1;
+        mapping.insert(attachment.placeholder.clone(), new_placeholder.clone());
+        remapped_images.push(LocalImageAttachment {
+            placeholder: new_placeholder,
+            path: attachment.path,
+        });
+    }
+
+    let mut elements = text_elements;
+    elements.sort_by_key(|elem| elem.byte_range.start);
+
+    let mut cursor = 0usize;
+    let mut rebuilt = String::new();
+    let mut rebuilt_elements = Vec::new();
+    for mut elem in elements {
+        let start = elem.byte_range.start.min(text.len());
+        let end = elem.byte_range.end.min(text.len());
+        if let Some(segment) = text.get(cursor..start) {
+            rebuilt.push_str(segment);
+        }
+
+        let original = text.get(start..end).unwrap_or("");
+        let placeholder_key = elem.placeholder.as_deref().unwrap_or(original);
+        let replacement = mapping
+            .get(placeholder_key)
+            .map(String::as_str)
+            .unwrap_or(original);
+
+        let elem_start = rebuilt.len();
+        rebuilt.push_str(replacement);
+        let elem_end = rebuilt.len();
+
+        if let Some(remapped) = mapping.get(placeholder_key) {
+            elem.placeholder = Some(remapped.clone());
+        }
+        elem.byte_range = (elem_start..elem_end).into();
+        rebuilt_elements.push(elem);
+        cursor = end;
+    }
+    if let Some(segment) = text.get(cursor..) {
+        rebuilt.push_str(segment);
+    }
+
+    UserMessage {
+        text: rebuilt,
+        local_images: remapped_images,
+        text_elements: rebuilt_elements,
     }
 }
 
@@ -906,29 +1010,74 @@ impl ChatWidget {
             ));
         }
 
-        // If any messages were queued during the task, restore them into the composer.
-        if !self.queued_user_messages.is_empty() {
-            let queued_text = self
-                .queued_user_messages
+        if let Some(combined) = self.drain_queued_messages_for_restore() {
+            let combined_local_image_paths = combined
+                .local_images
                 .iter()
-                .map(|m| m.text.clone())
-                .collect::<Vec<_>>()
-                .join("\n");
-            let existing_text = self.bottom_pane.composer_text();
-            let combined = if existing_text.is_empty() {
-                queued_text
-            } else if queued_text.is_empty() {
-                existing_text
-            } else {
-                format!("{queued_text}\n{existing_text}")
-            };
-            self.bottom_pane.set_composer_text(combined);
-            // Clear the queue and update the status indicator list.
-            self.queued_user_messages.clear();
+                .map(|img| img.path.clone())
+                .collect();
+            self.bottom_pane.set_composer_text(
+                combined.text,
+                combined.text_elements,
+                combined_local_image_paths,
+            );
             self.refresh_queued_user_messages();
         }
 
         self.request_redraw();
+    }
+
+    /// Merge queued drafts (plus the current composer state) into a single message for restore.
+    ///
+    /// Each queued draft numbers attachments from `[Image #1]`. When we concatenate drafts, we
+    /// must renumber placeholders in a stable order so the merged attachment list stays aligned
+    /// with the labels embedded in text. This helper drains the queue, remaps placeholders, and
+    /// fixes text element byte ranges as content is appended. Returns `None` when there is nothing
+    /// to restore.
+    fn drain_queued_messages_for_restore(&mut self) -> Option<UserMessage> {
+        if self.queued_user_messages.is_empty() {
+            return None;
+        }
+
+        let existing_message = UserMessage {
+            text: self.bottom_pane.composer_text(),
+            text_elements: self.bottom_pane.composer_text_elements(),
+            local_images: self.bottom_pane.composer_local_images(),
+        };
+
+        let mut to_merge: Vec<UserMessage> = self.queued_user_messages.drain(..).collect();
+        if !existing_message.text.is_empty() || !existing_message.local_images.is_empty() {
+            to_merge.push(existing_message);
+        }
+
+        let mut combined = UserMessage {
+            text: String::new(),
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        };
+        let mut combined_offset = 0usize;
+        let mut next_image_label = 1usize;
+
+        for (idx, message) in to_merge.into_iter().enumerate() {
+            if idx > 0 {
+                combined.text.push('\n');
+                combined_offset += 1;
+            }
+            let message = remap_placeholders_for_message(message, &mut next_image_label);
+            let base = combined_offset;
+            combined.text.push_str(&message.text);
+            combined_offset += message.text.len();
+            combined
+                .text_elements
+                .extend(message.text_elements.into_iter().map(|mut elem| {
+                    elem.byte_range.start += base;
+                    elem.byte_range.end += base;
+                    elem
+                }));
+            combined.local_images.extend(message.local_images);
+        }
+
+        Some(combined)
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
@@ -1434,8 +1583,7 @@ impl ChatWidget {
             config,
             frame_requester,
             app_event_tx,
-            initial_prompt,
-            initial_images,
+            initial_user_message,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -1478,13 +1626,11 @@ impl ChatWidget {
             active_cell_revision: 0,
             config,
             model,
+            collaboration_mode: CollaborationModeSelection::default(),
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(model_for_header),
-            initial_user_message: create_initial_user_message(
-                initial_prompt.unwrap_or_default(),
-                initial_images,
-            ),
+            initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
             plan_type: None,
@@ -1524,6 +1670,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_collaboration_modes_enabled(
+            widget.config.features.enabled(Feature::CollaborationModes),
+        );
 
         widget
     }
@@ -1538,8 +1687,7 @@ impl ChatWidget {
             mut config,
             frame_requester,
             app_event_tx,
-            initial_prompt,
-            initial_images,
+            initial_user_message,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -1575,13 +1723,11 @@ impl ChatWidget {
             active_cell_revision: 0,
             config,
             model: Some(header_model.clone()),
+            collaboration_mode: CollaborationModeSelection::default(),
             auth_manager,
             models_manager,
             session_header: SessionHeader::new(header_model),
-            initial_user_message: create_initial_user_message(
-                initial_prompt.unwrap_or_default(),
-                initial_images,
-            ),
+            initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
             plan_type: None,
@@ -1621,6 +1767,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_collaboration_modes_enabled(
+            widget.config.features.enabled(Feature::CollaborationModes),
+        );
 
         widget
     }
@@ -1686,6 +1835,16 @@ impl ChatWidget {
 
         match key_event {
             KeyEvent {
+                code: KeyCode::BackTab,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.collaboration_modes_enabled()
+                && !self.bottom_pane.is_task_running()
+                && self.bottom_pane.no_modal_or_popup_active() =>
+            {
+                self.cycle_collaboration_mode();
+            }
+            KeyEvent {
                 code: KeyCode::Up,
                 modifiers: KeyModifiers::ALT,
                 kind: KeyEventKind::Press,
@@ -1693,46 +1852,64 @@ impl ChatWidget {
             } if !self.queued_user_messages.is_empty() => {
                 // Prefer the most recently queued item.
                 if let Some(user_message) = self.queued_user_messages.pop_back() {
-                    self.bottom_pane.set_composer_text(user_message.text);
+                    let local_image_paths = user_message
+                        .local_images
+                        .iter()
+                        .map(|img| img.path.clone())
+                        .collect();
+                    self.bottom_pane.set_composer_text(
+                        user_message.text,
+                        user_message.text_elements,
+                        local_image_paths,
+                    );
                     self.refresh_queued_user_messages();
                     self.request_redraw();
                 }
             }
-            _ => {
-                match self.bottom_pane.handle_key_event(key_event) {
-                    InputResult::Submitted(text) => {
-                        // Enter always sends messages immediately (bypasses queue check)
-                        // Clear any reasoning status header when submitting a new message
+            _ => match self.bottom_pane.handle_key_event(key_event) {
+                InputResult::Submitted {
+                    text,
+                    text_elements,
+                } => {
+                    let user_message = UserMessage {
+                        text,
+                        local_images: self
+                            .bottom_pane
+                            .take_recent_submission_images_with_placeholders(),
+                        text_elements,
+                    };
+                    if self.is_session_configured() {
+                        // Submitted is only emitted when steer is enabled (Enter sends immediately).
+                        // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
                         self.set_status_header(String::from("Working"));
-                        let user_message = UserMessage {
-                            text,
-                            image_paths: self.bottom_pane.take_recent_submission_images(),
-                        };
-                        if !self.is_session_configured() {
-                            self.queue_user_message(user_message);
-                        } else {
-                            self.submit_user_message(user_message);
-                        }
-                    }
-                    InputResult::Queued(text) => {
-                        // Tab queues the message if a task is running, otherwise submits immediately
-                        let user_message = UserMessage {
-                            text,
-                            image_paths: self.bottom_pane.take_recent_submission_images(),
-                        };
+                        self.submit_user_message(user_message);
+                    } else {
                         self.queue_user_message(user_message);
                     }
-                    InputResult::Command(cmd) => {
-                        self.dispatch_command(cmd);
-                    }
-                    InputResult::CommandWithArgs(cmd, args) => {
-                        self.dispatch_command_with_args(cmd, args);
-                    }
-                    InputResult::None => {}
                 }
-            }
+                InputResult::Queued {
+                    text,
+                    text_elements,
+                } => {
+                    let user_message = UserMessage {
+                        text,
+                        local_images: self
+                            .bottom_pane
+                            .take_recent_submission_images_with_placeholders(),
+                        text_elements,
+                    };
+                    self.queue_user_message(user_message);
+                }
+                InputResult::Command(cmd) => {
+                    self.dispatch_command(cmd);
+                }
+                InputResult::CommandWithArgs(cmd, args) => {
+                    self.dispatch_command_with_args(cmd, args);
+                }
+                InputResult::None => {}
+            },
         }
     }
 
@@ -1796,6 +1973,11 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::Collab => {
+                if self.collaboration_modes_enabled() {
+                    self.cycle_collaboration_mode();
+                }
             }
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
@@ -1957,6 +2139,19 @@ impl ChatWidget {
                     },
                 });
             }
+            SlashCommand::Collab => {
+                if !self.collaboration_modes_enabled() {
+                    return;
+                }
+
+                if let Some(selection) = collaboration_modes::parse_selection(trimmed) {
+                    self.set_collaboration_mode(selection);
+                } else if !trimmed.is_empty() {
+                    self.add_error_message(format!(
+                        "Unknown collaboration mode '{trimmed}'. Try: plan, pair, execute."
+                    ));
+                }
+            }
             _ => self.dispatch_command(cmd),
         }
     }
@@ -2022,8 +2217,20 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        let UserMessage { text, image_paths } = user_message;
-        if text.is_empty() && image_paths.is_empty() {
+        let Some(model) = self.current_model().or(self.config.model.as_deref()) else {
+            tracing::warn!("cannot submit user message before model is known; queueing");
+            self.queued_user_messages.push_front(user_message);
+            self.refresh_queued_user_messages();
+            return;
+        };
+        let model = model.to_string();
+
+        let UserMessage {
+            text,
+            local_images,
+            text_elements,
+        } = user_message;
+        if text.is_empty() && local_images.is_empty() {
             return;
         }
 
@@ -2047,15 +2254,16 @@ impl ChatWidget {
             return;
         }
 
-        for path in image_paths {
-            items.push(UserInput::LocalImage { path });
+        for image in &local_images {
+            items.push(UserInput::LocalImage {
+                path: image.path.clone(),
+            });
         }
 
         if !text.is_empty() {
-            // TODO: Thread text element ranges from the composer input. Empty keeps old behavior.
             items.push(UserInput::Text {
                 text: text.clone(),
-                text_elements: Vec::new(),
+                text_elements: text_elements.clone(),
             });
         }
 
@@ -2069,14 +2277,34 @@ impl ChatWidget {
             }
         }
 
-        self.codex_op_tx
-            .send(Op::UserInput {
-                items,
-                final_output_json_schema: None,
-            })
-            .unwrap_or_else(|e| {
-                tracing::error!("failed to send message: {e}");
-            });
+        let collaboration_mode = self.collaboration_modes_enabled().then(|| {
+            collaboration_modes::resolve_mode_or_fallback(
+                self.models_manager.as_ref(),
+                self.collaboration_mode,
+                model.as_str(),
+                self.config.model_reasoning_effort,
+            )
+        });
+        let op = Op::UserTurn {
+            items,
+            cwd: self.config.cwd.clone(),
+            approval_policy: self.config.approval_policy.value(),
+            sandbox_policy: self.config.sandbox_policy.get().clone(),
+            model,
+            effort: self.config.model_reasoning_effort,
+            summary: self.config.model_reasoning_summary,
+            final_output_json_schema: None,
+            collaboration_mode,
+        };
+
+        if !self.agent_turn_running {
+            self.agent_turn_running = true;
+            self.update_task_running_state();
+        }
+
+        self.codex_op_tx.send(op).unwrap_or_else(|e| {
+            tracing::error!("failed to send message: {e}");
+        });
 
         // Persist the text to cross-session message history.
         if !text.is_empty() {
@@ -2089,7 +2317,12 @@ impl ChatWidget {
 
         // Only show the text portion in conversation history.
         if !text.is_empty() {
-            self.add_to_history(history_cell::new_user_prompt(text));
+            let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
+            self.add_to_history(history_cell::new_user_prompt(
+                text,
+                text_elements,
+                local_image_paths,
+            ));
         }
         self.needs_final_message_separator = false;
     }
@@ -2245,7 +2478,8 @@ impl ChatWidget {
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ReasoningRawContentDelta(_) => {}
+            | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::RequestUserInput(_) => {}
         }
     }
 
@@ -2299,10 +2533,12 @@ impl ChatWidget {
     }
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
-        let message = event.message.trim();
-        // Only show the text portion in conversation history.
-        if !message.is_empty() {
-            self.add_to_history(history_cell::new_user_prompt(message.to_string()));
+        if !event.message.trim().is_empty() {
+            self.add_to_history(history_cell::new_user_prompt(
+                event.message,
+                event.text_elements,
+                event.local_images,
+            ));
         }
 
         self.needs_final_message_separator = false;
@@ -2409,6 +2645,8 @@ impl ChatWidget {
             self.plan_type,
             Local::now(),
             self.model_display_name(),
+            self.collaboration_modes_enabled()
+                .then_some(self.collaboration_mode.label()),
         ));
     }
     fn stop_rate_limit_poller(&mut self) {
@@ -3584,6 +3822,9 @@ impl ChatWidget {
         if feature == Feature::Steer {
             self.bottom_pane.set_steer_enabled(enabled);
         }
+        if feature == Feature::CollaborationModes {
+            self.bottom_pane.set_collaboration_modes_enabled(enabled);
+        }
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
@@ -3624,8 +3865,37 @@ impl ChatWidget {
         self.model.as_deref()
     }
 
+    fn collaboration_modes_enabled(&self) -> bool {
+        self.config.features.enabled(Feature::CollaborationModes)
+    }
+
     fn model_display_name(&self) -> &str {
         self.model.as_deref().unwrap_or(DEFAULT_MODEL_DISPLAY_NAME)
+    }
+
+    fn cycle_collaboration_mode(&mut self) {
+        if !self.collaboration_modes_enabled() {
+            return;
+        }
+
+        let next = self.collaboration_mode.next();
+        self.set_collaboration_mode(next);
+    }
+
+    /// Update the selected collaboration mode.
+    ///
+    /// When collaboration modes are enabled, the current selection is attached to *every*
+    /// submission as `Op::UserTurn { collaboration_mode: Some(...) }`.
+    fn set_collaboration_mode(&mut self, selection: CollaborationModeSelection) {
+        if !self.collaboration_modes_enabled() {
+            return;
+        }
+
+        self.collaboration_mode = selection;
+        let flash = collaboration_modes::flash_line(selection);
+        const FLASH_DURATION: Duration = Duration::from_secs(2);
+        self.bottom_pane.flash_footer_hint(flash, FLASH_DURATION);
+        self.request_redraw();
     }
 
     /// Build a placeholder header cell while the session is configuring.
@@ -3815,8 +4085,14 @@ impl ChatWidget {
     }
 
     /// Replace the composer content with the provided text and reset cursor.
-    pub(crate) fn set_composer_text(&mut self, text: String) {
-        self.bottom_pane.set_composer_text(text);
+    pub(crate) fn set_composer_text(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+    ) {
+        self.bottom_pane
+            .set_composer_text(text, text_elements, local_image_paths);
     }
 
     pub(crate) fn show_esc_backtrack_hint(&mut self) {

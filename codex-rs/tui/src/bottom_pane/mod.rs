@@ -28,16 +28,24 @@ use bottom_pane_view::BottomPaneView;
 use codex_core::features::Features;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
+use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 use std::time::Duration;
 
 mod approval_overlay;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 mod bottom_pane_view;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LocalImageAttachment {
+    pub(crate) placeholder: String,
+    pub(crate) path: PathBuf,
+}
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
@@ -188,6 +196,11 @@ impl BottomPane {
         self.composer.set_steer_enabled(enabled);
     }
 
+    pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
+        self.composer.set_collaboration_modes_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
         self.status.as_ref()
     }
@@ -237,8 +250,10 @@ impl BottomPane {
         } else {
             // If a task is running and a status line is visible, allow Esc to
             // send an interrupt even while the composer has focus.
-            if matches!(key_event.code, crossterm::event::KeyCode::Esc)
+            // When a popup is active, prefer dismissing it over interrupting the task.
+            if key_event.code == KeyCode::Esc
                 && self.is_task_running
+                && !self.composer.popup_active()
                 && let Some(status) = &self.status
             {
                 // Send Op::Interrupt
@@ -309,8 +324,14 @@ impl BottomPane {
     }
 
     /// Replace the composer text with `text`.
-    pub(crate) fn set_composer_text(&mut self, text: String) {
-        self.composer.set_text_content(text);
+    pub(crate) fn set_composer_text(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+    ) {
+        self.composer
+            .set_text_content(text, text_elements, local_image_paths);
         self.request_redraw();
     }
 
@@ -332,6 +353,19 @@ impl BottomPane {
     /// Get the current composer text (for tests and programmatic checks).
     pub(crate) fn composer_text(&self) -> String {
         self.composer.current_text()
+    }
+
+    pub(crate) fn composer_text_elements(&self) -> Vec<TextElement> {
+        self.composer.text_elements()
+    }
+
+    pub(crate) fn composer_local_images(&self) -> Vec<LocalImageAttachment> {
+        self.composer.local_images()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn composer_local_image_paths(&self) -> Vec<PathBuf> {
+        self.composer.local_image_paths()
     }
 
     pub(crate) fn composer_text_with_pending(&self) -> String {
@@ -508,6 +542,23 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn flash_footer_hint(&mut self, line: Line<'static>, duration: Duration) {
+        self.composer.show_footer_flash(line, duration);
+        let frame_requester = self.frame_requester.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                tokio::time::sleep(duration).await;
+                frame_requester.schedule_frame();
+            });
+        } else {
+            std::thread::spawn(move || {
+                std::thread::sleep(duration);
+                frame_requester.schedule_frame();
+            });
+        }
+        self.request_redraw();
+    }
+
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.composer.is_empty()
     }
@@ -627,8 +678,16 @@ impl BottomPane {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
         self.composer.take_recent_submission_images()
+    }
+
+    pub(crate) fn take_recent_submission_images_with_placeholders(
+        &mut self,
+    ) -> Vec<LocalImageAttachment> {
+        self.composer
+            .take_recent_submission_images_with_placeholders()
     }
 
     fn as_renderable(&'_ self) -> RenderableItem<'_> {
@@ -673,9 +732,13 @@ impl Renderable for BottomPane {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use codex_core::protocol::Op;
+    use codex_protocol::protocol::SkillScope;
+    use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use std::path::PathBuf;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn snapshot_buffer(buf: &Buffer) -> String {
@@ -940,6 +1003,111 @@ mod tests {
         assert_snapshot!(
             "status_and_queued_messages_snapshot",
             render_snapshot(&pane, area)
+        );
+    }
+
+    #[test]
+    fn esc_with_skill_popup_does_not_interrupt_task() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(vec![SkillMetadata {
+                name: "test-skill".to_string(),
+                description: "test skill".to_string(),
+                short_description: None,
+                interface: None,
+                path: PathBuf::from("test-skill"),
+                scope: SkillScope::User,
+            }]),
+        });
+
+        pane.set_task_running(true);
+
+        // Repro: a running task + skill popup + Esc should dismiss the popup, not interrupt.
+        pane.insert_str("$");
+        assert!(
+            pane.composer.popup_active(),
+            "expected skill popup after typing `$`"
+        );
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        while let Ok(ev) = rx.try_recv() {
+            assert!(
+                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
+                "expected Esc to not send Op::Interrupt when dismissing skill popup"
+            );
+        }
+        assert!(
+            !pane.composer.popup_active(),
+            "expected Esc to dismiss skill popup"
+        );
+    }
+
+    #[test]
+    fn esc_with_slash_command_popup_does_not_interrupt_task() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+
+        // Repro: a running task + slash-command popup + Esc should not interrupt the task.
+        pane.insert_str("/");
+        assert!(
+            pane.composer.popup_active(),
+            "expected command popup after typing `/`"
+        );
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        while let Ok(ev) = rx.try_recv() {
+            assert!(
+                !matches!(ev, AppEvent::CodexOp(Op::Interrupt)),
+                "expected Esc to not send Op::Interrupt while command popup is active"
+            );
+        }
+        assert_eq!(pane.composer_text(), "/");
+    }
+
+    #[test]
+    fn esc_interrupts_running_task_when_no_popup() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(
+            matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
+            "expected Esc to send Op::Interrupt while a task is running"
         );
     }
 }
