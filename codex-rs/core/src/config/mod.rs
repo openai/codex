@@ -441,14 +441,7 @@ impl ConfigBuilder {
             Some(path) => AbsolutePathBuf::try_from(path)?,
             None => AbsolutePathBuf::current_dir()?,
         };
-        if harness_overrides.cwd.is_none()
-            || harness_overrides
-                .cwd
-                .as_ref()
-                .is_some_and(|p| !p.is_absolute())
-        {
-            harness_overrides.cwd = Some(cwd.to_path_buf());
-        }
+        harness_overrides.cwd = Some(cwd.to_path_buf());
         let config_layer_stack =
             load_config_layers_state(&codex_home, Some(cwd), &cli_overrides, loader_overrides)
                 .await?;
