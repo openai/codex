@@ -2314,6 +2314,7 @@ trust_level = "trusted"
     async fn project_profile_overrides_user_profile() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let workspace = TempDir::new()?;
+        let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
         std::fs::write(
             codex_home.path().join(CONFIG_TOML_FILE),
             format!(
@@ -2326,10 +2327,9 @@ model = "gpt-global"
 [profiles.project]
 model = "gpt-project"
 
-[projects."{path}"]
+[projects."{workspace_key}"]
 trust_level = "trusted"
 "#,
-                path = workspace.path().display()
             ),
         )?;
         let project_config_dir = workspace.path().join(".codex");
