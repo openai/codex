@@ -2,17 +2,21 @@
 
 use std::collections::HashMap;
 use std::ffi::CStr;
+use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Child;
 
 use crate::protocol::SandboxPolicy;
+use crate::protocol::WritableRoot;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
+const MACOS_GIT_PROTECTED_SUBPATHS: &[&str] = &["hooks", "config"];
 
 /// When working with `sandbox-exec`, only consider `sandbox-exec` in `/usr/bin`
 /// to defend against an attacker trying to inject a malicious version on the
@@ -69,20 +73,26 @@ pub(crate) fn create_seatbelt_command_args(
                     .canonicalize()
                     .unwrap_or_else(|_| wr.root.to_path_buf());
                 let root_param = format!("WRITABLE_ROOT_{index}");
-                file_write_params.push((root_param.clone(), canonical_root));
+                file_write_params.push((root_param.clone(), canonical_root.clone()));
 
-                if wr.read_only_subpaths.is_empty() {
+                let read_only_subpaths = seatbelt_read_only_subpaths(wr);
+                if read_only_subpaths.is_empty() {
                     writable_folder_policies.push(format!("(subpath (param \"{root_param}\"))"));
                 } else {
                     // Add parameters for each read-only subpath and generate
                     // the `(require-not ...)` clauses.
                     let mut require_parts: Vec<String> = Vec::new();
                     require_parts.push(format!("(subpath (param \"{root_param}\"))"));
-                    for (subpath_index, ro) in wr.read_only_subpaths.iter().enumerate() {
+                    for (subpath_index, ro) in read_only_subpaths.iter().enumerate() {
                         let canonical_ro = ro
                             .as_path()
-                            .canonicalize()
-                            .unwrap_or_else(|_| ro.to_path_buf());
+                            .strip_prefix(wr.root.as_path())
+                            .map(|relative| canonical_root.join(relative))
+                            .unwrap_or_else(|_| {
+                                ro.as_path()
+                                    .canonicalize()
+                                    .unwrap_or_else(|_| ro.to_path_buf())
+                            });
                         let ro_param = format!("WRITABLE_ROOT_{index}_RO_{subpath_index}");
                         require_parts
                             .push(format!("(require-not (subpath (param \"{ro_param}\")))"));
@@ -160,6 +170,73 @@ fn macos_dir_params() -> Vec<(String, PathBuf)> {
     vec![]
 }
 
+fn seatbelt_read_only_subpaths(writable_root: &WritableRoot) -> Vec<AbsolutePathBuf> {
+    let dot_git = writable_root
+        .root
+        .join(".git")
+        .expect(".git is a valid relative path");
+    let gitdir = if is_git_pointer_file(&dot_git) {
+        resolve_gitdir_from_file(&dot_git)
+    } else {
+        None
+    };
+    let git_root = if dot_git.as_path().is_dir() {
+        Some(dot_git.clone())
+    } else {
+        gitdir.clone()
+    };
+
+    let mut git_protected_inserted = false;
+    let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
+    for subpath in &writable_root.read_only_subpaths {
+        let matches_dot_git = subpath.as_path() == dot_git.as_path();
+        let matches_gitdir = gitdir
+            .as_ref()
+            .is_some_and(|gitdir| subpath.as_path() == gitdir.as_path());
+        if matches_dot_git || matches_gitdir {
+            if !git_protected_inserted && let Some(git_root) = git_root.as_ref() {
+                subpaths.extend(git_protected_subpaths(git_root));
+            }
+            git_protected_inserted = true;
+            continue;
+        }
+        subpaths.push(subpath.clone());
+    }
+
+    if !git_protected_inserted && let Some(git_root) = git_root.as_ref() {
+        subpaths.extend(git_protected_subpaths(git_root));
+    }
+
+    subpaths
+}
+
+fn git_protected_subpaths(git_root: &AbsolutePathBuf) -> Vec<AbsolutePathBuf> {
+    MACOS_GIT_PROTECTED_SUBPATHS
+        .iter()
+        .filter_map(|subpath| git_root.join(subpath).ok())
+        .collect()
+}
+
+fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
+    path.as_path().is_file() && path.as_path().file_name() == Some(OsStr::new(".git"))
+}
+
+fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Option<AbsolutePathBuf> {
+    let contents = std::fs::read_to_string(dot_git.as_path()).ok()?;
+    let trimmed = contents.trim();
+    let (_, gitdir_raw) = trimmed.split_once(':')?;
+    let gitdir_raw = gitdir_raw.trim();
+    if gitdir_raw.is_empty() {
+        return None;
+    }
+    let base = dot_git.as_path().parent()?;
+    let gitdir_path = AbsolutePathBuf::resolve_path_against_base(gitdir_raw, base).ok()?;
+    if !gitdir_path.as_path().exists() {
+        return None;
+    }
+    Some(gitdir_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::MACOS_SEATBELT_BASE_POLICY;
@@ -193,6 +270,8 @@ mod tests {
             vulnerable_root,
             vulnerable_root_canonical,
             dot_git_canonical,
+            dot_git_hooks_canonical,
+            dot_git_config_canonical,
             dot_codex_canonical,
             empty_root,
             empty_root_canonical,
@@ -233,13 +312,14 @@ mod tests {
         // Note that the policy includes:
         // - the base policy,
         // - read-only access to the filesystem,
-        // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
+        // - write access to WRITABLE_ROOT_0 (but not its .git/hooks, .git/config, or .codex),
+        //   WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
         let expected_policy = format!(
             r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")) (subpath (param "WRITABLE_ROOT_2"))
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_2"))) ) (subpath (param "WRITABLE_ROOT_1")) (subpath (param "WRITABLE_ROOT_2"))
 )
 "#,
         );
@@ -253,10 +333,14 @@ mod tests {
             ),
             format!(
                 "-DWRITABLE_ROOT_0_RO_0={}",
-                dot_git_canonical.to_string_lossy()
+                dot_git_hooks_canonical.to_string_lossy()
             ),
             format!(
                 "-DWRITABLE_ROOT_0_RO_1={}",
+                dot_git_config_canonical.to_string_lossy()
+            ),
+            format!(
+                "-DWRITABLE_ROOT_0_RO_2={}",
                 dot_codex_canonical.to_string_lossy()
             ),
             format!(
@@ -302,8 +386,8 @@ mod tests {
         );
         assert_seatbelt_denied(&output.stderr, &config_toml);
 
-        // Create a similar Seatbelt command that tries to write to a file in
-        // the .git folder, which should also be blocked.
+        // Create a similar Seatbelt command that tries to write to .git/hooks,
+        // which should also be blocked.
         let pre_commit_hook = dot_git_canonical.join("hooks").join("pre-commit");
         let shell_command_git: Vec<String> = [
             "bash",
@@ -332,6 +416,32 @@ mod tests {
             &pre_commit_hook.display()
         );
         assert_seatbelt_denied(&output.stderr, &pre_commit_hook);
+
+        // Writing to .git/config should also be blocked.
+        let git_config = dot_git_canonical.join("config");
+        let shell_command_git_config: Vec<String> = [
+            "bash",
+            "-c",
+            "echo 'pwned!' > \"$1\"",
+            "bash",
+            git_config.to_string_lossy().as_ref(),
+        ]
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
+        let write_git_config_args =
+            create_seatbelt_command_args(shell_command_git_config, &policy, &cwd);
+        let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+            .args(&write_git_config_args)
+            .current_dir(&cwd)
+            .output()
+            .expect("execute seatbelt command");
+        assert!(
+            !output.status.success(),
+            "command to write {} should fail under seatbelt",
+            &git_config.display()
+        );
+        assert_seatbelt_denied(&output.stderr, &git_config);
 
         // Verify that writing a file to the folder containing .git and .codex is allowed.
         let allowed_file = vulnerable_root_canonical.join("allowed.txt");
@@ -396,36 +506,6 @@ mod tests {
             exclude_slash_tmp: true,
         };
 
-        let shell_command: Vec<String> = [
-            "bash",
-            "-c",
-            "echo 'pwned!' > \"$1\"",
-            "bash",
-            dot_git.to_string_lossy().as_ref(),
-        ]
-        .iter()
-        .map(std::string::ToString::to_string)
-        .collect();
-        let args = create_seatbelt_command_args(shell_command, &policy, &cwd);
-
-        let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
-            .args(&args)
-            .current_dir(&cwd)
-            .output()
-            .expect("execute seatbelt command");
-
-        assert_eq!(
-            dot_git_contents,
-            String::from_utf8_lossy(&fs::read(&dot_git).expect("read .git pointer")),
-            ".git pointer file should not be modified under seatbelt"
-        );
-        assert!(
-            !output.status.success(),
-            "command to write {} should fail under seatbelt",
-            dot_git.display()
-        );
-        assert_seatbelt_denied(&output.stderr, &dot_git);
-
         let shell_command_gitdir: Vec<String> = [
             "bash",
             "-c",
@@ -454,6 +534,62 @@ mod tests {
             gitdir_config.display()
         );
         assert_seatbelt_denied(&output.stderr, &gitdir_config);
+
+        let gitdir_hooks = gitdir.join("hooks");
+        fs::create_dir_all(&gitdir_hooks).expect("create gitdir hooks");
+        let gitdir_pre_commit = gitdir_hooks.join("pre-commit");
+        let shell_command_gitdir_hook: Vec<String> = [
+            "bash",
+            "-c",
+            "echo 'pwned!' > \"$1\"",
+            "bash",
+            gitdir_pre_commit.to_string_lossy().as_ref(),
+        ]
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
+        let gitdir_hook_args =
+            create_seatbelt_command_args(shell_command_gitdir_hook, &policy, &cwd);
+        let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+            .args(&gitdir_hook_args)
+            .current_dir(&cwd)
+            .output()
+            .expect("execute seatbelt command");
+        assert!(
+            !output.status.success(),
+            "command to write {} should fail under seatbelt",
+            gitdir_pre_commit.display()
+        );
+        assert_seatbelt_denied(&output.stderr, &gitdir_pre_commit);
+
+        let shell_command: Vec<String> = [
+            "bash",
+            "-c",
+            "echo 'pwned!' > \"$1\"",
+            "bash",
+            dot_git.to_string_lossy().as_ref(),
+        ]
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
+        let args = create_seatbelt_command_args(shell_command, &policy, &cwd);
+
+        let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
+            .args(&args)
+            .current_dir(&cwd)
+            .output()
+            .expect("execute seatbelt command");
+
+        assert_eq!(
+            "pwned!\n",
+            String::from_utf8_lossy(&fs::read(&dot_git).expect("read .git pointer")),
+            ".git pointer file should be writable under seatbelt"
+        );
+        assert!(
+            output.status.success(),
+            "command to write {} should succeed under seatbelt",
+            dot_git.display()
+        );
     }
 
     #[test]
@@ -464,7 +600,8 @@ mod tests {
         let PopulatedTmp {
             vulnerable_root,
             vulnerable_root_canonical,
-            dot_git_canonical,
+            dot_git_hooks_canonical,
+            dot_git_config_canonical,
             dot_codex_canonical,
             ..
         } = populate_tmpdir(tmp.path());
@@ -511,13 +648,14 @@ mod tests {
         // Note that the policy includes:
         // - the base policy,
         // - read-only access to the filesystem,
-        // - write access to WRITABLE_ROOT_0 (but not its .git or .codex), WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
+        // - write access to WRITABLE_ROOT_0 (but not its .git/hooks, .git/config, or .codex),
+        //   WRITABLE_ROOT_1, and cwd as WRITABLE_ROOT_2.
         let expected_policy = format!(
             r#"{MACOS_SEATBELT_BASE_POLICY}
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_2"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
 )
 "#,
         );
@@ -531,10 +669,14 @@ mod tests {
             ),
             format!(
                 "-DWRITABLE_ROOT_0_RO_0={}",
-                dot_git_canonical.to_string_lossy()
+                dot_git_hooks_canonical.to_string_lossy()
             ),
             format!(
                 "-DWRITABLE_ROOT_0_RO_1={}",
+                dot_git_config_canonical.to_string_lossy()
+            ),
+            format!(
+                "-DWRITABLE_ROOT_0_RO_2={}",
                 dot_codex_canonical.to_string_lossy()
             ),
             format!(
@@ -565,14 +707,17 @@ mod tests {
     struct PopulatedTmp {
         /// Path containing a .git and .codex subfolder.
         /// For the purposes of this test, we consider this a "vulnerable" root
-        /// because a bad actor could write to .git/hooks/pre-commit so an
-        /// unsuspecting user would run code as privileged the next time they
-        /// ran `git commit` themselves, or modified .codex/config.toml to
-        /// contain `sandbox_mode = "danger-full-access"` so the agent would
-        /// have full privileges the next time it ran in that repo.
+        /// because a bad actor could write to .git/hooks/pre-commit or
+        /// .git/config so an unsuspecting user would run code as privileged
+        /// the next time they ran `git commit` themselves, or modified
+        /// .codex/config.toml to contain `sandbox_mode = "danger-full-access"`
+        /// so the agent would have full privileges the next time it ran in
+        /// that repo.
         vulnerable_root: PathBuf,
         vulnerable_root_canonical: PathBuf,
         dot_git_canonical: PathBuf,
+        dot_git_hooks_canonical: PathBuf,
+        dot_git_config_canonical: PathBuf,
         dot_codex_canonical: PathBuf,
 
         /// Path without .git or .codex subfolders.
@@ -609,12 +754,16 @@ mod tests {
             .canonicalize()
             .expect("canonicalize vulnerable_root");
         let dot_git_canonical = vulnerable_root_canonical.join(".git");
+        let dot_git_hooks_canonical = dot_git_canonical.join("hooks");
+        let dot_git_config_canonical = dot_git_canonical.join("config");
         let dot_codex_canonical = vulnerable_root_canonical.join(".codex");
         let empty_root_canonical = empty_root.canonicalize().expect("canonicalize empty_root");
         PopulatedTmp {
             vulnerable_root,
             vulnerable_root_canonical,
             dot_git_canonical,
+            dot_git_hooks_canonical,
+            dot_git_config_canonical,
             dot_codex_canonical,
             empty_root,
             empty_root_canonical,
