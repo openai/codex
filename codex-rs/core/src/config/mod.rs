@@ -894,7 +894,8 @@ pub struct ConfigToml {
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
 
-    /// Optionally specify the personality of the model
+    /// EXPERIMENTAL
+    /// Optionally specify a personality for the model
     pub model_personality: Option<Personality>,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
