@@ -36,7 +36,6 @@ use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
-use crossterm::event::KeyCode;
 use base64::Engine;
 use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
@@ -51,6 +50,7 @@ use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::user_input::TextElement;
+use crossterm::event::KeyCode;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -1114,7 +1114,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
         const CHANGE_MODE_HINT_EXPLANATION: &str = " to change mode";
         const DIR_LABEL: &str = "directory:";
         let label_width = DIR_LABEL.len();
-        
+
         let model_spans: Vec<Span<'static>> = if self.is_collaboration {
             // Render collaboration mode instead of model
             let collab_label = format!(
@@ -1122,9 +1122,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
                 collab_label = "mode:",
                 label_width = label_width
             );
-            let mut spans = vec![
-                Span::from(format!("{collab_label} ")).dim(),
-            ];
+            let mut spans = vec![Span::from(format!("{collab_label} ")).dim()];
             if let Some(mode_label) = self.collaboration_mode_label() {
                 spans.push(Span::styled(mode_label.to_string(), self.model_style));
             } else {

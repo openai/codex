@@ -715,10 +715,10 @@ impl ChatWidget {
         // instructions as-is; the session configured event should not override it.
         if !self.collaboration_modes_enabled() {
             self.stored_collaboration_mode = self.stored_collaboration_mode.with_updates(
-                    Some(model_for_header.clone()),
-                    Some(event.reasoning_effort),
-                    None,
-                );
+                Some(model_for_header.clone()),
+                Some(event.reasoning_effort),
+                None,
+            );
         }
         let session_info_cell = history_cell::new_session_info(
             &self.config,
