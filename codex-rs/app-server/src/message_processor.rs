@@ -83,7 +83,7 @@ impl MessageProcessor {
         );
         let custom_prompts_api = CustomPromptsApi::new(
             config.codex_home.clone(),
-            cli_overrides.clone(),
+            cli_overrides,
             loader_overrides_for_custom_prompts,
         );
 
