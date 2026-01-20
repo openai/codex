@@ -524,6 +524,7 @@ mod tests {
                 .can_set(&SandboxPolicy::WorkspaceWrite {
                     writable_roots: vec![AbsolutePathBuf::from_absolute_path(root)?],
                     network_access: false,
+                    local_network: false,
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,
                 })

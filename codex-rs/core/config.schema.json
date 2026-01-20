@@ -1195,6 +1195,10 @@
           "default": false,
           "type": "boolean"
         },
+        "local_network": {
+          "default": false,
+          "type": "boolean"
+        },
         "network_access": {
           "default": false,
           "type": "boolean"

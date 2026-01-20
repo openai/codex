@@ -70,6 +70,7 @@ async fn run_cmd_output(
             .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
             .collect(),
         network_access: false,
+        local_network: false,
         // Exclude tmp-related folders from writable roots because we need a
         // folder that is writable by tests but that we intentionally disallow
         // writing to in the sandbox.

@@ -382,6 +382,7 @@ pub struct SandboxSettings {
     #[serde(default)]
     pub writable_roots: Vec<AbsolutePathBuf>,
     pub network_access: Option<bool>,
+    pub local_network: Option<bool>,
     pub exclude_tmpdir_env_var: Option<bool>,
     pub exclude_slash_tmp: Option<bool>,
 }

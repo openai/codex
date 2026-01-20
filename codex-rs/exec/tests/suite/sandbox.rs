@@ -72,6 +72,7 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots,
         network_access: false,
+        local_network: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
     };
@@ -171,6 +172,7 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
+        local_network: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
     };

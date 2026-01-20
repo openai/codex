@@ -15,6 +15,7 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
         SandboxPolicy::WorkspaceWrite {
             writable_roots,
             network_access,
+            local_network: _,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
         } => {
@@ -72,6 +73,7 @@ mod tests {
         let summary = summarize_sandbox_policy(&SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![writable_root.clone()],
             network_access: true,
+            local_network: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
         });

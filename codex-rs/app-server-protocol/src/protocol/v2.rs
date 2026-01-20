@@ -309,6 +309,8 @@ pub struct SandboxWorkspaceWrite {
     #[serde(default)]
     pub network_access: bool,
     #[serde(default)]
+    pub local_network: bool,
+    #[serde(default)]
     pub exclude_tmpdir_env_var: bool,
     #[serde(default)]
     pub exclude_slash_tmp: bool,
@@ -571,6 +573,8 @@ pub enum SandboxPolicy {
         #[serde(default)]
         network_access: bool,
         #[serde(default)]
+        local_network: bool,
+        #[serde(default)]
         exclude_tmpdir_env_var: bool,
         #[serde(default)]
         exclude_slash_tmp: bool,
@@ -595,11 +599,13 @@ impl SandboxPolicy {
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 network_access,
+                local_network,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: writable_roots.clone(),
                 network_access: *network_access,
+                local_network: *local_network,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
             },
@@ -625,11 +631,13 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
             codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 network_access,
+                local_network,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 network_access,
+                local_network,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             },
