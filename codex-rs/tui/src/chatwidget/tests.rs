@@ -485,14 +485,11 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
     let placeholder_two = "[Image #2]";
     let text = format!("{placeholder_two} before {placeholder_one}");
     let elements = vec![
-        TextElement {
-            byte_range: (0..placeholder_two.len()).into(),
-            placeholder: None,
-        },
-        TextElement {
-            byte_range: ("[Image #2] before ".len().."[Image #2] before [Image #1]".len()).into(),
-            placeholder: None,
-        },
+        TextElement::new((0..placeholder_two.len()).into(), None),
+        TextElement::new(
+            ("[Image #2] before ".len().."[Image #2] before [Image #1]".len()).into(),
+            None,
+        ),
     ];
 
     let attachments = vec![
@@ -517,15 +514,14 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
     assert_eq!(
         remapped.text_elements,
         vec![
-            TextElement {
-                byte_range: (0.."[Image #4]".len()).into(),
-                placeholder: Some("[Image #4]".to_string()),
-            },
-            TextElement {
-                byte_range: ("[Image #4] before ".len().."[Image #4] before [Image #3]".len())
-                    .into(),
-                placeholder: Some("[Image #3]".to_string()),
-            },
+            TextElement::new(
+                (0.."[Image #4]".len()).into(),
+                Some("[Image #4]".to_string()),
+            ),
+            TextElement::new(
+                ("[Image #4] before ".len().."[Image #4] before [Image #3]".len()).into(),
+                Some("[Image #3]".to_string()),
+            ),
         ]
     );
     assert_eq!(

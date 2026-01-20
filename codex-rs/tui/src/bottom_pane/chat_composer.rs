@@ -4256,10 +4256,7 @@ mod tests {
 
         let placeholder = local_image_label_text(1);
         let text = format!("{placeholder} restored");
-        let text_elements = vec![TextElement {
-            byte_range: (0..placeholder.len()).into(),
-            placeholder: None,
-        }];
+        let text_elements = vec![TextElement::new((0..placeholder.len()).into(), None)];
         let path = PathBuf::from("/tmp/image1.png");
 
         composer.set_text_content(text, text_elements, vec![path.clone()]);
