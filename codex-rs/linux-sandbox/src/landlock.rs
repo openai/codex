@@ -7,6 +7,8 @@ use codex_core::error::SandboxErr;
 use codex_core::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use crate::mounts::apply_read_only_mounts;
+
 use landlock::ABI;
 use landlock::Access;
 use landlock::AccessFs;
@@ -40,6 +42,7 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     }
 
     if !sandbox_policy.has_full_disk_write_access() {
+        apply_read_only_mounts(sandbox_policy, cwd)?;
         let writable_roots = sandbox_policy
             .get_writable_roots_with_cwd(cwd)
             .into_iter()
