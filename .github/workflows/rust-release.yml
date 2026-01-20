@@ -115,9 +115,9 @@ jobs:
           if command -v "${arch}-linux-musl-g++" >/dev/null; then
             cxx="$(command -v "${arch}-linux-musl-g++")"
           elif command -v musl-g++ >/dev/null; then
-            cxx="$(command -v musl-g++")"
+            cxx="$(command -v musl-g++)"
           elif command -v musl-gcc >/dev/null; then
-            cxx="$(command -v musl-gcc")"
+            cxx="$(command -v musl-gcc)"
           else
             echo "musl g++ not found after install; arch=${arch}" >&2
             exit 1
