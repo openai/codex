@@ -752,13 +752,13 @@ impl TextArea {
             .iter()
             .map(|e| {
                 let placeholder = self.text.get(e.range.clone()).map(str::to_string);
-                UserTextElement {
-                    byte_range: ByteRange {
+                UserTextElement::new(
+                    ByteRange {
                         start: e.range.start,
                         end: e.range.end,
                     },
                     placeholder,
-                }
+                )
             })
             .collect()
     }

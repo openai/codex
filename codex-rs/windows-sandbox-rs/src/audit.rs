@@ -10,6 +10,7 @@ use anyhow::anyhow;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::ffi::c_void;
+use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -67,9 +68,9 @@ fn gather_candidates(cwd: &Path, env: &std::collections::HashMap<String, String>
         .cloned()
         .or_else(|| std::env::var("PATH").ok())
     {
-        for part in path.split(std::path::MAIN_SEPARATOR) {
-            if !part.is_empty() {
-                unique_push(&mut set, &mut out, PathBuf::from(part));
+        for part in std::env::split_paths(OsStr::new(&path)) {
+            if !part.as_os_str().is_empty() {
+                unique_push(&mut set, &mut out, part);
             }
         }
     }
@@ -297,4 +298,42 @@ pub fn apply_capability_denies_for_world_writable(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gather_candidates;
+    use std::collections::HashMap;
+    use std::fs;
+
+    #[test]
+    fn gathers_path_entries_by_list_separator() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir_a = tmp.path().join("Tools");
+        let dir_b = tmp.path().join("Bin");
+        let dir_space = tmp.path().join("Program Files");
+        fs::create_dir_all(&dir_a).expect("dir a");
+        fs::create_dir_all(&dir_b).expect("dir b");
+        fs::create_dir_all(&dir_space).expect("dir space");
+
+        let mut env_map = HashMap::new();
+        env_map.insert(
+            "PATH".to_string(),
+            format!(
+                "{};{};{}",
+                dir_a.display(),
+                dir_b.display(),
+                dir_space.display()
+            ),
+        );
+
+        let candidates = gather_candidates(tmp.path(), &env_map);
+        let canon_a = dir_a.canonicalize().expect("canon a");
+        let canon_b = dir_b.canonicalize().expect("canon b");
+        let canon_space = dir_space.canonicalize().expect("canon space");
+
+        assert!(candidates.contains(&canon_a));
+        assert!(candidates.contains(&canon_b));
+        assert!(candidates.contains(&canon_space));
+    }
 }

@@ -489,12 +489,7 @@ impl ChatComposer {
 
         let image_placeholders: HashSet<String> = text_elements
             .iter()
-            .filter_map(|elem| {
-                elem.placeholder.as_ref().cloned().or_else(|| {
-                    text.get(elem.byte_range.start..elem.byte_range.end)
-                        .map(str::to_string)
-                })
-            })
+            .filter_map(|elem| elem.placeholder(&text).map(str::to_string))
             .collect();
         for (idx, path) in local_image_paths.into_iter().enumerate() {
             let placeholder = local_image_label_text(idx + 1);
@@ -1174,13 +1169,13 @@ impl ChatComposer {
                     return None;
                 }
                 let placeholder = trimmed.get(new_start..new_end).map(str::to_string);
-                Some(TextElement {
-                    byte_range: ByteRange {
+                Some(TextElement::new(
+                    ByteRange {
                         start: new_start,
                         end: new_end,
                     },
                     placeholder,
-                })
+                ))
             })
             .collect()
     }
@@ -1219,7 +1214,7 @@ impl ChatComposer {
                 rebuilt.push_str(&text[cursor..start]);
             }
             let elem_text = &text[start..end];
-            let placeholder = elem.placeholder;
+            let placeholder = elem.placeholder(text).map(str::to_string);
             let replacement = placeholder
                 .as_deref()
                 .and_then(|ph| pending_by_placeholder.get_mut(ph))
@@ -1231,13 +1226,13 @@ impl ChatComposer {
                 rebuilt.push_str(elem_text);
                 let new_end = rebuilt.len();
                 let placeholder = placeholder.or_else(|| Some(elem_text.to_string()));
-                rebuilt_elements.push(TextElement {
-                    byte_range: ByteRange {
+                rebuilt_elements.push(TextElement::new(
+                    ByteRange {
                         start: new_start,
                         end: new_end,
                     },
                     placeholder,
-                });
+                ));
             }
             cursor = end;
         }
@@ -4223,7 +4218,7 @@ mod tests {
             } => {
                 assert_eq!(text, "[Image #1] hi");
                 assert_eq!(text_elements.len(), 1);
-                assert_eq!(text_elements[0].placeholder.as_deref(), Some("[Image #1]"));
+                assert_eq!(text_elements[0].placeholder(&text), Some("[Image #1]"));
                 assert_eq!(
                     text_elements[0].byte_range,
                     ByteRange {
@@ -4252,10 +4247,7 @@ mod tests {
 
         let placeholder = local_image_label_text(1);
         let text = format!("{placeholder} restored");
-        let text_elements = vec![TextElement {
-            byte_range: (0..placeholder.len()).into(),
-            placeholder: None,
-        }];
+        let text_elements = vec![TextElement::new((0..placeholder.len()).into(), None)];
         let path = PathBuf::from("/tmp/image1.png");
 
         composer.set_text_content(text, text_elements, vec![path.clone()]);
@@ -4292,7 +4284,7 @@ mod tests {
                 let expected = format!("{large_content} [Image #1]");
                 assert_eq!(text, expected);
                 assert_eq!(text_elements.len(), 1);
-                assert_eq!(text_elements[0].placeholder.as_deref(), Some("[Image #1]"));
+                assert_eq!(text_elements[0].placeholder(&text), Some("[Image #1]"));
                 assert_eq!(
                     text_elements[0].byte_range,
                     ByteRange {
@@ -4336,7 +4328,7 @@ mod tests {
                 let trimmed = large_content.trim().to_string();
                 assert_eq!(text, format!("{trimmed} [Image #1]"));
                 assert_eq!(text_elements.len(), 1);
-                assert_eq!(text_elements[0].placeholder.as_deref(), Some("[Image #1]"));
+                assert_eq!(text_elements[0].placeholder(&text), Some("[Image #1]"));
                 assert_eq!(
                     text_elements[0].byte_range,
                     ByteRange {
@@ -4380,7 +4372,7 @@ mod tests {
                 assert_eq!(text, "line1\nline2\n [Image #1]");
                 assert!(!text.contains('\r'));
                 assert_eq!(text_elements.len(), 1);
-                assert_eq!(text_elements[0].placeholder.as_deref(), Some("[Image #1]"));
+                assert_eq!(text_elements[0].placeholder(&text), Some("[Image #1]"));
                 assert_eq!(
                     text_elements[0].byte_range,
                     ByteRange {
@@ -4465,7 +4457,7 @@ mod tests {
             } => {
                 assert_eq!(text, "[Image #1]");
                 assert_eq!(text_elements.len(), 1);
-                assert_eq!(text_elements[0].placeholder.as_deref(), Some("[Image #1]"));
+                assert_eq!(text_elements[0].placeholder(&text), Some("[Image #1]"));
                 assert_eq!(
                     text_elements[0].byte_range,
                     ByteRange {
@@ -4627,20 +4619,20 @@ mod tests {
         let start2 = text.find(&placeholder2).expect("placeholder2 present");
         let start1 = text.find(&placeholder1).expect("placeholder1 present");
         let text_elements = vec![
-            TextElement {
-                byte_range: ByteRange {
+            TextElement::new(
+                ByteRange {
                     start: start2,
                     end: start2 + placeholder2.len(),
                 },
-                placeholder: Some(placeholder2),
-            },
-            TextElement {
-                byte_range: ByteRange {
+                Some(placeholder2),
+            ),
+            TextElement::new(
+                ByteRange {
                     start: start1,
                     end: start1 + placeholder1.len(),
                 },
-                placeholder: Some(placeholder1.clone()),
-            },
+                Some(placeholder1.clone()),
+            ),
         ];
         composer.set_text_content(text, text_elements, vec![path1, path2.clone()]);
 

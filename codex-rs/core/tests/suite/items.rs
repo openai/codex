@@ -40,10 +40,10 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
     let first_response = sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]);
     mount_sse_once(&server, first_response).await;
 
-    let text_elements = vec![TextElement {
-        byte_range: ByteRange { start: 0, end: 6 },
-        placeholder: Some("<file>".into()),
-    }];
+    let text_elements = vec![TextElement::new(
+        ByteRange { start: 0, end: 6 },
+        Some("<file>".into()),
+    )];
     let expected_input = UserInput::Text {
         text: "please inspect sample.txt".into(),
         text_elements: text_elements.clone(),
