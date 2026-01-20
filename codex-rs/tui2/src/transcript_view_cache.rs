@@ -1018,6 +1018,8 @@ mod tests {
         let mut cache = TranscriptViewCache::new();
         let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(UserHistoryCell {
             message: "hello".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
         })];
 
         cache.ensure_wrapped(&cells, 20);
