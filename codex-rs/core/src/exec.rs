@@ -692,7 +692,7 @@ async fn consume_truncated_output(
             .min(EXEC_OUTPUT_MAX_BYTES),
     );
     append_capped(&mut aggregated, &stdout.text, EXEC_OUTPUT_MAX_BYTES);
-    append_capped(&mut aggregated, &stderr.text, EXEC_OUTPUT_MAX_BYTES);
+    append_capped(&mut aggregated, &stderr.text, EXEC_OUTPUT_MAX_BYTES * 2);
     let aggregated_output = StreamOutput {
         text: aggregated,
         truncated_after_lines: None,
