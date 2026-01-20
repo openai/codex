@@ -20,8 +20,6 @@ use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 
-pub const BASE_INSTRUCTIONS_DEFAULT: &str = include_str!("../../core/prompt.md");
-
 /// Controls whether a command should use the session sandbox or bypass it.
 #[derive(
     Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
@@ -165,6 +163,8 @@ pub enum ResponseItem {
     #[serde(other)]
     Other,
 }
+
+pub const BASE_INSTRUCTIONS_DEFAULT: &str = include_str!("prompts/base_instructions/default.md");
 
 /// Base instructions for the model in a thread. Corresponds to the `instructions` field in the ResponsesAPI.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
