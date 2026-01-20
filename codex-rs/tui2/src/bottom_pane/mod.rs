@@ -27,6 +27,7 @@ use bottom_pane_view::BottomPaneView;
 use codex_core::features::Features;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
+use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -38,6 +39,12 @@ mod approval_overlay;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 mod bottom_pane_view;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LocalImageAttachment {
+    pub(crate) placeholder: String,
+    pub(crate) path: PathBuf,
+}
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
@@ -307,8 +314,14 @@ impl BottomPane {
     }
 
     /// Replace the composer text with `text`.
-    pub(crate) fn set_composer_text(&mut self, text: String) {
-        self.composer.set_text_content(text);
+    pub(crate) fn set_composer_text(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+    ) {
+        self.composer
+            .set_text_content(text, text_elements, local_image_paths);
         self.request_redraw();
     }
 
@@ -330,6 +343,19 @@ impl BottomPane {
     /// Get the current composer text (for tests and programmatic checks).
     pub(crate) fn composer_text(&self) -> String {
         self.composer.current_text()
+    }
+
+    pub(crate) fn composer_text_elements(&self) -> Vec<TextElement> {
+        self.composer.text_elements()
+    }
+
+    pub(crate) fn composer_local_images(&self) -> Vec<LocalImageAttachment> {
+        self.composer.local_images()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn composer_local_image_paths(&self) -> Vec<PathBuf> {
+        self.composer.local_image_paths()
     }
 
     /// Update the status indicator header (defaults to "Working") and details below it.
@@ -642,8 +668,16 @@ impl BottomPane {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
         self.composer.take_recent_submission_images()
+    }
+
+    pub(crate) fn take_recent_submission_images_with_placeholders(
+        &mut self,
+    ) -> Vec<LocalImageAttachment> {
+        self.composer
+            .take_recent_submission_images_with_placeholders()
     }
 
     fn as_renderable(&'_ self) -> RenderableItem<'_> {
