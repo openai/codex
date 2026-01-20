@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -9,9 +10,12 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::request_user_input::RequestUserInputArgs;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -229,6 +233,20 @@ async fn forward_events(
                         )
                         .await;
                     }
+                    Event {
+                        id,
+                        msg: EventMsg::RequestUserInput(event),
+                    } => {
+                        handle_request_user_input(
+                            &codex,
+                            id,
+                            &parent_session,
+                            &parent_ctx,
+                            event,
+                            &cancel_token,
+                        )
+                        .await;
+                    }
                     other => {
                         match tx_sub.send(other).or_cancel(&cancel_token).await {
                             Ok(Ok(())) => {}
@@ -332,6 +350,55 @@ async fn handle_patch_approval(
     )
     .await;
     let _ = codex.submit(Op::PatchApproval { id, decision }).await;
+}
+
+async fn handle_request_user_input(
+    codex: &Codex,
+    id: String,
+    parent_session: &Session,
+    parent_ctx: &TurnContext,
+    event: RequestUserInputEvent,
+    cancel_token: &CancellationToken,
+) {
+    let args = RequestUserInputArgs {
+        questions: event.questions,
+    };
+    let response_fut =
+        parent_session.request_user_input(parent_ctx, parent_ctx.sub_id.clone(), args);
+    let response = await_user_input_with_cancel(
+        response_fut,
+        parent_session,
+        &parent_ctx.sub_id,
+        cancel_token,
+    )
+    .await;
+    let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
+}
+
+async fn await_user_input_with_cancel<F>(
+    fut: F,
+    parent_session: &Session,
+    sub_id: &str,
+    cancel_token: &CancellationToken,
+) -> RequestUserInputResponse
+where
+    F: core::future::Future<Output = Option<RequestUserInputResponse>>,
+{
+    tokio::select! {
+        biased;
+        _ = cancel_token.cancelled() => {
+            let empty = RequestUserInputResponse {
+                answers: HashMap::new(),
+            };
+            parent_session
+                .notify_user_input_response(sub_id, empty.clone())
+                .await;
+            empty
+        }
+        response = fut => response.unwrap_or_else(|| RequestUserInputResponse {
+            answers: HashMap::new(),
+        }),
+    }
 }
 
 /// Await an approval decision, aborting on cancellation.

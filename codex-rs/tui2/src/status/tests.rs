@@ -152,6 +152,7 @@ async fn status_snapshot_includes_reasoning_details() {
         None,
         captured_at,
         &model_slug,
+        None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
@@ -203,6 +204,7 @@ async fn status_snapshot_includes_forked_from() {
         None,
         captured_at,
         &model_slug,
+        None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
@@ -260,6 +262,7 @@ async fn status_snapshot_includes_monthly_limit() {
         None,
         captured_at,
         &model_slug,
+        None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
@@ -304,6 +307,7 @@ async fn status_snapshot_shows_unlimited_credits() {
         None,
         captured_at,
         &model_slug,
+        None,
     );
     let rendered = render_lines(&composite.display_lines(120));
     assert!(
@@ -348,6 +352,7 @@ async fn status_snapshot_shows_positive_credits() {
         None,
         captured_at,
         &model_slug,
+        None,
     );
     let rendered = render_lines(&composite.display_lines(120));
     assert!(
@@ -392,6 +397,7 @@ async fn status_snapshot_hides_zero_credits() {
         None,
         captured_at,
         &model_slug,
+        None,
     );
     let rendered = render_lines(&composite.display_lines(120));
     assert!(
@@ -434,6 +440,7 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
         None,
         captured_at,
         &model_slug,
+        None,
     );
     let rendered = render_lines(&composite.display_lines(120));
     assert!(
@@ -476,6 +483,7 @@ async fn status_card_token_usage_excludes_cached_tokens() {
         None,
         now,
         &model_slug,
+        None,
     );
     let rendered = render_lines(&composite.display_lines(120));
 
@@ -533,6 +541,7 @@ async fn status_snapshot_truncates_in_narrow_terminal() {
         None,
         captured_at,
         &model_slug,
+        None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(70));
     if cfg!(windows) {
@@ -579,6 +588,7 @@ async fn status_snapshot_shows_missing_limits_message() {
         None,
         now,
         &model_slug,
+        None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
@@ -642,6 +652,7 @@ async fn status_snapshot_includes_credits_and_limits() {
         None,
         captured_at,
         &model_slug,
+        None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
@@ -694,6 +705,7 @@ async fn status_snapshot_shows_empty_limits_message() {
         None,
         captured_at,
         &model_slug,
+        None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
@@ -755,6 +767,7 @@ async fn status_snapshot_shows_stale_limits_message() {
         None,
         now,
         &model_slug,
+        None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
@@ -820,6 +833,7 @@ async fn status_snapshot_cached_limits_hide_credits_without_flag() {
         None,
         now,
         &model_slug,
+        None,
     );
     let mut rendered_lines = render_lines(&composite.display_lines(80));
     if cfg!(windows) {
@@ -875,6 +889,7 @@ async fn status_context_window_uses_last_usage() {
         None,
         now,
         &model_slug,
+        None,
     );
     let rendered_lines = render_lines(&composite.display_lines(80));
     let context_line = rendered_lines
