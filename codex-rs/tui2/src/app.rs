@@ -43,6 +43,7 @@ use crate::tui::scrolling::ScrollDirection;
 use crate::tui::scrolling::ScrollUpdate;
 use crate::tui::scrolling::TranscriptScroll;
 use crate::update_action::UpdateAction;
+use crate::visual_event_filter::should_forward_visual_event;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
@@ -54,6 +55,7 @@ use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::protocol::DeprecationNoticeEvent;
+use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::ListSkillsResponseEvent;
@@ -81,6 +83,9 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -89,6 +94,7 @@ use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 use tokio::select;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc::unbounded_channel;
 
 #[cfg(not(debug_assertions))]
@@ -421,6 +427,12 @@ pub(crate) struct App {
 
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
+
+    external_approval_routes: HashMap<String, (ThreadId, String)>,
+    /// Buffered Codex events while external approvals are pending.
+    paused_codex_events: VecDeque<Event>,
+
+    review_thread_ids: HashSet<ThreadId>,
 }
 impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
@@ -444,6 +456,7 @@ impl App {
     }
 
     async fn shutdown_current_conversation(&mut self) {
+        self.review_thread_ids.clear();
         if let Some(conversation_id) = self.chat_widget.conversation_id() {
             // Clear any in-flight rollback guard when switching conversations.
             self.backtrack.pending_rollback = None;
@@ -631,6 +644,9 @@ impl App {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            external_approval_routes: HashMap::new(),
+            paused_codex_events: VecDeque::new(),
+            review_thread_ids: HashSet::new(),
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -684,6 +700,9 @@ impl App {
 
         tui.frame_requester().schedule_frame();
 
+        let mut thread_created_rx = thread_manager.subscribe_thread_created();
+        let mut listen_for_threads = true;
+
         let exit_reason = loop {
             let control = select! {
                 Some(event) = app_event_rx.recv() => {
@@ -691,6 +710,20 @@ impl App {
                 }
                 Some(event) = tui_events.next() => {
                     app.handle_tui_event(tui, event).await?
+                }
+                created = thread_created_rx.recv(), if listen_for_threads => {
+                    match created {
+                        Ok(thread_id) => {
+                            app.handle_thread_created(thread_id).await?;
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            tracing::warn!("thread_created receiver lagged; skipping resync");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            listen_for_threads = false;
+                        }
+                    }
+                    AppRunControl::Continue
                 }
             };
             match control {
@@ -1656,15 +1689,35 @@ impl App {
                     self.suppress_shutdown_complete = false;
                     return Ok(AppRunControl::Continue);
                 }
-                if let EventMsg::ListSkillsResponse(response) = &event.msg {
-                    let cwd = self.chat_widget.config_ref().cwd.clone();
-                    let errors = errors_for_cwd(&cwd, response);
-                    emit_skill_load_warnings(&self.app_event_tx, &errors);
+                if !self.external_approval_routes.is_empty() {
+                    // Store the events while the approval is pending.
+                    self.paused_codex_events.push_back(event);
+                    return Ok(AppRunControl::Continue);
                 }
-                self.handle_backtrack_event(&event.msg);
-                self.chat_widget.handle_codex_event(event);
+                self.handle_codex_event_now(event);
                 if self.backtrack_render_pending {
                     tui.frame_requester().schedule_frame();
+                }
+            }
+            AppEvent::ExternalThreadEvent { thread_id, event } => {
+                if matches!(
+                    event.msg,
+                    EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_)
+                ) {
+                    self.handle_external_approval_request(thread_id, event);
+                    return Ok(AppRunControl::Continue);
+                }
+                if self.review_thread_ids.contains(&thread_id)
+                    && should_forward_visual_event(&event.msg)
+                {
+                    if !self.external_approval_routes.is_empty() {
+                        self.paused_codex_events.push_back(event);
+                        return Ok(AppRunControl::Continue);
+                    }
+                    self.handle_codex_event_now(event);
+                    if self.backtrack_render_pending {
+                        tui.frame_requester().schedule_frame();
+                    }
                 }
             }
             AppEvent::Exit(mode) => match mode {
@@ -1676,7 +1729,53 @@ impl App {
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
-            AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
+            AppEvent::CodexOp(op) => match op {
+                // Catch potential approvals coming from an external thread and treat them
+                // directly. This support both command and patch approval. In such case
+                // the approval get transferred to the corresponding thread and the external
+                // approval map (`external_approval_routes`) is updated.
+                Op::ExecApproval { id, decision } => {
+                    if let Some((thread_id, original_id)) =
+                        self.external_approval_routes.remove(&id)
+                    {
+                        // Approval of a sub-agent.
+                        self.forward_external_op(
+                            thread_id,
+                            Op::ExecApproval {
+                                id: original_id,
+                                decision,
+                            },
+                        )
+                        .await;
+                        self.finish_external_approval();
+                    } else {
+                        // This is an approval but not external.
+                        self.chat_widget
+                            .submit_op(Op::ExecApproval { id, decision });
+                    }
+                }
+                Op::PatchApproval { id, decision } => {
+                    if let Some((thread_id, original_id)) =
+                        self.external_approval_routes.remove(&id)
+                    {
+                        // Approval of a sub-agent.
+                        self.forward_external_op(
+                            thread_id,
+                            Op::PatchApproval {
+                                id: original_id,
+                                decision,
+                            },
+                        )
+                        .await;
+                        self.finish_external_approval();
+                    } else {
+                        // This is an approval but not external.
+                        self.chat_widget
+                            .submit_op(Op::PatchApproval { id, decision });
+                    }
+                }
+                _ => self.chat_widget.submit_op(op),
+            },
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();
@@ -2111,6 +2210,94 @@ impl App {
         Ok(AppRunControl::Continue)
     }
 
+    fn handle_codex_event_now(&mut self, event: Event) {
+        if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
+            self.suppress_shutdown_complete = false;
+            return;
+        }
+        match &event.msg {
+            EventMsg::EnteredReviewMode(ev) => {
+                self.review_thread_ids.insert(ev.review_thread_id);
+            }
+            EventMsg::ExitedReviewMode(_) => {
+                self.review_thread_ids.clear();
+            }
+            _ => {}
+        }
+        if let EventMsg::ListSkillsResponse(response) = &event.msg {
+            let cwd = self.chat_widget.config_ref().cwd.clone();
+            let errors = errors_for_cwd(&cwd, response);
+            emit_skill_load_warnings(&self.app_event_tx, &errors);
+        }
+        self.handle_backtrack_event(&event.msg);
+        self.chat_widget.handle_codex_event(event);
+    }
+
+    /// Routes external approval request events through the chat widget by
+    /// rewriting the event id to include the originating thread.
+    ///
+    /// `thread_id` is the external thread that issued the approval request.
+    /// `event` is the approval request event whose id is rewritten so replies
+    /// can be routed back to the correct thread.
+    fn handle_external_approval_request(&mut self, thread_id: ThreadId, mut event: Event) {
+        match &mut event.msg {
+            EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_) => {
+                let original_id = event.id.clone();
+                let routing_id = format!("{thread_id}:{original_id}");
+                self.external_approval_routes
+                    .insert(routing_id.clone(), (thread_id, original_id));
+                event.id = routing_id;
+            }
+            _ => return,
+        }
+        self.chat_widget.handle_codex_event(event);
+    }
+
+    async fn forward_external_op(&self, thread_id: ThreadId, op: Op) {
+        let thread = match self.server.get_thread(thread_id).await {
+            Ok(thread) => thread,
+            Err(err) => {
+                tracing::warn!("failed to find thread {thread_id} for approval response: {err}");
+                return;
+            }
+        };
+        if let Err(err) = thread.submit(op).await {
+            tracing::warn!("failed to submit approval response to thread {thread_id}: {err}");
+        }
+    }
+
+    fn finish_external_approval(&mut self) {
+        if self.external_approval_routes.is_empty() {
+            while let Some(event) = self.paused_codex_events.pop_front() {
+                self.handle_codex_event_now(event);
+            }
+        }
+    }
+
+    async fn handle_thread_created(&mut self, thread_id: ThreadId) -> Result<()> {
+        let thread = match self.server.get_thread(thread_id).await {
+            Ok(thread) => thread,
+            Err(err) => {
+                tracing::warn!("failed to attach listener for thread {thread_id}: {err}");
+                return Ok(());
+            }
+        };
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                let event = match thread.next_event().await {
+                    Ok(event) => event,
+                    Err(err) => {
+                        tracing::debug!("external thread {thread_id} listener stopped: {err}");
+                        break;
+                    }
+                };
+                app_event_tx.send(AppEvent::ExternalThreadEvent { thread_id, event });
+            }
+        });
+        Ok(())
+    }
+
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
         match reasoning_effort {
             Some(ReasoningEffortConfig::Minimal) => "minimal",
@@ -2399,6 +2586,9 @@ mod tests {
             pending_update_action: None,
             suppress_shutdown_complete: false,
             skip_world_writable_scan_once: false,
+            external_approval_routes: HashMap::new(),
+            paused_codex_events: VecDeque::new(),
+            review_thread_ids: HashSet::new(),
         }
     }
 
@@ -2453,6 +2643,9 @@ mod tests {
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
                 skip_world_writable_scan_once: false,
+                external_approval_routes: HashMap::new(),
+                paused_codex_events: VecDeque::new(),
+                review_thread_ids: HashSet::new(),
             },
             rx,
             op_rx,
