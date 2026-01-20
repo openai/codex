@@ -11572,6 +11572,7 @@ async fn prepare_validation_targets(
         repo_root,
         prompt,
         progress_sender.clone(),
+        log_sink.clone(),
         metrics.clone(),
         model,
         reasoning_effort,
@@ -19834,6 +19835,7 @@ async fn run_validation_target_prep_agent(
     repo_root: &Path,
     prompt: String,
     progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
     metrics: Arc<ReviewMetrics>,
     model: &str,
     reasoning_effort: Option<ReasoningEffort>,
@@ -19841,7 +19843,7 @@ async fn run_validation_target_prep_agent(
     let mut logs: Vec<String> = Vec::new();
     push_progress_log(
         &progress_sender,
-        &None,
+        &log_sink,
         &mut logs,
         "Preparing runnable validation targets...".to_string(),
     );
@@ -19868,7 +19870,7 @@ async fn run_validation_target_prep_agent(
         Ok(new_conversation) => new_conversation.conversation,
         Err(err) => {
             let message = format!("Failed to start validation prep agent: {err}");
-            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
             return Err(ValidationTargetPrepFailure { message, logs });
         }
     };
@@ -19880,7 +19882,7 @@ async fn run_validation_target_prep_agent(
         .await
     {
         let message = format!("Failed to submit validation prep prompt: {err}");
-        push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+        push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
         return Err(ValidationTargetPrepFailure { message, logs });
     }
 
@@ -19890,7 +19892,7 @@ async fn run_validation_target_prep_agent(
             Ok(event) => event,
             Err(err) => {
                 let message = format!("Validation prep agent terminated unexpectedly: {err}");
-                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
                 return Err(ValidationTargetPrepFailure { message, logs });
             }
         };
@@ -19906,19 +19908,19 @@ async fn run_validation_target_prep_agent(
             }
             EventMsg::AgentMessage(msg) => last_agent_message = Some(msg.message.clone()),
             EventMsg::AgentReasoning(reason) => {
-                log_model_reasoning(&reason.text, &progress_sender, &None, &mut logs);
+                log_model_reasoning(&reason.text, &progress_sender, &log_sink, &mut logs);
             }
             EventMsg::Warning(warn) => {
-                push_progress_log(&progress_sender, &None, &mut logs, warn.message);
+                push_progress_log(&progress_sender, &log_sink, &mut logs, warn.message);
             }
             EventMsg::Error(err) => {
                 let message = format!("Validation prep agent error: {}", err.message);
-                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
                 return Err(ValidationTargetPrepFailure { message, logs });
             }
             EventMsg::TurnAborted(aborted) => {
                 let message = format!("Validation prep agent aborted: {:?}", aborted.reason);
-                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
                 return Err(ValidationTargetPrepFailure { message, logs });
             }
             EventMsg::TokenCount(count) => {
@@ -19942,7 +19944,7 @@ async fn run_validation_target_prep_agent(
         Some(text) => text,
         None => {
             let message = "Validation prep agent produced an empty response.".to_string();
-            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
             return Err(ValidationTargetPrepFailure { message, logs });
         }
     };

@@ -11,6 +11,11 @@ Constraints
 Rules
 - Do not assume anything is already built.
 - Prefer standard, shipped entrypoints (existing binaries/services/SDK-exposed surfaces), not synthetic harnesses.
+- If the repo appears to use GN/Ninja (for example: `BUILD.gn`, `*.gn`, `tools/mb/mb.py`, `tools/dev/v8gen.py`), treat missing build tools as a solvable prerequisite:
+  - Ensure `gn` and `ninja` are available.
+  - Prefer repo-provided binaries/wrappers first (e.g., `./buildtools/**/gn`, `./buildtools/**/ninja`).
+  - If not present, attempt to install them for the session (package manager or `depot_tools`) and record what you did.
+  - If local install is not feasible, build a Docker-based target that provides `gn`/`ninja` and uses them to build+run the target in-container.
 
 Local/native target
 - First, check for already-built artifacts in common output dirs (for example: `out/`, `out.gn/`, `target/`, `build/`, `dist/`).
