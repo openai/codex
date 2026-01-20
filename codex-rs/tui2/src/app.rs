@@ -1472,6 +1472,8 @@ impl App {
         match event {
             AppEvent::NewSession => {
                 let model = self.chat_widget.current_model().to_string();
+                // Propagate selected model into config before spawning thread
+                self.config.model = Some(model.clone());
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
                     self.chat_widget.conversation_id(),
