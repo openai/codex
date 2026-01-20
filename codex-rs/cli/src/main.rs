@@ -943,7 +943,8 @@ mod tests {
         };
 
         assert!(args.last);
-        assert_eq!(args.session_id.as_deref(), Some("2+2"));
+        assert_eq!(args.session_id, None);
+        assert_eq!(args.prompt.as_deref(), Some("2+2"));
     }
 
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {
