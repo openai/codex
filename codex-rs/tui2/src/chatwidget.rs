@@ -556,9 +556,9 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         }
 
         let original = text.get(start..end).unwrap_or("");
-        let placeholder_key = elem.placeholder.as_deref().unwrap_or(original);
-        let replacement = mapping
-            .get(placeholder_key)
+        let placeholder = elem.placeholder(&text);
+        let replacement = placeholder
+            .and_then(|ph| mapping.get(ph))
             .map(String::as_str)
             .unwrap_or(original);
 
@@ -566,8 +566,8 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         rebuilt.push_str(replacement);
         let elem_end = rebuilt.len();
 
-        if let Some(remapped) = mapping.get(placeholder_key) {
-            elem.placeholder = Some(remapped.clone());
+        if let Some(remapped) = placeholder.and_then(|ph| mapping.get(ph)) {
+            elem.set_placeholder(Some(remapped.clone()));
         }
         elem.byte_range = (elem_start..elem_end).into();
         rebuilt_elements.push(elem);
