@@ -3,11 +3,7 @@ use codex_core::protocol::EventMsg;
 /// Returns true when a protocol event should be forwarded into the visual transcript.
 pub(crate) fn should_forward_visual_event(msg: &EventMsg) -> bool {
     matches!(
-        msg,
-        EventMsg::AgentMessage(_)
-            | EventMsg::AgentMessageDelta(_)
-            | EventMsg::AgentMessageContentDelta(_)
-            | EventMsg::AgentReasoning(_)
+        msg, EventMsg::AgentReasoning(_)
             | EventMsg::AgentReasoningDelta(_)
             | EventMsg::AgentReasoningRawContent(_)
             | EventMsg::AgentReasoningRawContentDelta(_)
@@ -15,8 +11,6 @@ pub(crate) fn should_forward_visual_event(msg: &EventMsg) -> bool {
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::TurnStarted(_)
-            | EventMsg::TurnComplete(_)
-            | EventMsg::TurnAborted(_)
             | EventMsg::TokenCount(_)
             | EventMsg::Warning(_)
             | EventMsg::Error(_)
@@ -35,9 +29,6 @@ pub(crate) fn should_forward_visual_event(msg: &EventMsg) -> bool {
             | EventMsg::BackgroundEvent(_)
             | EventMsg::StreamError(_)
             | EventMsg::TurnDiff(_)
-            | EventMsg::UndoStarted(_)
-            | EventMsg::UndoCompleted(_)
             | EventMsg::ContextCompacted(_)
-            | EventMsg::DeprecationNotice(_)
     )
 }
