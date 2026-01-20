@@ -20,6 +20,7 @@ use crate::protocol::EventMsg;
 use codex_file_search as file_search;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 
 /// Returned page of thread (thread) summaries.
@@ -742,6 +743,24 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
 pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Value>> {
     let summary = read_head_summary(path, HEAD_RECORD_LIMIT).await?;
     Ok(summary.head)
+}
+
+/// Read the SessionMetaLine from the head of a rollout file for reuse by
+/// callers that need the session metadata (e.g. to derive a cwd for config).
+pub async fn read_session_meta_line(path: &Path) -> io::Result<SessionMetaLine> {
+    let head = read_head_for_summary(path).await?;
+    let Some(first) = head.first() else {
+        return Err(io::Error::other(format!(
+            "rollout at {} is empty",
+            path.display()
+        )));
+    };
+    serde_json::from_value::<SessionMetaLine>(first.clone()).map_err(|_| {
+        io::Error::other(format!(
+            "rollout at {} does not start with session metadata",
+            path.display()
+        ))
+    })
 }
 
 async fn file_modified_time(path: &Path) -> io::Result<Option<OffsetDateTime>> {

@@ -311,7 +311,6 @@ async fn handle_model_migration_prompt_if_needed(
                     from_model: model.to_string(),
                     to_model: target_model.clone(),
                 });
-                config.model = Some(target_model.clone());
 
                 let mapped_effort = if let Some(reasoning_effort_mapping) = reasoning_effort_mapping
                     && let Some(reasoning_effort) = config.model_reasoning_effort
@@ -324,8 +323,8 @@ async fn handle_model_migration_prompt_if_needed(
                     config.model_reasoning_effort
                 };
 
+                config.model = Some(target_model.clone());
                 config.model_reasoning_effort = mapped_effort;
-
                 app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
                 app_event_tx.send(AppEvent::UpdateReasoningEffort(mapped_effort));
                 app_event_tx.send(AppEvent::PersistModelSelection {
@@ -361,7 +360,6 @@ pub(crate) struct App {
     pub(crate) auth_manager: Arc<AuthManager>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
-    pub(crate) current_model: String,
     pub(crate) active_profile: Option<String>,
 
     pub(crate) file_search: FileSearchManager,
@@ -439,7 +437,7 @@ impl App {
             models_manager: self.server.get_models_manager(),
             feedback: self.feedback.clone(),
             is_first_run: false,
-            model: Some(self.current_model.clone()),
+            model: Some(self.chat_widget.current_model().to_string()),
         }
     }
 
@@ -517,7 +515,7 @@ impl App {
                     models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model: config.model.clone(),
+                    model: Some(model.clone()),
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
@@ -605,7 +603,6 @@ impl App {
             chat_widget,
             auth_manager: auth_manager.clone(),
             config,
-            current_model: model.clone(),
             active_profile,
             file_search,
             enhanced_keys_supported,
@@ -1474,6 +1471,9 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
+                let model = self.chat_widget.current_model().to_string();
+                // Propagate selected model into config before spawning thread
+                self.config.model = Some(model.clone());
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
                     self.chat_widget.conversation_id(),
@@ -1493,7 +1493,7 @@ impl App {
                     models_manager: self.server.get_models_manager(),
                     feedback: self.feedback.clone(),
                     is_first_run: false,
-                    model: Some(self.current_model.clone()),
+                    model: Some(model),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 if let Some(summary) = summary {
@@ -1713,7 +1713,11 @@ impl App {
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
-                self.current_model = model;
+            }
+            AppEvent::UpdateCollaborationMode(mode) => {
+                let model = mode.model().to_string();
+                self.chat_widget.set_collaboration_mode(mode);
+                self.chat_widget.set_model(&model);
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
@@ -2138,8 +2142,10 @@ impl App {
     }
 
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.chat_widget.set_reasoning_effort(effort);
+        // TODO(aibrahim): Remove this and don't use config as a state object.
+        // Instead, explicitly pass the stored collaboration mode's effort into new sessions.
         self.config.model_reasoning_effort = effort;
+        self.chat_widget.set_reasoning_effort(effort);
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
@@ -2360,7 +2366,6 @@ mod tests {
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let current_model = "gpt-5.2-codex".to_string();
         let server = Arc::new(ThreadManager::with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
@@ -2375,7 +2380,6 @@ mod tests {
             chat_widget,
             auth_manager,
             config,
-            current_model,
             active_profile: None,
             file_search,
             transcript_cells: Vec::new(),
@@ -2413,7 +2417,6 @@ mod tests {
     ) {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let current_model = "gpt-5.2-codex".to_string();
         let server = Arc::new(ThreadManager::with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
@@ -2429,7 +2432,6 @@ mod tests {
                 chat_widget,
                 auth_manager,
                 config,
-                current_model,
                 active_profile: None,
                 file_search,
                 transcript_cells: Vec::new(),
@@ -2628,20 +2630,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_reasoning_effort_updates_config() {
+    async fn update_reasoning_effort_updates_collaboration_mode() {
         let mut app = make_test_app().await;
-        app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
 
         app.on_update_reasoning_effort(Some(ReasoningEffortConfig::High));
 
         assert_eq!(
-            app.config.model_reasoning_effort,
+            app.chat_widget.current_reasoning_effort(),
             Some(ReasoningEffortConfig::High)
         );
         assert_eq!(
-            app.chat_widget.config_ref().model_reasoning_effort,
+            app.config.model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
     }
@@ -2681,7 +2682,7 @@ mod tests {
             };
             Arc::new(new_session_info(
                 app.chat_widget.config_ref(),
-                app.current_model.as_str(),
+                app.chat_widget.current_model(),
                 event,
                 is_first,
             )) as Arc<dyn HistoryCell>
