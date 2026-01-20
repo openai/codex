@@ -531,7 +531,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
     Ok(cfg)
 }
 
-fn deserialize_config_toml_with_base(
+pub(crate) fn deserialize_config_toml_with_base(
     root_value: TomlValue,
     config_base_dir: &Path,
 ) -> std::io::Result<ConfigToml> {
