@@ -43,6 +43,9 @@ pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
+pub use crate::ask_user_question::AskUserQuestion;
+pub use crate::ask_user_question::AskUserQuestionOption;
+pub use crate::ask_user_question::AskUserQuestionRequestEvent;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -176,6 +179,14 @@ pub enum Op {
         request_id: RequestId,
         /// User's decision for the request.
         decision: ElicitationAction,
+    },
+
+    /// Resolve an AskUserQuestion request from the agent.
+    ResolveAskUserQuestion {
+        /// The id of the submission we are answering.
+        id: String,
+        /// Selected option label(s), in order.
+        answers: Vec<String>,
     },
 
     /// Append an entry to the persistent cross-session message history.
@@ -713,6 +724,8 @@ pub enum EventMsg {
     ElicitationRequest(ElicitationRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
+
+    AskUserQuestionRequest(AskUserQuestionRequestEvent),
 
     /// Notification advising the user that something they are using has been
     /// deprecated and should be phased out.

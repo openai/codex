@@ -36,6 +36,7 @@ use std::time::Duration;
 mod approval_overlay;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
+mod ask_user_question_view;
 mod bottom_pane_view;
 mod chat_composer;
 mod chat_composer_history;
@@ -57,6 +58,7 @@ mod queued_user_messages;
 mod scroll_state;
 mod selection_popup_common;
 mod textarea;
+pub(crate) use ask_user_question_view::AskUserQuestionView;
 pub(crate) use feedback_view::FeedbackNoteView;
 
 /// How long the "press again to quit" hint stays visible.

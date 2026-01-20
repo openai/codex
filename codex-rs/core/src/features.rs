@@ -98,6 +98,8 @@ pub enum Feature {
     EnableRequestCompression,
     /// Enable collab tools.
     Collab,
+    /// Allow the agent to ask interactive questions.
+    AskUserQuestion,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
 }
@@ -415,6 +417,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Collab,
         key: "collab",
+        stage: Stage::Experimental,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::AskUserQuestion,
+        key: "ask_user_question",
         stage: Stage::Experimental,
         default_enabled: false,
     },

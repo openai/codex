@@ -1,4 +1,5 @@
 pub mod account;
+pub mod ask_user_question;
 mod thread_id;
 #[allow(deprecated)]
 pub use thread_id::ConversationId;

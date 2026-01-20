@@ -29,6 +29,7 @@ use mcp_types::RequestId;
 use mcp_types::TextContent;
 use serde_json::json;
 use tokio::sync::Mutex;
+use tracing::warn;
 
 pub(crate) const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
@@ -260,6 +261,19 @@ async fn run_codex_tool_session_inner(
                     }
                     EventMsg::ElicitationRequest(_) => {
                         // TODO: forward elicitation requests to the client?
+                        continue;
+                    }
+                    EventMsg::AskUserQuestionRequest(ev) => {
+                        // Auto-resolve to prevent tool calls from hanging in MCP mode.
+                        if let Err(err) = thread
+                            .submit(Op::ResolveAskUserQuestion {
+                                id: ev.id,
+                                answers: Vec::new(),
+                            })
+                            .await
+                        {
+                            warn!("failed to auto-resolve ask-user-question request: {err}");
+                        }
                         continue;
                     }
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {

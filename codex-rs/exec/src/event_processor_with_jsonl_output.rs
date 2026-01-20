@@ -104,6 +104,7 @@ impl EventProcessorWithJsonOutput {
             protocol::EventMsg::McpToolCallEnd(ev) => self.handle_mcp_tool_call_end(ev),
             protocol::EventMsg::PatchApplyBegin(ev) => self.handle_patch_apply_begin(ev),
             protocol::EventMsg::PatchApplyEnd(ev) => self.handle_patch_apply_end(ev),
+            protocol::EventMsg::AskUserQuestionRequest(_) => Vec::new(),
             protocol::EventMsg::WebSearchBegin(_) => Vec::new(),
             protocol::EventMsg::WebSearchEnd(ev) => self.handle_web_search_end(ev),
             protocol::EventMsg::TokenCount(ev) => {

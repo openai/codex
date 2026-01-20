@@ -34,9 +34,11 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::ask_user_question::AskUserQuestion;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::protocol::AskUserQuestionRequestEvent;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
@@ -1257,6 +1259,37 @@ impl Session {
         rx_approve
     }
 
+    pub async fn request_user_question(
+        &self,
+        turn_context: &TurnContext,
+        id: String,
+        question: AskUserQuestion,
+    ) -> Vec<String> {
+        let sub_id = turn_context.sub_id.clone();
+        let (tx_answer, rx_answer) = oneshot::channel();
+        let prev_entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_question_answer(id.clone(), tx_answer)
+                }
+                None => None,
+            }
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending question for id: {id}");
+        }
+
+        let event = EventMsg::AskUserQuestionRequest(AskUserQuestionRequestEvent {
+            id: id.clone(),
+            turn_id: sub_id,
+            question,
+        });
+        self.send_event(turn_context, event).await;
+        rx_answer.await.unwrap_or_default()
+    }
+
     pub async fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
         let entry = {
             let mut active = self.active_turn.lock().await;
@@ -1274,6 +1307,27 @@ impl Session {
             }
             None => {
                 warn!("No pending approval found for sub_id: {sub_id}");
+            }
+        }
+    }
+
+    pub async fn notify_user_question(&self, id: &str, answers: Vec<String>) {
+        let entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_question_answer(id)
+                }
+                None => None,
+            }
+        };
+        match entry {
+            Some(tx_answer) => {
+                tx_answer.send(answers).ok();
+            }
+            None => {
+                warn!("No pending question found for id: {id}");
             }
         }
     }
@@ -1896,6 +1950,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             } => {
                 handlers::resolve_elicitation(&sess, server_name, request_id, decision).await;
             }
+            Op::ResolveAskUserQuestion { id, answers } => {
+                handlers::resolve_ask_user_question(&sess, id, answers).await;
+            }
             Op::Shutdown => {
                 if handlers::shutdown(&sess, sub.id.clone()).await {
                     break;
@@ -2089,6 +2146,10 @@ mod handlers {
                 "failed to resolve elicitation request in session"
             );
         }
+    }
+
+    pub async fn resolve_ask_user_question(sess: &Arc<Session>, id: String, answers: Vec<String>) {
+        sess.notify_user_question(&id, answers).await;
     }
 
     /// Propagate a user's exec approval decision to the session.

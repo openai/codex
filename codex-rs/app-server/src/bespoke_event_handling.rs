@@ -86,6 +86,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tracing::error;
+use tracing::warn;
 
 type JsonValue = serde_json::Value;
 
@@ -255,6 +256,18 @@ pub(crate) async fn apply_bespoke_event_handling(
                 });
             }
         },
+        EventMsg::AskUserQuestionRequest(ev) => {
+            // Auto-resolve to avoid blocking the session in app-server mode.
+            if let Err(err) = conversation
+                .submit(Op::ResolveAskUserQuestion {
+                    id: ev.id,
+                    answers: Vec::new(),
+                })
+                .await
+            {
+                warn!("failed to auto-resolve ask-user-question request: {err}");
+            }
+        }
         // TODO(celia): properly construct McpToolCall TurnItem in core.
         EventMsg::McpToolCallBegin(begin_event) => {
             let notification = construct_mcp_tool_call_notification(

@@ -479,6 +479,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 })
                 .await?;
         }
+        if let EventMsg::AskUserQuestionRequest(ev) = &event.msg {
+            // Automatically skip user questions in exec mode.
+            thread
+                .submit(Op::ResolveAskUserQuestion {
+                    id: ev.id.clone(),
+                    answers: Vec::new(),
+                })
+                .await?;
+        }
         if matches!(event.msg, EventMsg::Error(_)) {
             error_seen = true;
         }

@@ -67,6 +67,7 @@ impl ActiveTurn {
 #[derive(Default)]
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_question_answers: HashMap<String, oneshot::Sender<Vec<String>>>,
     pending_input: Vec<ResponseInputItem>,
 }
 
@@ -79,6 +80,14 @@ impl TurnState {
         self.pending_approvals.insert(key, tx)
     }
 
+    pub(crate) fn insert_pending_question_answer(
+        &mut self,
+        key: String,
+        tx: oneshot::Sender<Vec<String>>,
+    ) -> Option<oneshot::Sender<Vec<String>>> {
+        self.pending_question_answers.insert(key, tx)
+    }
+
     pub(crate) fn remove_pending_approval(
         &mut self,
         key: &str,
@@ -86,8 +95,16 @@ impl TurnState {
         self.pending_approvals.remove(key)
     }
 
+    pub(crate) fn remove_pending_question_answer(
+        &mut self,
+        key: &str,
+    ) -> Option<oneshot::Sender<Vec<String>>> {
+        self.pending_question_answers.remove(key)
+    }
+
     pub(crate) fn clear_pending(&mut self) {
         self.pending_approvals.clear();
+        self.pending_question_answers.clear();
         self.pending_input.clear();
     }
 

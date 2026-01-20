@@ -26,6 +26,7 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: WebSearchMode,
     pub collab_tools: bool,
+    pub ask_user_question: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -44,6 +45,7 @@ impl ToolsConfig {
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_collab_tools = features.enabled(Feature::Collab);
+        let include_ask_user_question = features.enabled(Feature::AskUserQuestion);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -75,6 +77,7 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
             collab_tools: include_collab_tools,
+            ask_user_question: include_ask_user_question,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
     }
@@ -1105,12 +1108,85 @@ fn sanitize_json_schema(value: &mut JsonValue) {
     }
 }
 
+fn create_ask_user_question_tool() -> ToolSpec {
+    let option_properties = BTreeMap::from([
+        (
+            "label".to_string(),
+            JsonSchema::String {
+                description: Some("Short option label.".to_string()),
+            },
+        ),
+        (
+            "description".to_string(),
+            JsonSchema::String {
+                description: Some("Brief description of the option.".to_string()),
+            },
+        ),
+    ]);
+
+    let question_properties = BTreeMap::from([
+        (
+            "question".to_string(),
+            JsonSchema::String {
+                description: Some("Question to ask the user.".to_string()),
+            },
+        ),
+        (
+            "header".to_string(),
+            JsonSchema::String {
+                description: Some("Optional short header for display.".to_string()),
+            },
+        ),
+        (
+            "options".to_string(),
+            JsonSchema::Array {
+                items: Box::new(JsonSchema::Object {
+                    properties: option_properties,
+                    required: Some(vec!["label".to_string(), "description".to_string()]),
+                    additional_properties: Some(false.into()),
+                }),
+                description: Some("Selectable options.".to_string()),
+            },
+        ),
+        (
+            "multiSelect".to_string(),
+            JsonSchema::Boolean {
+                description: Some("Whether multiple selections are allowed.".to_string()),
+            },
+        ),
+    ]);
+
+    let properties = BTreeMap::from([(
+        "questions".to_string(),
+        JsonSchema::Array {
+            items: Box::new(JsonSchema::Object {
+                properties: question_properties,
+                required: Some(vec!["question".to_string(), "options".to_string()]),
+                additional_properties: Some(false.into()),
+            }),
+            description: Some("Questions to ask, in order.".to_string()),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "ask_user_question".to_string(),
+        description: "Ask the user clarifying questions and return their answers.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["questions".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 /// Builds the tool registry builder while collecting tool specs for later serialization.
 pub(crate) fn build_specs(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
+    use crate::tools::handlers::AskUserQuestionHandler;
     use crate::tools::handlers::CollabHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
@@ -1132,6 +1208,7 @@ pub(crate) fn build_specs(
     let plan_handler = Arc::new(PlanHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
+    let ask_user_question_handler = Arc::new(AskUserQuestionHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
@@ -1240,6 +1317,11 @@ pub(crate) fn build_specs(
 
     builder.push_spec_with_parallel_support(create_view_image_tool(), true);
     builder.register_handler("view_image", view_image_handler);
+
+    if config.ask_user_question {
+        builder.push_spec(create_ask_user_question_tool());
+        builder.register_handler("ask_user_question", ask_user_question_handler);
+    }
 
     if config.collab_tools {
         let collab_handler = Arc::new(CollabHandler);
