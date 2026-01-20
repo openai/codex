@@ -6,7 +6,6 @@ use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
-use codex_app_server_protocol::TextElement as V2TextElement;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
@@ -17,7 +16,7 @@ use codex_app_server_protocol::UserInput;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::ByteRange;
-use codex_protocol::user_input::TextElement as CoreTextElement;
+use codex_protocol::user_input::TextElement;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -75,17 +74,10 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let preview = "Saved user message";
-    let text_elements = vec![CoreTextElement::new(
+    let text_elements = vec![TextElement::new(
         ByteRange { start: 0, end: 5 },
         Some("<note>".into()),
     )];
-    let expected_text_elements: Vec<V2TextElement> = text_elements
-        .iter()
-        .map(|elem| V2TextElement {
-            byte_range: elem.byte_range.into(),
-            placeholder: elem.placeholder(preview).map(str::to_string),
-        })
-        .collect();
     let conversation_id = create_fake_rollout_with_text_elements(
         codex_home.path(),
         "2025-01-05T12-00-00",
@@ -138,7 +130,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
                 content,
                 &vec![UserInput::Text {
                     text: preview.to_string(),
-                    text_elements: expected_text_elements,
+                    text_elements: text_elements.clone().into_iter().map(Into::into).collect(),
                 }]
             );
         }

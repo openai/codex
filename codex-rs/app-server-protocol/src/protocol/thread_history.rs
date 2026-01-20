@@ -1,4 +1,3 @@
-use crate::protocol::v2::TextElement;
 use crate::protocol::v2::ThreadItem;
 use crate::protocol::v2::Turn;
 use crate::protocol::v2::TurnError;
@@ -202,7 +201,7 @@ impl ThreadHistoryBuilder {
                     .text_elements
                     .iter()
                     .cloned()
-                    .map(|elem| TextElement::from_core(&payload.message, elem))
+                    .map(Into::into)
                     .collect(),
             });
         }
