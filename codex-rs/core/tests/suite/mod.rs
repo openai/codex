@@ -53,6 +53,7 @@ mod quota_exceeded;
 mod read_file;
 mod remote_models;
 mod request_compression;
+mod request_user_input;
 mod resume;
 mod resume_warning;
 mod review;
