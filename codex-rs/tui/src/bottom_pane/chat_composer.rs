@@ -5481,6 +5481,91 @@ mod tests {
     }
 
     #[test]
+    fn numeric_prompt_auto_submit_prunes_unused_image_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Hello $1".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        type_chars_humanlike(
+            &mut composer,
+            &[
+                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'm', 'y', '-', 'p', 'r', 'o', 'm',
+                'p', 't', ' ', 'f', 'o', 'o', ' ',
+            ],
+        );
+        composer.attach_image(PathBuf::from("/tmp/unused.png"));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(
+            result,
+            InputResult::Submitted { text, .. } if text == "Hello foo"
+        ));
+        assert!(
+            composer
+                .take_recent_submission_images_with_placeholders()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn queued_prompt_submission_prunes_unused_image_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(false);
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Hello $1".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer
+            .textarea
+            .set_text_clearing_elements("/prompts:my-prompt foo ");
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        composer.attach_image(PathBuf::from("/tmp/unused.png"));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(
+            result,
+            InputResult::Queued { text, .. } if text == "Hello foo"
+        ));
+        assert!(
+            composer
+                .take_recent_submission_images_with_placeholders()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn selecting_custom_prompt_with_positional_args_submits_numeric_expansion() {
         let prompt_text = "Header: $1\nArgs: $ARGUMENTS\n";
 
