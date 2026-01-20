@@ -506,6 +506,18 @@ impl Config {
     }
 }
 
+/// Load config with CLI overrides and apply a fallback cwd when none is specified in overrides.
+pub async fn load_with_cli_overrides_and_fallback_cwd(
+    cli_overrides: Vec<(String, TomlValue)>,
+    mut overrides: ConfigOverrides,
+    fallback_cwd: Option<PathBuf>,
+) -> std::io::Result<Config> {
+    if overrides.cwd.is_none() {
+        overrides.cwd = fallback_cwd;
+    }
+    Config::load_with_cli_overrides_and_harness_overrides(cli_overrides, overrides).await
+}
+
 /// DEPRECATED: Use [Config::load_with_cli_overrides()] instead because working
 /// with [ConfigToml] directly means that [ConfigRequirements] have not been
 /// applied yet, which risks failing to enforce required constraints.
@@ -2288,6 +2300,47 @@ trust_level = "trusted"
         )?;
 
         assert!(!config.features.enabled(Feature::WebSearchRequest));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn project_profile_overrides_user_profile() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"
+profile = "global"
+
+[profiles.global]
+model = "gpt-global"
+
+[profiles.project]
+model = "gpt-project"
+"#,
+        )?;
+
+        let workspace = TempDir::new()?;
+        let project_config_dir = workspace.path().join(".codex");
+        std::fs::create_dir_all(&project_config_dir)?;
+        std::fs::write(
+            project_config_dir.join(CONFIG_TOML_FILE),
+            r#"
+profile = "project"
+"#,
+        )?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(workspace.path().to_path_buf()),
+                ..Default::default()
+            })
+            .build()
+            .await?;
+
+        assert_eq!(config.active_profile.as_deref(), Some("project"));
+        assert_eq!(config.model.as_deref(), Some("gpt-project"));
 
         Ok(())
     }

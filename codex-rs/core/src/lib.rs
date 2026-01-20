@@ -104,6 +104,7 @@ pub use rollout::list::ThreadSortKey;
 pub use rollout::list::ThreadsPage;
 pub use rollout::list::parse_cursor;
 pub use rollout::list::read_head_for_summary;
+pub use rollout::list::read_session_meta_line;
 mod function_tool;
 mod state;
 mod tasks;
