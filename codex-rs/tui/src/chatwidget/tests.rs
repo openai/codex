@@ -192,10 +192,10 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
 
     let placeholder = "[Image #1]";
     let message = format!("{placeholder} replayed");
-    let text_elements = vec![TextElement {
-        byte_range: (0..placeholder.len()).into(),
-        placeholder: Some(placeholder.to_string()),
-    }];
+    let text_elements = vec![TextElement::new(
+        (0..placeholder.len()).into(),
+        Some(placeholder.to_string()),
+    )];
     let local_images = vec![PathBuf::from("/tmp/replay.png")];
 
     let conversation_id = ThreadId::new();
@@ -274,10 +274,10 @@ async fn submission_preserves_text_elements_and_local_images() {
 
     let placeholder = "[Image #1]";
     let text = format!("{placeholder} submit");
-    let text_elements = vec![TextElement {
-        byte_range: (0..placeholder.len()).into(),
-        placeholder: Some(placeholder.to_string()),
-    }];
+    let text_elements = vec![TextElement::new(
+        (0..placeholder.len()).into(),
+        Some(placeholder.to_string()),
+    )];
     let local_images = vec![PathBuf::from("/tmp/submitted.png")];
 
     chat.bottom_pane
@@ -330,26 +330,26 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
 
     let first_placeholder = "[Image #1]";
     let first_text = format!("{first_placeholder} first");
-    let first_elements = vec![TextElement {
-        byte_range: (0..first_placeholder.len()).into(),
-        placeholder: Some(first_placeholder.to_string()),
-    }];
+    let first_elements = vec![TextElement::new(
+        (0..first_placeholder.len()).into(),
+        Some(first_placeholder.to_string()),
+    )];
     let first_images = [PathBuf::from("/tmp/first.png")];
 
     let second_placeholder = "[Image #1]";
     let second_text = format!("{second_placeholder} second");
-    let second_elements = vec![TextElement {
-        byte_range: (0..second_placeholder.len()).into(),
-        placeholder: Some(second_placeholder.to_string()),
-    }];
+    let second_elements = vec![TextElement::new(
+        (0..second_placeholder.len()).into(),
+        Some(second_placeholder.to_string()),
+    )];
     let second_images = [PathBuf::from("/tmp/second.png")];
 
     let existing_placeholder = "[Image #1]";
     let existing_text = format!("{existing_placeholder} existing");
-    let existing_elements = vec![TextElement {
-        byte_range: (0..existing_placeholder.len()).into(),
-        placeholder: Some(existing_placeholder.to_string()),
-    }];
+    let existing_elements = vec![TextElement::new(
+        (0..existing_placeholder.len()).into(),
+        Some(existing_placeholder.to_string()),
+    )];
     let existing_images = vec![PathBuf::from("/tmp/existing.png")];
 
     chat.queued_user_messages.push_back(UserMessage {
@@ -392,18 +392,18 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     let second_start = first.len() + 1;
     let third_start = second_start + second.len() + 1;
     let expected_elements = vec![
-        TextElement {
-            byte_range: (first_start..first_start + "[Image #1]".len()).into(),
-            placeholder: Some("[Image #1]".to_string()),
-        },
-        TextElement {
-            byte_range: (second_start..second_start + "[Image #2]".len()).into(),
-            placeholder: Some("[Image #2]".to_string()),
-        },
-        TextElement {
-            byte_range: (third_start..third_start + "[Image #3]".len()).into(),
-            placeholder: Some("[Image #3]".to_string()),
-        },
+        TextElement::new(
+            (first_start..first_start + "[Image #1]".len()).into(),
+            Some("[Image #1]".to_string()),
+        ),
+        TextElement::new(
+            (second_start..second_start + "[Image #2]".len()).into(),
+            Some("[Image #2]".to_string()),
+        ),
+        TextElement::new(
+            (third_start..third_start + "[Image #3]".len()).into(),
+            Some("[Image #3]".to_string()),
+        ),
     ];
     assert_eq!(chat.bottom_pane.composer_text_elements(), expected_elements);
     assert_eq!(
@@ -422,14 +422,14 @@ async fn remap_placeholders_uses_attachment_labels() {
     let placeholder_two = "[Image #2]";
     let text = format!("{placeholder_two} before {placeholder_one}");
     let elements = vec![
-        TextElement {
-            byte_range: (0..placeholder_two.len()).into(),
-            placeholder: Some(placeholder_two.to_string()),
-        },
-        TextElement {
-            byte_range: ("[Image #2] before ".len().."[Image #2] before [Image #1]".len()).into(),
-            placeholder: Some(placeholder_one.to_string()),
-        },
+        TextElement::new(
+            (0..placeholder_two.len()).into(),
+            Some(placeholder_two.to_string()),
+        ),
+        TextElement::new(
+            ("[Image #2] before ".len().."[Image #2] before [Image #1]".len()).into(),
+            Some(placeholder_one.to_string()),
+        ),
     ];
 
     let attachments = vec![
@@ -454,15 +454,14 @@ async fn remap_placeholders_uses_attachment_labels() {
     assert_eq!(
         remapped.text_elements,
         vec![
-            TextElement {
-                byte_range: (0.."[Image #4]".len()).into(),
-                placeholder: Some("[Image #4]".to_string()),
-            },
-            TextElement {
-                byte_range: ("[Image #4] before ".len().."[Image #4] before [Image #3]".len())
-                    .into(),
-                placeholder: Some("[Image #3]".to_string()),
-            },
+            TextElement::new(
+                (0.."[Image #4]".len()).into(),
+                Some("[Image #4]".to_string()),
+            ),
+            TextElement::new(
+                ("[Image #4] before ".len().."[Image #4] before [Image #3]".len()).into(),
+                Some("[Image #3]".to_string()),
+            ),
         ]
     );
     assert_eq!(
@@ -486,14 +485,11 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
     let placeholder_two = "[Image #2]";
     let text = format!("{placeholder_two} before {placeholder_one}");
     let elements = vec![
-        TextElement {
-            byte_range: (0..placeholder_two.len()).into(),
-            placeholder: None,
-        },
-        TextElement {
-            byte_range: ("[Image #2] before ".len().."[Image #2] before [Image #1]".len()).into(),
-            placeholder: None,
-        },
+        TextElement::new((0..placeholder_two.len()).into(), None),
+        TextElement::new(
+            ("[Image #2] before ".len().."[Image #2] before [Image #1]".len()).into(),
+            None,
+        ),
     ];
 
     let attachments = vec![
@@ -518,15 +514,14 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
     assert_eq!(
         remapped.text_elements,
         vec![
-            TextElement {
-                byte_range: (0.."[Image #4]".len()).into(),
-                placeholder: Some("[Image #4]".to_string()),
-            },
-            TextElement {
-                byte_range: ("[Image #4] before ".len().."[Image #4] before [Image #3]".len())
-                    .into(),
-                placeholder: Some("[Image #3]".to_string()),
-            },
+            TextElement::new(
+                (0.."[Image #4]".len()).into(),
+                Some("[Image #4]".to_string()),
+            ),
+            TextElement::new(
+                ("[Image #4] before ".len().."[Image #4] before [Image #3]".len()).into(),
+                Some("[Image #3]".to_string()),
+            ),
         ]
     );
     assert_eq!(

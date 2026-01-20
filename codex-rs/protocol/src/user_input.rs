@@ -36,7 +36,35 @@ pub struct TextElement {
     /// Byte range in the parent `text` buffer that this element occupies.
     pub byte_range: ByteRange,
     /// Optional human-readable placeholder for the element, displayed in the UI.
-    pub placeholder: Option<String>,
+    placeholder: Option<String>,
+}
+
+impl TextElement {
+    pub fn new(byte_range: ByteRange, placeholder: Option<String>) -> Self {
+        Self {
+            byte_range,
+            placeholder,
+        }
+    }
+
+    pub fn set_placeholder(&mut self, placeholder: Option<String>) {
+        self.placeholder = placeholder;
+    }
+
+    /// Returns the stored placeholder without falling back to the text buffer.
+    ///
+    /// This is intended only for protocol conversions where the full text is not
+    /// available; prefer `placeholder(text)` for UI logic.
+    #[doc(hidden)]
+    pub fn _placeholder_for_conversion_only(&self) -> Option<&str> {
+        self.placeholder.as_deref()
+    }
+
+    pub fn placeholder<'a>(&'a self, text: &'a str) -> Option<&'a str> {
+        self.placeholder
+            .as_deref()
+            .or_else(|| text.get(self.byte_range.start..self.byte_range.end))
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS, JsonSchema)]
