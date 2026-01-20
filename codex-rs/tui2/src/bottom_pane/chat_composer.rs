@@ -1543,7 +1543,8 @@ impl ChatComposer {
         };
         if let Some(expanded) = expanded_prompt {
             text = expanded;
-            // Expanded prompt (e.g. custom prompt) is plain text; no UI element ranges to preserve.
+            // Expanded prompt (e.g. custom prompt) is plain text; text elements not supported yet.
+            // TODO: Preserve UI element ranges through prompt expansion in a follow-up PR.
             text_elements = Vec::new();
         }
         if text.is_empty() && !has_attachments {
