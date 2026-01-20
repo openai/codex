@@ -244,7 +244,7 @@
       "format": "int64"
     },
     "model_personality": {
-      "description": "Optionally specify the personality of the model",
+      "description": "EXPERIMENTAL Optionally specify a personality for the model",
       "allOf": [
         {
           "$ref": "#/definitions/Personality"
