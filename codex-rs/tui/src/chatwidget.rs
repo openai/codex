@@ -2708,7 +2708,8 @@ impl ChatWidget {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
-            | EventMsg::RequestUserInput(_) => {}
+            | EventMsg::RequestUserInput(_)
+            | EventMsg::DynamicToolCallRequest(_) => {}
         }
     }
 

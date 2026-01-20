@@ -1,4 +1,5 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
+use crate::dynamic_tools::RESERVED_DYNAMIC_TOOL_NAMES;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
@@ -28,6 +29,7 @@ use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
+use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
@@ -162,6 +164,7 @@ use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
@@ -1384,33 +1387,77 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_start(&mut self, request_id: RequestId, params: ThreadStartParams) {
+        let ThreadStartParams {
+            model,
+            model_provider,
+            cwd,
+            approval_policy,
+            sandbox,
+            config,
+            base_instructions,
+            developer_instructions,
+            dynamic_tools,
+            experimental_raw_events,
+        } = params;
         let typesafe_overrides = self.build_thread_config_overrides(
-            params.model,
-            params.model_provider,
-            params.cwd,
-            params.approval_policy,
-            params.sandbox,
-            params.base_instructions,
-            params.developer_instructions,
+            model,
+            model_provider,
+            cwd,
+            approval_policy,
+            sandbox,
+            base_instructions,
+            developer_instructions,
         );
 
-        let config =
-            match derive_config_from_params(&self.cli_overrides, params.config, typesafe_overrides)
-                .await
-            {
-                Ok(config) => config,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("error deriving config: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            };
+        let config = match derive_config_from_params(
+            &self.cli_overrides,
+            config,
+            typesafe_overrides,
+        )
+        .await
+        {
+            Ok(config) => config,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("error deriving config: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
 
-        match self.thread_manager.start_thread(config).await {
+        let dynamic_tools = dynamic_tools.unwrap_or_default();
+        let core_dynamic_tools = if dynamic_tools.is_empty() {
+            Vec::new()
+        } else {
+            let snapshot = collect_mcp_snapshot(&config).await;
+            let mcp_tool_names = snapshot.tools.keys().cloned().collect::<HashSet<_>>();
+            if let Err(message) = validate_dynamic_tools(&dynamic_tools, &mcp_tool_names) {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message,
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            dynamic_tools
+                .into_iter()
+                .map(|tool| CoreDynamicToolSpec {
+                    name: tool.name,
+                    description: tool.description,
+                    input_schema: tool.input_schema,
+                })
+                .collect()
+        };
+
+        match self
+            .thread_manager
+            .start_thread_with_tools(config, core_dynamic_tools)
+            .await
+        {
             Ok(new_conv) => {
                 let NewThread {
                     thread_id,
@@ -1465,7 +1512,7 @@ impl CodexMessageProcessor {
                 if let Err(err) = self
                     .attach_conversation_listener(
                         thread_id,
-                        params.experimental_raw_events,
+                        experimental_raw_events,
                         ApiVersion::V2,
                     )
                     .await
@@ -4019,6 +4066,40 @@ fn errors_to_info(
             message: err.message.clone(),
         })
         .collect()
+}
+
+fn validate_dynamic_tools(
+    tools: &[ApiDynamicToolSpec],
+    mcp_tool_names: &HashSet<String>,
+) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for tool in tools {
+        let name = tool.name.trim();
+        if name.is_empty() {
+            return Err("dynamic tool name must not be empty".to_string());
+        }
+        if name != tool.name {
+            return Err(format!(
+                "dynamic tool name has leading/trailing whitespace: {}",
+                tool.name
+            ));
+        }
+        if name == "mcp" || name.starts_with("mcp__") {
+            return Err(format!("dynamic tool name is reserved: {name}"));
+        }
+        if RESERVED_DYNAMIC_TOOL_NAMES.contains(&name) {
+            return Err(format!(
+                "dynamic tool name conflicts with built-in tool: {name}"
+            ));
+        }
+        if mcp_tool_names.contains(name) {
+            return Err(format!("dynamic tool name conflicts with MCP tool: {name}"));
+        }
+        if !seen.insert(name.to_string()) {
+            return Err(format!("duplicate dynamic tool name: {name}"));
+        }
+    }
+    Ok(())
 }
 
 /// Derive the effective [`Config`] by layering three override sources.

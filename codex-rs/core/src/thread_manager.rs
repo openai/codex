@@ -196,12 +196,21 @@ impl ThreadManager {
     }
 
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
+        self.start_thread_with_tools(config, Vec::new()).await
+    }
+
+    pub async fn start_thread_with_tools(
+        &self,
+        config: Config,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+    ) -> CodexResult<NewThread> {
         self.state
             .spawn_thread(
                 config,
                 InitialHistory::New,
                 Arc::clone(&self.state.auth_manager),
                 self.agent_control(),
+                dynamic_tools,
             )
             .await
     }
@@ -224,7 +233,13 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewThread> {
         self.state
-            .spawn_thread(config, initial_history, auth_manager, self.agent_control())
+            .spawn_thread(
+                config,
+                initial_history,
+                auth_manager,
+                self.agent_control(),
+                Vec::new(),
+            )
             .await
     }
 
@@ -262,6 +277,7 @@ impl ThreadManager {
                 history,
                 Arc::clone(&self.state.auth_manager),
                 self.agent_control(),
+                Vec::new(),
             )
             .await
     }
@@ -319,6 +335,7 @@ impl ThreadManagerState {
             InitialHistory::New,
             Arc::clone(&self.auth_manager),
             agent_control,
+            Vec::new(),
         )
         .await
     }
@@ -330,6 +347,7 @@ impl ThreadManagerState {
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     ) -> CodexResult<NewThread> {
         let CodexSpawnOk {
             codex, thread_id, ..
@@ -341,6 +359,7 @@ impl ThreadManagerState {
             initial_history,
             self.session_source.clone(),
             agent_control,
+            dynamic_tools,
         )
         .await?;
         self.finalize_thread_spawn(codex, thread_id).await
