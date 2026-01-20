@@ -229,6 +229,7 @@ fn maybe_push_chat_wire_api_deprecation(
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn(
         config: Config,
         auth_manager: Arc<AuthManager>,
