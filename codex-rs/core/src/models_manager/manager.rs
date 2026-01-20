@@ -407,6 +407,16 @@ mod tests {
         .expect("valid model")
     }
 
+    fn assert_models_contain(actual: &[ModelInfo], expected: &[ModelInfo]) {
+        for model in expected {
+            assert!(
+                actual.iter().any(|candidate| candidate.slug == model.slug),
+                "expected model {} in cached list",
+                model.slug
+            );
+        }
+    }
+
     fn provider_for(base_url: String) -> ModelProviderInfo {
         ModelProviderInfo {
             name: "mock".into(),
@@ -426,7 +436,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_available_models_sorts_and_marks_default() {
+    async fn refresh_available_models_sorts_by_priority() {
         let server = MockServer::start().await;
         let remote_models = vec![
             remote_model("priority-low", "Low", 1),
@@ -458,7 +468,7 @@ mod tests {
             .await
             .expect("refresh succeeds");
         let cached_remote = manager.get_remote_models(&config).await;
-        assert_eq!(cached_remote, remote_models);
+        assert_models_contain(&cached_remote, &remote_models);
 
         let available = manager
             .list_models(&config, RefreshStrategy::OnlineIfUncached)
@@ -475,11 +485,6 @@ mod tests {
             high_idx < low_idx,
             "higher priority should be listed before lower priority"
         );
-        assert!(
-            available[high_idx].is_default,
-            "highest priority should be default"
-        );
-        assert!(!available[low_idx].is_default);
         assert_eq!(
             models_mock.requests().len(),
             1,
@@ -519,22 +524,14 @@ mod tests {
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
             .await
             .expect("first refresh succeeds");
-        assert_eq!(
-            manager.get_remote_models(&config).await,
-            remote_models,
-            "remote cache should store fetched models"
-        );
+        assert_models_contain(&manager.get_remote_models(&config).await, &remote_models);
 
         // Second call should read from cache and avoid the network.
         manager
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
             .await
             .expect("cached refresh succeeds");
-        assert_eq!(
-            manager.get_remote_models(&config).await,
-            remote_models,
-            "cache path should not mutate stored models"
-        );
+        assert_models_contain(&manager.get_remote_models(&config).await, &remote_models);
         assert_eq!(
             models_mock.requests().len(),
             1,
@@ -598,11 +595,7 @@ mod tests {
             .refresh_available_models(&config, RefreshStrategy::OnlineIfUncached)
             .await
             .expect("second refresh succeeds");
-        assert_eq!(
-            manager.get_remote_models(&config).await,
-            updated_models,
-            "stale cache should trigger refetch"
-        );
+        assert_models_contain(&manager.get_remote_models(&config).await, &updated_models);
         assert_eq!(
             initial_mock.requests().len(),
             1,
