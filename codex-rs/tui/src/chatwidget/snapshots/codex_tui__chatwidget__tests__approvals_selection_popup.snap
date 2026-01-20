@@ -2,7 +2,7 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Select Approval Mode
+  Update Model Permissions
 
 › 1. Read Only (current)  Requires approval to edit files and run commands.
   2. Agent                Read and edit files, and run commands.

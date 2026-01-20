@@ -3112,7 +3112,7 @@ async fn approvals_popup_navigation_skips_disabled() {
         .expect("render approvals popup after disabled selection");
     let screen = terminal.backend().vt100().screen().contents();
     assert!(
-        screen.contains("Select Approval Mode"),
+        screen.contains("Update Model Permissions"),
         "popup should remain open after selecting a disabled entry"
     );
     assert!(
