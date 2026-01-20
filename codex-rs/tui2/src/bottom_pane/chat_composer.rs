@@ -5321,9 +5321,13 @@ mod tests {
         );
 
         let count = 32;
+        let mut now = Instant::now();
+        let step = Duration::from_millis(1);
         for _ in 0..count {
-            let _ =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+            let _ = composer.handle_input_basic_with_time(
+                KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+                now,
+            );
             assert!(
                 composer.is_in_paste_burst(),
                 "expected active paste burst during fast typing"
@@ -5332,13 +5336,15 @@ mod tests {
                 composer.textarea.text().is_empty(),
                 "text should not appear during burst"
             );
+            now += step;
         }
 
         assert!(
             composer.textarea.text().is_empty(),
             "text should remain empty until flush"
         );
-        let flushed = flush_after_paste_burst(&mut composer);
+        let flush_time = now + PasteBurst::recommended_active_flush_delay() + step;
+        let flushed = composer.handle_paste_burst_flush(flush_time);
         assert!(flushed, "expected buffered text to flush after stop");
         assert_eq!(composer.textarea.text(), "a".repeat(count));
         assert!(
