@@ -4639,6 +4639,21 @@ pub async fn run_security_review(
         );
         plan_tracker.reset_step(SecurityReviewPlanStep::PrepareValidationTargets);
     }
+    if !validation_prep_complete
+        && matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
+            Some(StepStatus::InProgress)
+        )
+    {
+        push_progress_log(
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+            "Validate findings: waiting for validation target preparation; resetting status to pending."
+                .to_string(),
+        );
+        plan_tracker.reset_step(SecurityReviewPlanStep::ValidateFindings);
+    }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
     plan_tracker.emit_plan_snapshot();
@@ -6278,14 +6293,6 @@ pub async fn run_security_review(
 
     let specs_root = request.output_root.join("specs");
     let testing_path = specs_root.join("TESTING.md");
-    if tokio_fs::read_to_string(&testing_path)
-        .await
-        .unwrap_or_default()
-        .trim()
-        .is_empty()
-    {
-        write_testing_instructions(&repo_path, &specs_root, progress_sender.clone(), None).await;
-    }
     if !validation_target_additions.is_empty() {
         apply_validation_testing_md_additions(
             &testing_path,
@@ -6301,17 +6308,30 @@ pub async fn run_security_review(
         plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
         Some(StepStatus::Completed | StepStatus::InProgress)
     );
-    if validation_target_prep_succeeded {
-        if validate_was_started {
-            plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
-        } else {
-            plan_tracker.complete_and_start_next(
-                SecurityReviewPlanStep::PrepareValidationTargets,
-                Some(SecurityReviewPlanStep::ValidateFindings),
+    if !validate_was_started {
+        if !matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+            Some(StepStatus::Completed)
+        ) && !validation_target_prep_succeeded
+        {
+            push_progress_log(
+                &progress_sender,
+                &log_sink,
+                &mut logs,
+                "Prepare runnable validation targets did not produce runnable targets; continuing to validation (may record UnableToValidate statuses)."
+                    .to_string(),
             );
         }
-    } else if !validate_was_started {
-        plan_tracker.start_step(SecurityReviewPlanStep::ValidateFindings);
+
+        plan_tracker.complete_and_start_next(
+            SecurityReviewPlanStep::PrepareValidationTargets,
+            Some(SecurityReviewPlanStep::ValidateFindings),
+        );
+    } else if !matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+        Some(StepStatus::Completed)
+    ) {
+        plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
     }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
@@ -8469,14 +8489,6 @@ async fn generate_specs(
             logs.push(msg);
         }
     }
-
-    write_testing_instructions(
-        repo_root,
-        &specs_root,
-        progress_sender.clone(),
-        log_sink.clone(),
-    )
-    .await;
 
     Ok(Some(SpecGenerationOutcome {
         combined_markdown,
@@ -11275,248 +11287,10 @@ fn guess_testing_defaults(repo_root: &Path) -> (bool, bool, bool, bool, bool, u1
     )
 }
 
-fn build_testing_instructions(repo_root: &Path) -> String {
-    let (
-        has_cargo,
-        has_package_json,
-        has_dockerfile,
-        has_compose,
-        has_playwright,
-        default_port,
-        repo_label,
-    ) = guess_testing_defaults(repo_root);
-
-    let cargo_build_cmd = if repo_root.join("Cargo.lock").exists() {
-        "cargo build --locked"
-    } else {
-        "cargo build"
-    };
-
-    fn has_package_json_script(package_json: &Value, script_name: &str) -> bool {
-        package_json
-            .get("scripts")
-            .and_then(Value::as_object)
-            .and_then(|scripts| scripts.get(script_name))
-            .and_then(Value::as_str)
-            .is_some_and(|script| !script.trim().is_empty())
-    }
-
-    let package_json = if has_package_json {
-        fs::read_to_string(repo_root.join("package.json"))
-            .ok()
-            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-    } else {
-        None
-    };
-
-    let npm_install_cmd = if repo_root.join("package-lock.json").exists()
-        || repo_root.join("npm-shrinkwrap.json").exists()
-    {
-        "npm ci"
-    } else {
-        "npm install"
-    };
-    let npm_has_build_script = package_json
-        .as_ref()
-        .is_some_and(|package_json| has_package_json_script(package_json, "build"));
-    let npm_run_cmd = if package_json
-        .as_ref()
-        .is_some_and(|package_json| has_package_json_script(package_json, "dev"))
-    {
-        format!("npm run dev -- --port {default_port}")
-    } else if package_json
-        .as_ref()
-        .is_some_and(|package_json| has_package_json_script(package_json, "start"))
-    {
-        "npm start".to_string()
-    } else {
-        format!("npm run dev -- --port {default_port}")
-    };
-
-    let has_go = repo_root.join("go.mod").exists();
-
-    let mut sections: Vec<String> = Vec::new();
-
-    let mut quickstart: Vec<String> = Vec::new();
-    if has_cargo {
-        quickstart.push(format!("- {cargo_build_cmd}"));
-        quickstart.push("- cargo run --release".to_string());
-    }
-    if has_go {
-        quickstart.push("- go build ./...".to_string());
-    }
-    if has_package_json {
-        quickstart.push(format!("- {npm_install_cmd}"));
-        if npm_has_build_script {
-            quickstart.push("- npm run build".to_string());
-        }
-        quickstart.push(format!("- {npm_run_cmd}"));
-    }
-    if quickstart.is_empty() {
-        quickstart.push(
-            "- Identify the primary service entrypoint, install deps, and start it with the appropriate runner (npm/cargo/docker)."
-                .to_string(),
-        );
-    }
-    sections.push(format!("## Quickstart\n{}\n", quickstart.join("\n")));
-
-    if has_cargo {
-        sections.push(format!(
-            "## Native build\n- {cargo_build_cmd}\n- Artifacts: `target/debug` (or `target/release` after `cargo build --release`).\n- Run: `cargo run --release`\n"
-        ));
-    }
-
-    if has_go {
-        sections.push(
-            "## Native build (Go)\n- go build ./...\n- If this is a service, run the project's entrypoint (Makefile/taskfile/etc) and confirm it starts.\n"
-                .to_string(),
-        );
-    }
-
-    if has_package_json {
-        let mut lines = vec![format!("## Web/Node\n- {npm_install_cmd}")];
-        if npm_has_build_script {
-            lines.push("- npm run build".to_string());
-        }
-        lines.push(format!("- {npm_run_cmd}"));
-        lines.push(format!(
-            "- Verify: `curl -i http://localhost:{default_port}` (adjust if your app uses a different port).\n"
-        ));
-        sections.push(lines.join("\n"));
-    }
-
-    if has_dockerfile || has_compose {
-        let tag = format!("{repo_label}-local");
-        let mut docker_lines: Vec<String> = Vec::new();
-        if has_compose {
-            docker_lines.push(
-                "- Prefer released images when possible: `docker compose pull` then `docker compose up`."
-                    .to_string(),
-            );
-            docker_lines.push(
-                "- If the compose file requires local builds (uses `build:`), use: `docker compose up --build`."
-                    .to_string(),
-            );
-        } else {
-            docker_lines.push(
-                "- If a released image exists (e.g., GHCR/Docker Hub), prefer pulling it (example: `docker pull <image>:latest`) and running it locally."
-                    .to_string(),
-            );
-            docker_lines.push(format!("- docker build -t {tag} ."));
-            docker_lines.push(format!(
-                "- docker run -p <host_port>:<container_port> {tag}"
-            ));
-        }
-        docker_lines.push(format!(
-            "- Verify: `curl -i http://localhost:{default_port}` (update to the container's exposed port)."
-        ));
-        sections.push(format!("## Docker\n{}\n", docker_lines.join("\n")));
-    }
-
-    if has_playwright {
-        sections.push(
-            "## Headless checks\n- npm install (if not already)\n- npx playwright install\n- npx playwright test\n"
-                .to_string(),
-        );
-    } else {
-        sections.push(
-            "## Headless checks\n- If the project has a UI, install Playwright and add a smoke test harness (e.g., `npx playwright install` then `npx playwright test`).\n"
-                .to_string(),
-        );
-    }
-
-    sections.push(format!(
-        "## Manual verification\n- Once the service is running (default port: {default_port}; override with `PORT` env if applicable), confirm a 200/OK from a health or root endpoint:\n  - `curl -I http://localhost:{default_port}`\n- For authenticated flows, add seed users in test config or fixtures before hitting secured endpoints.\n"
-    ));
-
-    format!("# Local build and smoke test\n\n{}\n", sections.join("\n"))
-}
-
-async fn write_testing_instructions(
-    repo_root: &Path,
-    specs_root: &Path,
-    progress_sender: Option<AppEventSender>,
-    log_sink: Option<Arc<SecurityReviewLogSink>>,
-) {
-    let testing_path = specs_root.join("TESTING.md");
-    let contents = build_testing_instructions(repo_root);
-    let existing = tokio_fs::read_to_string(&testing_path).await.ok();
-    if let Some(existing) = existing.as_deref()
-        && !existing.trim().is_empty()
-    {
-        if existing.trim() != contents.trim() {
-            let generated_path = specs_root.join("TESTING.generated.md");
-            let message = format!(
-                "Testing instructions already exist at {}; leaving unchanged and writing an updated copy to {}.",
-                display_path_for(&testing_path, repo_root),
-                display_path_for(&generated_path, repo_root)
-            );
-            push_progress_log(&progress_sender, &log_sink, &mut Vec::new(), message);
-            if let Some(parent) = generated_path.parent() {
-                let _ = tokio_fs::create_dir_all(parent).await;
-            }
-            if let Err(err) = tokio_fs::write(&generated_path, contents.as_bytes()).await {
-                let warn = format!(
-                    "Failed to write generated testing instructions to {}: {err}",
-                    generated_path.display()
-                );
-                push_progress_log(&progress_sender, &log_sink, &mut Vec::new(), warn);
-            }
-        } else {
-            let message = format!(
-                "Testing instructions already present at {}; leaving unchanged.",
-                display_path_for(&testing_path, repo_root)
-            );
-            push_progress_log(&progress_sender, &log_sink, &mut Vec::new(), message);
-        }
-        return;
-    }
-
-    let log_message = format!(
-        "Writing testing instructions to {}.",
-        display_path_for(&testing_path, repo_root)
-    );
-    push_progress_log(&progress_sender, &log_sink, &mut Vec::new(), log_message);
-    if let Some(parent) = testing_path.parent() {
-        let _ = tokio_fs::create_dir_all(parent).await;
-    }
-    if let Err(err) = tokio_fs::write(&testing_path, contents.as_bytes()).await {
-        let warn = format!(
-            "Failed to write testing instructions to {}: {err}",
-            testing_path.display()
-        );
-        push_progress_log(&progress_sender, &log_sink, &mut Vec::new(), warn);
-    } else {
-        let message = format!(
-            "Testing instructions saved to {} (includes build/run, Docker, and headless checks).",
-            display_path_for(&testing_path, repo_root)
-        );
-        push_progress_log(&progress_sender, &log_sink, &mut Vec::new(), message);
-    }
-}
-
 struct ValidationTargetPrepOutcome {
     logs: Vec<String>,
     testing_md_additions: Vec<String>,
     success: bool,
-}
-
-fn extract_compose_image_refs(contents: &str) -> Vec<String> {
-    let mut images: Vec<String> = Vec::new();
-    for line in contents.lines() {
-        let trimmed = line.trim_start();
-        let Some(rest) = trimmed.strip_prefix("image:") else {
-            continue;
-        };
-        let image = rest
-            .trim()
-            .trim_matches(|ch| matches!(ch, '"' | '\''))
-            .trim();
-        if !image.is_empty() {
-            images.push(image.to_string());
-        }
-    }
-    images
 }
 
 async fn prepare_validation_targets(
@@ -11534,7 +11308,7 @@ async fn prepare_validation_targets(
     let mut logs: Vec<String> = Vec::new();
     let mut additions: Vec<String> = Vec::new();
 
-    let (has_cargo, has_package_json, _, _, _, default_port, _) = guess_testing_defaults(repo_root);
+    let (has_cargo, has_package_json, _, _, _, _, _) = guess_testing_defaults(repo_root);
     let has_go = repo_root.join("go.mod").exists();
 
     let compose_candidates = [
@@ -11552,21 +11326,9 @@ async fn prepare_validation_targets(
 
     let specs_root = output_root.join("specs");
     let testing_path = specs_root.join("TESTING.md");
-    let mut testing_md = tokio_fs::read_to_string(&testing_path)
+    let testing_md = tokio_fs::read_to_string(&testing_path)
         .await
         .unwrap_or_default();
-    if testing_md.trim().is_empty() {
-        write_testing_instructions(
-            repo_root,
-            &specs_root,
-            progress_sender.clone(),
-            log_sink.clone(),
-        )
-        .await;
-        testing_md = tokio_fs::read_to_string(&testing_path)
-            .await
-            .unwrap_or_default();
-    }
     let testing_md_context = trim_prompt_context(&testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
 
     let compose_files = if compose_paths.is_empty() {
@@ -11658,80 +11420,6 @@ async fn prepare_validation_targets(
                 &mut logs,
                 format!("Validation target prep agent failed: {}", err.message),
             );
-        }
-    }
-
-    if !success && additions.is_empty() {
-        if compose_paths.is_empty() && !has_dockerfile {
-            if has_cargo {
-                additions.push("- Native build (Cargo): run `cargo build` (or `cargo build --locked` if `Cargo.lock` exists), then build/rerun any per-finding validation scripts against the produced binaries.".to_string());
-            }
-            if has_go {
-                additions.push("- Native build (Go): run `go build ./...` then run the primary entrypoint binary (or `go test ./...` for a smoke test).".to_string());
-            }
-            if has_package_json {
-                additions.push(format!(
-                    "- Native build (Node/Web): run `npm ci` (or `npm install`), then `npm run build` when available, then start the app (for example: `npm run dev -- --port {default_port}`) before running validation checks."
-                ));
-            }
-            if !has_cargo && !has_go && !has_package_json {
-                additions.push("- Native build: no Docker config found. Build and run the project with its native build system (cargo/make/cmake/npm/etc) before attempting validation.".to_string());
-            }
-        } else {
-            if compose_paths.is_empty() {
-                additions.push(
-                    "- Docker (prefer released images): if the project publishes an image for the latest release, prefer `docker pull <image>:latest` + `docker run ...`; fall back to `docker build` only when no published image exists or you need ASan builds."
-                        .to_string(),
-                );
-            } else {
-                additions.push(
-                    "- Docker (prefer released images): try `docker compose pull` then `docker compose up` (avoids local builds); fall back to `docker compose up --build` if needed."
-                        .to_string(),
-                );
-            }
-            if has_dockerfile {
-                additions.push(
-                    "- Note: crash PoCs that require ASan generally need a from-source build; released images are usually not ASan-instrumented."
-                        .to_string(),
-                );
-            }
-
-            let mut images: Vec<String> = Vec::new();
-            for path in &compose_paths {
-                match tokio_fs::read_to_string(path).await {
-                    Ok(contents) => images.extend(extract_compose_image_refs(&contents)),
-                    Err(err) => {
-                        push_progress_log(
-                            &progress_sender,
-                            &log_sink,
-                            &mut logs,
-                            format!(
-                                "Validation target prep: failed to read {}: {err}.",
-                                display_path_for(path, repo_root)
-                            ),
-                        );
-                    }
-                }
-            }
-
-            images.sort();
-            images.dedup();
-            if !images.is_empty() {
-                let rendered = images
-                    .iter()
-                    .take(8)
-                    .map(|image| format!("`{image}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let suffix = if images.len() > 8 {
-                    format!(", … (+{} more)", images.len().saturating_sub(8))
-                } else {
-                    String::new()
-                };
-                additions.push(format!(
-                    "- Candidate images referenced by compose config: {rendered}{suffix}"
-                ));
-            }
         }
     }
 
@@ -11991,16 +11679,7 @@ fn merge_validation_target_md(existing: &str, lines: &[String]) -> Option<String
             }
             file_lines.extend(section_lines);
         }
-        Some(header_index) => {
-            let section_end = file_lines
-                .iter()
-                .enumerate()
-                .skip(header_index + 1)
-                .find(|(_, line)| line.trim_start().starts_with("## "))
-                .map(|(index, _)| index)
-                .unwrap_or(file_lines.len());
-            file_lines.splice(header_index..section_end, section_lines);
-        }
+        Some(_) => return None,
     }
 
     let mut out = file_lines.join("\n");
@@ -12024,12 +11703,10 @@ async fn apply_validation_testing_md_additions(
     progress_sender: &Option<AppEventSender>,
     logs: &mut Vec<String>,
 ) {
-    let merged = tokio_fs::read_to_string(testing_path)
+    let existing = tokio_fs::read_to_string(testing_path)
         .await
-        .ok()
-        .and_then(|existing| merge_validation_testing_md(&existing, additions));
-
-    let Some(contents) = merged else {
+        .unwrap_or_default();
+    let Some(contents) = merge_validation_testing_md(&existing, additions) else {
         return;
     };
 
@@ -12070,12 +11747,10 @@ async fn apply_validation_target_md_section(
     progress_sender: &Option<AppEventSender>,
     logs: &mut Vec<String>,
 ) {
-    let merged = tokio_fs::read_to_string(testing_path)
+    let existing = tokio_fs::read_to_string(testing_path)
         .await
-        .ok()
-        .and_then(|existing| merge_validation_target_md(&existing, lines));
-
-    let Some(contents) = merged else {
+        .unwrap_or_default();
+    let Some(contents) = merge_validation_target_md(&existing, lines) else {
         return;
     };
 
@@ -20663,12 +20338,6 @@ async fn run_asan_validation(
     let mut testing_md = tokio_fs::read_to_string(&testing_path)
         .await
         .unwrap_or_default();
-    if testing_md.trim().is_empty() {
-        write_testing_instructions(&repo_path, &specs_root, progress_sender.clone(), None).await;
-        testing_md = tokio_fs::read_to_string(&testing_path)
-            .await
-            .unwrap_or_default();
-    }
 
     let generated_creds_path = specs_root.join(WEB_VALIDATION_CREDS_FILE_NAME);
     let web_validation = {
