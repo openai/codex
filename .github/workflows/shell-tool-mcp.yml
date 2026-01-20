@@ -100,8 +100,31 @@ jobs:
       - if: ${{ matrix.install_musl }}
         name: Install musl build dependencies
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y musl-tools pkg-config
+          sudo apt-get install -y musl-tools pkg-config g++-musl
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-musl)
+              arch="x86_64"
+              ;;
+            aarch64-unknown-linux-musl)
+              arch="aarch64"
+              ;;
+            *)
+              echo "Unexpected musl target: ${{ matrix.target }}" >&2
+              exit 1
+              ;;
+          esac
+          if command -v "${arch}-linux-musl-g++" >/dev/null; then
+            cxx="$(command -v "${arch}-linux-musl-g++")"
+          elif command -v musl-g++ >/dev/null; then
+            cxx="$(command -v musl-g++")"
+          else
+            echo "musl g++ not found after install; arch=${arch}" >&2
+            exit 1
+          fi
+          echo "CXX=${cxx}" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=${cxx}" >> "$GITHUB_ENV"
 
       - name: Build exec server binaries
         run: cargo build --release --target ${{ matrix.target }} --bin codex-exec-mcp-server --bin codex-execve-wrapper
