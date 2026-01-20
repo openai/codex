@@ -114,19 +114,22 @@ jobs:
           esac
           if command -v clang++ >/dev/null; then
             cxx="$(command -v clang++)"
-            echo "CXXFLAGS=--target=${{ matrix.target }} -stdlib=libc++" >> "$GITHUB_ENV"
+            echo "CXXFLAGS=--target=${{ matrix.target }} -stdlib=libc++ -pthread" >> "$GITHUB_ENV"
+            echo "CFLAGS=--target=${{ matrix.target }} -pthread" >> "$GITHUB_ENV"
           elif command -v "${arch}-linux-musl-g++" >/dev/null; then
             cxx="$(command -v "${arch}-linux-musl-g++")"
           elif command -v musl-g++ >/dev/null; then
             cxx="$(command -v musl-g++)"
           elif command -v musl-gcc >/dev/null; then
             cxx="$(command -v musl-gcc)"
+            echo "CFLAGS=-pthread" >> "$GITHUB_ENV"
           else
             echo "musl g++ not found after install; arch=${arch}" >&2
             exit 1
           fi
           echo "CXX=${cxx}" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=${cxx}" >> "$GITHUB_ENV"
+          echo "CMAKE_ARGS=-DCMAKE_HAVE_THREADS_LIBRARY=1 -DCMAKE_USE_PTHREADS_INIT=1 -DCMAKE_THREAD_LIBS_INIT=-pthread -DTHREADS_PREFER_PTHREAD_FLAG=ON" >> "$GITHUB_ENV"
 
       - name: Cargo build
         shell: bash
