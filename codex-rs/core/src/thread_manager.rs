@@ -235,6 +235,15 @@ impl ThreadManager {
         self.state.threads.write().await.remove(thread_id)
     }
 
+    /// Closes all threads open in this ThreadManager
+    pub async fn remove_and_close_all_threads(&self) -> CodexResult<()> {
+        for thread in self.state.threads.read().await.values() {
+            thread.submit(Op::Shutdown).await?;
+        }
+        self.state.threads.write().await.clear();
+        Ok(())
+    }
+
     /// Fork an existing thread by taking messages up to the given position (not including
     /// the message at the given position) and starting a new thread with identical
     /// configuration (unless overridden by the caller's `config`). The new thread will have

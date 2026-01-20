@@ -190,8 +190,8 @@ pub(crate) async fn exit_review_mode(
     review_output: Option<ReviewOutputEvent>,
     ctx: Arc<TurnContext>,
 ) {
-    const REVIEW_USER_MESSAGE_ID: &str = "review:rollout:user";
-    const REVIEW_ASSISTANT_MESSAGE_ID: &str = "review:rollout:assistant";
+    const REVIEW_USER_MESSAGE_ID: &str = "review_rollout_user";
+    const REVIEW_ASSISTANT_MESSAGE_ID: &str = "review_rollout_assistant";
     let (user_message, assistant_message) = if let Some(out) = review_output.clone() {
         let mut findings_str = String::new();
         let text = out.overall_explanation.trim();
