@@ -21,6 +21,8 @@ Example config:
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
 admin_url = "http://127.0.0.1:8080"
+# Note: `enabled` is a policy toggle today; the binary still binds listeners unless
+# the embedding app checks the flag before calling `run()`.
 # When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests (HTTP(S) proxies only),
 # including CONNECT tunnels in full mode.
 allow_upstream_proxy = false
@@ -137,6 +139,9 @@ let handle = proxy.run().await?;
 handle.shutdown().await?;
 ```
 
+When unix socket proxying is enabled, HTTP/admin bind overrides are still clamped to loopback
+to avoid turning the proxy into a remote bridge to local daemons.
+
 ### Policy hook (exec-policy mapping)
 
 The proxy exposes a policy hook (`NetworkPolicyDecider`) that can override allowlist-only blocks.
@@ -189,10 +194,12 @@ what it can reasonably guarantee.
 - Listener safety defaults:
   - the admin API is unauthenticated; non-loopback binds are clamped unless explicitly enabled via
     `dangerously_allow_non_loopback_admin`
-  - the HTTP proxy listener similarly clamps non-loopback binds unless explicitly enabled via
+- the HTTP proxy listener similarly clamps non-loopback binds unless explicitly enabled via
     `dangerously_allow_non_loopback_proxy`
-  - when unix socket proxying is enabled, both listeners are forced to loopback to avoid turning the
+- when unix socket proxying is enabled, both listeners are forced to loopback to avoid turning the
     proxy into a remote bridge into local daemons.
+- the `enabled` flag is a policy toggle today; the binary does not currently short-circuit
+    startup based on it.
 - MITM CA key handling:
   - the CA key file is created with restrictive permissions (`0600`) and written atomically using
     create-new + fsync + rename, to avoid partial writes or transiently-permissive modes.

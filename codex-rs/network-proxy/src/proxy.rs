@@ -92,6 +92,7 @@ impl NetworkProxyBuilder {
         };
         let runtime = config::resolve_runtime(&state.current_cfg().await?);
         let current_cfg = state.current_cfg().await?;
+        // Reapply bind clamping for caller overrides so unix-socket proxying stays loopback-only.
         let (http_addr, admin_addr) = config::clamp_bind_addrs(
             self.http_addr.unwrap_or(runtime.http_addr),
             self.admin_addr.unwrap_or(runtime.admin_addr),
