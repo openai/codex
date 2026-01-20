@@ -1943,12 +1943,17 @@ impl ChatWidget {
                         }
                     }
                     InputResult::Queued(text) => {
-                        // Tab queues the message if a task is running, otherwise submits immediately
-                        let user_message = UserMessage {
-                            text,
-                            image_paths: self.bottom_pane.take_recent_submission_images(),
-                        };
-                        self.queue_user_message(user_message);
+                        if self.bottom_pane.is_task_running() {
+                            // Tab queues the message only while a task is active.
+                            let user_message = UserMessage {
+                                text,
+                                image_paths: self.bottom_pane.take_recent_submission_images(),
+                            };
+                            self.queue_user_message(user_message);
+                        } else {
+                            self.bottom_pane.set_composer_text(text);
+                            self.request_redraw();
+                        }
                     }
                     InputResult::Command(cmd) => {
                         self.dispatch_command(cmd);

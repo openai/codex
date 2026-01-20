@@ -1054,6 +1054,18 @@ async fn enqueueing_history_prompt_multiple_times_is_stable() {
 }
 
 #[tokio::test]
+async fn tab_noop_when_no_task_running() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.conversation_id = Some(ThreadId::new());
+
+    chat.bottom_pane.set_composer_text("keep me".to_string());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+    assert_eq!(chat.bottom_pane.composer_text(), "keep me");
+    assert!(chat.queued_user_messages.is_empty());
+}
+
+#[tokio::test]
 async fn streaming_final_answer_keeps_task_running_state() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.conversation_id = Some(ThreadId::new());
