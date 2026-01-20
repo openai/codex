@@ -15,6 +15,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::TurnContextItem;
 use crate::protocol::TurnStartedEvent;
 use crate::protocol::WarningEvent;
+use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
@@ -46,7 +47,7 @@ pub(crate) async fn run_inline_auto_compact_task(
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
         text: prompt,
-        // Plain text conversion has no UI element ranges.
+        // Compaction prompt is synthesized; no UI element ranges to preserve.
         text_elements: Vec::new(),
     }];
 
@@ -90,7 +91,6 @@ async fn run_compact_task_inner(
         model: turn_context.client.get_model(),
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
-        base_instructions: turn_context.base_instructions.clone(),
         user_instructions: turn_context.user_instructions.clone(),
         developer_instructions: turn_context.developer_instructions.clone(),
         final_output_json_schema: turn_context.final_output_json_schema.clone(),
@@ -104,6 +104,7 @@ async fn run_compact_task_inner(
         let turn_input_len = turn_input.len();
         let prompt = Prompt {
             input: turn_input,
+            base_instructions: sess.get_base_instructions().await,
             ..Default::default()
         };
         let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
@@ -223,9 +224,29 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
                     Some(user.message())
                 }
             }
-            _ => None,
+            _ => collect_turn_aborted_marker(item),
         })
         .collect()
+}
+
+fn collect_turn_aborted_marker(item: &ResponseItem) -> Option<String> {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return None;
+    };
+    if role != "user" {
+        return None;
+    }
+
+    let text = content_items_to_text(content)?;
+    if text
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with(TURN_ABORTED_OPEN_TAG)
+    {
+        Some(text)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn is_summary_message(message: &str) -> bool {
@@ -337,6 +358,7 @@ async fn drain_to_completed(
 mod tests {
 
     use super::*;
+    use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -488,5 +510,42 @@ mod tests {
             other => panic!("expected summary message, found {other:?}"),
         };
         assert_eq!(summary, summary_text);
+    }
+
+    #[test]
+    fn build_compacted_history_preserves_turn_aborted_markers() {
+        let marker = format!(
+            "{TURN_ABORTED_OPEN_TAG}\n  <turn_id>turn-1</turn_id>\n  <reason>interrupted</reason>\n</turn_aborted>"
+        );
+        let items = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: marker.clone(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "real user message".to_string(),
+                }],
+            },
+        ];
+
+        let user_messages = collect_user_messages(&items);
+        let history = build_compacted_history(Vec::new(), &user_messages, "SUMMARY");
+
+        let found_marker = history.iter().any(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                content_items_to_text(content).is_some_and(|text| text == marker)
+            }
+            _ => false,
+        });
+        assert!(
+            found_marker,
+            "expected compacted history to retain <turn_aborted> marker"
+        );
     }
 }

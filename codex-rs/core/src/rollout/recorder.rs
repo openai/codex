@@ -1,14 +1,13 @@
 //! Persist Codex session rollouts (.jsonl) so sessions can be replayed or inspected later.
 
 use std::fs::File;
-use std::fs::FileTimes;
 use std::fs::{self};
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 use codex_protocol::ThreadId;
+use codex_protocol::models::BaseInstructions;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
@@ -59,6 +58,7 @@ pub enum RolloutRecorderParams {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
+        base_instructions: BaseInstructions,
     },
     Resume {
         path: PathBuf,
@@ -81,11 +81,13 @@ impl RolloutRecorderParams {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
         source: SessionSource,
+        base_instructions: BaseInstructions,
     ) -> Self {
         Self::Create {
             conversation_id,
             forked_from_id,
             source,
+            base_instructions,
         }
     }
 
@@ -160,6 +162,7 @@ impl RolloutRecorder {
                 conversation_id,
                 forked_from_id,
                 source,
+                base_instructions,
             } => {
                 let LogFileInfo {
                     file,
@@ -188,20 +191,18 @@ impl RolloutRecorder {
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         source,
                         model_provider: Some(config.model_provider_id.clone()),
+                        base_instructions: Some(base_instructions),
                     }),
                 )
             }
-            RolloutRecorderParams::Resume { path } => {
-                touch_rollout_file(&path)?;
-                (
-                    tokio::fs::OpenOptions::new()
-                        .append(true)
-                        .open(&path)
-                        .await?,
-                    path,
-                    None,
-                )
-            }
+            RolloutRecorderParams::Resume { path } => (
+                tokio::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)
+                    .await?,
+                path,
+                None,
+            ),
         };
 
         // Clone the cwd for the spawned task to collect git info asynchronously
@@ -384,13 +385,6 @@ fn create_log_file(config: &Config, conversation_id: ThreadId) -> std::io::Resul
         conversation_id,
         timestamp,
     })
-}
-
-fn touch_rollout_file(path: &Path) -> std::io::Result<()> {
-    let file = fs::OpenOptions::new().append(true).open(path)?;
-    let times = FileTimes::new().set_modified(SystemTime::now());
-    file.set_times(times)?;
-    Ok(())
 }
 
 async fn rollout_writer(
