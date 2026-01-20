@@ -18,6 +18,8 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ToolsV2;
 use codex_app_server_protocol::WriteStatus;
+use codex_core::config::TrustLevel;
+use codex_core::config::set_project_trust_level;
 use codex_core::config_loader::SYSTEM_CONFIG_TOML_FILE_UNIX;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -158,6 +160,7 @@ async fn config_read_includes_project_layers_for_cwd() -> Result<()> {
 model_reasoning_effort = "high"
 "#,
     )?;
+    set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
     let project_config = AbsolutePathBuf::try_from(project_config_dir)?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
