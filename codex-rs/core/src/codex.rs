@@ -2971,6 +2971,7 @@ async fn run_sampling_request(
         tools: router.specs(),
         parallel_tool_calls: model_supports_parallel,
         base_instructions,
+        personality: None,
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 

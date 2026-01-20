@@ -9,6 +9,7 @@ use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 
 use crate::config::Config;
+use crate::config::types::Personality;
 use crate::truncate::approx_bytes_for_tokens;
 use tracing::warn;
 
@@ -88,6 +89,20 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
     }
     if let Some(base_instructions) = &config.base_instructions {
         model.base_instructions = base_instructions.clone();
+    } else if model.slug.contains("gpt-5.2-codex")
+        && let Some(personality) = &config.model_personality
+    {
+        let template = include_str!(
+            "../../templates/model_instructions/gpt-5.2-codex_instructions_template.md"
+        );
+        let personality_message = match personality {
+            Personality::Friendly => include_str!("../../templates/personalities/friendly.md"),
+            Personality::Pragmatic => {
+                include_str!("../../templates/personalities/pragmatic.md")
+            }
+        };
+        let instructions = template.replace("{{ personality_message }}", personality_message);
+        model.base_instructions = instructions;
     }
     model
 }
