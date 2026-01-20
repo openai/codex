@@ -2313,9 +2313,11 @@ trust_level = "trusted"
     #[tokio::test]
     async fn project_profile_overrides_user_profile() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
+        let workspace = TempDir::new()?;
         std::fs::write(
             codex_home.path().join(CONFIG_TOML_FILE),
-            r#"
+            format!(
+                r#"
 profile = "global"
 
 [profiles.global]
@@ -2323,10 +2325,13 @@ model = "gpt-global"
 
 [profiles.project]
 model = "gpt-project"
-"#,
-        )?;
 
-        let workspace = TempDir::new()?;
+[projects."{path}"]
+trust_level = "trusted"
+"#,
+                path = workspace.path().display()
+            ),
+        )?;
         let project_config_dir = workspace.path().join(".codex");
         std::fs::create_dir_all(&project_config_dir)?;
         std::fs::write(
