@@ -239,7 +239,18 @@ impl ModelsManager {
 
     /// Replace the cached remote models and rebuild the derived presets list.
     async fn apply_remote_models(&self, models: Vec<ModelInfo>) {
-        *self.remote_models.write().await = models;
+        let mut existing_models = self.remote_models.read().await.clone();
+        for model in models {
+            if let Some(existing_index) = existing_models
+                .iter()
+                .position(|existing| existing.slug == model.slug)
+            {
+                existing_models[existing_index] = model;
+            } else {
+                existing_models.push(model);
+            }
+        }
+        *self.remote_models.write().await = existing_models;
     }
 
     fn load_remote_models_from_file() -> Result<Vec<ModelInfo>, std::io::Error> {
