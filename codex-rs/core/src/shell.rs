@@ -67,6 +67,11 @@ impl Shell {
             }
         }
     }
+
+    /// Return the shell snapshot if existing.
+    pub fn shell_snapshot(&self) -> Option<Arc<ShellSnapshot>> {
+        self.shell_snapshot.borrow().clone()
+    }
 }
 
 pub(crate) fn empty_shell_snapshot_receiver() -> watch::Receiver<Option<Arc<ShellSnapshot>>> {
