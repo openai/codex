@@ -498,13 +498,6 @@ impl TextArea {
         if n == 0 || self.cursor_pos >= self.text.len() {
             return;
         }
-        if self
-            .elements
-            .iter()
-            .any(|element| element.range.start == self.cursor_pos)
-        {
-            return;
-        }
         let mut target = self.cursor_pos;
         for _ in 0..n {
             target = self.next_atomic_boundary(target);
@@ -771,12 +764,6 @@ impl TextArea {
                 )
             })
             .collect()
-    }
-
-    pub fn element_payload_starting_at(&self, pos: usize) -> Option<String> {
-        let pos = pos.min(self.text.len());
-        let elem = self.elements.iter().find(|e| e.range.start == pos)?;
-        self.text.get(elem.range.clone()).map(str::to_string)
     }
 
     /// Renames a single text element in-place, keeping it atomic.
@@ -1335,7 +1322,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_forward_skips_element_at_left_edge() {
+    fn delete_forward_deletes_element_at_left_edge() {
         let mut t = TextArea::new();
         t.insert_str("a");
         t.insert_element("<element>");
@@ -1345,7 +1332,7 @@ mod tests {
         t.set_cursor(elem_start);
         t.delete_forward(1);
 
-        assert_eq!(t.text(), "a<element>b");
+        assert_eq!(t.text(), "ab");
         assert_eq!(t.cursor(), elem_start);
     }
 
