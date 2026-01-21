@@ -12,6 +12,7 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
@@ -115,10 +116,12 @@ mod spawn {
                 .into(),
             )
             .await;
-        let mut config = build_agent_spawn_config(turn.as_ref())?;
+        let mut config =
+            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
         agent_role
             .apply_to_config(&mut config)
             .map_err(FunctionCallError::RespondToModel)?;
+
         let result = session
             .services
             .agent_control
@@ -557,15 +560,18 @@ fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {
     }
 }
 
-fn build_agent_spawn_config(turn: &TurnContext) -> Result<Config, FunctionCallError> {
+fn build_agent_spawn_config(
+    base_instructions: &BaseInstructions,
+    turn: &TurnContext,
+) -> Result<Config, FunctionCallError> {
     let base_config = turn.client.config();
     let mut config = (*base_config).clone();
+    config.base_instructions = Some(base_instructions.text.clone());
     config.model = Some(turn.client.get_model());
     config.model_provider = turn.client.get_provider();
     config.model_reasoning_effort = turn.client.get_reasoning_effort();
     config.model_reasoning_summary = turn.client.get_reasoning_summary();
     config.developer_instructions = turn.developer_instructions.clone();
-    config.base_instructions = turn.base_instructions.clone();
     config.compact_prompt = turn.compact_prompt.clone();
     config.user_instructions = turn.user_instructions.clone();
     config.shell_environment_policy = turn.shell_environment_policy.clone();
@@ -1062,8 +1068,10 @@ mod tests {
     #[tokio::test]
     async fn build_agent_spawn_config_uses_turn_context_values() {
         let (_session, mut turn) = make_session_and_context().await;
+        let base_instructions = BaseInstructions {
+            text: "base".to_string(),
+        };
         turn.developer_instructions = Some("dev".to_string());
-        turn.base_instructions = Some("base".to_string());
         turn.compact_prompt = Some("compact".to_string());
         turn.user_instructions = Some("user".to_string());
         turn.shell_environment_policy = ShellEnvironmentPolicy {
@@ -1076,14 +1084,14 @@ mod tests {
         turn.approval_policy = AskForApproval::Never;
         turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
 
-        let config = build_agent_spawn_config(&turn).expect("spawn config");
+        let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
         let mut expected = (*turn.client.config()).clone();
+        expected.base_instructions = Some(base_instructions.text);
         expected.model = Some(turn.client.get_model());
         expected.model_provider = turn.client.get_provider();
         expected.model_reasoning_effort = turn.client.get_reasoning_effort();
         expected.model_reasoning_summary = turn.client.get_reasoning_summary();
         expected.developer_instructions = turn.developer_instructions.clone();
-        expected.base_instructions = turn.base_instructions.clone();
         expected.compact_prompt = turn.compact_prompt.clone();
         expected.user_instructions = turn.user_instructions.clone();
         expected.shell_environment_policy = turn.shell_environment_policy.clone();

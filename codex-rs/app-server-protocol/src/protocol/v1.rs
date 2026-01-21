@@ -128,6 +128,7 @@ pub struct ConversationSummary {
     pub path: PathBuf,
     pub preview: String,
     pub timestamp: Option<String>,
+    pub updated_at: Option<String>,
     pub model_provider: String,
     pub cwd: PathBuf,
     pub cli_version: String,
@@ -502,17 +503,14 @@ impl From<CoreTextElement> for V1TextElement {
     fn from(value: CoreTextElement) -> Self {
         Self {
             byte_range: value.byte_range.into(),
-            placeholder: value.placeholder,
+            placeholder: value._placeholder_for_conversion_only().map(str::to_string),
         }
     }
 }
 
 impl From<V1TextElement> for CoreTextElement {
     fn from(value: V1TextElement) -> Self {
-        Self {
-            byte_range: value.byte_range.into(),
-            placeholder: value.placeholder,
-        }
+        Self::new(value.byte_range.into(), value.placeholder)
     }
 }
 

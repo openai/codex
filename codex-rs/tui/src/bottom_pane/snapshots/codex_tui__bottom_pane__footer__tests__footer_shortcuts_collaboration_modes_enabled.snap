@@ -1,0 +1,11 @@
+---
+source: tui/src/bottom_pane/footer.rs
+assertion_line: 535
+expression: terminal.backend()
+---
+"  / for commands                             ! for shell commands               "
+"  ctrl + j for newline                       tab to queue message               "
+"  @ for file paths                           ctrl + v to paste images           "
+"  ctrl + g to edit in external editor        esc esc to edit previous message   "
+"  ctrl + c to exit                           shift + tab to change mode         "
+"                                             ctrl + t to view transcript        "

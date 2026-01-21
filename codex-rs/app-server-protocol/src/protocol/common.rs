@@ -133,6 +133,10 @@ client_request_definitions! {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
     },
+    SkillsConfigWrite => "skills/config/write" {
+        params: v2::SkillsConfigWriteParams,
+        response: v2::SkillsConfigWriteResponse,
+    },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
         response: v2::TurnStartResponse,
@@ -149,6 +153,11 @@ client_request_definitions! {
     ModelList => "model/list" {
         params: v2::ModelListParams,
         response: v2::ModelListResponse,
+    },
+    /// EXPERIMENTAL - list collaboration mode presets.
+    CollaborationModeList => "collaborationMode/list" {
+        params: v2::CollaborationModeListParams,
+        response: v2::CollaborationModeListResponse,
     },
 
     McpServerOauthLogin => "mcpServer/oauth/login" {
@@ -499,6 +508,12 @@ server_request_definitions! {
     FileChangeRequestApproval => "item/fileChange/requestApproval" {
         params: v2::FileChangeRequestApprovalParams,
         response: v2::FileChangeRequestApprovalResponse,
+    },
+
+    /// EXPERIMENTAL - Request input from the user for a tool call.
+    ToolRequestUserInput => "item/tool/requestUserInput" {
+        params: v2::ToolRequestUserInputParams,
+        response: v2::ToolRequestUserInputResponse,
     },
 
     /// DEPRECATED APIs below
@@ -869,6 +884,23 @@ mod tests {
                     "limit": null,
                     "cursor": null
                 }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_list_collaboration_modes() -> Result<()> {
+        let request = ClientRequest::CollaborationModeList {
+            request_id: RequestId::Integer(7),
+            params: v2::CollaborationModeListParams::default(),
+        };
+        assert_eq!(
+            json!({
+                "method": "collaborationMode/list",
+                "id": 7,
+                "params": {}
             }),
             serde_json::to_value(&request)?,
         );

@@ -360,6 +360,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 .collect();
             items.push(UserInput::Text {
                 text: prompt_text.clone(),
+                // CLI input doesn't track UI element ranges, so none are available here.
                 text_elements: Vec::new(),
             });
             let output_schema = load_output_schema(output_schema_path.clone());
@@ -379,6 +380,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 .collect();
             items.push(UserInput::Text {
                 text: prompt_text.clone(),
+                // CLI input doesn't track UI element ranges, so none are available here.
                 text_elements: Vec::new(),
             });
             let output_schema = load_output_schema(output_schema_path);
@@ -452,6 +454,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     effort: default_effort,
                     summary: default_summary,
                     final_output_json_schema: output_schema,
+                    collaboration_mode: None,
                 })
                 .await?;
             info!("Sent prompt with event ID: {task_id}");
@@ -514,6 +517,9 @@ async fn resolve_resume_path(
         };
         match codex_core::RolloutRecorder::find_latest_thread_path(
             &config.codex_home,
+            1,
+            None,
+            codex_core::ThreadSortKey::UpdatedAt,
             &[],
             Some(default_provider_filter.as_slice()),
             &config.model_provider_id,

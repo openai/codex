@@ -97,13 +97,14 @@ impl UserMessageItem {
                 // Text element ranges are relative to each text chunk; offset them so they align
                 // with the concatenated message returned by `message()`.
                 for elem in text_elements {
-                    out.push(TextElement {
-                        byte_range: ByteRange {
-                            start: offset + elem.byte_range.start,
-                            end: offset + elem.byte_range.end,
-                        },
-                        placeholder: elem.placeholder.clone(),
-                    });
+                    let byte_range = ByteRange {
+                        start: offset + elem.byte_range.start,
+                        end: offset + elem.byte_range.end,
+                    };
+                    out.push(TextElement::new(
+                        byte_range,
+                        elem.placeholder(text).map(str::to_string),
+                    ));
                 }
                 offset += text.len();
             }
