@@ -48,6 +48,7 @@ impl RequestUserInputOverlay {
         }
         let sections = self.layout_sections(area);
 
+        // Progress header keeps the user oriented across multiple questions.
         let progress_line = if self.question_count() > 0 {
             let idx = self.current_index() + 1;
             let total = self.question_count();
@@ -57,6 +58,7 @@ impl RequestUserInputOverlay {
         };
         Paragraph::new(progress_line).render(sections.progress_area, buf);
 
+        // Question title and wrapped prompt text.
         let question_header = self.current_question().map(|q| q.header.clone());
         let header_line = if let Some(header) = question_header {
             Line::from(header.bold())
@@ -93,6 +95,7 @@ impl RequestUserInputOverlay {
             Paragraph::new(Line::from(answer_title)).render(sections.answer_title_area, buf);
         }
 
+        // Build rows with selection markers for the shared selection renderer.
         let option_rows = self
             .current_question()
             .and_then(|question| question.options.as_ref())
@@ -122,6 +125,7 @@ impl RequestUserInputOverlay {
                 .map(|answer| answer.option_state)
                 .unwrap_or_default();
             if sections.options_area.height > 0 {
+                // Ensure the selected option is visible in the scroll window.
                 option_state
                     .ensure_visible(option_rows.len(), sections.options_area.height as usize);
                 render_rows(
@@ -182,6 +186,7 @@ impl RequestUserInputOverlay {
             );
         }
         let hint_y = footer_y.saturating_add(sections.footer_lines.saturating_sub(1));
+        // Footer hints (selection index + navigation keys).
         let mut hint_spans = Vec::new();
         if self.has_options() {
             let options_len = self.options_len();
@@ -234,6 +239,7 @@ impl RequestUserInputOverlay {
             return None;
         }
         if input_area.height < 3 {
+            // Inline notes layout uses a prefix and a single-line text area.
             let prefix = notes_prefix();
             let prefix_width = prefix.len() as u16;
             if input_area.width <= prefix_width {
@@ -299,6 +305,7 @@ impl RequestUserInputOverlay {
             }
             return;
         }
+        // Draw a light ASCII frame around the notes area.
         let top_border = format!("+{}+", "-".repeat(area.width.saturating_sub(2) as usize));
         let bottom_border = top_border.clone();
         Paragraph::new(Line::from(top_border)).render(

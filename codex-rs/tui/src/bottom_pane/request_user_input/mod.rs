@@ -5,7 +5,7 @@
 //! - When options exist, notes are stored per selected option (notes become "other").
 //! - Typing while focused on options jumps into notes to keep freeform input fast.
 //! - Enter advances to the next question; the last question submits all answers.
-//! - Unanswered questions submit as "skipped".
+//! - Freeform-only questions submit "skipped" when empty.
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -54,15 +54,20 @@ impl NotesEntry {
 }
 
 struct AnswerState {
+    // Final selection for the question (always set for option questions).
     selected: Option<usize>,
+    // Scrollable cursor state for option navigation/highlight.
     option_state: ScrollState,
+    // Notes for freeform-only questions.
     notes: NotesEntry,
+    // Per-option notes for option questions.
     option_notes: Vec<NotesEntry>,
 }
 
 pub(crate) struct RequestUserInputOverlay {
     app_event_tx: AppEventSender,
     request: RequestUserInputEvent,
+    // Queue of incoming requests to process after the current one.
     queue: VecDeque<RequestUserInputEvent>,
     answers: Vec<AnswerState>,
     current_idx: usize,
@@ -265,6 +270,7 @@ impl RequestUserInputOverlay {
         for (idx, question) in self.request.questions.iter().enumerate() {
             let answer_state = &self.answers[idx];
             let options = question.options.as_ref();
+            // For option questions we always produce a selection.
             let selected_idx = if options.is_some_and(|opts| !opts.is_empty()) {
                 answer_state
                     .selected
@@ -289,7 +295,7 @@ impl RequestUserInputOverlay {
                     .map(|opt| opt.label.clone())
             });
             let selected = selected_label.into_iter().collect::<Vec<_>>();
-            // If there are options, always return a selection and only send notes when present.
+            // For option questions, only send notes when present.
             let other = if notes.is_empty() && options.is_some_and(|opts| !opts.is_empty()) {
                 None
             } else if notes.is_empty() && selected.is_empty() {
@@ -316,7 +322,7 @@ impl RequestUserInputOverlay {
         }
     }
 
-    /// Count questions that have no selection and no notes.
+    /// Count freeform-only questions that have no notes.
     fn unanswered_count(&self) -> usize {
         self.request
             .questions

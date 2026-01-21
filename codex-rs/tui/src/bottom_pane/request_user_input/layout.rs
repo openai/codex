@@ -7,10 +7,12 @@ pub(super) struct LayoutSections {
     pub(super) header_area: Rect,
     pub(super) question_area: Rect,
     pub(super) answer_title_area: Rect,
+    // Wrapped question text lines to render in the question area.
     pub(super) question_lines: Vec<String>,
     pub(super) options_area: Rect,
     pub(super) notes_title_area: Rect,
     pub(super) notes_area: Rect,
+    // Number of footer rows (status + hints).
     pub(super) footer_lines: u16,
 }
 
@@ -55,6 +57,7 @@ impl RequestUserInputOverlay {
             height: question_text_height,
         };
         cursor_y = cursor_y.saturating_add(question_text_height);
+        // Remaining height after progress/header/question areas.
         let remaining = area.height.saturating_sub(cursor_y.saturating_sub(area.y));
         let mut answer_title_height = if has_options { 1 } else { 0 };
         let mut options_height = 0;
@@ -82,11 +85,13 @@ impl RequestUserInputOverlay {
                     notes_title_height = 0;
                     notes_input_height = min_notes;
                 } else {
+                    // Tight layout: hide section titles and shrink notes to one line.
                     answer_title_height = 0;
                     notes_title_height = 0;
                     notes_input_height = min_notes;
                 }
 
+                // Reserve notes/answer title area so options are scrollable if needed.
                 let reserved = answer_title_height
                     .saturating_add(notes_title_height)
                     .saturating_add(notes_input_height);
@@ -97,6 +102,7 @@ impl RequestUserInputOverlay {
             if max_notes == 0 {
                 notes_input_height = 0;
             } else {
+                // When no options exist, notes are the primary input.
                 notes_input_height = notes_input_height.min(max_notes).max(3.min(max_notes));
             }
         }
