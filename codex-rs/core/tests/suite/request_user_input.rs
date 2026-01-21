@@ -47,7 +47,10 @@ fn call_output(req: &ResponsesRequest, call_id: &str) -> String {
     }
 }
 
-fn call_output_with_success(req: &ResponsesRequest, call_id: &str) -> (String, Option<bool>) {
+fn call_output_content_and_success(
+    req: &ResponsesRequest,
+    call_id: &str,
+) -> (String, Option<bool>) {
     let raw = req.function_call_output(call_id);
     assert_eq!(
         raw.get("call_id").and_then(Value::as_str),
@@ -253,11 +256,11 @@ where
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let req = second_mock.single_request();
-    let (output, success) = call_output_with_success(&req, &call_id);
+    let (output, success) = call_output_content_and_success(&req, &call_id);
     assert_eq!(success, Some(false));
     assert_eq!(
         output,
-        format!("request_user_input is unavailable in {mode_name} mode right now")
+        format!("request_user_input is unavailable in {mode_name}")
     );
 
     Ok(())

@@ -43,7 +43,7 @@ impl ToolHandler for RequestUserInputHandler {
         };
         if let Some(mode_name) = disallowed_mode {
             return Err(FunctionCallError::RespondToModel(format!(
-                "request_user_input is unavailable in {mode_name} mode right now"
+                "request_user_input is unavailable in {mode_name}"
             )));
         }
 
