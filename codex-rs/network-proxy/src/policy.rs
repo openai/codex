@@ -39,6 +39,9 @@ fn is_non_public_ipv4(ip: Ipv4Addr) -> bool {
 }
 
 fn is_non_public_ipv6(ip: Ipv6Addr) -> bool {
+    if let Some(v4) = ip.to_ipv4() {
+        return is_non_public_ipv4(v4) || ip.is_loopback();
+    }
     // Treat anything that isn't globally routable as "local" for SSRF prevention. In particular:
     //  - `::1` loopback
     //  - `fc00::/7` unique-local (RFC 4193)
@@ -120,6 +123,10 @@ mod tests {
         assert!(is_non_public_ip("10.0.0.1".parse().unwrap()));
         assert!(is_non_public_ip("192.168.0.1".parse().unwrap()));
         assert!(!is_non_public_ip("8.8.8.8".parse().unwrap()));
+
+        assert!(is_non_public_ip("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("::ffff:10.0.0.1".parse().unwrap()));
+        assert!(!is_non_public_ip("::ffff:8.8.8.8".parse().unwrap()));
 
         assert!(is_non_public_ip("::1".parse().unwrap()));
         assert!(is_non_public_ip("fe80::1".parse().unwrap()));

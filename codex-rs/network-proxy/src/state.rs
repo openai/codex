@@ -171,12 +171,16 @@ impl AppState {
             // request. Explicit local/loopback literals are allowed only when explicitly
             // allowlisted; hostnames that resolve to local/private IPs are blocked even if
             // allowlisted.
-            let local_literal = if is_loopback_host(host) {
-                true
-            } else if let Ok(ip) = host.parse::<IpAddr>() {
-                is_non_public_ip(ip)
-            } else {
-                false
+            let local_literal = {
+                let host = host.trim();
+                let host = host.split_once('%').map(|(ip, _)| ip).unwrap_or(host);
+                if is_loopback_host(host) {
+                    true
+                } else if let Ok(ip) = host.parse::<IpAddr>() {
+                    is_non_public_ip(ip)
+                } else {
+                    false
+                }
             };
 
             if local_literal {
@@ -1017,6 +1021,34 @@ mod tests {
 
         assert_eq!(
             state.host_blocked("10.0.0.1", 80).await.unwrap(),
+            (false, String::new())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_rejects_scoped_ipv6_literal_when_not_allowlisted() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            allow_local_binding: false,
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("fe80::1%lo0", 80).await.unwrap(),
+            (true, "not_allowed_local".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_allows_scoped_ipv6_literal_when_explicitly_allowlisted() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["fe80::1%lo0".to_string()],
+            allow_local_binding: false,
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("fe80::1%lo0", 80).await.unwrap(),
             (false, String::new())
         );
     }
