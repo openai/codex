@@ -225,6 +225,27 @@ jobs:
             cp target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg "$dest/codex-${{ matrix.target }}.dmg"
           fi
 
+      - if: ${{ runner.os == 'macOS' }}
+        name: Staple and verify notarization (staged binaries)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          dest="dist/${{ matrix.target }}"
+          for binary in codex codex-responses-api-proxy; do
+            path="${dest}/${binary}-${{ matrix.target }}"
+            echo "Stapling: ${binary}"
+            xcrun stapler staple "$path"
+
+            if ! xcrun stapler validate "$path" >/dev/null 2>&1; then
+              echo "Stapling verification failed for ${binary}"
+              xcrun stapler validate "$path" 2>&1 || true
+              exit 1
+            fi
+
+            echo "${binary} is properly stapled"
+          done
+
       - if: ${{ matrix.runner == 'windows-11-arm' }}
         name: Install zstd
         shell: powershell
