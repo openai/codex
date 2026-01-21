@@ -89,6 +89,7 @@ use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
 use super::chat_composer_history::ChatComposerHistory;
+use super::chat_composer_history::HistoryEntry;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::command_popup::CommandPopupFlags;
@@ -460,11 +461,11 @@ impl ChatComposer {
         offset: usize,
         entry: Option<String>,
     ) -> bool {
-        let Some(text) = self.history.on_entry_response(log_id, offset, entry) else {
+        let Some(entry) = self.history.on_entry_response(log_id, offset, entry) else {
             return false;
         };
-        // Composer history (↑/↓) stores plain text only; no UI element ranges/attachments to restore here.
-        self.set_text_content(text, Vec::new(), Vec::new());
+        // Persistent history only carries text, but local entries rehydrate elements and attachments.
+        self.set_text_content(entry.text, entry.text_elements, entry.local_image_paths);
         true
     }
 
@@ -707,9 +708,19 @@ impl ChatComposer {
             return None;
         }
         let previous = self.current_text();
+        let text_elements = self.textarea.text_elements();
+        let local_image_paths = self
+            .attached_images
+            .iter()
+            .map(|img| img.path.clone())
+            .collect();
         self.set_text_content(String::new(), Vec::new(), Vec::new());
         self.history.reset_navigation();
-        self.history.record_local_submission(&previous);
+        self.history.record_local_submission(HistoryEntry {
+            text: previous.clone(),
+            text_elements,
+            local_image_paths,
+        });
         Some(previous)
     }
 
@@ -1792,8 +1803,17 @@ impl ChatComposer {
         if text.is_empty() && self.attached_images.is_empty() {
             return None;
         }
-        if !text.is_empty() {
-            self.history.record_local_submission(&text);
+        if !text.is_empty() || !self.attached_images.is_empty() {
+            let local_image_paths = self
+                .attached_images
+                .iter()
+                .map(|img| img.path.clone())
+                .collect();
+            self.history.record_local_submission(HistoryEntry {
+                text: text.clone(),
+                text_elements: text_elements.clone(),
+                local_image_paths,
+            });
         }
         self.pending_pastes.clear();
         Some((text, text_elements))
@@ -1989,15 +2009,19 @@ impl ChatComposer {
                     .history
                     .should_handle_navigation(self.textarea.text(), self.textarea.cursor())
                 {
-                    let replace_text = match key_event.code {
+                    let replace_entry = match key_event.code {
                         KeyCode::Up => self.history.navigate_up(&self.app_event_tx),
                         KeyCode::Down => self.history.navigate_down(&self.app_event_tx),
                         KeyCode::Char('p') => self.history.navigate_up(&self.app_event_tx),
                         KeyCode::Char('n') => self.history.navigate_down(&self.app_event_tx),
                         _ => unreachable!(),
                     };
-                    if let Some(text) = replace_text {
-                        self.set_text_content(text, Vec::new(), Vec::new());
+                    if let Some(entry) = replace_entry {
+                        self.set_text_content(
+                            entry.text,
+                            entry.text_elements,
+                            entry.local_image_paths,
+                        );
                         return (InputResult::None, true);
                     }
                 }
@@ -3255,7 +3279,7 @@ mod tests {
 
         assert_eq!(
             composer.history.navigate_up(&composer.app_event_tx),
-            Some("draft text".to_string())
+            Some(HistoryEntry::from_text("draft text".to_string()))
         );
     }
 
@@ -4706,6 +4730,37 @@ mod tests {
         }
         let imgs = composer.take_recent_submission_images();
         assert_eq!(vec![path], imgs);
+    }
+
+    #[test]
+    fn history_navigation_restores_image_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+        let path = PathBuf::from("/tmp/image1.png");
+        composer.attach_image(path.clone());
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+
+        let text = composer.current_text();
+        assert_eq!(text, "[Image #1]");
+        let text_elements = composer.text_elements();
+        assert_eq!(text_elements.len(), 1);
+        assert_eq!(text_elements[0].placeholder(&text), Some("[Image #1]"));
+        assert_eq!(composer.local_image_paths(), vec![path]);
     }
 
     #[test]
