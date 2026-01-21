@@ -615,13 +615,9 @@ impl ChatComposer {
             .collect()
     }
 
-    fn prune_attached_images_for_submission(
-        &mut self,
-        text: &str,
-        text_elements: &[TextElement],
-    ) -> bool {
+    fn prune_attached_images_for_submission(&mut self, text: &str, text_elements: &[TextElement]) {
         if self.attached_images.is_empty() {
-            return false;
+            return;
         }
         let image_placeholders: HashSet<&str> = text_elements
             .iter()
@@ -629,7 +625,6 @@ impl ChatComposer {
             .collect();
         self.attached_images
             .retain(|img| image_placeholders.contains(img.placeholder.as_str()));
-        !self.attached_images.is_empty()
     }
 
     /// Insert an attachment placeholder and track it for the next submission.
@@ -1661,8 +1656,8 @@ impl ChatComposer {
         }
         // Custom prompt expansion can remove or rewrite image placeholders, so prune any
         // attachments that no longer have a corresponding placeholder in the expanded text.
-        let has_attachments = self.prune_attached_images_for_submission(&text, &text_elements);
-        if text.is_empty() && !has_attachments {
+        self.prune_attached_images_for_submission(&text, &text_elements);
+        if text.is_empty() && self.attached_images.is_empty() {
             return None;
         }
         if !text.is_empty() {
