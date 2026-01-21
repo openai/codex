@@ -356,15 +356,23 @@ impl From<SandboxMode> for DeveloperInstructions {
 
 impl From<AskForApproval> for DeveloperInstructions {
     fn from(mode: AskForApproval) -> Self {
-        let text = match mode {
-            AskForApproval::Never => APPROVAL_POLICY_NEVER.trim_end(),
-            AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.trim_end(),
-            AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.trim_end(),
-            AskForApproval::OnRequestRule => APPROVAL_POLICY_ON_REQUEST_RULE.trim_end(),
-            AskForApproval::OnRequest => APPROVAL_POLICY_ON_REQUEST.trim_end(),
-        };
-
-        DeveloperInstructions::new(text)
+        match mode {
+            AskForApproval::OnRequestRule => {
+                let on_request = APPROVAL_POLICY_ON_REQUEST.trim_end();
+                let on_request_rule = APPROVAL_POLICY_ON_REQUEST_RULE.trim_end();
+                DeveloperInstructions::new(format!("{on_request}\n{on_request_rule}"))
+            }
+            AskForApproval::Never => DeveloperInstructions::new(APPROVAL_POLICY_NEVER.trim_end()),
+            AskForApproval::UnlessTrusted => {
+                DeveloperInstructions::new(APPROVAL_POLICY_UNLESS_TRUSTED.trim_end())
+            }
+            AskForApproval::OnFailure => {
+                DeveloperInstructions::new(APPROVAL_POLICY_ON_FAILURE.trim_end())
+            }
+            AskForApproval::OnRequest => {
+                DeveloperInstructions::new(APPROVAL_POLICY_ON_REQUEST.trim_end())
+            }
+        }
     }
 }
 

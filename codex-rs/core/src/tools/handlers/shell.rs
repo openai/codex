@@ -110,7 +110,14 @@ impl ToolHandler for ShellHandler {
             ToolPayload::Function { arguments } => {
                 let params: ShellToolCallParams = parse_arguments(&arguments)?;
                 let request_approval = params.request_approval.clone();
-                let rule_prefix = params.rule_prefix.clone();
+                let rule_prefix = if matches!(
+                    turn.approval_policy,
+                    codex_protocol::protocol::AskForApproval::OnRequestRule
+                ) {
+                    params.rule_prefix.clone()
+                } else {
+                    None
+                };
                 let exec_params = Self::to_exec_params(&params, turn.as_ref());
                 Self::run_exec_like(
                     tool_name.as_str(),
@@ -189,7 +196,14 @@ impl ToolHandler for ShellCommandHandler {
 
         let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
         let request_approval = params.request_approval.clone();
-        let rule_prefix = params.rule_prefix.clone();
+        let rule_prefix = if matches!(
+            turn.approval_policy,
+            codex_protocol::protocol::AskForApproval::OnRequestRule
+        ) {
+            params.rule_prefix.clone()
+        } else {
+            None
+        };
         let exec_params = Self::to_exec_params(&params, session.as_ref(), turn.as_ref());
         ShellHandler::run_exec_like(
             tool_name.as_str(),

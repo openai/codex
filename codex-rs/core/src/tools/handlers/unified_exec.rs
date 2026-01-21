@@ -144,6 +144,15 @@ impl ToolHandler for UnifiedExecHandler {
                     ..
                 } = args;
 
+                let rule_prefix = if matches!(
+                    context.turn.approval_policy,
+                    codex_protocol::protocol::AskForApproval::OnRequestRule
+                ) {
+                    rule_prefix
+                } else {
+                    None
+                };
+
                 let sandbox_permissions = if request_approval.is_some() {
                     if !matches!(
                         context.turn.approval_policy,
