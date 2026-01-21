@@ -52,7 +52,6 @@ use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
-use codex_core::models_manager::manager::ModelsManager;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
@@ -512,7 +511,10 @@ impl App {
 
         let auth = auth_manager.auth().await;
         let auth_ref = auth.as_ref();
-        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+        let model_info = thread_manager
+            .get_models_manager()
+            .get_model_info(model.as_str(), &config)
+            .await;
         let otel_manager = OtelManager::new(
             ThreadId::new(),
             model.as_str(),
