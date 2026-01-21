@@ -434,6 +434,15 @@ jobs:
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
 
+      - name: Trigger developers.openai.com deploy
+      # Only trigger the deploy if the release is not a pre-release.
+      # The deploy is used to update the developers.openai.com website with the new config schema json file.
+        if: ${{ success() && !contains(steps.release_name.outputs.name, '-') }}
+        env:
+          DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          curl -sS -X POST "$DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL"
+
       - uses: facebook/dotslash-publish-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
