@@ -1,3 +1,11 @@
+//! Request-user-input overlay state machine.
+//!
+//! Core behaviors:
+//! - Each question can be answered by selecting one option and/or providing notes.
+//! - When options exist, notes are stored per selected option (notes become "other").
+//! - Typing while focused on options jumps into notes to keep freeform input fast.
+//! - Enter advances to the next question; the last question submits all answers.
+//! - Unanswered questions submit as "skipped".
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -158,7 +166,7 @@ impl RequestUserInputOverlay {
         if self.has_options()
             && self
                 .current_answer()
-                .is_some_and(|ans| ans.selected.is_none())
+                .is_some_and(|answer| answer.selected.is_none())
         {
             SELECT_OPTION_PLACEHOLDER
         } else if self.has_options() {
@@ -168,6 +176,7 @@ impl RequestUserInputOverlay {
         }
     }
 
+    /// Ensure the focus mode is valid for the current question.
     fn ensure_focus_available(&mut self) {
         if self.question_count() == 0 {
             return;
@@ -177,6 +186,7 @@ impl RequestUserInputOverlay {
         }
     }
 
+    /// Rebuild local answer state from the current request.
     fn reset_for_request(&mut self) {
         self.answers = self
             .request
@@ -204,6 +214,7 @@ impl RequestUserInputOverlay {
         self.focus = Focus::Options;
     }
 
+    /// Move to the next/previous question, wrapping in either direction.
     fn move_question(&mut self, next: bool) {
         let len = self.question_count();
         if len == 0 {
@@ -214,6 +225,7 @@ impl RequestUserInputOverlay {
         self.ensure_focus_available();
     }
 
+    /// Synchronize selection state to the currently focused option.
     fn select_current_option(&mut self) {
         if !self.has_options() {
             return;
@@ -226,6 +238,7 @@ impl RequestUserInputOverlay {
         answer.selected = answer.option_state.selected_idx;
     }
 
+    /// Ensure there is a selection before allowing notes entry.
     fn ensure_selected_for_notes(&mut self) {
         if self.has_options()
             && self
@@ -236,6 +249,7 @@ impl RequestUserInputOverlay {
         }
     }
 
+    /// Advance to next question, or submit when on the last one.
     fn go_next_or_submit(&mut self) {
         if self.current_index() + 1 >= self.question_count() {
             self.submit_answers();
@@ -244,12 +258,14 @@ impl RequestUserInputOverlay {
         }
     }
 
+    /// Build the response payload and dispatch it to the app.
     fn submit_answers(&mut self) {
         let mut answers = HashMap::new();
         for (idx, question) in self.request.questions.iter().enumerate() {
             let answer_state = &self.answers[idx];
             let options = question.options.as_ref();
             let selected_idx = answer_state.selected;
+            // Notes map to "other". When options exist, notes are per selected option.
             let notes = if options.is_some_and(|opts| !opts.is_empty()) {
                 selected_idx
                     .and_then(|selected| answer_state.option_notes.get(selected))
@@ -266,6 +282,7 @@ impl RequestUserInputOverlay {
                     .map(|opt| opt.label.clone())
             });
             let selected = selected_label.into_iter().collect::<Vec<_>>();
+            // If neither selection nor notes are present, mark as skipped.
             let other = if notes.is_empty() {
                 if selected.is_empty() {
                     Some("skipped".to_string())
@@ -294,6 +311,7 @@ impl RequestUserInputOverlay {
         }
     }
 
+    /// Count questions that have no selection and no notes.
     fn unanswered_count(&self) -> usize {
         self.request
             .questions
@@ -316,6 +334,7 @@ impl RequestUserInputOverlay {
             .count()
     }
 
+    /// Compute the preferred notes input height for the current question.
     fn notes_input_height(&self, width: u16) -> u16 {
         let Some(entry) = self.current_notes_entry() else {
             return 3;
@@ -338,6 +357,7 @@ impl BottomPaneView for RequestUserInputOverlay {
             return;
         }
 
+        // Question navigation is always available.
         match key_event.code {
             KeyCode::PageUp => {
                 self.move_question(false);
@@ -356,6 +376,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 let Some(answer) = self.current_answer_mut() else {
                     return;
                 };
+                // Keep selection synchronized as the user moves.
                 match key_event.code {
                     KeyCode::Up => {
                         answer.option_state.move_up_wrap(options_len);
@@ -373,6 +394,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                         self.go_next_or_submit();
                     }
                     KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete => {
+                        // Any typing while in options switches to notes for fast freeform input.
                         self.focus = Focus::Notes;
                         self.ensure_selected_for_notes();
                         if let Some(entry) = self.current_notes_entry_mut() {
@@ -387,6 +409,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                     self.go_next_or_submit();
                     return;
                 }
+                // Notes are per option when options exist.
                 self.ensure_selected_for_notes();
                 if let Some(entry) = self.current_notes_entry_mut() {
                     entry.text.input(key_event);
@@ -418,6 +441,7 @@ impl BottomPaneView for RequestUserInputOverlay {
             return true;
         }
         if matches!(self.focus, Focus::Options) {
+            // Treat pastes the same as typing: switch into notes.
             self.focus = Focus::Notes;
             self.ensure_selected_for_notes();
             if let Some(entry) = self.current_notes_entry_mut() {

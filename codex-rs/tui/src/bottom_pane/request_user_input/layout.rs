@@ -15,6 +15,7 @@ pub(super) struct LayoutSections {
 }
 
 impl RequestUserInputOverlay {
+    /// Compute layout sections, collapsing notes and hints as space shrinks.
     pub(super) fn layout_sections(&self, area: Rect) -> LayoutSections {
         let question_lines = self
             .current_question()
@@ -28,6 +29,7 @@ impl RequestUserInputOverlay {
         let question_text_height = question_lines.len() as u16;
         let has_options = self.has_options();
         let mut notes_input_height = self.notes_input_height(area.width);
+        // Keep the question + options visible first; notes and hints collapse as space shrinks.
         let footer_lines = if self.unanswered_count() > 0 { 2 } else { 1 };
         let mut notes_title_height = if has_options { 1 } else { 0 };
 
@@ -67,6 +69,7 @@ impl RequestUserInputOverlay {
             } else {
                 let min_notes = 1u16;
                 let full_notes = 3u16;
+                // Prefer to keep all options visible, then allocate notes height.
                 if remaining_content
                     >= options_len + answer_title_height + notes_title_height + full_notes
                 {

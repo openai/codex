@@ -41,6 +41,7 @@ impl Renderable for RequestUserInputOverlay {
 }
 
 impl RequestUserInputOverlay {
+    /// Render the full request-user-input overlay.
     pub(super) fn render_ui(&self, area: Rect, buf: &mut Buffer) {
         if area.width == 0 || area.height == 0 {
             return;
@@ -102,7 +103,7 @@ impl RequestUserInputOverlay {
                     .map(|(idx, opt)| {
                         let selected = self
                             .current_answer()
-                            .and_then(|ans| ans.selected)
+                            .and_then(|answer| answer.selected)
                             .is_some_and(|sel| sel == idx);
                         let prefix = if selected { "(x)" } else { "( )" };
                         GenericDisplayRow {
@@ -118,7 +119,7 @@ impl RequestUserInputOverlay {
         if self.has_options() {
             let mut option_state = self
                 .current_answer()
-                .map(|ans| ans.option_state)
+                .map(|answer| answer.option_state)
                 .unwrap_or_default();
             if sections.options_area.height > 0 {
                 option_state
@@ -165,6 +166,7 @@ impl RequestUserInputOverlay {
             .y
             .saturating_add(sections.notes_area.height);
         if sections.footer_lines == 2 {
+            // Status line for unanswered count when any question is empty.
             let warning = format!(
                 "Unanswered: {} | Will submit as skipped",
                 self.unanswered_count()
@@ -220,6 +222,7 @@ impl RequestUserInputOverlay {
         );
     }
 
+    /// Return the cursor position when editing notes, if visible.
     pub(super) fn cursor_pos_impl(&self, area: Rect) -> Option<(u16, u16)> {
         if !self.focus_is_notes() {
             return None;
@@ -256,6 +259,7 @@ impl RequestUserInputOverlay {
         entry.text.cursor_pos_with_state(textarea_rect, state)
     }
 
+    /// Render the notes input box or inline notes field.
     fn render_notes_input(&self, area: Rect, buf: &mut Buffer) {
         let Some(entry) = self.current_notes_entry() else {
             return;
@@ -264,6 +268,7 @@ impl RequestUserInputOverlay {
             return;
         }
         if area.height < 3 {
+            // Inline notes field for tight layouts.
             let prefix = notes_prefix();
             let prefix_width = prefix.len() as u16;
             if area.width <= prefix_width {
