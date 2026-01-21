@@ -53,14 +53,6 @@
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
     },
-    "experimental_instructions_file": {
-      "description": "Legacy, now use features",
-      "allOf": [
-        {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        }
-      ]
-    },
     "experimental_use_freeform_apply_patch": {
       "type": "boolean"
     },
@@ -239,6 +231,14 @@
       "description": "Size of the context window for the model, in tokens.",
       "type": "integer",
       "format": "int64"
+    },
+    "model_instructions_file": {
+      "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Codex will likely degrade model performance.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ]
     },
     "model_personality": {
       "description": "EXPERIMENTAL Optionally specify a personality for the model",
@@ -545,9 +545,6 @@
         "experimental_compact_prompt_file": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
-        "experimental_instructions_file": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        },
         "experimental_use_freeform_apply_patch": {
           "type": "boolean"
         },
@@ -639,6 +636,14 @@
         },
         "model": {
           "type": "string"
+        },
+        "model_instructions_file": {
+          "description": "Optional path to a file containing model instructions.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ]
         },
         "model_personality": {
           "$ref": "#/definitions/Personality"

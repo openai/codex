@@ -109,11 +109,11 @@ async fn chat_mode_stream_cli() {
     );
 }
 
-/// Verify that passing `-c experimental_instructions_file=...` to the CLI
+/// Verify that passing `-c model_instructions_file=...` to the CLI
 /// overrides the built-in base instructions by inspecting the request body
 /// received by a mock OpenAI Responses endpoint.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exec_cli_applies_experimental_instructions_file() {
+async fn exec_cli_applies_model_instructions_file() {
     skip_if_no_network!();
 
     // Start mock server which will capture the request and return a minimal
@@ -128,7 +128,7 @@ async fn exec_cli_applies_experimental_instructions_file() {
     // Create a temporary instructions file with a unique marker we can assert
     // appears in the outbound request payload.
     let custom = TempDir::new().unwrap();
-    let marker = "cli-experimental-instructions-marker";
+    let marker = "cli-model-instructions-file-marker";
     let custom_path = custom.path().join("instr.md");
     std::fs::write(&custom_path, marker).unwrap();
     let custom_path_str = custom_path.to_string_lossy().replace('\\', "/");
@@ -151,9 +151,7 @@ async fn exec_cli_applies_experimental_instructions_file() {
         .arg("-c")
         .arg("model_provider=\"mock\"")
         .arg("-c")
-        .arg(format!(
-            "experimental_instructions_file=\"{custom_path_str}\""
-        ))
+        .arg(format!("model_instructions_file=\"{custom_path_str}\""))
         .arg("-C")
         .arg(&repo_root)
         .arg("hello?\n");
