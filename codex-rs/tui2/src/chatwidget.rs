@@ -162,6 +162,7 @@ use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+use crate::ui_consts::DEFAULT_MODEL_DISPLAY_NAME;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -213,7 +214,6 @@ impl UnifiedExecWaitState {
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
 const NUDGE_MODEL_SLUG: &str = "gpt-5.1-codex-mini";
 const RATE_LIMIT_SWITCH_PROMPT_THRESHOLD: f64 = 90.0;
-const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 
 #[derive(Default)]
 struct RateLimitWarningState {
