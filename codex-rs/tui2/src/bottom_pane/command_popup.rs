@@ -15,6 +15,10 @@ use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
 
+type CommandMatch = (CommandItem, Option<Vec<usize>>, i32);
+type CommandMatches = Vec<CommandMatch>;
+type CommandMatchSet = HashSet<CommandItem>;
+
 fn windows_degraded_sandbox_active() -> bool {
     cfg!(target_os = "windows")
         && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -23,7 +27,7 @@ fn windows_degraded_sandbox_active() -> bool {
 }
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CommandItem {
     Builtin(SlashCommand),
     // Index into `prompts`
@@ -122,9 +126,9 @@ impl CommandPopup {
     /// Compute fuzzy-filtered matches over built-in commands and user prompts,
     /// paired with optional highlight indices and score. Preserves the original
     /// presentation order for built-ins and prompts.
-    fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>, i32)> {
+    fn filtered(&self) -> CommandMatches {
         let filter = self.command_filter.trim();
-        let mut out: Vec<(CommandItem, Option<Vec<usize>>, i32)> = Vec::new();
+        let mut out = CommandMatches::new();
         if filter.is_empty() {
             // Built-ins first, in presentation order.
             for (_, cmd) in self.builtins.iter() {
@@ -137,18 +141,65 @@ impl CommandPopup {
             return out;
         }
 
+        let (prefix_matches, prefix_items) = self.prefix_matches(filter);
+        if !prefix_matches.is_empty() {
+            let mut out = prefix_matches;
+            out.extend(self.fuzzy_matches(filter, &prefix_items));
+            return out;
+        }
+
+        self.fuzzy_matches(filter, &CommandMatchSet::new())
+    }
+
+    fn prefix_matches(&self, filter: &str) -> (CommandMatches, CommandMatchSet) {
+        let mut out = CommandMatches::new();
+        let mut items = CommandMatchSet::new();
+        let prefix_indices = |offset: usize, len: usize| (0..len).map(|i| i + offset).collect();
         for (_, cmd) in self.builtins.iter() {
+            if cmd.command().starts_with(filter) {
+                let item = CommandItem::Builtin(*cmd);
+                out.push((item, Some(prefix_indices(0, filter.len())), 0));
+                items.insert(item);
+            }
+        }
+        for (idx, prompt) in self.prompts.iter().enumerate() {
+            let display = format!("{PROMPTS_CMD_PREFIX}:{}", prompt.name);
+            if display.starts_with(filter) {
+                let item = CommandItem::UserPrompt(idx);
+                out.push((item, Some(prefix_indices(0, filter.len())), 0));
+                items.insert(item);
+            } else if prompt.name.starts_with(filter) {
+                let offset = PROMPTS_CMD_PREFIX.len() + 1;
+                let item = CommandItem::UserPrompt(idx);
+                out.push((item, Some(prefix_indices(offset, filter.len())), 0));
+                items.insert(item);
+            }
+        }
+        (out, items)
+    }
+
+    fn fuzzy_matches(&self, filter: &str, exclude: &CommandMatchSet) -> CommandMatches {
+        let mut out = CommandMatches::new();
+        for (_, cmd) in self.builtins.iter() {
+            let item = CommandItem::Builtin(*cmd);
+            if exclude.contains(&item) {
+                continue;
+            }
             if let Some((indices, score)) = fuzzy_match(cmd.command(), filter) {
-                out.push((CommandItem::Builtin(*cmd), Some(indices), score));
+                out.push((item, Some(indices), score));
             }
         }
         // Support both search styles:
         // - Typing "name" should surface "/prompts:name" results.
         // - Typing "prompts:name" should also work.
         for (idx, p) in self.prompts.iter().enumerate() {
+            let item = CommandItem::UserPrompt(idx);
+            if exclude.contains(&item) {
+                continue;
+            }
             let display = format!("{PROMPTS_CMD_PREFIX}:{}", p.name);
             if let Some((indices, score)) = fuzzy_match(&display, filter) {
-                out.push((CommandItem::UserPrompt(idx), Some(indices), score));
+                out.push((item, Some(indices), score));
             }
         }
         out
@@ -301,11 +352,11 @@ mod tests {
             cmds,
             vec![
                 "model",
+                "mention",
+                "mcp",
                 "experimental",
                 "resume",
-                "compact",
-                "mention",
-                "mcp"
+                "compact"
             ]
         );
     }
