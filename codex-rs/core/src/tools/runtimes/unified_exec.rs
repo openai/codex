@@ -2,12 +2,15 @@
 Runtime: unified exec
 
 Handles approval + sandbox orchestration for unified exec requests, delegating to
-the session manager to spawn PTYs once an ExecEnv is prepared.
+the process manager to spawn PTYs once an ExecEnv is prepared.
 */
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecExpiration;
+use crate::features::Feature;
+use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
+use crate::shell::ShellType;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::sandboxing::Approvable;
@@ -22,8 +25,8 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::UnifiedExecError;
-use crate::unified_exec::UnifiedExecSession;
-use crate::unified_exec::UnifiedExecSessionManager;
+use crate::unified_exec::UnifiedExecProcess;
+use crate::unified_exec::UnifiedExecProcessManager;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -34,6 +37,7 @@ pub struct UnifiedExecRequest {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
+    pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub exec_approval_requirement: ExecApprovalRequirement,
@@ -43,11 +47,12 @@ pub struct UnifiedExecRequest {
 pub struct UnifiedExecApprovalKey {
     pub command: Vec<String>,
     pub cwd: PathBuf,
+    pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
 }
 
 pub struct UnifiedExecRuntime<'a> {
-    manager: &'a UnifiedExecSessionManager,
+    manager: &'a UnifiedExecProcessManager,
 }
 
 impl UnifiedExecRequest {
@@ -55,6 +60,7 @@ impl UnifiedExecRequest {
         command: Vec<String>,
         cwd: PathBuf,
         env: HashMap<String, String>,
+        tty: bool,
         sandbox_permissions: SandboxPermissions,
         justification: Option<String>,
         exec_approval_requirement: ExecApprovalRequirement,
@@ -63,6 +69,7 @@ impl UnifiedExecRequest {
             command,
             cwd,
             env,
+            tty,
             sandbox_permissions,
             justification,
             exec_approval_requirement,
@@ -71,7 +78,7 @@ impl UnifiedExecRequest {
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
-    pub fn new(manager: &'a UnifiedExecSessionManager) -> Self {
+    pub fn new(manager: &'a UnifiedExecProcessManager) -> Self {
         Self { manager }
     }
 }
@@ -89,12 +96,13 @@ impl Sandboxable for UnifiedExecRuntime<'_> {
 impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     type ApprovalKey = UnifiedExecApprovalKey;
 
-    fn approval_key(&self, req: &UnifiedExecRequest) -> Self::ApprovalKey {
-        UnifiedExecApprovalKey {
+    fn approval_keys(&self, req: &UnifiedExecRequest) -> Vec<Self::ApprovalKey> {
+        vec![UnifiedExecApprovalKey {
             command: req.command.clone(),
             cwd: req.cwd.clone(),
+            tty: req.tty,
             sandbox_permissions: req.sandbox_permissions,
-        }
+        }]
     }
 
     fn start_approval_async<'b>(
@@ -102,7 +110,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         req: &'b UnifiedExecRequest,
         ctx: ApprovalCtx<'b>,
     ) -> BoxFuture<'b, ReviewDecision> {
-        let key = self.approval_key(req);
+        let keys = self.approval_keys(req);
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
@@ -113,7 +121,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             .clone()
             .or_else(|| req.justification.clone());
         Box::pin(async move {
-            with_cached_approval(&session.services, key, || async move {
+            with_cached_approval(&session.services, "unified_exec", keys, || async move {
                 session
                     .request_command_approval(
                         turn,
@@ -155,16 +163,23 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     }
 }
 
-impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecSession> for UnifiedExecRuntime<'a> {
+impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {
     async fn run(
         &mut self,
         req: &UnifiedExecRequest,
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx<'_>,
-    ) -> Result<UnifiedExecSession, ToolError> {
+    ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
         let command = maybe_wrap_shell_lc_with_snapshot(base_command, session_shell.as_ref());
+        let command = if matches!(session_shell.shell_type, ShellType::PowerShell)
+            && ctx.session.features().enabled(Feature::PowershellUtf8)
+        {
+            prefix_powershell_script_with_utf8(&command)
+        } else {
+            command
+        };
 
         let spec = build_command_spec(
             &command,
@@ -179,7 +194,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecSession> for UnifiedExecRunt
             .env_for(spec)
             .map_err(|err| ToolError::Codex(err.into()))?;
         self.manager
-            .open_session_with_exec_env(&exec_env)
+            .open_session_with_exec_env(&exec_env, req.tty)
             .await
             .map_err(|err| match err {
                 UnifiedExecError::SandboxDenied { output, .. } => {

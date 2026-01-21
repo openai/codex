@@ -73,8 +73,8 @@ impl Client {
         })
     }
 
-    pub async fn from_auth(base_url: impl Into<String>, auth: &CodexAuth) -> Result<Self> {
-        let token = auth.get_token().await.map_err(anyhow::Error::from)?;
+    pub fn from_auth(base_url: impl Into<String>, auth: &CodexAuth) -> Result<Self> {
+        let token = auth.get_token().map_err(anyhow::Error::from)?;
         let mut client = Self::new(base_url)?
             .with_user_agent(get_codex_user_agent())
             .with_bearer_token(token);
@@ -174,6 +174,7 @@ impl Client {
         limit: Option<i32>,
         task_filter: Option<&str>,
         environment_id: Option<&str>,
+        cursor: Option<&str>,
     ) -> Result<PaginatedListTaskListItem> {
         let url = match self.path_style {
             PathStyle::CodexApi => format!("{}/api/codex/tasks/list", self.base_url),
@@ -187,6 +188,11 @@ impl Client {
         };
         let req = if let Some(tf) = task_filter {
             req.query(&[("task_filter", tf)])
+        } else {
+            req
+        };
+        let req = if let Some(c) = cursor {
+            req.query(&[("cursor", c)])
         } else {
             req
         };

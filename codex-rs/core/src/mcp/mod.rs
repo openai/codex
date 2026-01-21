@@ -47,7 +47,7 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
 
     mcp_connection_manager
         .initialize(
-            config.mcp_servers.clone(),
+            &config.mcp_servers,
             config.mcp_oauth_credentials_store_mode,
             auth_status_entries.clone(),
             tx_event,

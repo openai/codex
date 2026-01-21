@@ -12,9 +12,10 @@ use crate::features::Feature;
 use crate::protocol::CompactedItem;
 use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
-use crate::protocol::TaskStartedEvent;
 use crate::protocol::TurnContextItem;
+use crate::protocol::TurnStartedEvent;
 use crate::protocol::WarningEvent;
+use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
@@ -44,7 +45,11 @@ pub(crate) async fn run_inline_auto_compact_task(
     turn_context: Arc<TurnContext>,
 ) {
     let prompt = turn_context.compact_prompt().to_string();
-    let input = vec![UserInput::Text { text: prompt }];
+    let input = vec![UserInput::Text {
+        text: prompt,
+        // Compaction prompt is synthesized; no UI element ranges to preserve.
+        text_elements: Vec::new(),
+    }];
 
     run_compact_task_inner(sess, turn_context, input).await;
 }
@@ -54,7 +59,7 @@ pub(crate) async fn run_compact_task(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
 ) {
-    let start_event = EventMsg::TaskStarted(TaskStartedEvent {
+    let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, start_event).await;
@@ -86,13 +91,20 @@ async fn run_compact_task_inner(
         model: turn_context.client.get_model(),
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
+        user_instructions: turn_context.user_instructions.clone(),
+        developer_instructions: turn_context.developer_instructions.clone(),
+        final_output_json_schema: turn_context.final_output_json_schema.clone(),
+        truncation_policy: Some(turn_context.truncation_policy.into()),
     });
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
-        let turn_input = history.get_history_for_prompt();
+        // Clone is required because of the loop
+        let turn_input = history.clone().for_prompt();
+        let turn_input_len = turn_input.len();
         let prompt = Prompt {
-            input: turn_input.clone(),
+            input: turn_input,
+            base_instructions: sess.get_base_instructions().await,
             ..Default::default()
         };
         let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
@@ -103,7 +115,7 @@ async fn run_compact_task_inner(
                     sess.notify_background_event(
                         turn_context.as_ref(),
                         format!(
-                            "Trimmed {truncated_count} older conversation item(s) before compacting so the prompt fits the model context window."
+                            "Trimmed {truncated_count} older thread item(s) before compacting so the prompt fits the model context window."
                         ),
                     )
                     .await;
@@ -114,7 +126,7 @@ async fn run_compact_task_inner(
                 return;
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
-                if turn_input.len() > 1 {
+                if turn_input_len > 1 {
                     // Trim from the beginning to preserve cache (prefix-based) and keep recent messages intact.
                     error!(
                         "Context window exceeded while compacting; removing oldest history item. Error: {e}"
@@ -150,15 +162,15 @@ async fn run_compact_task_inner(
         }
     }
 
-    let history_snapshot = sess.clone_history().await.get_history();
-    let summary_suffix =
-        get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
+    let history_snapshot = sess.clone_history().await;
+    let history_items = history_snapshot.raw_items();
+    let summary_suffix = get_last_assistant_message_from_turn(history_items).unwrap_or_default();
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
-    let user_messages = collect_user_messages(&history_snapshot);
+    let user_messages = collect_user_messages(history_items);
 
-    let initial_context = sess.build_initial_context(turn_context.as_ref());
+    let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
     let mut new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
-    let ghost_snapshots: Vec<ResponseItem> = history_snapshot
+    let ghost_snapshots: Vec<ResponseItem> = history_items
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
         .cloned()
@@ -177,7 +189,7 @@ async fn run_compact_task_inner(
     sess.send_event(&turn_context, event).await;
 
     let warning = EventMsg::Warning(WarningEvent {
-        message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.".to_string(),
+        message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
     });
     sess.send_event(&turn_context, warning).await;
 }
@@ -212,9 +224,29 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
                     Some(user.message())
                 }
             }
-            _ => None,
+            _ => collect_turn_aborted_marker(item),
         })
         .collect()
+}
+
+fn collect_turn_aborted_marker(item: &ResponseItem) -> Option<String> {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return None;
+    };
+    if role != "user" {
+        return None;
+    }
+
+    let text = content_items_to_text(content)?;
+    if text
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with(TURN_ABORTED_OPEN_TAG)
+    {
+        Some(text)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn is_summary_message(message: &str) -> bool {
@@ -290,7 +322,8 @@ async fn drain_to_completed(
     turn_context: &TurnContext,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut stream = turn_context.client.clone().stream(prompt).await?;
+    let mut client_session = turn_context.client.new_session();
+    let mut stream = client_session.stream(prompt).await?;
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {
@@ -303,6 +336,9 @@ async fn drain_to_completed(
             Ok(ResponseEvent::OutputItemDone(item)) => {
                 sess.record_into_history(std::slice::from_ref(&item), turn_context)
                     .await;
+            }
+            Ok(ResponseEvent::ServerReasoningIncluded(included)) => {
+                sess.set_server_reasoning_included(included).await;
             }
             Ok(ResponseEvent::RateLimits(snapshot)) => {
                 sess.update_rate_limits(turn_context, snapshot).await;
@@ -322,6 +358,7 @@ async fn drain_to_completed(
 mod tests {
 
     use super::*;
+    use crate::session_prefix::TURN_ABORTED_OPEN_TAG;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -473,5 +510,42 @@ mod tests {
             other => panic!("expected summary message, found {other:?}"),
         };
         assert_eq!(summary, summary_text);
+    }
+
+    #[test]
+    fn build_compacted_history_preserves_turn_aborted_markers() {
+        let marker = format!(
+            "{TURN_ABORTED_OPEN_TAG}\n  <turn_id>turn-1</turn_id>\n  <reason>interrupted</reason>\n</turn_aborted>"
+        );
+        let items = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: marker.clone(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "real user message".to_string(),
+                }],
+            },
+        ];
+
+        let user_messages = collect_user_messages(&items);
+        let history = build_compacted_history(Vec::new(), &user_messages, "SUMMARY");
+
+        let found_marker = history.iter().any(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                content_items_to_text(content).is_some_and(|text| text == marker)
+            }
+            _ => false,
+        });
+        assert!(
+            found_marker,
+            "expected compacted history to retain <turn_aborted> marker"
+        );
     }
 }

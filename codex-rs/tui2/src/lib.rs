@@ -6,29 +6,36 @@
 use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
+pub use app::ExitReason;
 use codex_app_server_protocol::AuthMode;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
+use codex_common::oss::ollama_chat_deprecation_notice;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
+use codex_core::ThreadSortKey;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
-use codex_core::find_conversation_path_by_id_str;
+use codex_core::find_thread_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
+use codex_core::read_session_meta_line;
+use codex_core::terminal::Multiplexer;
+use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::filter::Targets;
 use tracing_subscriber::prelude::*;
 
 mod additional_dirs;
@@ -40,7 +47,10 @@ mod ascii_animation;
 mod bottom_pane;
 mod chatwidget;
 mod cli;
+mod clipboard_copy;
 mod clipboard_paste;
+mod collab;
+mod collaboration_modes;
 mod color;
 pub mod custom_terminal;
 mod diff_render;
@@ -67,7 +77,6 @@ mod resume_picker;
 mod selection_list;
 mod session_log;
 mod shimmer;
-mod skill_error_prompt;
 mod slash_command;
 mod status;
 mod status_indicator_widget;
@@ -76,6 +85,15 @@ mod style;
 mod terminal_palette;
 mod text_formatting;
 mod tooltips;
+mod transcript_copy;
+mod transcript_copy_action;
+mod transcript_copy_ui;
+mod transcript_multi_click;
+mod transcript_render;
+mod transcript_scrollbar;
+mod transcript_scrollbar_ui;
+mod transcript_selection;
+mod transcript_view_cache;
 mod tui;
 mod ui_consts;
 pub mod update_action;
@@ -125,7 +143,7 @@ pub async fn run_main(
     if cli.web_search {
         cli.config_overrides
             .raw_overrides
-            .push("features.web_search_request=true".to_string());
+            .push("web_search=\"live\"".to_string());
     }
 
     // When using `--oss`, let the bootstrapper pick the model (defaulting to
@@ -153,15 +171,26 @@ pub async fn run_main(
         }
     };
 
+    let cwd = cli.cwd.clone();
+    let config_cwd = match cwd.as_deref() {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,
+        None => AbsolutePathBuf::current_dir()?,
+    };
+
     #[allow(clippy::print_stderr)]
-    let config_toml =
-        match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides.clone()).await {
-            Ok(config_toml) => config_toml,
-            Err(err) => {
-                eprintln!("Error loading config.toml: {err}");
-                std::process::exit(1);
-            }
-        };
+    let config_toml = match load_config_as_toml_with_cli_overrides(
+        &codex_home,
+        &config_cwd,
+        cli_kv_overrides.clone(),
+    )
+    .await
+    {
+        Ok(config_toml) => config_toml,
+        Err(err) => {
+            eprintln!("Error loading config.toml: {err}");
+            std::process::exit(1);
+        }
+    };
 
     let model_provider_override = if cli.oss {
         let resolved = resolve_oss_provider(
@@ -199,8 +228,6 @@ pub async fn run_main(
         None // No model specified, will use the default.
     };
 
-    // canonicalize the cwd
-    let cwd = cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p));
     let additional_dirs = cli.add_dir.clone();
 
     let overrides = ConfigOverrides {
@@ -223,7 +250,7 @@ pub async fn run_main(
 
     let config = load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await;
 
-    if let Some(warning) = add_dir_warning_message(&cli.add_dir, &config.sandbox_policy) {
+    if let Some(warning) = add_dir_warning_message(&cli.add_dir, config.sandbox_policy.get()) {
         #[allow(clippy::print_stderr)]
         {
             eprintln!("Error adding directories: {warning}");
@@ -232,12 +259,11 @@ pub async fn run_main(
     }
 
     #[allow(clippy::print_stderr)]
-    if let Err(err) = enforce_login_restrictions(&config).await {
+    if let Err(err) = enforce_login_restrictions(&config) {
         eprintln!("{err}");
         std::process::exit(1);
     }
 
-    let active_profile = config.active_profile.clone();
     let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
@@ -268,19 +294,17 @@ pub async fn run_main(
 
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
-        .with_target(false)
+        // `with_target(true)` is the default, but we previously disabled it for file output.
+        // Keep it enabled so we can selectively enable targets via `RUST_LOG=...` and then
+        // grep for a specific module/target while troubleshooting.
+        .with_target(true)
         .with_ansi(false)
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_filter(env_filter());
 
     let feedback = codex_feedback::CodexFeedback::new();
-    let targets = Targets::new().with_default(tracing::Level::TRACE);
-
-    let feedback_layer = tracing_subscriber::fmt::layer()
-        .with_writer(feedback.make_writer())
-        .with_ansi(false)
-        .with_target(false)
-        .with_filter(targets);
+    let feedback_layer = feedback.logger_layer();
+    let feedback_metadata_layer = feedback.metadata_layer();
 
     if cli.oss && model_provider_override.is_some() {
         // We're in the oss section, so provider_id should be Some
@@ -297,14 +321,23 @@ pub async fn run_main(
         ensure_oss_provider_ready(provider_id, &config).await?;
     }
 
-    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
-
-    #[allow(clippy::print_stderr)]
-    let otel = match otel {
-        Ok(otel) => otel,
-        Err(e) => {
-            eprintln!("Could not create otel exporter: {e}");
-            std::process::exit(1);
+    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, true)
+    })) {
+        Ok(Ok(otel)) => otel,
+        Ok(Err(e)) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Could not create otel exporter: {e}");
+            }
+            None
+        }
+        Err(_) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Could not create otel exporter: panicked during initialization");
+            }
+            None
         }
     };
 
@@ -315,20 +348,17 @@ pub async fn run_main(
     let _ = tracing_subscriber::registry()
         .with(file_layer)
         .with(feedback_layer)
+        .with(feedback_metadata_layer)
         .with(otel_tracing_layer)
         .with(otel_logger_layer)
         .try_init();
 
-    run_ratatui_app(
-        cli,
-        config,
-        overrides,
-        cli_kv_overrides,
-        active_profile,
-        feedback,
-    )
-    .await
-    .map_err(|err| std::io::Error::other(err.to_string()))
+    let terminal_info = codex_core::terminal::terminal_info();
+    tracing::info!(terminal = ?terminal_info, "Detected terminal info");
+
+    run_ratatui_app(cli, config, overrides, cli_kv_overrides, feedback)
+        .await
+        .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 async fn run_ratatui_app(
@@ -336,10 +366,11 @@ async fn run_ratatui_app(
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
-    active_profile: Option<String>,
     feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
+
+    tooltips::announcement::prewarm();
 
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.
@@ -369,6 +400,8 @@ async fn run_ratatui_app(
                         token_usage: codex_core::protocol::TokenUsage::default(),
                         conversation_id: None,
                         update_action: Some(action),
+                        exit_reason: ExitReason::UserRequested,
+                        session_lines: Vec::new(),
                     });
                 }
             }
@@ -384,15 +417,15 @@ async fn run_ratatui_app(
         initial_config.cli_auth_credentials_store_mode,
     );
     let login_status = get_login_status(&initial_config);
-    let should_show_trust_screen = should_show_trust_screen(&initial_config);
+    let should_show_trust_screen_flag = should_show_trust_screen(&initial_config);
     let should_show_onboarding =
-        should_show_onboarding(login_status, &initial_config, should_show_trust_screen);
+        should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
 
     let config = if should_show_onboarding {
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
                 show_login_screen: should_show_login_screen(login_status, &initial_config),
-                show_trust_screen: should_show_trust_screen,
+                show_trust_screen: should_show_trust_screen_flag,
                 login_status,
                 auth_manager: auth_manager.clone(),
                 config: initial_config.clone(),
@@ -408,6 +441,8 @@ async fn run_ratatui_app(
                 token_usage: codex_core::protocol::TokenUsage::default(),
                 conversation_id: None,
                 update_action: None,
+                exit_reason: ExitReason::UserRequested,
+                session_lines: Vec::new(),
             });
         }
         // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
@@ -416,7 +451,7 @@ async fn run_ratatui_app(
             .map(|d| d == TrustDirectorySelection::Trust)
             .unwrap_or(false)
         {
-            load_config_or_exit(cli_kv_overrides, overrides).await
+            load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await
         } else {
             initial_config
         }
@@ -424,46 +459,107 @@ async fn run_ratatui_app(
         initial_config
     };
 
-    // Determine resume behavior: explicit id, then resume last, then picker.
-    let resume_selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
-        match find_conversation_path_by_id_str(&config.codex_home, id_str).await? {
-            Some(path) => resume_picker::ResumeSelection::Resume(path),
-            None => {
-                error!("Error finding conversation path: {id_str}");
-                restore();
-                session_log::log_session_end();
-                let _ = tui.terminal.clear();
-                if let Err(err) = writeln!(
-                    std::io::stdout(),
-                    "No saved session found with ID {id_str}. Run `codex resume` without an ID to choose from existing sessions."
-                ) {
-                    error!("Failed to write resume error message: {err}");
-                }
-                return Ok(AppExitInfo {
-                    token_usage: codex_core::protocol::TokenUsage::default(),
-                    conversation_id: None,
-                    update_action: None,
-                });
+    let ollama_chat_support_notice = match ollama_chat_deprecation_notice(&config).await {
+        Ok(notice) => notice,
+        Err(err) => {
+            tracing::warn!(?err, "Failed to detect Ollama wire API");
+            None
+        }
+    };
+    let mut missing_session_exit = |id_str: &str, action: &str| {
+        error!("Error finding conversation path: {id_str}");
+        restore();
+        session_log::log_session_end();
+        let _ = tui.terminal.clear();
+        Ok(AppExitInfo {
+            token_usage: codex_core::protocol::TokenUsage::default(),
+            conversation_id: None,
+            update_action: None,
+            exit_reason: ExitReason::Fatal(format!(
+                "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
+            )),
+            session_lines: Vec::new(),
+        })
+    };
+
+    let use_fork = cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some();
+    let session_selection = if use_fork {
+        if let Some(id_str) = cli.fork_session_id.as_deref() {
+            match find_thread_path_by_id_str(&config.codex_home, id_str).await? {
+                Some(path) => resume_picker::SessionSelection::Fork(path),
+                None => return missing_session_exit(id_str, "fork"),
             }
+        } else if cli.fork_last {
+            let provider_filter = vec![config.model_provider_id.clone()];
+            match RolloutRecorder::list_threads(
+                &config.codex_home,
+                1,
+                None,
+                ThreadSortKey::UpdatedAt,
+                INTERACTIVE_SESSION_SOURCES,
+                Some(provider_filter.as_slice()),
+                &config.model_provider_id,
+            )
+            .await
+            {
+                Ok(page) => page
+                    .items
+                    .first()
+                    .map(|it| resume_picker::SessionSelection::Fork(it.path.clone()))
+                    .unwrap_or(resume_picker::SessionSelection::StartFresh),
+                Err(_) => resume_picker::SessionSelection::StartFresh,
+            }
+        } else if cli.fork_picker {
+            match resume_picker::run_fork_picker(
+                &mut tui,
+                &config.codex_home,
+                &config.model_provider_id,
+                cli.fork_show_all,
+            )
+            .await?
+            {
+                resume_picker::SessionSelection::Exit => {
+                    restore();
+                    session_log::log_session_end();
+                    return Ok(AppExitInfo {
+                        token_usage: codex_core::protocol::TokenUsage::default(),
+                        conversation_id: None,
+                        update_action: None,
+                        exit_reason: ExitReason::UserRequested,
+                        session_lines: Vec::new(),
+                    });
+                }
+                other => other,
+            }
+        } else {
+            resume_picker::SessionSelection::StartFresh
+        }
+    } else if let Some(id_str) = cli.resume_session_id.as_deref() {
+        match find_thread_path_by_id_str(&config.codex_home, id_str).await? {
+            Some(path) => resume_picker::SessionSelection::Resume(path),
+            None => return missing_session_exit(id_str, "resume"),
         }
     } else if cli.resume_last {
         let provider_filter = vec![config.model_provider_id.clone()];
-        match RolloutRecorder::list_conversations(
+        let filter_cwd = if cli.resume_show_all {
+            None
+        } else {
+            Some(config.cwd.as_path())
+        };
+        match RolloutRecorder::find_latest_thread_path(
             &config.codex_home,
             1,
             None,
+            ThreadSortKey::UpdatedAt,
             INTERACTIVE_SESSION_SOURCES,
             Some(provider_filter.as_slice()),
             &config.model_provider_id,
+            filter_cwd,
         )
         .await
         {
-            Ok(page) => page
-                .items
-                .first()
-                .map(|it| resume_picker::ResumeSelection::Resume(it.path.clone()))
-                .unwrap_or(resume_picker::ResumeSelection::StartFresh),
-            Err(_) => resume_picker::ResumeSelection::StartFresh,
+            Ok(Some(path)) => resume_picker::SessionSelection::Resume(path),
+            _ => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
         match resume_picker::run_resume_picker(
@@ -474,22 +570,84 @@ async fn run_ratatui_app(
         )
         .await?
         {
-            resume_picker::ResumeSelection::Exit => {
+            resume_picker::SessionSelection::Exit => {
                 restore();
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
                     token_usage: codex_core::protocol::TokenUsage::default(),
                     conversation_id: None,
                     update_action: None,
+                    exit_reason: ExitReason::UserRequested,
+                    session_lines: Vec::new(),
                 });
             }
             other => other,
         }
     } else {
-        resume_picker::ResumeSelection::StartFresh
+        resume_picker::SessionSelection::StartFresh
     };
 
-    let Cli { prompt, images, .. } = cli;
+    let config = match &session_selection {
+        resume_picker::SessionSelection::Resume(path)
+        | resume_picker::SessionSelection::Fork(path) => {
+            let history_cwd = match read_session_meta_line(path).await {
+                Ok(meta_line) => Some(meta_line.meta.cwd),
+                Err(err) => {
+                    let rollout_path = path.display().to_string();
+                    tracing::warn!(
+                        %rollout_path,
+                        %err,
+                        "Failed to read session metadata from rollout"
+                    );
+                    None
+                }
+            };
+            load_config_or_exit_with_fallback_cwd(
+                cli_kv_overrides.clone(),
+                overrides.clone(),
+                history_cwd,
+            )
+            .await
+        }
+        _ => config,
+    };
+    let active_profile = config.active_profile.clone();
+    let should_show_trust_screen = should_show_trust_screen(&config);
+
+    let Cli {
+        prompt,
+        images,
+        no_alt_screen,
+        ..
+    } = cli;
+
+    // Run the main chat + transcript UI on the terminal's alternate screen so
+    // the entire viewport can be used without polluting normal scrollback. This
+    // mirrors the behavior of the legacy TUI but keeps inline mode available
+    // for smaller prompts like onboarding and model migration.
+    //
+    // However, alternate screen prevents scrollback in terminal multiplexers like
+    // Zellij that strictly follow the xterm spec (which disallows scrollback in
+    // alternate screen buffers). This auto-detects the terminal and disables
+    // alternate screen in Zellij while keeping it enabled elsewhere.
+    let use_alt_screen = if no_alt_screen {
+        // CLI flag explicitly disables alternate screen
+        false
+    } else {
+        match config.tui_alternate_screen {
+            AltScreenMode::Always => true,
+            AltScreenMode::Never => false,
+            AltScreenMode::Auto => {
+                // Auto-detect: disable in Zellij, enable elsewhere
+                let terminal_info = codex_core::terminal::terminal_info();
+                !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
+            }
+        }
+    };
+
+    // Set flag on Tui so all enter_alt_screen() calls respect the setting
+    tui.set_alt_screen_enabled(use_alt_screen);
+    let _ = tui.enter_alt_screen();
 
     let app_result = App::run(
         &mut tui,
@@ -498,13 +656,24 @@ async fn run_ratatui_app(
         active_profile,
         prompt,
         images,
-        resume_selection,
+        session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
+        ollama_chat_support_notice,
     )
     .await;
 
+    let _ = tui.leave_alt_screen();
     restore();
+    if let Ok(exit_info) = &app_result {
+        let mut stdout = std::io::stdout();
+        for line in exit_info.session_lines.iter() {
+            let _ = writeln!(stdout, "{line}");
+        }
+        if !exit_info.session_lines.is_empty() {
+            let _ = writeln!(stdout);
+        }
+    }
     // Mark the end of the recorded session.
     session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead
@@ -551,8 +720,22 @@ async fn load_config_or_exit(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
 ) -> Config {
+    load_config_or_exit_with_fallback_cwd(cli_kv_overrides, overrides, None).await
+}
+
+async fn load_config_or_exit_with_fallback_cwd(
+    cli_kv_overrides: Vec<(String, toml::Value)>,
+    overrides: ConfigOverrides,
+    fallback_cwd: Option<PathBuf>,
+) -> Config {
     #[allow(clippy::print_stderr)]
-    match Config::load_with_cli_overrides(cli_kv_overrides, overrides).await {
+    match ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(overrides)
+        .fallback_cwd(fallback_cwd)
+        .build()
+        .await
+    {
         Ok(config) => config,
         Err(err) => {
             eprintln!("Error loading configuration: {err}");
@@ -602,21 +785,23 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::config::ConfigOverrides;
-    use codex_core::config::ConfigToml;
+    use codex_core::config::ConfigBuilder;
     use codex_core::config::ProjectConfig;
     use serial_test::serial;
     use tempfile::TempDir;
 
-    #[test]
+    async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
+        ConfigBuilder::default()
+            .codex_home(temp_dir.path().to_path_buf())
+            .build()
+            .await
+    }
+
+    #[tokio::test]
     #[serial]
-    fn windows_skips_trust_prompt_without_sandbox() -> std::io::Result<()> {
+    async fn windows_skips_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            temp_dir.path().to_path_buf(),
-        )?;
+        let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
         config.set_windows_sandbox_globally(false);
@@ -635,15 +820,11 @@ mod tests {
         }
         Ok(())
     }
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
+    async fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            temp_dir.path().to_path_buf(),
-        )?;
+        let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
         config.set_windows_sandbox_globally(true);
@@ -662,15 +843,11 @@ mod tests {
         }
         Ok(())
     }
-    #[test]
-    fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
+    #[tokio::test]
+    async fn untrusted_project_skips_trust_prompt() -> std::io::Result<()> {
         use codex_protocol::config_types::TrustLevel;
         let temp_dir = TempDir::new()?;
-        let mut config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            temp_dir.path().to_path_buf(),
-        )?;
+        let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig {
             trust_level: Some(TrustLevel::Untrusted),

@@ -19,12 +19,12 @@ jobs:
           run_install: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@1.90
+      - uses: dtolnay/rust-toolchain@1.92
 
       - name: build codex
         run: cargo build --bin codex

@@ -230,7 +230,21 @@ fn format_program_name(path: &Path, preserve_program_paths: bool) -> Option<Stri
 
 async fn load_exec_policy() -> anyhow::Result<Policy> {
     let codex_home = find_codex_home().context("failed to resolve codex_home for execpolicy")?;
-    codex_core::load_exec_policy(&codex_home)
+
+    // TODO(mbolin): At a minimum, `cwd` should be configurable via
+    // `codex/sandbox-state/update` or some other custom MCP call.
+    let cwd = None;
+    let cli_overrides = Vec::new();
+    let overrides = codex_core::config_loader::LoaderOverrides::default();
+    let config_layer_stack = codex_core::config_loader::load_config_layers_state(
+        &codex_home,
+        cwd,
+        &cli_overrides,
+        overrides,
+    )
+    .await?;
+
+    codex_core::load_exec_policy(&config_layer_stack)
         .await
         .map_err(anyhow::Error::from)
 }

@@ -23,7 +23,6 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-async-stream = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
@@ -72,6 +71,7 @@ strum_macros = { workspace = true }
 supports-color = { workspace = true }
 tempfile = { workspace = true }
 textwrap = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
@@ -81,7 +81,7 @@ tokio = { workspace = true, features = [
     "test-util",
     "time",
 ] }
-tokio-stream = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
 toml = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-appender = { workspace = true }
@@ -98,6 +98,14 @@ tokio-util = { workspace = true, features = ["time"] }
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+which = { workspace = true }
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+] }
+winsplit = "0.1"
+
 # Clipboard support via `arboard` is not available on Android/Termux.
 # Only include it for non-Android targets so the crate builds on Android.
 [target.'cfg(not(target_os = "android"))'.dependencies]
@@ -105,7 +113,10 @@ arboard = { workspace = true }
 
 
 [dev-dependencies]
+codex-cli = { workspace = true }
 codex-core = { workspace = true, features = ["test-support"] }
+codex-utils-cargo-bin = { workspace = true }
+codex-utils-pty = { workspace = true }
 assert_matches = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }

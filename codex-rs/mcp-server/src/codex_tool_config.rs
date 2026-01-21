@@ -1,10 +1,14 @@
 //! Configuration object accepted by the `codex` MCP tool-call.
 
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
 use codex_core::protocol::AskForApproval;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::SandboxMode;
 use codex_utils_json_to_toml::json_to_toml;
 use mcp_types::Tool;
 use mcp_types::ToolInputSchema;
+use mcp_types::ToolOutputSchema;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
@@ -19,7 +23,7 @@ pub struct CodexToolCallParam {
     /// The *initial user prompt* to start the Codex conversation.
     pub prompt: String,
 
-    /// Optional override for the model name (e.g. "o3", "o4-mini").
+    /// Optional override for the model name (e.g. 'gpt-5.2', 'gpt-5.2-codex').
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 
@@ -124,12 +128,22 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
         name: "codex".to_string(),
         title: Some("Codex".to_string()),
         input_schema: tool_input_schema,
-        // TODO(mbolin): This should be defined.
-        output_schema: None,
+        output_schema: Some(codex_tool_output_schema()),
         description: Some(
             "Run a Codex session. Accepts configuration parameters matching the Codex Config struct.".to_string(),
         ),
         annotations: None,
+    }
+}
+
+fn codex_tool_output_schema() -> ToolOutputSchema {
+    ToolOutputSchema {
+        properties: Some(serde_json::json!({
+            "threadId": { "type": "string" },
+            "content": { "type": "string" }
+        })),
+        required: Some(vec!["threadId".to_string(), "content".to_string()]),
+        r#type: "object".to_string(),
     }
 }
 
@@ -139,7 +153,7 @@ impl CodexToolCallParam {
     pub async fn into_config(
         self,
         codex_linux_sandbox_exe: Option<PathBuf>,
-    ) -> std::io::Result<(String, codex_core::config::Config)> {
+    ) -> std::io::Result<(String, Config)> {
         let Self {
             prompt,
             model,
@@ -154,22 +168,17 @@ impl CodexToolCallParam {
         } = self;
 
         // Build the `ConfigOverrides` recognized by codex-core.
-        let overrides = codex_core::config::ConfigOverrides {
+        let overrides = ConfigOverrides {
             model,
-            review_model: None,
             config_profile: profile,
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy.map(Into::into),
             sandbox_mode: sandbox.map(Into::into),
-            model_provider: None,
             codex_linux_sandbox_exe,
             base_instructions,
             developer_instructions,
             compact_prompt,
-            include_apply_patch_tool: None,
-            show_raw_agent_reasoning: None,
-            tools_web_search_request: None,
-            additional_writable_roots: Vec::new(),
+            ..Default::default()
         };
 
         let cli_overrides = cli_overrides
@@ -179,7 +188,7 @@ impl CodexToolCallParam {
             .collect();
 
         let cfg =
-            codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides).await?;
+            Config::load_with_cli_overrides_and_harness_overrides(cli_overrides, overrides).await?;
 
         Ok((prompt, cfg))
     }
@@ -188,11 +197,34 @@ impl CodexToolCallParam {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexToolCallReplyParam {
-    /// The conversation id for this Codex session.
-    pub conversation_id: String,
+    /// DEPRECATED: use threadId instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    conversation_id: Option<String>,
+
+    /// The thread id for this Codex session.
+    /// This field is required, but we keep it optional here for backward
+    /// compatibility for clients that still use conversationId.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread_id: Option<String>,
 
     /// The *next user prompt* to continue the Codex conversation.
     pub prompt: String,
+}
+
+impl CodexToolCallReplyParam {
+    pub(crate) fn get_thread_id(&self) -> anyhow::Result<ThreadId> {
+        if let Some(thread_id) = &self.thread_id {
+            let thread_id = ThreadId::from_string(thread_id)?;
+            Ok(thread_id)
+        } else if let Some(conversation_id) = &self.conversation_id {
+            let thread_id = ThreadId::from_string(conversation_id)?;
+            Ok(thread_id)
+        } else {
+            Err(anyhow::anyhow!(
+                "either threadId or conversationId must be provided"
+            ))
+        }
+    }
 }
 
 /// Builds a `Tool` definition for the `codex-reply` tool-call.
@@ -218,10 +250,9 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
         name: "codex-reply".to_string(),
         title: Some("Codex Reply".to_string()),
         input_schema: tool_input_schema,
-        output_schema: None,
+        output_schema: Some(codex_tool_output_schema()),
         description: Some(
-            "Continue a Codex conversation by providing the conversation id and prompt."
-                .to_string(),
+            "Continue a Codex conversation by providing the thread id and prompt.".to_string(),
         ),
         annotations: None,
     }
@@ -248,11 +279,8 @@ mod tests {
         let tool = create_tool_for_codex_tool_call_param();
         let tool_json = serde_json::to_value(&tool).expect("tool serializes");
         let expected_tool_json = serde_json::json!({
-          "name": "codex",
-          "title": "Codex",
           "description": "Run a Codex session. Accepts configuration parameters matching the Codex Config struct.",
           "inputSchema": {
-            "type": "object",
             "properties": {
               "approval-policy": {
                 "description": "Approval policy for shell commands generated by the model: `untrusted`, `on-failure`, `on-request`, `never`.",
@@ -264,26 +292,29 @@ mod tests {
                 ],
                 "type": "string"
               },
-              "sandbox": {
-                "description": "Sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`.",
-                "enum": [
-                  "read-only",
-                  "workspace-write",
-                  "danger-full-access"
-                ],
+              "base-instructions": {
+                "description": "The set of instructions to use instead of the default ones.",
+                "type": "string"
+              },
+              "compact-prompt": {
+                "description": "Prompt used when compacting the conversation.",
                 "type": "string"
               },
               "config": {
-                "description": "Individual config settings that will override what is in CODEX_HOME/config.toml.",
                 "additionalProperties": true,
+                "description": "Individual config settings that will override what is in CODEX_HOME/config.toml.",
                 "type": "object"
               },
               "cwd": {
                 "description": "Working directory for the session. If relative, it is resolved against the server process's current working directory.",
                 "type": "string"
               },
+              "developer-instructions": {
+                "description": "Developer instructions that should be injected as a developer role message.",
+                "type": "string"
+              },
               "model": {
-                "description": "Optional override for the model name (e.g. \"o3\", \"o4-mini\").",
+                "description": "Optional override for the model name (e.g. 'gpt-5.2', 'gpt-5.2-codex').",
                 "type": "string"
               },
               "profile": {
@@ -294,23 +325,38 @@ mod tests {
                 "description": "The *initial user prompt* to start the Codex conversation.",
                 "type": "string"
               },
-              "base-instructions": {
-                "description": "The set of instructions to use instead of the default ones.",
+              "sandbox": {
+                "description": "Sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`.",
+                "enum": [
+                  "read-only",
+                  "workspace-write",
+                  "danger-full-access"
+                ],
                 "type": "string"
-              },
-              "developer-instructions": {
-                "description": "Developer instructions that should be injected as a developer role message.",
-                "type": "string"
-              },
-              "compact-prompt": {
-                "description": "Prompt used when compacting the conversation.",
-                "type": "string"
-              },
+              }
             },
             "required": [
               "prompt"
-            ]
-          }
+            ],
+            "type": "object"
+          },
+          "name": "codex",
+          "outputSchema": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "threadId",
+              "content"
+            ],
+            "type": "object"
+          },
+          "title": "Codex"
         });
         assert_eq!(expected_tool_json, tool_json);
     }
@@ -320,25 +366,43 @@ mod tests {
         let tool = create_tool_for_codex_tool_call_reply_param();
         let tool_json = serde_json::to_value(&tool).expect("tool serializes");
         let expected_tool_json = serde_json::json!({
-          "description": "Continue a Codex conversation by providing the conversation id and prompt.",
+          "description": "Continue a Codex conversation by providing the thread id and prompt.",
           "inputSchema": {
             "properties": {
               "conversationId": {
-                "description": "The conversation id for this Codex session.",
+                "description": "DEPRECATED: use threadId instead.",
                 "type": "string"
               },
               "prompt": {
                 "description": "The *next user prompt* to continue the Codex conversation.",
                 "type": "string"
               },
+              "threadId": {
+                "description": "The thread id for this Codex session. This field is required, but we keep it optional here for backward compatibility for clients that still use conversationId.",
+                "type": "string"
+              }
             },
             "required": [
-              "conversationId",
               "prompt",
             ],
             "type": "object",
           },
           "name": "codex-reply",
+          "outputSchema": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "threadId",
+              "content"
+            ],
+            "type": "object"
+          },
           "title": "Codex Reply",
         });
         assert_eq!(expected_tool_json, tool_json);

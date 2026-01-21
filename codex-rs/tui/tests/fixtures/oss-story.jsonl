@@ -8037,5 +8037,5 @@
 {"ts":"2025-08-10T03:48:49.926Z","dir":"to_tui","kind":"log_line","line":"[INFO codex_core::codex] Shutting down Codex instance"}
 {"ts":"2025-08-10T03:48:49.927Z","dir":"to_tui","kind":"log_line","line":"[INFO codex_core::codex] Aborting existing session"}
 {"ts":"2025-08-10T03:48:49.927Z","dir":"to_tui","kind":"codex_event","payload":{"id":"7","msg":{"type":"shutdown_complete"}}}
-{"ts":"2025-08-10T03:48:49.927Z","dir":"to_tui","kind":"app_event","variant":"ExitRequest"}
+{"ts":"2025-08-10T03:48:49.927Z","dir":"to_tui","kind":"app_event","variant":"Exit"}
 {"ts":"2025-08-10T03:48:49.927Z","dir":"meta","kind":"session_end"}

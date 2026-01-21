@@ -1,34 +1,60 @@
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
+#[cfg(target_os = "windows")]
+use crate::app_event::WindowsSandboxEnableMode;
+#[cfg(target_os = "windows")]
+use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::chatwidget::ChatWidget;
+use crate::custom_terminal::Frame;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::file_search::FileSearchManager;
 use crate::history_cell::HistoryCell;
+use crate::history_cell::UserHistoryCell;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
-use crate::resume_picker::ResumeSelection;
-use crate::skill_error_prompt::SkillErrorPromptOutcome;
-use crate::skill_error_prompt::run_skill_error_prompt;
+use crate::resume_picker::SessionSelection;
+use crate::transcript_copy_action::TranscriptCopyAction;
+use crate::transcript_copy_action::TranscriptCopyFeedback;
+use crate::transcript_copy_ui::TranscriptCopyUi;
+use crate::transcript_multi_click::TranscriptMultiClick;
+use crate::transcript_scrollbar::render_transcript_scrollbar_if_active;
+use crate::transcript_scrollbar::split_transcript_area;
+use crate::transcript_scrollbar_ui::TranscriptScrollbarMouseEvent;
+use crate::transcript_scrollbar_ui::TranscriptScrollbarMouseHandling;
+use crate::transcript_scrollbar_ui::TranscriptScrollbarUi;
+use crate::transcript_selection::TRANSCRIPT_GUTTER_COLS;
+use crate::transcript_selection::TranscriptSelection;
+use crate::transcript_selection::TranscriptSelectionPoint;
+use crate::transcript_view_cache::TranscriptViewCache;
 use crate::tui;
 use crate::tui::TuiEvent;
+use crate::tui::scrolling::MouseScrollState;
+use crate::tui::scrolling::ScrollConfig;
+use crate::tui::scrolling::ScrollConfigOverrides;
+use crate::tui::scrolling::ScrollDirection;
+use crate::tui::scrolling::ScrollUpdate;
+use crate::tui::scrolling::TranscriptScroll;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
-use codex_core::ConversationManager;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
-use codex_core::openai_models::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
-use codex_core::openai_models::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
-use codex_core::openai_models::models_manager::ModelsManager;
+use codex_core::models_manager::manager::RefreshStrategy;
+use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
+use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::ListSkillsResponseEvent;
@@ -36,8 +62,8 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
-use codex_core::skills::SkillError;
-use codex_protocol::ConversationId;
+use codex_core::terminal::terminal_info;
+use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -46,9 +72,14 @@ use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::MouseButton;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -67,23 +98,47 @@ use crate::history_cell::UpdateAvailableHistoryCell;
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
-    pub conversation_id: Option<ConversationId>,
+    pub conversation_id: Option<ThreadId>,
     pub update_action: Option<UpdateAction>,
+    pub exit_reason: ExitReason,
+    /// ANSI-styled transcript lines to print after the TUI exits.
+    ///
+    /// These lines are rendered against the same width as the final TUI
+    /// viewport and include styling (colors, bold, etc.) so that scrollback
+    /// preserves the visual structure of the on-screen transcript.
+    pub session_lines: Vec<String>,
+}
+
+#[derive(Debug)]
+pub(crate) enum AppRunControl {
+    Continue,
+    Exit(ExitReason),
+}
+
+#[derive(Debug, Clone)]
+pub enum ExitReason {
+    UserRequested,
+    Fatal(String),
 }
 
 impl From<AppExitInfo> for codex_tui::AppExitInfo {
     fn from(info: AppExitInfo) -> Self {
+        let exit_reason = match info.exit_reason {
+            ExitReason::UserRequested => codex_tui::ExitReason::UserRequested,
+            ExitReason::Fatal(message) => codex_tui::ExitReason::Fatal(message),
+        };
         codex_tui::AppExitInfo {
             token_usage: info.token_usage,
-            conversation_id: info.conversation_id,
+            thread_id: info.conversation_id,
             update_action: info.update_action.map(Into::into),
+            exit_reason,
         }
     }
 }
 
 fn session_summary(
     token_usage: TokenUsage,
-    conversation_id: Option<ConversationId>,
+    conversation_id: Option<ThreadId>,
 ) -> Option<SessionSummary> {
     if token_usage.is_zero() {
         return None;
@@ -98,16 +153,6 @@ fn session_summary(
     })
 }
 
-fn skill_errors_from_info(errors: &[SkillErrorInfo]) -> Vec<SkillError> {
-    errors
-        .iter()
-        .map(|err| SkillError {
-            path: err.path.clone(),
-            message: err.message.clone(),
-        })
-        .collect()
-}
-
 fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
     response
         .skills
@@ -115,6 +160,36 @@ fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillEr
         .find(|entry| entry.cwd.as_path() == cwd)
         .map(|entry| entry.errors.clone())
         .unwrap_or_default()
+}
+
+fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorInfo]) {
+    if errors.is_empty() {
+        return;
+    }
+
+    let error_count = errors.len();
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        crate::history_cell::new_warning_event(format!(
+            "Skipped loading {error_count} skill(s) due to invalid SKILL.md files."
+        )),
+    )));
+
+    for error in errors {
+        let path = error.path.display();
+        let message = error.message.as_str();
+        app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            crate::history_cell::new_warning_event(format!("{path}: {message}")),
+        )));
+    }
+}
+
+fn emit_deprecation_notice(app_event_tx: &AppEventSender, notice: Option<DeprecationNoticeEvent>) {
+    let Some(DeprecationNoticeEvent { summary, details }) = notice else {
+        return;
+    };
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        crate::history_cell::new_deprecation_notice(summary, details),
+    )));
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,9 +249,8 @@ async fn handle_model_migration_prompt_if_needed(
     config: &mut Config,
     model: &str,
     app_event_tx: &AppEventSender,
-    models_manager: Arc<ModelsManager>,
+    available_models: Vec<ModelPreset>,
 ) -> Option<AppExitInfo> {
-    let available_models = models_manager.list_models(config).await;
     let upgrade = available_models
         .iter()
         .find(|preset| preset.model == model)
@@ -186,6 +260,8 @@ async fn handle_model_migration_prompt_if_needed(
         id: target_model,
         reasoning_effort_mapping,
         migration_config_key,
+        migration_markdown,
+        ..
     }) = upgrade
     {
         if migration_prompt_hidden(config, migration_config_key.as_str()) {
@@ -227,6 +303,7 @@ async fn handle_model_migration_prompt_if_needed(
             &target_model,
             heading_label,
             target_description,
+            migration_markdown.clone(),
             can_opt_out,
         );
         match run_model_migration_prompt(tui, prompt_copy).await {
@@ -235,7 +312,6 @@ async fn handle_model_migration_prompt_if_needed(
                     from_model: model.to_string(),
                     to_model: target_model.clone(),
                 });
-                config.model = Some(target_model.clone());
 
                 let mapped_effort = if let Some(reasoning_effort_mapping) = reasoning_effort_mapping
                     && let Some(reasoning_effort) = config.model_reasoning_effort
@@ -248,8 +324,8 @@ async fn handle_model_migration_prompt_if_needed(
                     config.model_reasoning_effort
                 };
 
+                config.model = Some(target_model.clone());
                 config.model_reasoning_effort = mapped_effort;
-
                 app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
                 app_event_tx.send(AppEvent::UpdateReasoningEffort(mapped_effort));
                 app_event_tx.send(AppEvent::PersistModelSelection {
@@ -268,6 +344,8 @@ async fn handle_model_migration_prompt_if_needed(
                     token_usage: TokenUsage::default(),
                     conversation_id: None,
                     update_action: None,
+                    exit_reason: ExitReason::UserRequested,
+                    session_lines: Vec::new(),
                 });
             }
         }
@@ -277,31 +355,61 @@ async fn handle_model_migration_prompt_if_needed(
 }
 
 pub(crate) struct App {
-    pub(crate) server: Arc<ConversationManager>,
+    pub(crate) server: Arc<ThreadManager>,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     pub(crate) auth_manager: Arc<AuthManager>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
-    pub(crate) current_model: String,
     pub(crate) active_profile: Option<String>,
 
     pub(crate) file_search: FileSearchManager,
 
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
+    transcript_view_cache: TranscriptViewCache,
 
-    // Pager overlay state (Transcript or Static like Diff)
+    #[allow(dead_code)]
+    transcript_scroll: TranscriptScroll,
+    transcript_selection: TranscriptSelection,
+    transcript_multi_click: TranscriptMultiClick,
+    transcript_view_top: usize,
+    transcript_total_lines: usize,
+    transcript_copy_ui: TranscriptCopyUi,
+    transcript_copy_action: TranscriptCopyAction,
+    transcript_scrollbar_ui: TranscriptScrollbarUi,
+
+    // Pager overlay state (Transcript or Static like Diff).
     pub(crate) overlay: Option<Overlay>,
-    pub(crate) deferred_history_lines: Vec<Line<'static>>,
-    has_emitted_history_lines: bool,
+    /// History cells received while an overlay is active.
+    ///
+    /// While in an alt-screen overlay, the normal terminal buffer is not visible.
+    /// Instead we queue the incoming cells here and, on overlay close, render them at the *current*
+    /// width and queue them in one batch via `Tui::insert_history_lines`.
+    ///
+    /// This matters for correctness if/when scrollback printing is enabled: if we deferred
+    /// already-rendered `Vec<Line>`, we'd bake viewport-width wrapping based on the width at the
+    /// time the cell arrived (which may differ from the width when the overlay closes).
+    pub(crate) deferred_history_cells: Vec<Arc<dyn HistoryCell>>,
+    /// True once at least one history cell has been inserted into terminal scrollback.
+    ///
+    /// Used to decide whether to insert an extra blank separator line when flushing deferred cells.
+    pub(crate) has_emitted_history_lines: bool,
 
     pub(crate) enhanced_keys_supported: bool,
 
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
 
+    scroll_config: ScrollConfig,
+    scroll_state: MouseScrollState,
+
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+    /// When set, the next draw re-renders the transcript into terminal scrollback once.
+    ///
+    /// This is used after a confirmed conversation rollback to ensure scrollback reflects the
+    /// trimmed transcript cells.
+    pub(crate) backtrack_render_pending: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
@@ -313,13 +421,34 @@ pub(crate) struct App {
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
 }
-
 impl App {
+    pub fn chatwidget_init_for_forked_or_resumed_thread(
+        &self,
+        tui: &mut tui::Tui,
+        cfg: codex_core::config::Config,
+    ) -> crate::chatwidget::ChatWidgetInit {
+        crate::chatwidget::ChatWidgetInit {
+            config: cfg,
+            frame_requester: tui.frame_requester(),
+            app_event_tx: self.app_event_tx.clone(),
+            // Fork/resume bootstraps here don't carry any prefilled message content.
+            initial_user_message: None,
+            enhanced_keys_supported: self.enhanced_keys_supported,
+            auth_manager: self.auth_manager.clone(),
+            models_manager: self.server.get_models_manager(),
+            feedback: self.feedback.clone(),
+            is_first_run: false,
+            model: Some(self.chat_widget.current_model().to_string()),
+        }
+    }
+
     async fn shutdown_current_conversation(&mut self) {
         if let Some(conversation_id) = self.chat_widget.conversation_id() {
+            // Clear any in-flight rollback guard when switching conversations.
+            self.backtrack.pending_rollback = None;
             self.suppress_shutdown_complete = true;
             self.chat_widget.submit_op(Op::Shutdown);
-            self.server.remove_conversation(&conversation_id).await;
+            self.server.remove_thread(&conversation_id).await;
         }
     }
 
@@ -331,28 +460,35 @@ impl App {
         active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
-        resume_selection: ResumeSelection,
+        session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
+        ollama_chat_support_notice: Option<DeprecationNoticeEvent>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+        emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
 
-        let conversation_manager = Arc::new(ConversationManager::new(
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.codex_home.clone(),
             auth_manager.clone(),
             SessionSource::Cli,
         ));
-        let mut model = conversation_manager
+        let mut model = thread_manager
             .get_models_manager()
-            .get_model(&config.model, &config)
+            .get_default_model(&config.model, &config, RefreshStrategy::Offline)
+            .await;
+        let available_models = thread_manager
+            .get_models_manager()
+            .list_models(&config, RefreshStrategy::Offline)
             .await;
         let exit_info = handle_model_migration_prompt_if_needed(
             tui,
             &mut config,
             model.as_str(),
             &app_event_tx,
-            conversation_manager.get_models_manager(),
+            available_models,
         )
         .await;
         if let Some(exit_info) = exit_info {
@@ -363,56 +499,80 @@ impl App {
         }
 
         let enhanced_keys_supported = tui.enhanced_keys_supported();
-        let model_family = conversation_manager
-            .get_models_manager()
-            .construct_model_family(model.as_str(), &config)
-            .await;
-        let mut chat_widget = match resume_selection {
-            ResumeSelection::StartFresh | ResumeSelection::Exit => {
+        let mut chat_widget = match session_selection {
+            SessionSelection::StartFresh | SessionSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
-                    initial_prompt: initial_prompt.clone(),
-                    initial_images: initial_images.clone(),
+                    initial_user_message: crate::chatwidget::create_initial_user_message(
+                        initial_prompt.clone(),
+                        initial_images.clone(),
+                        // CLI prompt args are plain strings, so they don't provide element ranges.
+                        Vec::new(),
+                    ),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
-                    models_manager: conversation_manager.get_models_manager(),
+                    models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model_family: model_family.clone(),
+                    model: Some(model.clone()),
                 };
-                ChatWidget::new(init, conversation_manager.clone())
+                ChatWidget::new(init, thread_manager.clone())
             }
-            ResumeSelection::Resume(path) => {
-                let resumed = conversation_manager
-                    .resume_conversation_from_rollout(
-                        config.clone(),
-                        path.clone(),
-                        auth_manager.clone(),
-                    )
+            SessionSelection::Resume(path) => {
+                let resumed = thread_manager
+                    .resume_thread_from_rollout(config.clone(), path.clone(), auth_manager.clone())
                     .await
                     .wrap_err_with(|| {
-                        format!("Failed to resume session from {}", path.display())
+                        let path_display = path.display();
+                        format!("Failed to resume session from {path_display}")
                     })?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: app_event_tx.clone(),
-                    initial_prompt: initial_prompt.clone(),
-                    initial_images: initial_images.clone(),
+                    initial_user_message: crate::chatwidget::create_initial_user_message(
+                        initial_prompt.clone(),
+                        initial_images.clone(),
+                        // CLI prompt args are plain strings, so they don't provide element ranges.
+                        Vec::new(),
+                    ),
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
-                    models_manager: conversation_manager.get_models_manager(),
+                    models_manager: thread_manager.get_models_manager(),
                     feedback: feedback.clone(),
                     is_first_run,
-                    model_family: model_family.clone(),
+                    model: config.model.clone(),
                 };
-                ChatWidget::new_from_existing(
-                    init,
-                    resumed.conversation,
-                    resumed.session_configured,
-                )
+                ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
+            }
+            SessionSelection::Fork(path) => {
+                let forked = thread_manager
+                    .fork_thread(usize::MAX, config.clone(), path.clone())
+                    .await
+                    .wrap_err_with(|| {
+                        let path_display = path.display();
+                        format!("Failed to fork session from {path_display}")
+                    })?;
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: app_event_tx.clone(),
+                    initial_user_message: crate::chatwidget::create_initial_user_message(
+                        initial_prompt.clone(),
+                        initial_images.clone(),
+                        // CLI prompt args are plain strings, so they don't provide element ranges.
+                        Vec::new(),
+                    ),
+                    enhanced_keys_supported,
+                    auth_manager: auth_manager.clone(),
+                    models_manager: thread_manager.get_models_manager(),
+                    feedback: feedback.clone(),
+                    is_first_run,
+                    model: config.model.clone(),
+                };
+                ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
         };
 
@@ -421,23 +581,50 @@ impl App {
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
+        let scroll_config = ScrollConfig::from_terminal(
+            &terminal_info(),
+            ScrollConfigOverrides {
+                events_per_tick: config.tui_scroll_events_per_tick,
+                wheel_lines_per_tick: config.tui_scroll_wheel_lines,
+                trackpad_lines_per_tick: config.tui_scroll_trackpad_lines,
+                trackpad_accel_events: config.tui_scroll_trackpad_accel_events,
+                trackpad_accel_max: config.tui_scroll_trackpad_accel_max,
+                mode: Some(config.tui_scroll_mode),
+                wheel_tick_detect_max_ms: config.tui_scroll_wheel_tick_detect_max_ms,
+                wheel_like_max_duration_ms: config.tui_scroll_wheel_like_max_duration_ms,
+                invert_direction: config.tui_scroll_invert,
+            },
+        );
+
+        let copy_selection_shortcut = crate::transcript_copy_ui::detect_copy_selection_shortcut();
 
         let mut app = Self {
-            server: conversation_manager.clone(),
+            server: thread_manager.clone(),
             app_event_tx,
             chat_widget,
             auth_manager: auth_manager.clone(),
             config,
-            current_model: model.clone(),
             active_profile,
             file_search,
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
+            transcript_view_cache: TranscriptViewCache::new(),
+            transcript_scroll: TranscriptScroll::default(),
+            transcript_selection: TranscriptSelection::default(),
+            transcript_multi_click: TranscriptMultiClick::default(),
+            transcript_view_top: 0,
+            transcript_total_lines: 0,
+            transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(copy_selection_shortcut),
+            transcript_copy_action: TranscriptCopyAction::default(),
+            transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
             overlay: None,
-            deferred_history_lines: Vec::new(),
+            deferred_history_cells: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            scroll_config,
+            scroll_state: MouseScrollState::default(),
             backtrack: BacktrackState::default(),
+            backtrack_render_pending: false,
             feedback: feedback.clone(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
@@ -449,7 +636,7 @@ impl App {
         {
             let should_check = codex_core::get_platform_sandbox().is_some()
                 && matches!(
-                    app.config.sandbox_policy,
+                    app.config.sandbox_policy.get(),
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
                         | codex_core::protocol::SandboxPolicy::ReadOnly
                 )
@@ -463,21 +650,31 @@ impl App {
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
-                let sandbox_policy = app.config.sandbox_policy.clone();
+                let sandbox_policy = app.config.sandbox_policy.get().clone();
                 Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
             }
         }
 
         #[cfg(not(debug_assertions))]
         if let Some(latest_version) = upgrade_version {
-            app.handle_event(
-                tui,
-                AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
-                    latest_version,
-                    crate::update_action::get_update_action(),
-                ))),
-            )
-            .await?;
+            let control = app
+                .handle_event(
+                    tui,
+                    AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
+                        latest_version,
+                        crate::update_action::get_update_action(),
+                    ))),
+                )
+                .await?;
+            if let AppRunControl::Exit(exit_reason) = control {
+                return Ok(AppExitInfo {
+                    token_usage: app.token_usage(),
+                    conversation_id: app.chat_widget.conversation_id(),
+                    update_action: app.pending_update_action,
+                    exit_reason,
+                    session_lines: Vec::new(),
+                });
+            }
         }
 
         let tui_events = tui.event_stream();
@@ -485,19 +682,42 @@ impl App {
 
         tui.frame_requester().schedule_frame();
 
-        while select! {
-            Some(event) = app_event_rx.recv() => {
-                app.handle_event(tui, event).await?
+        let exit_reason = loop {
+            let control = select! {
+                Some(event) = app_event_rx.recv() => {
+                    app.handle_event(tui, event).await?
+                }
+                Some(event) = tui_events.next() => {
+                    app.handle_tui_event(tui, event).await?
+                }
+            };
+            match control {
+                AppRunControl::Continue => {}
+                AppRunControl::Exit(reason) => break reason,
             }
-            Some(event) = tui_events.next() => {
-                app.handle_tui_event(tui, event).await?
-            }
-        } {}
+        };
+        let width = tui.terminal.last_known_screen_size.width;
+        let session_lines = if width == 0 {
+            Vec::new()
+        } else {
+            let transcript =
+                crate::transcript_render::build_transcript_lines(&app.transcript_cells, width);
+            let (lines, line_meta) = (transcript.lines, transcript.meta);
+            let is_user_cell: Vec<bool> = app
+                .transcript_cells
+                .iter()
+                .map(|cell| cell.as_any().is::<UserHistoryCell>())
+                .collect();
+            crate::transcript_render::render_lines_to_ansi(&lines, &line_meta, &is_user_cell, width)
+        };
+
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             conversation_id: app.chat_widget.conversation_id(),
             update_action: app.pending_update_action,
+            exit_reason,
+            session_lines,
         })
     }
 
@@ -505,13 +725,20 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         event: TuiEvent,
-    ) -> Result<bool> {
+    ) -> Result<AppRunControl> {
+        if matches!(&event, TuiEvent::Draw) {
+            self.handle_scroll_tick(tui);
+        }
+
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
             match event {
                 TuiEvent::Key(key_event) => {
                     self.handle_key_event(tui, key_event).await;
+                }
+                TuiEvent::Mouse(mouse_event) => {
+                    self.handle_mouse_event(tui, mouse_event);
                 }
                 TuiEvent::Paste(pasted) => {
                     // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
@@ -522,56 +749,754 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
+                    if self.backtrack_render_pending {
+                        self.backtrack_render_pending = false;
+                        self.render_transcript_once(tui);
+                    }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
                         .chat_widget
                         .handle_paste_burst_tick(tui.frame_requester())
                     {
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
-                    tui.draw(
-                        self.chat_widget.desired_height(tui.terminal.size()?.width),
-                        |frame| {
-                            self.chat_widget.render(frame.area(), frame.buffer);
-                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
-                                frame.set_cursor_position((x, y));
-                            }
-                        },
-                    )?;
+                    let cells = self.transcript_cells.clone();
+                    tui.draw(tui.terminal.size()?.height, |frame| {
+                        let chat_height = self.chat_widget.desired_height(frame.area().width);
+                        let chat_top = self.render_transcript_cells(frame, &cells, chat_height);
+                        let chat_area = Rect {
+                            x: frame.area().x,
+                            y: chat_top,
+                            width: frame.area().width,
+                            height: chat_height.min(
+                                frame
+                                    .area()
+                                    .height
+                                    .saturating_sub(chat_top.saturating_sub(frame.area().y)),
+                            ),
+                        };
+                        self.chat_widget.render(chat_area, frame.buffer);
+                        let chat_bottom = chat_area.y.saturating_add(chat_area.height);
+                        if chat_bottom < frame.area().bottom() {
+                            Clear.render_ref(
+                                Rect {
+                                    x: frame.area().x,
+                                    y: chat_bottom,
+                                    width: frame.area().width,
+                                    height: frame.area().bottom().saturating_sub(chat_bottom),
+                                },
+                                frame.buffer,
+                            );
+                        }
+                        if let Some((x, y)) = self.chat_widget.cursor_pos(chat_area) {
+                            frame.set_cursor_position((x, y));
+                        }
+                    })?;
+                    let transcript_scrolled =
+                        !matches!(self.transcript_scroll, TranscriptScroll::ToBottom);
+                    let selection_active = matches!(
+                        (self.transcript_selection.anchor, self.transcript_selection.head),
+                        (Some(a), Some(b)) if a != b
+                    );
+                    let scroll_position = if self.transcript_total_lines == 0 {
+                        None
+                    } else {
+                        Some((
+                            self.transcript_view_top.saturating_add(1),
+                            self.transcript_total_lines,
+                        ))
+                    };
+                    let copy_selection_key = self.copy_selection_key();
+                    let copy_feedback = self.transcript_copy_feedback_for_footer();
+                    self.chat_widget.set_transcript_ui_state(
+                        transcript_scrolled,
+                        selection_active,
+                        scroll_position,
+                        copy_selection_key,
+                        copy_feedback,
+                    );
                 }
             }
         }
-        Ok(true)
+        Ok(AppRunControl::Continue)
     }
 
-    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
-        let model_family = self
-            .server
-            .get_models_manager()
-            .construct_model_family(self.current_model.as_str(), &self.config)
-            .await;
+    pub(crate) fn render_transcript_cells(
+        &mut self,
+        frame: &mut Frame,
+        cells: &[Arc<dyn HistoryCell>],
+        chat_height: u16,
+    ) -> u16 {
+        let area = frame.area();
+        if area.width == 0 || area.height == 0 {
+            self.transcript_scroll = TranscriptScroll::default();
+            self.transcript_view_top = 0;
+            self.transcript_total_lines = 0;
+            return area.bottom().saturating_sub(chat_height);
+        }
+
+        let chat_height = chat_height.min(area.height);
+        let max_transcript_height = area.height.saturating_sub(chat_height);
+        if max_transcript_height == 0 {
+            self.transcript_scroll = TranscriptScroll::default();
+            self.transcript_view_top = 0;
+            self.transcript_total_lines = 0;
+            return area.y;
+        }
+
+        let transcript_full_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: max_transcript_height,
+        };
+        let (transcript_area, _) = split_transcript_area(transcript_full_area);
+
+        self.transcript_view_cache
+            .ensure_wrapped(cells, transcript_area.width);
+        let total_lines = self.transcript_view_cache.lines().len();
+        if total_lines == 0 {
+            Clear.render_ref(transcript_full_area, frame.buffer);
+            self.transcript_scroll = TranscriptScroll::default();
+            self.transcript_view_top = 0;
+            self.transcript_total_lines = 0;
+            return area.y;
+        }
+
+        self.transcript_total_lines = total_lines;
+        let max_visible = std::cmp::min(max_transcript_height as usize, total_lines);
+        let max_start = total_lines.saturating_sub(max_visible);
+
+        let (scroll_state, top_offset) = {
+            let line_meta = self.transcript_view_cache.line_meta();
+            self.transcript_scroll.resolve_top(line_meta, max_start)
+        };
+        self.transcript_scroll = scroll_state;
+        self.transcript_view_top = top_offset;
+
+        let transcript_visible_height = max_visible as u16;
+        let chat_top = if total_lines <= max_transcript_height as usize {
+            let gap = if transcript_visible_height == 0 { 0 } else { 1 };
+            area.y
+                .saturating_add(transcript_visible_height)
+                .saturating_add(gap)
+        } else {
+            area.bottom().saturating_sub(chat_height)
+        };
+
+        let clear_height = chat_top.saturating_sub(area.y);
+        if clear_height > 0 {
+            Clear.render_ref(
+                Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: clear_height,
+                },
+                frame.buffer,
+            );
+        }
+
+        let transcript_full_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: transcript_visible_height,
+        };
+        let (transcript_area, transcript_scrollbar_area) =
+            split_transcript_area(transcript_full_area);
+
+        // Cache a few viewports worth of rasterized rows so redraws during streaming can cheaply
+        // copy already-rendered `Cell`s instead of re-running grapheme segmentation.
+        self.transcript_view_cache
+            .set_raster_capacity(max_visible.saturating_mul(4).max(256));
+
+        for (row_index, line_index) in (top_offset..total_lines).enumerate() {
+            if row_index >= max_visible {
+                break;
+            }
+
+            let y = transcript_area.y + row_index as u16;
+            let row_area = Rect {
+                x: transcript_area.x,
+                y,
+                width: transcript_area.width,
+                height: 1,
+            };
+
+            self.transcript_view_cache
+                .render_row_index_into(line_index, row_area, frame.buffer);
+        }
+
+        self.apply_transcript_selection(transcript_area, frame.buffer);
+        if let (Some(anchor), Some(head)) = (
+            self.transcript_selection.anchor,
+            self.transcript_selection.head,
+        ) && anchor != head
+        {
+            self.transcript_copy_ui.render_copy_pill(
+                transcript_area,
+                frame.buffer,
+                (anchor.line_index, anchor.column),
+                (head.line_index, head.column),
+                self.transcript_view_top,
+                self.transcript_total_lines,
+            );
+        } else {
+            self.transcript_copy_ui.clear_affordance();
+        }
+        render_transcript_scrollbar_if_active(
+            frame.buffer,
+            transcript_scrollbar_area,
+            total_lines,
+            max_visible,
+            top_offset,
+        );
+        chat_top
+    }
+
+    /// Handle mouse interaction in the main transcript view.
+    ///
+    /// - Mouse wheel movement scrolls the conversation history using stream-based
+    ///   normalization (events-per-line factor, discrete vs. continuous streams),
+    ///   independent of the terminal's own scrollback.
+    /// - Mouse drags adjust a text selection defined in terms of
+    ///   flattened transcript lines and columns, so the selection is anchored
+    ///   to the underlying content rather than absolute screen rows.
+    /// - When the user drags to extend a selection while the view is following the bottom
+    ///   and a task is actively running (e.g., streaming a response), the scroll mode is
+    ///   first converted into an anchored position so that ongoing updates no longer move
+    ///   the viewport under the selection. A simple click without a drag does not change
+    ///   scroll behavior.
+    /// - Mouse events outside the transcript area (e.g. over the composer/footer) must not
+    ///   start or mutate transcript selection state. A left-click outside the transcript
+    ///   clears any existing transcript selection so the user can dismiss the highlight.
+    fn handle_mouse_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        mouse_event: crossterm::event::MouseEvent,
+    ) {
+        use crossterm::event::MouseEventKind;
+
+        if self.overlay.is_some() {
+            return;
+        }
+
+        let size = tui.terminal.last_known_screen_size;
+        let width = size.width;
+        let height = size.height;
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        let chat_height = self.chat_widget.desired_height(width);
+        if chat_height >= height {
+            return;
+        }
+
+        // Only handle events over the transcript area above the composer.
+        let transcript_height = height.saturating_sub(chat_height);
+        if transcript_height == 0 {
+            return;
+        }
+
+        let transcript_full_area = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height: transcript_height,
+        };
+        let (transcript_area, transcript_scrollbar_area) =
+            split_transcript_area(transcript_full_area);
+        let base_x = transcript_area.x.saturating_add(TRANSCRIPT_GUTTER_COLS);
+        let max_x = transcript_area.right().saturating_sub(1);
+
+        if matches!(
+            self.transcript_scrollbar_ui
+                .handle_mouse_event(TranscriptScrollbarMouseEvent {
+                    tui,
+                    mouse_event,
+                    transcript_area,
+                    scrollbar_area: transcript_scrollbar_area,
+                    transcript_cells: &self.transcript_cells,
+                    transcript_view_cache: &mut self.transcript_view_cache,
+                    transcript_scroll: &mut self.transcript_scroll,
+                    transcript_view_top: &mut self.transcript_view_top,
+                    transcript_total_lines: &mut self.transcript_total_lines,
+                    mouse_scroll_state: &mut self.scroll_state,
+                }),
+            TranscriptScrollbarMouseHandling::Handled
+        ) {
+            return;
+        }
+
+        // Treat the transcript as the only interactive region for transcript selection.
+        //
+        // This prevents clicks in the composer/footer from starting or extending a transcript
+        // selection, while still allowing a left-click outside the transcript to clear an
+        // existing highlight.
+        if !self.transcript_scrollbar_ui.pointer_capture_active()
+            && (mouse_event.row < transcript_full_area.y
+                || mouse_event.row >= transcript_full_area.bottom())
+        {
+            if matches!(
+                mouse_event.kind,
+                MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+            ) && (self.transcript_selection.anchor.is_some()
+                || self.transcript_selection.head.is_some())
+            {
+                self.transcript_selection = TranscriptSelection::default();
+                // Mouse events do not inherently trigger a redraw; schedule one so the cleared
+                // highlight is reflected immediately.
+                tui.frame_requester().schedule_frame();
+            }
+            return;
+        }
+
+        let mut clamped_x = mouse_event.column;
+        let clamped_y = mouse_event.row;
+        if clamped_x < base_x {
+            clamped_x = base_x;
+        }
+        if clamped_x > max_x {
+            clamped_x = max_x;
+        }
+
+        let streaming = self.chat_widget.is_task_running();
+
+        if matches!(mouse_event.kind, MouseEventKind::Down(MouseButton::Left))
+            && self
+                .transcript_copy_ui
+                .hit_test(mouse_event.column, mouse_event.row)
+        {
+            if self.transcript_copy_action.copy_and_handle(
+                tui,
+                chat_height,
+                &self.transcript_cells,
+                self.transcript_selection,
+            ) {
+                self.transcript_selection = TranscriptSelection::default();
+            }
+            return;
+        }
+
+        match mouse_event.kind {
+            MouseEventKind::ScrollUp => {
+                let scroll_update = self.mouse_scroll_update(ScrollDirection::Up);
+                self.apply_scroll_update(
+                    tui,
+                    scroll_update,
+                    transcript_area.height as usize,
+                    transcript_area.width,
+                    true,
+                );
+            }
+            MouseEventKind::ScrollDown => {
+                let scroll_update = self.mouse_scroll_update(ScrollDirection::Down);
+                self.apply_scroll_update(
+                    tui,
+                    scroll_update,
+                    transcript_area.height as usize,
+                    transcript_area.width,
+                    true,
+                );
+            }
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {}
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.transcript_copy_ui.set_dragging(true);
+                let point = self.transcript_point_from_coordinates(
+                    transcript_area,
+                    base_x,
+                    clamped_x,
+                    clamped_y,
+                );
+                if self.transcript_multi_click.on_mouse_down(
+                    &mut self.transcript_selection,
+                    &self.transcript_cells,
+                    transcript_area.width,
+                    point,
+                ) {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                let point = self.transcript_point_from_coordinates(
+                    transcript_area,
+                    base_x,
+                    clamped_x,
+                    clamped_y,
+                );
+                let outcome = crate::transcript_selection::on_mouse_drag(
+                    &mut self.transcript_selection,
+                    &self.transcript_scroll,
+                    point,
+                    streaming,
+                );
+                self.transcript_multi_click
+                    .on_mouse_drag(&self.transcript_selection, point);
+                if outcome.lock_scroll {
+                    self.lock_transcript_scroll_to_current_view(
+                        transcript_area.height as usize,
+                        transcript_area.width,
+                    );
+                }
+                if outcome.changed {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.transcript_copy_ui.set_dragging(false);
+                let selection_changed =
+                    crate::transcript_selection::on_mouse_up(&mut self.transcript_selection);
+                let has_active_selection = self.transcript_selection.anchor.is_some()
+                    && self.transcript_selection.head.is_some();
+                if selection_changed || has_active_selection {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Convert a single mouse scroll event (direction-only) into a normalized scroll update.
+    ///
+    /// This delegates to [`MouseScrollState::on_scroll_event`] using the current [`ScrollConfig`].
+    /// The returned [`ScrollUpdate`] is intentionally split into:
+    ///
+    /// - `lines`: a *delta* in visual lines to apply immediately to the transcript viewport.
+    ///   - Sign convention matches [`ScrollDirection`] (`Up` is negative; `Down` is positive).
+    ///   - May be 0 in trackpad-like mode while sub-line fractions are still accumulating.
+    /// - `next_tick_in`: an optional delay after which we should trigger a follow-up tick.
+    ///   This is required because stream closure is defined by a *time gap* rather than an
+    ///   explicit "gesture end" event. See [`App::apply_scroll_update`] and
+    ///   [`App::handle_scroll_tick`].
+    ///
+    /// In TUI2, that follow-up tick is driven via `TuiEvent::Draw`: we schedule a frame, and on
+    /// the next draw we call [`MouseScrollState::on_tick`] to close idle streams and flush any
+    /// newly-reached whole lines. This prevents perceived "stop lag" where accumulated scroll only
+    /// applies once the next user input arrives.
+    fn mouse_scroll_update(&mut self, direction: ScrollDirection) -> ScrollUpdate {
+        self.scroll_state
+            .on_scroll_event(direction, self.scroll_config)
+    }
+
+    /// Apply a [`ScrollUpdate`] to the transcript viewport and schedule any needed follow-up tick.
+    ///
+    /// `update.lines` is applied immediately via [`App::scroll_transcript`].
+    ///
+    /// If `update.next_tick_in` is `Some`, we schedule a future frame so `TuiEvent::Draw` can call
+    /// [`App::handle_scroll_tick`] and close the stream after it goes idle and/or cadence-flush
+    /// pending whole lines.
+    ///
+    /// `schedule_frame` is forwarded to [`App::scroll_transcript`] and controls whether scrolling
+    /// should request an additional draw. Pass `false` when applying scroll during a
+    /// `TuiEvent::Draw` tick to avoid redundant frames.
+    fn apply_scroll_update(
+        &mut self,
+        tui: &mut tui::Tui,
+        update: ScrollUpdate,
+        visible_lines: usize,
+        width: u16,
+        schedule_frame: bool,
+    ) {
+        if update.lines != 0 {
+            self.scroll_transcript(tui, update.lines, visible_lines, width, schedule_frame);
+        }
+        if let Some(delay) = update.next_tick_in {
+            tui.frame_requester().schedule_frame_in(delay);
+        }
+    }
+
+    /// Drive stream closure and cadence-based flushing for mouse scrolling.
+    ///
+    /// This is called on every `TuiEvent::Draw` before rendering. If a scroll stream is active, it
+    /// may:
+    ///
+    /// - Close the stream once it has been idle for longer than the stream-gap threshold.
+    /// - Flush whole-line deltas on the redraw cadence for trackpad-like streams, even if no new
+    ///   events arrive.
+    ///
+    /// The resulting update is applied with `schedule_frame = false` because we are already in a
+    /// draw tick.
+    fn handle_scroll_tick(&mut self, tui: &mut tui::Tui) {
+        let Some((visible_lines, width)) = self.transcript_scroll_dimensions(tui) else {
+            return;
+        };
+        let update = self.scroll_state.on_tick();
+        self.apply_scroll_update(tui, update, visible_lines, width, false);
+    }
+
+    /// Compute the transcript viewport dimensions used for scrolling.
+    ///
+    /// Mouse scrolling is applied in terms of "visible transcript lines": the terminal height
+    /// minus the chat composer height. We compute this from the last known terminal size to avoid
+    /// querying the terminal during non-draw events.
+    ///
+    /// Returns `(visible_lines, width)` or `None` when the terminal is not yet sized or the chat
+    /// area consumes the full height.
+    fn transcript_scroll_dimensions(&self, tui: &tui::Tui) -> Option<(usize, u16)> {
+        let size = tui.terminal.last_known_screen_size;
+        let width = size.width;
+        let height = size.height;
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let chat_height = self.chat_widget.desired_height(width);
+        if chat_height >= height {
+            return None;
+        }
+
+        let transcript_height = height.saturating_sub(chat_height);
+        if transcript_height == 0 {
+            return None;
+        }
+
+        let transcript_full_area = Rect {
+            x: 0,
+            y: 0,
+            width,
+            height: transcript_height,
+        };
+        let (transcript_area, _) = split_transcript_area(transcript_full_area);
+
+        Some((transcript_height as usize, transcript_area.width))
+    }
+
+    /// Scroll the transcript by a number of visual lines.
+    ///
+    /// This is the shared implementation behind mouse wheel movement and PgUp/PgDn keys in
+    /// the main view. Scroll state is expressed in terms of transcript cells and their
+    /// internal line indices, so scrolling refers to logical conversation content and
+    /// remains stable even as wrapping or streaming causes visual reflows.
+    ///
+    /// `schedule_frame` controls whether to request an extra draw; pass `false` when applying
+    /// scroll during a `TuiEvent::Draw` tick to avoid redundant frames.
+    fn scroll_transcript(
+        &mut self,
+        tui: &mut tui::Tui,
+        delta_lines: i32,
+        visible_lines: usize,
+        width: u16,
+        schedule_frame: bool,
+    ) {
+        if visible_lines == 0 {
+            return;
+        }
+
+        self.transcript_view_cache
+            .ensure_wrapped(&self.transcript_cells, width);
+        let line_meta = self.transcript_view_cache.line_meta();
+        self.transcript_scroll =
+            self.transcript_scroll
+                .scrolled_by(delta_lines, line_meta, visible_lines);
+
+        if schedule_frame {
+            // Request a redraw; the frame scheduler coalesces bursts and clamps to 60fps.
+            tui.frame_requester().schedule_frame();
+        }
+    }
+
+    /// Convert a `ToBottom` (auto-follow) scroll state into a fixed anchor at the current view.
+    ///
+    /// When the user begins a mouse selection while new output is streaming in, the view
+    /// should stop auto-following the latest line so the selection stays on the intended
+    /// content. This helper inspects the flattened transcript at the given width, derives
+    /// a concrete position corresponding to the current top row, and switches into a scroll
+    /// mode that keeps that position stable until the user scrolls again.
+    fn lock_transcript_scroll_to_current_view(&mut self, visible_lines: usize, width: u16) {
+        if self.transcript_cells.is_empty() || visible_lines == 0 || width == 0 {
+            return;
+        }
+
+        self.transcript_view_cache
+            .ensure_wrapped(&self.transcript_cells, width);
+        let lines = self.transcript_view_cache.lines();
+        let line_meta = self.transcript_view_cache.line_meta();
+        if lines.is_empty() || line_meta.is_empty() {
+            return;
+        }
+
+        let total_lines = lines.len();
+        let max_visible = std::cmp::min(visible_lines, total_lines);
+        if max_visible == 0 {
+            return;
+        }
+
+        let max_start = total_lines.saturating_sub(max_visible);
+        let top_offset = match self.transcript_scroll {
+            TranscriptScroll::ToBottom => max_start,
+            TranscriptScroll::Scrolled { .. }
+            | TranscriptScroll::ScrolledSpacerBeforeCell { .. } => {
+                // Already anchored; nothing to lock.
+                return;
+            }
+        };
+
+        if let Some(scroll_state) = TranscriptScroll::anchor_for(line_meta, top_offset) {
+            self.transcript_scroll = scroll_state;
+        }
+    }
+
+    /// Apply the current transcript selection to the given buffer.
+    ///
+    /// The selection is defined in terms of flattened wrapped transcript line
+    /// indices and columns. This method maps those content-relative endpoints
+    /// into the currently visible viewport based on `transcript_view_top` and
+    /// `transcript_total_lines`, so the highlight moves with the content as the
+    /// user scrolls.
+    fn apply_transcript_selection(&self, area: Rect, buf: &mut Buffer) {
+        let (anchor, head) = match (
+            self.transcript_selection.anchor,
+            self.transcript_selection.head,
+        ) {
+            (Some(a), Some(h)) => (a, h),
+            _ => return,
+        };
+
+        if self.transcript_total_lines == 0 {
+            return;
+        }
+
+        let base_x = area.x.saturating_add(TRANSCRIPT_GUTTER_COLS);
+        let max_x = area.right().saturating_sub(1);
+
+        let (start, end) = crate::transcript_selection::ordered_endpoints(anchor, head);
+
+        let visible_start = self.transcript_view_top;
+        let visible_end = self
+            .transcript_view_top
+            .saturating_add(area.height as usize)
+            .min(self.transcript_total_lines);
+
+        for (row_index, line_index) in (visible_start..visible_end).enumerate() {
+            if line_index < start.line_index || line_index > end.line_index {
+                continue;
+            }
+
+            let y = area.y + row_index as u16;
+
+            let mut first_text_x = None;
+            let mut last_text_x = None;
+            for x in base_x..=max_x {
+                let cell = &buf[(x, y)];
+                if cell.symbol() != " " {
+                    if first_text_x.is_none() {
+                        first_text_x = Some(x);
+                    }
+                    last_text_x = Some(x);
+                }
+            }
+
+            let (text_start, text_end) = match (first_text_x, last_text_x) {
+                // Treat indentation spaces as part of the selectable region by
+                // starting from the first content column to the right of the
+                // transcript gutter, but still clamp to the last non-space
+                // glyph so trailing padding is not included.
+                (Some(_), Some(e)) => (base_x, e),
+                _ => continue,
+            };
+
+            let line_start_col = if line_index == start.line_index {
+                start.column
+            } else {
+                0
+            };
+            let line_end_col = if line_index == end.line_index {
+                end.column
+            } else {
+                max_x.saturating_sub(base_x)
+            };
+
+            let row_sel_start = base_x.saturating_add(line_start_col);
+            let row_sel_end = base_x.saturating_add(line_end_col).min(max_x);
+
+            if row_sel_start > row_sel_end {
+                continue;
+            }
+
+            let from_x = row_sel_start.max(text_start);
+            let to_x = row_sel_end.min(text_end);
+
+            if from_x > to_x {
+                continue;
+            }
+
+            for x in from_x..=to_x {
+                let cell = &mut buf[(x, y)];
+                let style = cell.style();
+                cell.set_style(style.add_modifier(ratatui::style::Modifier::REVERSED));
+            }
+        }
+    }
+
+    fn transcript_copy_feedback_for_footer(&mut self) -> Option<TranscriptCopyFeedback> {
+        self.transcript_copy_action.footer_feedback()
+    }
+
+    fn copy_selection_key(&self) -> crate::key_hint::KeyBinding {
+        self.transcript_copy_ui.key_binding()
+    }
+
+    /// Map a mouse position in the transcript area to a content-relative
+    /// selection point, if there is transcript content to select.
+    fn transcript_point_from_coordinates(
+        &self,
+        transcript_area: Rect,
+        base_x: u16,
+        x: u16,
+        y: u16,
+    ) -> Option<TranscriptSelectionPoint> {
+        if self.transcript_total_lines == 0 {
+            return None;
+        }
+
+        let mut row_index = y.saturating_sub(transcript_area.y);
+        if row_index >= transcript_area.height {
+            if transcript_area.height == 0 {
+                return None;
+            }
+            row_index = transcript_area.height.saturating_sub(1);
+        }
+
+        let max_line = self.transcript_total_lines.saturating_sub(1);
+        let line_index = self
+            .transcript_view_top
+            .saturating_add(usize::from(row_index))
+            .min(max_line);
+        let column = x.saturating_sub(base_x);
+
+        Some(TranscriptSelectionPoint { line_index, column })
+    }
+
+    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
+                let model = self.chat_widget.current_model().to_string();
+                // Propagate selected model into config before spawning thread
+                self.config.model = Some(model.clone());
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
                     self.chat_widget.conversation_id(),
                 );
                 self.shutdown_current_conversation().await;
+                if let Err(err) = self.server.remove_and_close_all_threads().await {
+                    tracing::warn!(error = %err, "failed to close all threads");
+                }
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
                     app_event_tx: self.app_event_tx.clone(),
-                    initial_prompt: None,
-                    initial_images: Vec::new(),
+                    // New sessions start without prefilled message content.
+                    initial_user_message: None,
                     enhanced_keys_supported: self.enhanced_keys_supported,
                     auth_manager: self.auth_manager.clone(),
                     models_manager: self.server.get_models_manager(),
                     feedback: self.feedback.clone(),
                     is_first_run: false,
-                    model_family: model_family.clone(),
+                    model: Some(model),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
-                self.current_model = model_family.get_model_slug().to_string();
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
@@ -591,14 +1516,14 @@ impl App {
                 )
                 .await?
                 {
-                    ResumeSelection::Resume(path) => {
+                    SessionSelection::Resume(path) => {
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
                             self.chat_widget.conversation_id(),
                         );
                         match self
                             .server
-                            .resume_conversation_from_rollout(
+                            .resume_thread_from_rollout(
                                 self.config.clone(),
                                 path.clone(),
                                 self.auth_manager.clone(),
@@ -607,25 +1532,15 @@ impl App {
                         {
                             Ok(resumed) => {
                                 self.shutdown_current_conversation().await;
-                                let init = crate::chatwidget::ChatWidgetInit {
-                                    config: self.config.clone(),
-                                    frame_requester: tui.frame_requester(),
-                                    app_event_tx: self.app_event_tx.clone(),
-                                    initial_prompt: None,
-                                    initial_images: Vec::new(),
-                                    enhanced_keys_supported: self.enhanced_keys_supported,
-                                    auth_manager: self.auth_manager.clone(),
-                                    models_manager: self.server.get_models_manager(),
-                                    feedback: self.feedback.clone(),
-                                    is_first_run: false,
-                                    model_family: model_family.clone(),
-                                };
+                                let init = self.chatwidget_init_for_forked_or_resumed_thread(
+                                    tui,
+                                    self.config.clone(),
+                                );
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
-                                    resumed.conversation,
+                                    resumed.thread,
                                     resumed.session_configured,
                                 );
-                                self.current_model = model_family.get_model_slug().to_string();
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
@@ -640,43 +1555,81 @@ impl App {
                                 }
                             }
                             Err(err) => {
+                                let path_display = path.display();
                                 self.chat_widget.add_error_message(format!(
-                                    "Failed to resume session from {}: {err}",
-                                    path.display()
+                                    "Failed to resume session from {path_display}: {err}"
                                 ));
                             }
                         }
                     }
-                    ResumeSelection::Exit | ResumeSelection::StartFresh => {}
+                    SessionSelection::Exit
+                    | SessionSelection::StartFresh
+                    | SessionSelection::Fork(_) => {}
                 }
 
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::ForkCurrentSession => {
+                let summary = session_summary(
+                    self.chat_widget.token_usage(),
+                    self.chat_widget.conversation_id(),
+                );
+                if let Some(path) = self.chat_widget.rollout_path() {
+                    match self
+                        .server
+                        .fork_thread(usize::MAX, self.config.clone(), path.clone())
+                        .await
+                    {
+                        Ok(forked) => {
+                            self.shutdown_current_conversation().await;
+                            let init = self.chatwidget_init_for_forked_or_resumed_thread(
+                                tui,
+                                self.config.clone(),
+                            );
+                            self.chat_widget = ChatWidget::new_from_existing(
+                                init,
+                                forked.thread,
+                                forked.session_configured,
+                            );
+                            if let Some(summary) = summary {
+                                let mut lines: Vec<Line<'static>> =
+                                    vec![summary.usage_line.clone().into()];
+                                if let Some(command) = summary.resume_command {
+                                    let spans = vec![
+                                        "To continue this session, run ".into(),
+                                        command.cyan(),
+                                    ];
+                                    lines.push(spans.into());
+                                }
+                                self.chat_widget.add_plain_history_lines(lines);
+                            }
+                        }
+                        Err(err) => {
+                            let path_display = path.display();
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to fork current session from {path_display}: {err}"
+                            ));
+                        }
+                    }
+                } else {
+                    self.chat_widget
+                        .add_error_message("Current session is not ready to fork yet.".to_string());
+                }
+
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
+                if let Some(Overlay::Transcript(transcript)) = &mut self.overlay {
+                    transcript.insert_cell(cell.clone());
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
-                if !display.is_empty() {
-                    // Only insert a separating blank line for new cells that are not
-                    // part of an ongoing stream. Streaming continuations should not
-                    // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
-                        if self.has_emitted_history_lines {
-                            display.insert(0, Line::from(""));
-                        } else {
-                            self.has_emitted_history_lines = true;
-                        }
-                    }
-                    if self.overlay.is_some() {
-                        self.deferred_history_lines.extend(display);
-                    } else {
-                        tui.insert_history_lines(display);
-                    }
+                if self.overlay.is_some() {
+                    self.deferred_history_cells.push(cell);
+                } else {
+                    tui.frame_requester().schedule_frame();
                 }
             }
             AppEvent::StartCommitAnimation => {
@@ -706,31 +1659,27 @@ impl App {
                     && matches!(event.msg, EventMsg::ShutdownComplete)
                 {
                     self.suppress_shutdown_complete = false;
-                    return Ok(true);
+                    return Ok(AppRunControl::Continue);
                 }
                 if let EventMsg::ListSkillsResponse(response) = &event.msg {
                     let cwd = self.chat_widget.config_ref().cwd.clone();
                     let errors = errors_for_cwd(&cwd, response);
-                    if errors.is_empty() {
-                        self.chat_widget.handle_codex_event(event);
-                        return Ok(true);
-                    }
-                    let errors = skill_errors_from_info(&errors);
-                    match run_skill_error_prompt(tui, &errors).await {
-                        SkillErrorPromptOutcome::Exit => {
-                            self.chat_widget.submit_op(Op::Shutdown);
-                            return Ok(false);
-                        }
-                        SkillErrorPromptOutcome::Continue => {}
-                    }
+                    emit_skill_load_warnings(&self.app_event_tx, &errors);
                 }
+                self.handle_backtrack_event(&event.msg);
                 self.chat_widget.handle_codex_event(event);
+                if self.backtrack_render_pending {
+                    tui.frame_requester().schedule_frame();
+                }
             }
-            AppEvent::ConversationHistory(ev) => {
-                self.on_conversation_history_for_backtrack(tui, ev).await?;
-            }
-            AppEvent::ExitRequest => {
-                return Ok(false);
+            AppEvent::Exit(mode) => match mode {
+                ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
+                ExitMode::Immediate => {
+                    return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+                }
+            },
+            AppEvent::FatalExitRequest(message) => {
+                return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
             AppEvent::DiffResult(text) => {
@@ -764,13 +1713,12 @@ impl App {
                 self.on_update_reasoning_effort(effort);
             }
             AppEvent::UpdateModel(model) => {
-                let model_family = self
-                    .server
-                    .get_models_manager()
-                    .construct_model_family(&model, &self.config)
-                    .await;
-                self.chat_widget.set_model(&model, model_family);
-                self.current_model = model;
+                self.chat_widget.set_model(&model);
+            }
+            AppEvent::UpdateCollaborationMode(mode) => {
+                let model = mode.model().to_string();
+                self.chat_widget.set_collaboration_mode(mode);
+                self.chat_widget.set_model(&model);
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
@@ -806,19 +1754,91 @@ impl App {
             AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
-            AppEvent::EnableWindowsSandboxForAgentMode { preset } => {
+            AppEvent::OpenWindowsSandboxFallbackPrompt { preset, reason } => {
+                self.chat_widget.clear_windows_sandbox_setup_status();
+                self.chat_widget
+                    .open_windows_sandbox_fallback_prompt(preset, reason);
+            }
+            AppEvent::BeginWindowsSandboxElevatedSetup { preset } => {
                 #[cfg(target_os = "windows")]
                 {
+                    let policy = preset.sandbox.clone();
+                    let policy_cwd = self.config.cwd.clone();
+                    let command_cwd = policy_cwd.clone();
+                    let env_map: std::collections::HashMap<String, String> =
+                        std::env::vars().collect();
+                    let codex_home = self.config.codex_home.clone();
+                    let tx = self.app_event_tx.clone();
+
+                    // If the elevated setup already ran on this machine, don't prompt for
+                    // elevation again - just flip the config to use the elevated path.
+                    if codex_core::windows_sandbox::sandbox_setup_is_complete(codex_home.as_path())
+                    {
+                        tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                            preset,
+                            mode: WindowsSandboxEnableMode::Elevated,
+                        });
+                        return Ok(AppRunControl::Continue);
+                    }
+
+                    self.chat_widget.show_windows_sandbox_setup_status();
+                    tokio::task::spawn_blocking(move || {
+                        let result = codex_core::windows_sandbox::run_elevated_setup(
+                            &policy,
+                            policy_cwd.as_path(),
+                            command_cwd.as_path(),
+                            &env_map,
+                            codex_home.as_path(),
+                        );
+                        let event = match result {
+                            Ok(()) => AppEvent::EnableWindowsSandboxForAgentMode {
+                                preset: preset.clone(),
+                                mode: WindowsSandboxEnableMode::Elevated,
+                            },
+                            Err(err) => {
+                                tracing::error!(
+                                    error = %err,
+                                    "failed to run elevated Windows sandbox setup"
+                                );
+                                AppEvent::OpenWindowsSandboxFallbackPrompt {
+                                    preset,
+                                    reason: WindowsSandboxFallbackReason::ElevationFailed,
+                                }
+                            }
+                        };
+                        tx.send(event);
+                    });
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = preset;
+                }
+            }
+            AppEvent::EnableWindowsSandboxForAgentMode { preset, mode } => {
+                #[cfg(target_os = "windows")]
+                {
+                    self.chat_widget.clear_windows_sandbox_setup_status();
                     let profile = self.active_profile.as_deref();
                     let feature_key = Feature::WindowsSandbox.key();
+                    let elevated_key = Feature::WindowsSandboxElevated.key();
+                    let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
                     match ConfigEditsBuilder::new(&self.config.codex_home)
                         .with_profile(profile)
                         .set_feature_enabled(feature_key, true)
+                        .set_feature_enabled(elevated_key, elevated_enabled)
                         .apply()
                         .await
                     {
                         Ok(()) => {
                             self.config.set_windows_sandbox_globally(true);
+                            self.config
+                                .set_windows_elevated_sandbox_globally(elevated_enabled);
+                            self.chat_widget
+                                .set_feature_enabled(Feature::WindowsSandbox, true);
+                            self.chat_widget.set_feature_enabled(
+                                Feature::WindowsSandboxElevated,
+                                elevated_enabled,
+                            );
                             self.chat_widget.clear_forced_auto_mode_downgrade();
                             if let Some((sample_paths, extra_count, failed_scan)) =
                                 self.chat_widget.world_writable_warning_details()
@@ -840,6 +1860,7 @@ impl App {
                                         model: None,
                                         effort: None,
                                         summary: None,
+                                        collaboration_mode: None,
                                     },
                                 ));
                                 self.app_event_tx
@@ -847,7 +1868,14 @@ impl App {
                                 self.app_event_tx
                                     .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
                                 self.chat_widget.add_info_message(
-                                    "Enabled experimental Windows sandbox.".to_string(),
+                                    match mode {
+                                        WindowsSandboxEnableMode::Elevated => {
+                                            "Enabled elevated agent sandbox.".to_string()
+                                        }
+                                        WindowsSandboxEnableMode::Legacy => {
+                                            "Enabled non-elevated agent sandbox.".to_string()
+                                        }
+                                    },
                                     None,
                                 );
                             }
@@ -865,7 +1893,7 @@ impl App {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = preset;
+                    let _ = (preset, mode);
                 }
             }
             AppEvent::PersistModelSelection { model, effort } => {
@@ -911,19 +1939,29 @@ impl App {
             AppEvent::UpdateSandboxPolicy(policy) => {
                 #[cfg(target_os = "windows")]
                 let policy_is_workspace_write_or_ro = matches!(
-                    policy,
+                    &policy,
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
                         | codex_core::protocol::SandboxPolicy::ReadOnly
                 );
 
-                self.config.sandbox_policy = policy.clone();
+                if let Err(err) = self.config.sandbox_policy.set(policy.clone()) {
+                    tracing::warn!(%err, "failed to set sandbox policy on app config");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to set sandbox policy: {err}"));
+                    return Ok(AppRunControl::Continue);
+                }
                 #[cfg(target_os = "windows")]
-                if !matches!(policy, codex_core::protocol::SandboxPolicy::ReadOnly)
+                if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
                     || codex_core::get_platform_sandbox().is_some()
                 {
                     self.config.forced_auto_mode_downgraded_on_windows = false;
                 }
-                self.chat_widget.set_sandbox_policy(policy);
+                if let Err(err) = self.chat_widget.set_sandbox_policy(policy) {
+                    tracing::warn!(%err, "failed to set sandbox policy on chat config");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to set sandbox policy: {err}"));
+                    return Ok(AppRunControl::Continue);
+                }
 
                 // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
                 #[cfg(target_os = "windows")]
@@ -931,7 +1969,7 @@ impl App {
                     // One-shot suppression if the user just confirmed continue.
                     if self.skip_world_writable_scan_once {
                         self.skip_world_writable_scan_once = false;
-                        return Ok(true);
+                        return Ok(AppRunControl::Continue);
                     }
 
                     let should_check = codex_core::get_platform_sandbox().is_some()
@@ -943,7 +1981,7 @@ impl App {
                             std::env::vars().collect();
                         let tx = self.app_event_tx.clone();
                         let logs_base_dir = self.config.codex_home.clone();
-                        let sandbox_policy = self.config.sandbox_policy.clone();
+                        let sandbox_policy = self.config.sandbox_policy.get().clone();
                         Self::spawn_world_writable_scan(
                             cwd,
                             env_map,
@@ -952,6 +1990,39 @@ impl App {
                             tx,
                         );
                     }
+                }
+            }
+            AppEvent::UpdateFeatureFlags { updates } => {
+                if updates.is_empty() {
+                    return Ok(AppRunControl::Continue);
+                }
+
+                let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(self.active_profile.as_deref());
+                for (feature, enabled) in &updates {
+                    let key = feature.key();
+                    if *enabled {
+                        self.config.features.enable(*feature);
+                        self.chat_widget.set_feature_enabled(*feature, true);
+                        builder = builder.set_feature_enabled(key, true);
+                    } else {
+                        self.config.features.disable(*feature);
+                        self.chat_widget.set_feature_enabled(*feature, false);
+                        if feature.default_enabled() {
+                            builder = builder.set_feature_enabled(key, false);
+                        } else {
+                            builder = builder.with_edits([ConfigEdit::ClearPath {
+                                segments: vec!["features".to_string(), key.to_string()],
+                            }]);
+                        }
+                    }
+                }
+
+                if let Err(err) = builder.apply().await {
+                    tracing::error!(error = %err, "failed to persist feature flags");
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to update experimental features: {err}"
+                    ));
                 }
             }
             AppEvent::SkipNextWorldWritableScan => {
@@ -1079,7 +2150,7 @@ impl App {
                 }
             },
         }
-        Ok(true)
+        Ok(AppRunControl::Continue)
     }
 
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
@@ -1105,8 +2176,10 @@ impl App {
     }
 
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.chat_widget.set_reasoning_effort(effort);
+        // TODO(aibrahim): Remove this and don't use config as a state object.
+        // Instead, explicitly pass the stored collaboration mode's effort into new sessions.
         self.config.model_reasoning_effort = effort;
+        self.chat_widget.set_reasoning_effort(effort);
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
@@ -1139,6 +2212,100 @@ impl App {
                     self.chat_widget.handle_key_event(key_event);
                 }
             }
+            KeyEvent {
+                code: KeyCode::Char(ch),
+                modifiers,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } if self.transcript_copy_ui.is_copy_key(ch, modifiers) => {
+                let size = tui.terminal.last_known_screen_size;
+                let width = size.width;
+                let height = size.height;
+                if width == 0 || height == 0 {
+                    return;
+                }
+
+                let chat_height = self.chat_widget.desired_height(width);
+                if self.transcript_copy_action.copy_and_handle(
+                    tui,
+                    chat_height,
+                    &self.transcript_cells,
+                    self.transcript_selection,
+                ) {
+                    self.transcript_selection = TranscriptSelection::default();
+                }
+            }
+            KeyEvent {
+                code: KeyCode::PageUp,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                let size = tui.terminal.last_known_screen_size;
+                let width = size.width;
+                let height = size.height;
+                if width > 0 && height > 0 {
+                    let chat_height = self.chat_widget.desired_height(width);
+                    if chat_height < height {
+                        let transcript_height = height.saturating_sub(chat_height);
+                        if transcript_height > 0 {
+                            let delta = -i32::from(transcript_height);
+                            self.scroll_transcript(
+                                tui,
+                                delta,
+                                usize::from(transcript_height),
+                                width,
+                                true,
+                            );
+                        }
+                    }
+                }
+            }
+            KeyEvent {
+                code: KeyCode::PageDown,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                let size = tui.terminal.last_known_screen_size;
+                let width = size.width;
+                let height = size.height;
+                if width > 0 && height > 0 {
+                    let chat_height = self.chat_widget.desired_height(width);
+                    if chat_height < height {
+                        let transcript_height = height.saturating_sub(chat_height);
+                        if transcript_height > 0 {
+                            let delta = i32::from(transcript_height);
+                            self.scroll_transcript(
+                                tui,
+                                delta,
+                                usize::from(transcript_height),
+                                width,
+                                true,
+                            );
+                        }
+                    }
+                }
+            }
+            KeyEvent {
+                code: KeyCode::Home,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                if !self.transcript_cells.is_empty() {
+                    self.transcript_scroll = TranscriptScroll::Scrolled {
+                        cell_index: 0,
+                        line_in_cell: 0,
+                    };
+                    tui.frame_requester().schedule_frame();
+                }
+            }
+            KeyEvent {
+                code: KeyCode::End,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                self.transcript_scroll = TranscriptScroll::ToBottom;
+                tui.frame_requester().schedule_frame();
+            }
             // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
             KeyEvent {
                 code: KeyCode::Enter,
@@ -1148,8 +2315,9 @@ impl App {
                 && self.backtrack.nth_user_message != usize::MAX
                 && self.chat_widget.composer_is_empty() =>
             {
-                // Delegate to helper for clarity; preserves behavior.
-                self.confirm_backtrack_from_main();
+                if let Some(selection) = self.confirm_backtrack_from_main() {
+                    self.apply_backtrack_selection(tui, selection);
+                }
             }
             KeyEvent {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
@@ -1209,25 +2377,30 @@ mod tests {
     use crate::history_cell::HistoryCell;
     use crate::history_cell::UserHistoryCell;
     use crate::history_cell::new_session_info;
+    use crate::transcript_copy_ui::CopySelectionShortcut;
+    use crate::tui::scrolling::TranscriptLineMeta;
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
-    use codex_core::ConversationManager;
+    use codex_core::ThreadManager;
+    use codex_core::config::ConfigBuilder;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
-    use codex_protocol::ConversationId;
+    use codex_protocol::ThreadId;
+    use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use tempfile::tempdir;
 
-    fn make_test_app() -> App {
-        let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender();
+    async fn make_test_app() -> App {
+        let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let current_model = chat_widget.get_model_family().get_model_slug().to_string();
-        let server = Arc::new(ConversationManager::with_models_provider(
+        let server = Arc::new(ThreadManager::with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
         ));
@@ -1241,16 +2414,29 @@ mod tests {
             chat_widget,
             auth_manager,
             config,
-            current_model,
             active_profile: None,
             file_search,
             transcript_cells: Vec::new(),
+            transcript_view_cache: TranscriptViewCache::new(),
+            transcript_scroll: TranscriptScroll::default(),
+            transcript_selection: TranscriptSelection::default(),
+            transcript_multi_click: TranscriptMultiClick::default(),
+            transcript_view_top: 0,
+            transcript_total_lines: 0,
+            transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(
+                CopySelectionShortcut::CtrlShiftC,
+            ),
+            transcript_copy_action: TranscriptCopyAction::default(),
+            transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
             overlay: None,
-            deferred_history_lines: Vec::new(),
+            deferred_history_cells: Vec::new(),
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            scroll_config: ScrollConfig::default(),
+            scroll_state: MouseScrollState::default(),
             backtrack: BacktrackState::default(),
+            backtrack_render_pending: false,
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
@@ -1258,15 +2444,14 @@ mod tests {
         }
     }
 
-    fn make_test_app_with_channels() -> (
+    async fn make_test_app_with_channels() -> (
         App,
         tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
         tokio::sync::mpsc::UnboundedReceiver<Op>,
     ) {
-        let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender();
+        let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let current_model = chat_widget.get_model_family().get_model_slug().to_string();
-        let server = Arc::new(ConversationManager::with_models_provider(
+        let server = Arc::new(ThreadManager::with_models_provider(
             CodexAuth::from_api_key("Test API Key"),
             config.model_provider.clone(),
         ));
@@ -1281,16 +2466,29 @@ mod tests {
                 chat_widget,
                 auth_manager,
                 config,
-                current_model,
                 active_profile: None,
                 file_search,
                 transcript_cells: Vec::new(),
+                transcript_view_cache: TranscriptViewCache::new(),
+                transcript_scroll: TranscriptScroll::default(),
+                transcript_selection: TranscriptSelection::default(),
+                transcript_multi_click: TranscriptMultiClick::default(),
+                transcript_view_top: 0,
+                transcript_total_lines: 0,
+                transcript_copy_ui: TranscriptCopyUi::new_with_shortcut(
+                    CopySelectionShortcut::CtrlShiftC,
+                ),
+                transcript_copy_action: TranscriptCopyAction::default(),
+                transcript_scrollbar_ui: TranscriptScrollbarUi::default(),
                 overlay: None,
-                deferred_history_lines: Vec::new(),
+                deferred_history_cells: Vec::new(),
                 has_emitted_history_lines: false,
                 enhanced_keys_supported: false,
                 commit_anim_running: Arc::new(AtomicBool::new(false)),
+                scroll_config: ScrollConfig::default(),
+                scroll_state: MouseScrollState::default(),
                 backtrack: BacktrackState::default(),
+                backtrack_render_pending: false,
                 feedback: codex_feedback::CodexFeedback::new(),
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
@@ -1302,11 +2500,32 @@ mod tests {
     }
 
     fn all_model_presets() -> Vec<ModelPreset> {
-        codex_core::openai_models::model_presets::all_model_presets().clone()
+        codex_core::models_manager::model_presets::all_model_presets().clone()
     }
 
-    #[test]
-    fn model_migration_prompt_only_shows_for_deprecated_models() {
+    fn model_migration_copy_to_plain_text(
+        copy: &crate::model_migration::ModelMigrationCopy,
+    ) -> String {
+        if let Some(markdown) = copy.markdown.as_ref() {
+            return markdown.clone();
+        }
+        let mut s = String::new();
+        for span in &copy.heading {
+            s.push_str(&span.content);
+        }
+        s.push('\n');
+        s.push('\n');
+        for line in &copy.content {
+            for span in &line.spans {
+                s.push_str(&span.content);
+            }
+            s.push('\n');
+        }
+        s
+    }
+
+    #[tokio::test]
+    async fn model_migration_prompt_only_shows_for_deprecated_models() {
         let seen = BTreeMap::new();
         assert!(should_show_model_migration_prompt(
             "gpt-5",
@@ -1340,8 +2559,94 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn model_migration_prompt_respects_hide_flag_and_self_target() {
+    #[tokio::test]
+    async fn model_migration_prompt_shows_for_hidden_model() {
+        let codex_home = tempdir().expect("temp codex home");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+
+        let available_models = all_model_presets();
+        let current = available_models
+            .iter()
+            .find(|preset| preset.model == "gpt-5.1-codex")
+            .cloned()
+            .expect("gpt-5.1-codex preset present");
+        assert!(
+            !current.show_in_picker,
+            "expected gpt-5.1-codex to be hidden from picker for this test"
+        );
+
+        let upgrade = current.upgrade.as_ref().expect("upgrade configured");
+        assert!(
+            should_show_model_migration_prompt(
+                &current.model,
+                &upgrade.id,
+                &config.notices.model_migrations,
+                &available_models,
+            ),
+            "expected migration prompt to be eligible for hidden model"
+        );
+
+        let target = available_models
+            .iter()
+            .find(|preset| preset.model == upgrade.id)
+            .cloned()
+            .expect("upgrade target present");
+        let target_description =
+            (!target.description.is_empty()).then(|| target.description.clone());
+        let can_opt_out = true;
+        let copy = migration_copy_for_models(
+            &current.model,
+            &upgrade.id,
+            target.display_name,
+            target_description,
+            upgrade.migration_markdown.clone(),
+            can_opt_out,
+        );
+
+        assert_snapshot!(
+            "model_migration_prompt_shows_for_hidden_model",
+            model_migration_copy_to_plain_text(&copy)
+        );
+    }
+
+    #[tokio::test]
+    async fn transcript_selection_copy_includes_offscreen_lines() {
+        let mut app = make_test_app().await;
+        app.transcript_cells = vec![Arc::new(AgentMessageCell::new(
+            vec![
+                Line::from("one"),
+                Line::from("two"),
+                Line::from("three"),
+                Line::from("four"),
+            ],
+            true,
+        ))];
+
+        app.transcript_view_top = 2;
+        app.transcript_selection.anchor = Some(TranscriptSelectionPoint {
+            line_index: 0,
+            column: 0,
+        });
+        app.transcript_selection.head = Some(TranscriptSelectionPoint {
+            line_index: 3,
+            column: u16::MAX,
+        });
+
+        let text = crate::transcript_copy::selection_to_copy_text_for_cells(
+            &app.transcript_cells,
+            app.transcript_selection,
+            40,
+        )
+        .expect("expected text");
+        assert_eq!(text, "one\ntwo\nthree\nfour");
+    }
+
+    #[tokio::test]
+    async fn model_migration_prompt_respects_hide_flag_and_self_target() {
         let mut seen = BTreeMap::new();
         seen.insert("gpt-5".to_string(), "gpt-5.1".to_string());
         assert!(!should_show_model_migration_prompt(
@@ -1358,32 +2663,33 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn update_reasoning_effort_updates_config() {
-        let mut app = make_test_app();
-        app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
+    #[tokio::test]
+    async fn update_reasoning_effort_updates_collaboration_mode() {
+        let mut app = make_test_app().await;
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
 
         app.on_update_reasoning_effort(Some(ReasoningEffortConfig::High));
 
         assert_eq!(
-            app.config.model_reasoning_effort,
+            app.chat_widget.current_reasoning_effort(),
             Some(ReasoningEffortConfig::High)
         );
         assert_eq!(
-            app.chat_widget.config_ref().model_reasoning_effort,
+            app.config.model_reasoning_effort,
             Some(ReasoningEffortConfig::High)
         );
     }
 
-    #[test]
-    fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
-        let mut app = make_test_app();
+    #[tokio::test]
+    async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
         let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
                 message: text.to_string(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
@@ -1395,7 +2701,8 @@ mod tests {
 
         let make_header = |is_first| {
             let event = SessionConfiguredEvent {
-                session_id: ConversationId::new(),
+                session_id: ThreadId::new(),
+                forked_from_id: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
                 approval_policy: AskForApproval::Never,
@@ -1409,15 +2716,14 @@ mod tests {
             };
             Arc::new(new_session_info(
                 app.chat_widget.config_ref(),
-                app.current_model.as_str(),
+                app.chat_widget.current_model(),
                 event,
                 is_first,
             )) as Arc<dyn HistoryCell>
         };
 
-        // Simulate the transcript after trimming for a fork, replaying history, and
-        // appending the edited turn. The session header separates the retained history
-        // from the forked conversation's replayed turns.
+        // Simulate a transcript with duplicated history (e.g., from prior backtracks)
+        // and an edited turn appended after a session header boundary.
         app.transcript_cells = vec![
             make_header(true),
             user_cell("first question"),
@@ -1433,24 +2739,295 @@ mod tests {
 
         assert_eq!(user_count(&app.transcript_cells), 2);
 
-        app.backtrack.base_id = Some(ConversationId::new());
+        let base_id = ThreadId::new();
+        app.chat_widget.handle_codex_event(Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: base_id,
+                forked_from_id: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::ReadOnly,
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: PathBuf::new(),
+            }),
+        });
+
+        app.backtrack.base_id = Some(base_id);
         app.backtrack.primed = true;
         app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
 
-        app.confirm_backtrack_from_main();
+        let selection = app
+            .confirm_backtrack_from_main()
+            .expect("backtrack selection");
+        assert_eq!(selection.nth_user_message, 1);
+        assert_eq!(selection.prefill, "follow-up (edited)");
 
-        let (_, nth, prefill) = app.backtrack.pending.clone().expect("pending backtrack");
-        assert_eq!(nth, 1);
-        assert_eq!(prefill, "follow-up (edited)");
+        app.apply_backtrack_rollback(selection);
+
+        let mut rollback_turns = None;
+        while let Ok(op) = op_rx.try_recv() {
+            if let Op::ThreadRollback { num_turns } = op {
+                rollback_turns = Some(num_turns);
+            }
+        }
+
+        assert_eq!(rollback_turns, Some(1));
+    }
+
+    #[tokio::test]
+    async fn transcript_selection_moves_with_scroll() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut app = make_test_app().await;
+        app.transcript_total_lines = 3;
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 2,
+        };
+
+        // Anchor selection to logical line 1, columns 2..4.
+        app.transcript_selection = TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 2,
+            }),
+            head: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 4,
+            }),
+        };
+
+        // First render: top of view is line 0, so line 1 maps to the second row.
+        app.transcript_view_top = 0;
+        let mut buf = Buffer::empty(area);
+        for x in 2..area.width {
+            buf[(x, 0)].set_symbol("A");
+            buf[(x, 1)].set_symbol("B");
+        }
+
+        app.apply_transcript_selection(area, &mut buf);
+
+        // No selection should be applied to the first row when the view is anchored at the top.
+        for x in 0..area.width {
+            let cell = &buf[(x, 0)];
+            assert!(cell.style().add_modifier.is_empty());
+        }
+
+        // After scrolling down by one line, the same logical line should now be
+        // rendered on the first row, and the highlight should move with it.
+        app.transcript_view_top = 1;
+        let mut buf_scrolled = Buffer::empty(area);
+        for x in 2..area.width {
+            buf_scrolled[(x, 0)].set_symbol("B");
+            buf_scrolled[(x, 1)].set_symbol("C");
+        }
+
+        app.apply_transcript_selection(area, &mut buf_scrolled);
+
+        // After scrolling, the selection should now be applied on the first row rather than the
+        // second.
+        for x in 0..area.width {
+            let cell = &buf_scrolled[(x, 1)];
+            assert!(cell.style().add_modifier.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn transcript_selection_renders_copy_affordance() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut app = make_test_app().await;
+        app.transcript_total_lines = 3;
+        app.transcript_view_top = 0;
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 3,
+        };
+
+        app.transcript_selection = TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 2,
+            }),
+            head: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 6,
+            }),
+        };
+
+        let mut buf = Buffer::empty(area);
+        for y in 0..area.height {
+            for x in 2..area.width.saturating_sub(1) {
+                buf[(x, y)].set_symbol("X");
+            }
+        }
+
+        app.apply_transcript_selection(area, &mut buf);
+        let anchor = app.transcript_selection.anchor.expect("anchor");
+        let head = app.transcript_selection.head.expect("head");
+        app.transcript_copy_ui.render_copy_pill(
+            area,
+            &mut buf,
+            (anchor.line_index, anchor.column),
+            (head.line_index, head.column),
+            app.transcript_view_top,
+            app.transcript_total_lines,
+        );
+
+        let mut s = String::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            s.push('\n');
+        }
+
+        assert!(s.contains("copy"));
+        assert!(s.contains("ctrl + shift + c"));
+        assert!(app.transcript_copy_ui.hit_test(10, 2));
+    }
+
+    #[tokio::test]
+    async fn transcript_selection_renders_ctrl_y_copy_affordance_in_vscode_mode() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut app = make_test_app().await;
+        app.transcript_copy_ui = TranscriptCopyUi::new_with_shortcut(CopySelectionShortcut::CtrlY);
+        app.transcript_total_lines = 3;
+        app.transcript_view_top = 0;
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 3,
+        };
+
+        app.transcript_selection = TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 2,
+            }),
+            head: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 6,
+            }),
+        };
+
+        let mut buf = Buffer::empty(area);
+        for y in 0..area.height {
+            for x in 2..area.width.saturating_sub(1) {
+                buf[(x, y)].set_symbol("X");
+            }
+        }
+
+        app.apply_transcript_selection(area, &mut buf);
+        let anchor = app.transcript_selection.anchor.expect("anchor");
+        let head = app.transcript_selection.head.expect("head");
+        app.transcript_copy_ui.render_copy_pill(
+            area,
+            &mut buf,
+            (anchor.line_index, anchor.column),
+            (head.line_index, head.column),
+            app.transcript_view_top,
+            app.transcript_total_lines,
+        );
+
+        let mut s = String::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            s.push('\n');
+        }
+
+        assert!(s.contains("copy"));
+        assert!(s.contains("ctrl + y"));
+        assert!(!s.contains("ctrl + shift + c"));
+        assert!(app.transcript_copy_ui.hit_test(10, 2));
+    }
+
+    #[tokio::test]
+    async fn transcript_selection_hides_copy_affordance_while_dragging() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+
+        let mut app = make_test_app().await;
+        app.transcript_total_lines = 3;
+        app.transcript_view_top = 0;
+        app.transcript_copy_ui.set_dragging(true);
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 3,
+        };
+
+        app.transcript_selection = TranscriptSelection {
+            anchor: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 2,
+            }),
+            head: Some(TranscriptSelectionPoint {
+                line_index: 1,
+                column: 6,
+            }),
+        };
+
+        let mut buf = Buffer::empty(area);
+        for y in 0..area.height {
+            for x in 2..area.width.saturating_sub(1) {
+                buf[(x, y)].set_symbol("X");
+            }
+        }
+
+        let anchor = app.transcript_selection.anchor.expect("anchor");
+        let head = app.transcript_selection.head.expect("head");
+        app.transcript_copy_ui.render_copy_pill(
+            area,
+            &mut buf,
+            (anchor.line_index, anchor.column),
+            (head.line_index, head.column),
+            app.transcript_view_top,
+            app.transcript_total_lines,
+        );
+
+        let mut s = String::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            s.push('\n');
+        }
+
+        assert!(!s.contains("copy"));
+        assert!(!app.transcript_copy_ui.hit_test(10, 2));
     }
 
     #[tokio::test]
     async fn new_session_requests_shutdown_for_previous_conversation() {
-        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels();
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
-        let conversation_id = ConversationId::new();
+        let conversation_id = ThreadId::new();
         let event = SessionConfiguredEvent {
             session_id: conversation_id,
+            forked_from_id: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
             approval_policy: AskForApproval::Never,
@@ -1480,21 +3057,41 @@ mod tests {
         }
     }
 
-    #[test]
-    fn session_summary_skip_zero_usage() {
+    #[tokio::test]
+    async fn session_summary_skip_zero_usage() {
         assert!(session_summary(TokenUsage::default(), None).is_none());
     }
 
-    #[test]
-    fn session_summary_includes_resume_hint() {
+    #[tokio::test]
+    async fn render_lines_to_ansi_pads_user_rows_to_full_width() {
+        let line: Line<'static> = Line::from("hi");
+        let lines = vec![line];
+        let line_meta = vec![TranscriptLineMeta::CellLine {
+            cell_index: 0,
+            line_in_cell: 0,
+        }];
+        let is_user_cell = vec![true];
+        let width: u16 = 10;
+
+        let rendered = crate::transcript_render::render_lines_to_ansi(
+            &lines,
+            &line_meta,
+            &is_user_cell,
+            width,
+        );
+        assert_eq!(rendered.len(), 1);
+        assert!(rendered[0].contains("hi"));
+    }
+
+    #[tokio::test]
+    async fn session_summary_includes_resume_hint() {
         let usage = TokenUsage {
             input_tokens: 10,
             output_tokens: 2,
             total_tokens: 12,
             ..Default::default()
         };
-        let conversation =
-            ConversationId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
+        let conversation = ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap();
 
         let summary = session_summary(usage, Some(conversation)).expect("summary");
         assert_eq!(

@@ -10,12 +10,12 @@ struct Alias {
 
 const ALIASES: &[Alias] = &[
     Alias {
-        legacy_key: "experimental_use_unified_exec_tool",
-        feature: Feature::UnifiedExec,
+        legacy_key: "enable_experimental_windows_sandbox",
+        feature: Feature::WindowsSandbox,
     },
     Alias {
-        legacy_key: "experimental_use_rmcp_client",
-        feature: Feature::RmcpClient,
+        legacy_key: "experimental_use_unified_exec_tool",
+        feature: Feature::UnifiedExec,
     },
     Alias {
         legacy_key: "experimental_use_freeform_apply_patch",
@@ -30,6 +30,10 @@ const ALIASES: &[Alias] = &[
         feature: Feature::WebSearchRequest,
     },
 ];
+
+pub(crate) fn legacy_feature_keys() -> impl Iterator<Item = &'static str> {
+    ALIASES.iter().map(|alias| alias.legacy_key)
+}
 
 pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
     ALIASES
@@ -46,9 +50,7 @@ pub struct LegacyFeatureToggles {
     pub include_apply_patch_tool: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
-    pub experimental_use_rmcp_client: Option<bool>,
     pub tools_web_search: Option<bool>,
-    pub tools_view_image: Option<bool>,
 }
 
 impl LegacyFeatureToggles {
@@ -73,21 +75,9 @@ impl LegacyFeatureToggles {
         );
         set_if_some(
             features,
-            Feature::RmcpClient,
-            self.experimental_use_rmcp_client,
-            "experimental_use_rmcp_client",
-        );
-        set_if_some(
-            features,
             Feature::WebSearchRequest,
             self.tools_web_search,
             "tools.web_search",
-        );
-        set_if_some(
-            features,
-            Feature::ViewImageTool,
-            self.tools_view_image,
-            "tools.view_image",
         );
     }
 }

@@ -8,6 +8,7 @@ use codex_windows_sandbox::create_process_as_user;
 use codex_windows_sandbox::create_readonly_token_with_cap_from;
 use codex_windows_sandbox::create_workspace_write_token_with_cap_from;
 use codex_windows_sandbox::get_current_token_for_restriction;
+use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::parse_policy;
 use codex_windows_sandbox::to_wide;
@@ -32,6 +33,12 @@ use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
 use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 use windows_sys::Win32::System::Threading::INFINITE;
+
+#[path = "cwd_junction.rs"]
+mod cwd_junction;
+
+#[allow(dead_code)]
+mod read_acl_mutex;
 
 #[derive(Debug, Deserialize)]
 struct RunnerRequest {
@@ -85,6 +92,7 @@ pub fn main() -> Result<()> {
     }
     let req: RunnerRequest = serde_json::from_str(&input).context("parse runner request json")?;
     let log_dir = Some(req.codex_home.as_path());
+    hide_current_user_profile_dir(req.codex_home.as_path());
     log_note(
         &format!(
             "runner start cwd={} cmd={:?} real_codex_home={}",
@@ -106,7 +114,9 @@ pub fn main() -> Result<()> {
             SandboxPolicy::WorkspaceWrite { .. } => {
                 create_workspace_write_token_with_cap_from(base, psid_cap)
             }
-            SandboxPolicy::DangerFullAccess => unreachable!(),
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                unreachable!()
+            }
         }
     };
     let (h_token, psid_to_use) = token_res?;
@@ -144,16 +154,52 @@ pub fn main() -> Result<()> {
     let h_stdin = open_pipe(&req.stdin_pipe, FILE_GENERIC_READ)?;
     let h_stdout = open_pipe(&req.stdout_pipe, FILE_GENERIC_WRITE)?;
     let h_stderr = open_pipe(&req.stderr_pipe, FILE_GENERIC_WRITE)?;
+    let stdio = Some((h_stdin, h_stdout, h_stderr));
+
+    // While the read-ACL helper is running, PowerShell can fail to start in the requested CWD due
+    // to unreadable ancestors. Use a junction CWD for that window; once the helper finishes, go
+    // back to using the real requested CWD (no probing, no extra state).
+    let use_junction = match read_acl_mutex::read_acl_mutex_exists() {
+        Ok(exists) => exists,
+        Err(err) => {
+            // Fail-safe: if we can't determine the state, assume the helper might be running and
+            // use the junction path to avoid CWD failures on unreadable ancestors.
+            log_note(
+                &format!("junction: read_acl_mutex_exists failed: {err}; assuming read ACL helper is running"),
+                log_dir,
+            );
+            true
+        }
+    };
+    if use_junction {
+        log_note(
+            "junction: read ACL helper running; using junction CWD",
+            log_dir,
+        );
+    }
+    let effective_cwd = if use_junction {
+        cwd_junction::create_cwd_junction(&req.cwd, log_dir).unwrap_or_else(|| req.cwd.clone())
+    } else {
+        req.cwd.clone()
+    };
+    log_note(
+        &format!(
+            "runner: effective cwd={} (requested {})",
+            effective_cwd.display(),
+            req.cwd.display()
+        ),
+        log_dir,
+    );
 
     // Build command and env, spawn with CreateProcessAsUserW.
     let spawn_result = unsafe {
         create_process_as_user(
             h_token,
             &req.command,
-            &req.cwd,
+            &effective_cwd,
             &req.env_map,
             Some(&req.codex_home),
-            Some((h_stdin, h_stdout, h_stderr)),
+            stdio,
         )
     };
     let (proc_info, _si) = match spawn_result {
@@ -217,9 +263,5 @@ pub fn main() -> Result<()> {
     if exit_code != 0 {
         eprintln!("runner child exited with code {}", exit_code);
     }
-    log_note(
-        &format!("runner exit pid={} code={}", proc_info.hProcess, exit_code),
-        log_dir,
-    );
     std::process::exit(exit_code);
 }

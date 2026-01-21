@@ -5,7 +5,8 @@ macro_rules! windows_modules {
 }
 
 windows_modules!(
-    acl, allow, audit, cap, dpapi, env, identity, logging, policy, process, token, winutil
+    acl, allow, audit, cap, dpapi, env, hide_users, identity, logging, policy, process, token,
+    winutil
 );
 
 #[cfg(target_os = "windows")]
@@ -17,6 +18,10 @@ mod elevated_impl;
 
 #[cfg(target_os = "windows")]
 pub use acl::allow_null_device;
+#[cfg(target_os = "windows")]
+pub use acl::ensure_allow_mask_aces;
+#[cfg(target_os = "windows")]
+pub use acl::ensure_allow_mask_aces_with_inheritance;
 #[cfg(target_os = "windows")]
 pub use acl::ensure_allow_write_aces;
 #[cfg(target_os = "windows")]
@@ -34,7 +39,13 @@ pub use dpapi::unprotect as dpapi_unprotect;
 #[cfg(target_os = "windows")]
 pub use elevated_impl::run_windows_sandbox_capture as run_windows_sandbox_capture_elevated;
 #[cfg(target_os = "windows")]
+pub use hide_users::hide_current_user_profile_dir;
+#[cfg(target_os = "windows")]
+pub use hide_users::hide_newly_created_users;
+#[cfg(target_os = "windows")]
 pub use identity::require_logon_sandbox_creds;
+#[cfg(target_os = "windows")]
+pub use identity::sandbox_setup_is_complete;
 #[cfg(target_os = "windows")]
 pub use logging::log_note;
 #[cfg(target_os = "windows")]
@@ -85,7 +96,6 @@ mod windows_impl {
     use super::acl::revoke_ace;
     use super::allow::compute_allow_paths;
     use super::allow::AllowDenyPaths;
-    use super::cap::cap_sid_file;
     use super::cap::load_or_create_cap_sids;
     use super::env::apply_no_network_to_env;
     use super::env::ensure_non_interactive_pager;
@@ -104,7 +114,6 @@ mod windows_impl {
     use anyhow::Result;
     use std::collections::HashMap;
     use std::ffi::c_void;
-    use std::fs;
     use std::io;
     use std::path::Path;
     use std::path::PathBuf;
@@ -128,13 +137,6 @@ mod windows_impl {
 
     fn should_apply_network_block(policy: &SandboxPolicy) -> bool {
         !policy.has_full_network_access()
-    }
-
-    fn ensure_dir(p: &Path) -> Result<()> {
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d)?;
-        }
-        Ok(())
     }
 
     fn ensure_codex_home_exists(p: &Path) -> Result<()> {
@@ -194,31 +196,32 @@ mod windows_impl {
             apply_no_network_to_env(&mut env_map)?;
         }
         ensure_codex_home_exists(codex_home)?;
-
         let current_dir = cwd.to_path_buf();
-        let logs_base_dir = Some(codex_home);
+        let sandbox_base = codex_home.join(".sandbox");
+        std::fs::create_dir_all(&sandbox_base)?;
+        let logs_base_dir = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
-        let cap_sid_path = cap_sid_file(codex_home);
         let is_workspace_write = matches!(&policy, SandboxPolicy::WorkspaceWrite { .. });
 
+        if matches!(
+            &policy,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        ) {
+            anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
+        }
+        let caps = load_or_create_cap_sids(codex_home)?;
         let (h_token, psid_to_use): (HANDLE, *mut c_void) = unsafe {
             match &policy {
                 SandboxPolicy::ReadOnly => {
-                    let caps = load_or_create_cap_sids(codex_home);
-                    ensure_dir(&cap_sid_path)?;
-                    fs::write(&cap_sid_path, serde_json::to_string(&caps)?)?;
                     let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
                     super::token::create_readonly_token_with_cap(psid)?
                 }
                 SandboxPolicy::WorkspaceWrite { .. } => {
-                    let caps = load_or_create_cap_sids(codex_home);
-                    ensure_dir(&cap_sid_path)?;
-                    fs::write(&cap_sid_path, serde_json::to_string(&caps)?)?;
                     let psid = convert_string_sid_to_sid(&caps.workspace).unwrap();
                     super::token::create_workspace_write_token_with_cap(psid)?
                 }
-                SandboxPolicy::DangerFullAccess => {
-                    anyhow::bail!("DangerFullAccess is not supported for sandboxing")
+                SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                    unreachable!("DangerFullAccess handled above")
                 }
             }
         };

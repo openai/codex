@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
+use codex_core::config::Constrained;
 use codex_core::features::Feature;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::AskForApproval;
@@ -126,7 +127,7 @@ impl ActionKind {
                 );
 
                 let command = format!("python3 -c \"{script}\"");
-                let event = shell_event(call_id, &command, 3_000, sandbox_permissions)?;
+                let event = shell_event(call_id, &command, 5_000, sandbox_permissions)?;
                 Ok((event, Some(command)))
             }
             ActionKind::RunCommand { command } => {
@@ -491,6 +492,7 @@ async fn submit_turn(
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: prompt.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
@@ -499,6 +501,7 @@ async fn submit_turn(
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -552,7 +555,7 @@ async fn expect_exec_approval(
     let event = wait_for_event(&test.codex, |event| {
         matches!(
             event,
-            EventMsg::ExecApprovalRequest(_) | EventMsg::TaskComplete(_)
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
         )
     })
     .await;
@@ -567,7 +570,7 @@ async fn expect_exec_approval(
             assert_eq!(last_arg, expected_command);
             approval
         }
-        EventMsg::TaskComplete(_) => panic!("expected approval request before completion"),
+        EventMsg::TurnComplete(_) => panic!("expected approval request before completion"),
         other => panic!("unexpected event: {other:?}"),
     }
 }
@@ -579,7 +582,7 @@ async fn expect_patch_approval(
     let event = wait_for_event(&test.codex, |event| {
         matches!(
             event,
-            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TaskComplete(_)
+            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
         )
     })
     .await;
@@ -589,7 +592,7 @@ async fn expect_patch_approval(
             assert_eq!(approval.call_id, expected_call_id);
             approval
         }
-        EventMsg::TaskComplete(_) => panic!("expected patch approval request before completion"),
+        EventMsg::TurnComplete(_) => panic!("expected patch approval request before completion"),
         other => panic!("unexpected event: {other:?}"),
     }
 }
@@ -598,13 +601,13 @@ async fn wait_for_completion_without_approval(test: &TestCodex) {
     let event = wait_for_event(&test.codex, |event| {
         matches!(
             event,
-            EventMsg::ExecApprovalRequest(_) | EventMsg::TaskComplete(_)
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
         )
     })
     .await;
 
     match event {
-        EventMsg::TaskComplete(_) => {}
+        EventMsg::TurnComplete(_) => {}
         EventMsg::ExecApprovalRequest(event) => {
             panic!("unexpected approval request: {:?}", event.command)
         }
@@ -614,7 +617,7 @@ async fn wait_for_completion_without_approval(test: &TestCodex) {
 
 async fn wait_for_completion(test: &TestCodex) {
     wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TaskComplete(_))
+        matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
 }
@@ -1462,8 +1465,8 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     let model = model_override.unwrap_or("gpt-5.1");
 
     let mut builder = test_codex().with_model(model).with_config(move |config| {
-        config.approval_policy = approval_policy;
-        config.sandbox_policy = sandbox_policy.clone();
+        config.approval_policy = Constrained::allow_any(approval_policy);
+        config.sandbox_policy = Constrained::allow_any(sandbox_policy.clone());
         for feature in features {
             config.features.enable(feature);
         }
@@ -1562,14 +1565,131 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
+async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+    let sandbox_policy_for_config = sandbox_policy.clone();
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.1-codex")
+        .with_config(move |config| {
+            config.approval_policy = Constrained::allow_any(approval_policy);
+            config.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        });
+    let test = builder.build(&server).await?;
+
+    let target = TargetPath::OutsideWorkspace("apply_patch_allow_session.txt");
+    let (path, patch_path) = target.resolve_for_patch(&test);
+    let _ = fs::remove_file(&path);
+
+    let patch_add = build_add_file_patch(&patch_path, "before");
+    let patch_update = format!(
+        "*** Begin Patch\n*** Update File: {patch_path}\n@@\n-before\n+after\n*** End Patch\n"
+    );
+
+    let call_id_1 = "apply_patch_allow_session_1";
+    let call_id_2 = "apply_patch_allow_session_2";
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_apply_patch_function_call(call_id_1, &patch_add),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "apply_patch allow session",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+    let _ = expect_patch_approval(&test, call_id_1).await;
+    test.codex
+        .submit(Op::PatchApproval {
+            id: "0".into(),
+            decision: ReviewDecision::ApprovedForSession,
+        })
+        .await?;
+    wait_for_completion(&test).await;
+    assert!(fs::read_to_string(&path)?.contains("before"));
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_apply_patch_function_call(call_id_2, &patch_update),
+            ev_completed("resp-3"),
+        ]),
+    )
+    .await;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-2", "done"),
+            ev_completed("resp-4"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        "apply_patch allow session followup",
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    match event {
+        EventMsg::TurnComplete(_) => {}
+        EventMsg::ApplyPatchApprovalRequest(event) => {
+            panic!("unexpected patch approval request: {:?}", event.call_id)
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    assert!(fs::read_to_string(&path)?.contains("after"));
+    let _ = fs::remove_file(path);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[cfg(unix)]
 async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts() -> Result<()> {
     let server = start_mock_server().await;
     let approval_policy = AskForApproval::UnlessTrusted;
     let sandbox_policy = SandboxPolicy::ReadOnly;
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_config(move |config| {
-        config.approval_policy = approval_policy;
-        config.sandbox_policy = sandbox_policy_for_config;
+        config.approval_policy = Constrained::allow_any(approval_policy);
+        config.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
     });
     let test = builder.build(&server).await?;
     let allow_prefix_path = test.cwd.path().join("allow-prefix.txt");

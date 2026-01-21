@@ -1,3 +1,15 @@
+//! Transcript/history cells for the Codex TUI.
+//!
+//! A `HistoryCell` is the unit of display in the conversation UI, representing both committed
+//! transcript entries and, transiently, an in-flight active cell that can mutate in place while
+//! streaming.
+//!
+//! The transcript overlay (`Ctrl+T`) appends a cached live tail derived from the active cell, and
+//! that cached tail is refreshed based on an active-cell cache key. Cells that change based on
+//! elapsed time expose `transcript_animation_tick()`, and code that mutates the active cell in place
+//! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
+//! rendered transcript output can change.
+
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -10,7 +22,6 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
-use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
@@ -21,7 +32,6 @@ use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
-use crate::wrapping::word_wrap_lines;
 use base64::Engine;
 use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
@@ -31,10 +41,10 @@ use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::openai_models::ReasoningSummaryFormat;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::user_input::TextElement;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -42,6 +52,7 @@ use mcp_types::Resource;
 use mcp_types::ResourceLink;
 use mcp_types::ResourceTemplate;
 use ratatui::prelude::*;
+use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Styled;
@@ -57,6 +68,40 @@ use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
+
+/// Visual transcript lines plus soft-wrap joiners.
+///
+/// A history cell can produce multiple "visual lines" once prefixes/indents and wrapping are
+/// applied. Clipboard reconstruction needs more information than just those lines because users
+/// expect soft-wrapped prose to copy as a single logical line, while explicit newlines and spacer
+/// rows should remain hard breaks.
+///
+/// `joiner_before` records, for each output line, whether it is a continuation created by the
+/// wrapping algorithm and what string should be inserted at the wrap boundary when joining lines.
+/// This avoids heuristics like always inserting a space, and instead preserves the exact whitespace
+/// that was skipped at the boundary.
+///
+/// In `codex-tui`, `HistoryCell` only exposes `transcript_lines(...)` and the UI generally does not
+/// need to reconstruct clipboard text across off-screen history or soft-wrap boundaries. In
+/// `codex-tui2`, transcript selection and copy are app-driven (not terminal-driven) and may span
+/// content that is not currently visible, so we need extra metadata to distinguish hard breaks from
+/// soft wraps and to preserve the exact whitespace at wrap boundaries.
+///
+/// The invariant is that `joiner_before.len() == lines.len()` and `joiner_before[0]` is always
+/// `None`. A `None` entry represents a hard break (copy inserts a newline), while `Some(joiner)`
+/// represents a soft wrap continuation (copy inserts `joiner` and continues on the same logical
+/// line). This data is produced by transcript rendering and consumed by transcript copy to keep
+/// clipboard output faithful to what the user saw.
+#[derive(Debug, Clone)]
+pub(crate) struct TranscriptLinesWithJoiners {
+    /// Visual transcript lines for a history cell, including any indent/prefix spans.
+    ///
+    /// This is the same shape used for on-screen transcript rendering: a single cell may expand
+    /// to multiple `Line`s after wrapping and prefixing.
+    pub(crate) lines: Vec<Line<'static>>,
+    /// For each output line, whether and how to join it to the previous line when copying.
+    pub(crate) joiner_before: Vec<Option<String>>,
+}
 
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
@@ -74,6 +119,32 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.display_lines(width)
+    }
+
+    /// Transcript lines plus soft-wrap joiners used for copy/paste fidelity.
+    ///
+    /// Most cells can use the default implementation (no joiners), but cells that apply wrapping
+    /// should override this and return joiners derived from the same wrapping operation so
+    /// clipboard reconstruction can distinguish hard breaks from soft wraps.
+    ///
+    /// `joiner_before[i]` describes the boundary *between* `lines[i - 1]` and `lines[i]`:
+    ///
+    /// - `None` means "hard break": copy inserts a newline between the two lines.
+    /// - `Some(joiner)` means "soft wrap continuation": copy inserts `joiner` and continues on the
+    ///   same logical line.
+    ///
+    /// Example (one logical line wrapped across two visual lines):
+    ///
+    /// - `lines = ["• Hello", "  world"]`
+    /// - `joiner_before = [None, Some(\" \")]`
+    ///
+    /// Copy should produce `"Hello world"` (no hard newline).
+    fn transcript_lines_with_joiners(&self, width: u16) -> TranscriptLinesWithJoiners {
+        let lines = self.transcript_lines(width);
+        TranscriptLinesWithJoiners {
+            joiner_before: vec![None; lines.len()],
+            lines,
+        }
     }
 
     fn desired_transcript_height(&self, width: u16) -> u16 {
@@ -97,6 +168,20 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 
     fn is_stream_continuation(&self) -> bool {
         false
+    }
+
+    /// Returns a coarse "animation tick" when transcript output is time-dependent.
+    ///
+    /// The transcript overlay caches the rendered output of the in-flight active cell, so cells
+    /// that include time-based UI (spinner, shimmer, etc.) should return a tick that changes over
+    /// time to signal that the cached tail should be recomputed. Returning `None` means the
+    /// transcript lines are stable, while returning `Some(tick)` during an in-flight animation
+    /// allows the overlay to keep up with the main viewport.
+    ///
+    /// If a cell uses time-based visuals but always returns `None`, `Ctrl+T` can appear "frozen" on
+    /// the first rendered frame even though the main viewport is animating.
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        None
     }
 }
 
@@ -131,12 +216,83 @@ impl dyn HistoryCell {
 #[derive(Debug)]
 pub(crate) struct UserHistoryCell {
     pub message: String,
+    pub text_elements: Vec<TextElement>,
+    #[allow(dead_code)]
+    pub local_image_paths: Vec<PathBuf>,
+}
+
+/// Build logical lines for a user message with styled text elements.
+///
+/// This preserves explicit newlines while interleaving element spans and skips
+/// malformed byte ranges instead of panicking during history rendering.
+fn build_user_message_lines_with_elements(
+    message: &str,
+    elements: &[TextElement],
+    style: Style,
+    element_style: Style,
+) -> Vec<Line<'static>> {
+    let mut elements = elements.to_vec();
+    elements.sort_by_key(|e| e.byte_range.start);
+    let mut offset = 0usize;
+    let mut raw_lines: Vec<Line<'static>> = Vec::new();
+    for line_text in message.split('\n') {
+        let line_start = offset;
+        let line_end = line_start + line_text.len();
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        // Track how much of the line we've emitted to interleave plain and styled spans.
+        let mut cursor = line_start;
+        for elem in &elements {
+            let start = elem.byte_range.start.max(line_start);
+            let end = elem.byte_range.end.min(line_end);
+            if start >= end {
+                continue;
+            }
+            let rel_start = start - line_start;
+            let rel_end = end - line_start;
+            // Guard against malformed UTF-8 byte ranges from upstream data; skip
+            // invalid elements rather than panicking while rendering history.
+            if !line_text.is_char_boundary(rel_start) || !line_text.is_char_boundary(rel_end) {
+                continue;
+            }
+            let rel_cursor = cursor - line_start;
+            if cursor < start
+                && line_text.is_char_boundary(rel_cursor)
+                && let Some(segment) = line_text.get(rel_cursor..rel_start)
+            {
+                spans.push(Span::from(segment.to_string()));
+            }
+            if let Some(segment) = line_text.get(rel_start..rel_end) {
+                spans.push(Span::styled(segment.to_string(), element_style));
+                cursor = end;
+            }
+        }
+        let rel_cursor = cursor - line_start;
+        if cursor < line_end
+            && line_text.is_char_boundary(rel_cursor)
+            && let Some(segment) = line_text.get(rel_cursor..)
+        {
+            spans.push(Span::from(segment.to_string()));
+        }
+        let line = if spans.is_empty() {
+            Line::from(line_text.to_string()).style(style)
+        } else {
+            Line::from(spans).style(style)
+        };
+        raw_lines.push(line);
+        // Split on '\n' so any '\r' stays in the line; advancing by 1 accounts
+        // for the separator byte.
+        offset = line_end + 1;
+    }
+
+    raw_lines
 }
 
 impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
+        self.transcript_lines_with_joiners(width).lines
+    }
 
+    fn transcript_lines_with_joiners(&self, width: u16) -> TranscriptLinesWithJoiners {
         let wrap_width = width
             .saturating_sub(
                 LIVE_PREFIX_COLS + 1, /* keep a one-column right margin for wrapping */
@@ -144,18 +300,48 @@ impl HistoryCell for UserHistoryCell {
             .max(1);
 
         let style = user_message_style();
+        let element_style = style.fg(Color::Cyan);
 
-        let wrapped = word_wrap_lines(
-            self.message.lines().map(|l| Line::from(l).style(style)),
-            // Wrap algorithm matches textarea.rs.
-            RtOptions::new(usize::from(wrap_width))
-                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
-        );
+        let (wrapped, joiner_before) = if self.text_elements.is_empty() {
+            crate::wrapping::word_wrap_lines_with_joiners(
+                self.message.split('\n').map(|l| Line::from(l).style(style)),
+                // Wrap algorithm matches textarea.rs.
+                RtOptions::new(usize::from(wrap_width))
+                    .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+            )
+        } else {
+            let raw_lines = build_user_message_lines_with_elements(
+                &self.message,
+                &self.text_elements,
+                style,
+                element_style,
+            );
+            crate::wrapping::word_wrap_lines_with_joiners(
+                raw_lines,
+                RtOptions::new(usize::from(wrap_width))
+                    .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+            )
+        };
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut joins: Vec<Option<String>> = Vec::new();
 
         lines.push(Line::from("").style(style));
-        lines.extend(prefix_lines(wrapped, "› ".bold().dim(), "  ".into()));
+        joins.push(None);
+
+        let prefixed = prefix_lines(wrapped, "› ".bold().dim(), "  ".into());
+        for (line, joiner) in prefixed.into_iter().zip(joiner_before) {
+            lines.push(line);
+            joins.push(joiner);
+        }
+
         lines.push(Line::from("").style(style));
-        lines
+        joins.push(None);
+
+        TranscriptLinesWithJoiners {
+            lines,
+            joiner_before: joins,
+        }
     }
 }
 
@@ -176,6 +362,10 @@ impl ReasoningSummaryCell {
     }
 
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.lines_with_joiners(width).lines
+    }
+
+    fn lines_with_joiners(&self, width: u16) -> TranscriptLinesWithJoiners {
         let mut lines: Vec<Line<'static>> = Vec::new();
         append_markdown(
             &self.content,
@@ -195,12 +385,17 @@ impl ReasoningSummaryCell {
             })
             .collect::<Vec<_>>();
 
-        word_wrap_lines(
+        let (lines, joiner_before) = crate::wrapping::word_wrap_lines_with_joiners(
             &summary_lines,
             RtOptions::new(width as usize)
                 .initial_indent("• ".dim().into())
                 .subsequent_indent("  ".into()),
-        )
+        );
+
+        TranscriptLinesWithJoiners {
+            lines,
+            joiner_before,
+        }
     }
 }
 
@@ -225,6 +420,10 @@ impl HistoryCell for ReasoningSummaryCell {
         self.lines(width)
     }
 
+    fn transcript_lines_with_joiners(&self, width: u16) -> TranscriptLinesWithJoiners {
+        self.lines_with_joiners(width)
+    }
+
     fn desired_transcript_height(&self, width: u16) -> u16 {
         self.lines(width).len() as u16
     }
@@ -232,14 +431,64 @@ impl HistoryCell for ReasoningSummaryCell {
 
 #[derive(Debug)]
 pub(crate) struct AgentMessageCell {
-    lines: Vec<Line<'static>>,
+    /// Width-agnostic logical markdown lines for this chunk.
+    ///
+    /// These are produced either:
+    /// - by streaming (`markdown_stream` → `markdown_render::render_markdown_logical_lines`), or
+    /// - by legacy/non-streaming callers that pass pre-rendered `Vec<Line>` via [`Self::new`].
+    ///
+    /// Importantly, this stores *logical* lines, not already-wrapped visual lines, so the transcript
+    /// can reflow on resize.
+    logical_lines: Vec<crate::markdown_render::MarkdownLogicalLine>,
+    /// Whether this cell should render the leading transcript bullet (`• `).
+    ///
+    /// Streaming emits multiple immutable `AgentMessageCell`s per assistant message; only the first
+    /// chunk shows the bullet. Continuations use a two-space gutter.
     is_first_line: bool,
 }
 
 impl AgentMessageCell {
+    /// Construct an agent message cell from already-rendered `Line`s.
+    ///
+    /// This is primarily used by non-streaming paths. The lines are treated as already "logical"
+    /// lines (no additional markdown indentation metadata is available), and wrapping is still
+    /// performed at render time so the transcript can reflow on resize.
     pub(crate) fn new(lines: Vec<Line<'static>>, is_first_line: bool) -> Self {
         Self {
-            lines,
+            logical_lines: lines
+                .into_iter()
+                .map(|line| {
+                    let is_preformatted = line.style.fg == Some(ratatui::style::Color::Cyan);
+                    let line_style = line.style;
+                    let content = Line {
+                        style: Style::default(),
+                        alignment: line.alignment,
+                        spans: line.spans,
+                    };
+                    crate::markdown_render::MarkdownLogicalLine {
+                        content,
+                        initial_indent: Line::default(),
+                        subsequent_indent: Line::default(),
+                        line_style,
+                        is_preformatted,
+                    }
+                })
+                .collect(),
+            is_first_line,
+        }
+    }
+
+    /// Construct an agent message cell from markdown logical lines.
+    ///
+    /// This is the preferred streaming constructor: it preserves markdown indentation rules (list
+    /// markers, nested list continuation indent, blockquote prefix, etc.) so wrapping can be
+    /// performed correctly at render time for the current viewport width.
+    pub(crate) fn new_logical(
+        logical_lines: Vec<crate::markdown_render::MarkdownLogicalLine>,
+        is_first_line: bool,
+    ) -> Self {
+        Self {
+            logical_lines,
             is_first_line,
         }
     }
@@ -247,16 +496,105 @@ impl AgentMessageCell {
 
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        word_wrap_lines(
-            &self.lines,
-            RtOptions::new(width as usize)
-                .initial_indent(if self.is_first_line {
-                    "• ".dim().into()
-                } else {
-                    "  ".into()
-                })
-                .subsequent_indent("  ".into()),
-        )
+        self.transcript_lines_with_joiners(width).lines
+    }
+
+    /// Render wrapped transcript lines plus soft-wrap joiners.
+    ///
+    /// This is where width-dependent wrapping happens for streaming agent output. The cell composes
+    /// indentation as:
+    ///
+    /// - transcript gutter (`• ` or `  `), plus
+    /// - markdown-provided indent/prefix spans (`initial_indent` / `subsequent_indent`)
+    ///
+    /// The wrapping algorithm returns a `joiner_before` vector so copy/paste can treat soft wraps
+    /// as joinable (no hard newline) while preserving exact whitespace at wrap boundaries.
+    fn transcript_lines_with_joiners(&self, width: u16) -> TranscriptLinesWithJoiners {
+        if width == 0 {
+            return TranscriptLinesWithJoiners {
+                lines: Vec::new(),
+                joiner_before: Vec::new(),
+            };
+        }
+
+        let mut out_lines: Vec<Line<'static>> = Vec::new();
+        let mut joiner_before: Vec<Option<String>> = Vec::new();
+
+        // `at_cell_start` tracks whether we're about to emit the first *visual* line of this cell.
+        // Only the first chunk of a streamed message gets the `• ` gutter; continuations use `  `.
+        let mut at_cell_start = true;
+        for logical in &self.logical_lines {
+            let gutter_first_visual_line: Line<'static> = if at_cell_start && self.is_first_line {
+                "• ".dim().into()
+            } else {
+                "  ".into()
+            };
+            let gutter_continuation: Line<'static> = "  ".into();
+
+            // Compose the transcript gutter with markdown-provided indentation:
+            //
+            // - `gutter_*` is the transcript-level prefix (`• ` / `  `).
+            // - `initial_indent` / `subsequent_indent` come from markdown structure (blockquote
+            //   prefix, list marker indentation, nested list continuation indentation, etc.).
+            //
+            // We apply these indents during wrapping so:
+            // - the UI renders with correct continuation indentation, and
+            // - soft-wrap joiners stay aligned with the exact whitespace the wrapper skipped.
+            let compose_indent =
+                |gutter: &Line<'static>, md_indent: &Line<'static>| -> Line<'static> {
+                    let mut spans = gutter.spans.clone();
+                    spans.extend(md_indent.spans.iter().cloned());
+                    Line::from(spans)
+                };
+
+            // Preformatted lines are rendered as a single visual line (no wrapping).
+            // This preserves code-block whitespace and keeps code copy behavior stable.
+            if logical.is_preformatted {
+                let mut spans = gutter_first_visual_line.spans.clone();
+                spans.extend(logical.initial_indent.spans.iter().cloned());
+                spans.extend(logical.content.spans.iter().cloned());
+                out_lines.push(Line::from(spans).style(logical.line_style));
+                joiner_before.push(None);
+                at_cell_start = false;
+                continue;
+            }
+
+            // Prose path: wrap to current width and capture joiners.
+            //
+            // `word_wrap_line_with_joiners` guarantees:
+            // - `wrapped.len() == wrapped_joiners.len()`
+            // - `wrapped_joiners[0] == None` (first visual segment of a logical line is a hard break)
+            // - subsequent entries are `Some(joiner)` (soft-wrap continuations).
+            let opts = RtOptions::new(width as usize)
+                .initial_indent(compose_indent(
+                    &gutter_first_visual_line,
+                    &logical.initial_indent,
+                ))
+                .subsequent_indent(compose_indent(
+                    &gutter_continuation,
+                    &logical.subsequent_indent,
+                ));
+
+            let (wrapped, wrapped_joiners) =
+                crate::wrapping::word_wrap_line_with_joiners(&logical.content, opts);
+            for (visual, joiner) in wrapped.into_iter().zip(wrapped_joiners) {
+                out_lines.push(line_to_static(&visual).style(logical.line_style));
+                joiner_before.push(joiner);
+                at_cell_start = false;
+            }
+        }
+
+        debug_assert_eq!(out_lines.len(), joiner_before.len());
+        debug_assert!(
+            joiner_before
+                .first()
+                .is_none_or(std::option::Option::is_none)
+        );
+
+        TranscriptLinesWithJoiners {
+            lines: out_lines,
+            joiner_before,
+        }
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -358,20 +696,29 @@ impl PrefixedWrappedHistoryCell {
 
 impl HistoryCell for PrefixedWrappedHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        if width == 0 {
-            return Vec::new();
-        }
-        let opts = RtOptions::new(width.max(1) as usize)
-            .initial_indent(self.initial_prefix.clone())
-            .subsequent_indent(self.subsequent_prefix.clone());
-        let wrapped = word_wrap_lines(&self.text, opts);
-        let mut out = Vec::new();
-        push_owned_lines(&wrapped, &mut out);
-        out
+        self.transcript_lines_with_joiners(width).lines
     }
 
     fn desired_height(&self, width: u16) -> u16 {
         self.display_lines(width).len() as u16
+    }
+
+    fn transcript_lines_with_joiners(&self, width: u16) -> TranscriptLinesWithJoiners {
+        if width == 0 {
+            return TranscriptLinesWithJoiners {
+                lines: Vec::new(),
+                joiner_before: Vec::new(),
+            };
+        }
+        let opts = RtOptions::new(width.max(1) as usize)
+            .initial_indent(self.initial_prefix.clone())
+            .subsequent_indent(self.subsequent_prefix.clone());
+        let (lines, joiner_before) =
+            crate::wrapping::word_wrap_lines_with_joiners(&self.text, opts);
+        TranscriptLinesWithJoiners {
+            lines,
+            joiner_before,
+        }
     }
 }
 
@@ -575,11 +922,11 @@ pub(crate) fn padded_emoji(emoji: &str) -> String {
 
 #[derive(Debug)]
 struct TooltipHistoryCell {
-    tip: &'static str,
+    tip: String,
 }
 
 impl TooltipHistoryCell {
-    fn new(tip: &'static str) -> Self {
+    fn new(tip: String) -> Self {
         Self { tip }
     }
 }
@@ -633,6 +980,7 @@ pub(crate) fn new_session_info(
     // Header box rendered as history (so it appears at the very top)
     let header = SessionHeaderHistoryCell::new(
         model.clone(),
+        Style::default(),
         reasoning_effort,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
@@ -693,21 +1041,41 @@ pub(crate) fn new_session_info(
     SessionInfoCell(CompositeHistoryCell { parts })
 }
 
-pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
-    UserHistoryCell { message }
+pub(crate) fn new_user_prompt(
+    message: String,
+    text_elements: Vec<TextElement>,
+    local_image_paths: Vec<PathBuf>,
+) -> UserHistoryCell {
+    UserHistoryCell {
+        message,
+        text_elements,
+        local_image_paths,
+    }
 }
 
 #[derive(Debug)]
-struct SessionHeaderHistoryCell {
+pub(crate) struct SessionHeaderHistoryCell {
     version: &'static str,
     model: String,
+    model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
 }
 
 impl SessionHeaderHistoryCell {
-    fn new(
+    pub(crate) fn new(
         model: String,
+        model_style: Style,
+        reasoning_effort: Option<ReasoningEffortConfig>,
+        directory: PathBuf,
+        version: &'static str,
+    ) -> Self {
+        Self::new_with_style(model, model_style, reasoning_effort, directory, version)
+    }
+
+    pub(crate) fn new_with_style(
+        model: String,
+        model_style: Style,
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
         version: &'static str,
@@ -715,6 +1083,7 @@ impl SessionHeaderHistoryCell {
         Self {
             version,
             model,
+            model_style,
             reasoning_effort,
             directory,
         }
@@ -787,7 +1156,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let reasoning_label = self.reasoning_label();
         let mut model_spans: Vec<Span<'static>> = vec![
             Span::from(format!("{model_label} ")).dim(),
-            Span::from(self.model.clone()),
+            Span::styled(self.model.clone(), self.model_style),
         ];
         if let Some(reasoning) = reasoning_label {
             model_spans.push(Span::from(" "));
@@ -1011,6 +1380,13 @@ impl HistoryCell for McpToolCallCell {
 
         lines
     }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled || self.result.is_some() {
+            return None;
+        }
+        Some((self.start_time.elapsed().as_millis() / 50) as u64)
+    }
 }
 
 pub(crate) fn new_active_mcp_tool_call(
@@ -1021,9 +1397,9 @@ pub(crate) fn new_active_mcp_tool_call(
     McpToolCallCell::new(call_id, invocation, animations_enabled)
 }
 
-pub(crate) fn new_web_search_call(query: String) -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> = vec![Line::from(vec![padded_emoji("🌐").into(), query.into()])];
-    PlainHistoryCell { lines }
+pub(crate) fn new_web_search_call(query: String) -> PrefixedWrappedHistoryCell {
+    let text: Text<'static> = Line::from(vec!["Searched".bold(), " ".into(), query.into()]).into();
+    PrefixedWrappedHistoryCell::new(text, "• ".dim(), "  ")
 }
 
 /// If the first content is an image, return a new cell with the image.
@@ -1113,7 +1489,8 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         "  • No MCP servers configured.".italic().into(),
         Line::from(vec![
             "    See the ".into(),
-            "\u{1b}]8;;https://github.com/openai/codex/blob/main/docs/config.md#mcp_servers\u{7}MCP docs\u{1b}]8;;\u{7}".underlined(),
+            "\u{1b}]8;;https://developers.openai.com/codex/mcp\u{7}MCP docs\u{1b}]8;;\u{7}"
+                .underlined(),
             " to configure them.".into(),
         ])
         .style(Style::default().add_modifier(Modifier::DIM)),
@@ -1140,7 +1517,6 @@ pub(crate) fn new_mcp_tools_output(
     if tools.is_empty() {
         lines.push("  • No MCP tools available.".italic().into());
         lines.push("".into());
-        return PlainHistoryCell { lines };
     }
 
     let mut servers: Vec<_> = config.mcp_servers.iter().collect();
@@ -1164,6 +1540,9 @@ pub(crate) fn new_mcp_tools_output(
             header.push(" ".into());
             header.push("(disabled)".red());
             lines.push(header.into());
+            if let Some(reason) = cfg.disabled_reason.as_ref().map(ToString::to_string) {
+                lines.push(vec!["    • Reason: ".into(), reason.dim()].into());
+            }
             lines.push(Line::from(""));
             continue;
         }
@@ -1419,48 +1798,49 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_reasoning_summary_block(
-    full_reasoning_buffer: String,
-    reasoning_summary_format: ReasoningSummaryFormat,
-) -> Box<dyn HistoryCell> {
-    if reasoning_summary_format == ReasoningSummaryFormat::Experimental {
-        // Experimental format is following:
-        // ** header **
-        //
-        // reasoning summary
-        //
-        // So we need to strip header from reasoning summary
-        let full_reasoning_buffer = full_reasoning_buffer.trim();
-        if let Some(open) = full_reasoning_buffer.find("**") {
-            let after_open = &full_reasoning_buffer[(open + 2)..];
-            if let Some(close) = after_open.find("**") {
-                let after_close_idx = open + 2 + close + 2;
-                // if we don't have anything beyond `after_close_idx`
-                // then we don't have a summary to inject into history
-                if after_close_idx < full_reasoning_buffer.len() {
-                    let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
-                    let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
-                    return Box::new(ReasoningSummaryCell::new(
-                        header_buffer,
-                        summary_buffer,
-                        false,
-                    ));
-                }
+pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<dyn HistoryCell> {
+    // Experimental format is following:
+    // ** header **
+    //
+    // reasoning summary
+    //
+    // So we need to strip header from reasoning summary
+    let full_reasoning_buffer = full_reasoning_buffer.trim();
+    if let Some(open) = full_reasoning_buffer.find("**") {
+        let after_open = &full_reasoning_buffer[(open + 2)..];
+        if let Some(close) = after_open.find("**") {
+            let after_close_idx = open + 2 + close + 2;
+            // if we don't have anything beyond `after_close_idx`
+            // then we don't have a summary to inject into history
+            if after_close_idx < full_reasoning_buffer.len() {
+                let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
+                let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
+                return Box::new(ReasoningSummaryCell::new(
+                    header_buffer,
+                    summary_buffer,
+                    false,
+                ));
             }
         }
     }
     Box::new(ReasoningSummaryCell::new(
         "".to_string(),
-        full_reasoning_buffer,
+        full_reasoning_buffer.to_string(),
         true,
     ))
 }
 
 #[derive(Debug)]
+/// A visual divider between turns, optionally showing how long the assistant "worked for".
+///
+/// This separator is only emitted for turns that performed concrete work (e.g., running commands,
+/// applying patches, making MCP tool calls), so purely conversational turns do not show an empty
+/// divider.
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
 }
 impl FinalMessageSeparator {
+    /// Creates a separator; `elapsed_seconds` typically comes from the status indicator timer.
     pub(crate) fn new(elapsed_seconds: Option<u64>) -> Self {
         Self { elapsed_seconds }
     }
@@ -1514,11 +1894,9 @@ mod tests {
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
     use codex_core::config::Config;
-    use codex_core::config::ConfigOverrides;
-    use codex_core::config::ConfigToml;
+    use codex_core::config::ConfigBuilder;
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
-    use codex_core::openai_models::models_manager::ModelsManager;
     use codex_core::protocol::McpAuthStatus;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
@@ -1532,14 +1910,13 @@ mod tests {
     use mcp_types::TextContent;
     use mcp_types::Tool;
     use mcp_types::ToolInputSchema;
-
-    fn test_config() -> Config {
-        Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            std::env::temp_dir(),
-        )
-        .expect("config")
+    async fn test_config() -> Config {
+        let codex_home = std::env::temp_dir();
+        ConfigBuilder::default()
+            .codex_home(codex_home.clone())
+            .build()
+            .await
+            .expect("config")
     }
 
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -1558,9 +1935,134 @@ mod tests {
         render_lines(&cell.transcript_lines(u16::MAX))
     }
 
+    /// Remove a single leading markdown blockquote marker (`> `) from `line`.
+    ///
+    /// This is a test-only normalization helper.
+    ///
+    /// In the rendered transcript, blockquote indentation is represented as literal `> ` spans in
+    /// the line prefix. For wrapped blockquote prose, those prefix spans can appear on every visual
+    /// line (including soft-wrap continuations). When we want to compare the *logical* joined text
+    /// across different widths, we strip the repeated marker on continuation lines so the
+    /// comparison doesn't fail due to prefix duplication.
+    fn strip_leading_blockquote_marker(line: &str) -> String {
+        let mut out = String::with_capacity(line.len());
+        let mut seen_non_space = false;
+        let mut removed = false;
+        let mut chars = line.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if !seen_non_space {
+                if ch == ' ' {
+                    out.push(ch);
+                    continue;
+                }
+                seen_non_space = true;
+                if ch == '>' && !removed {
+                    removed = true;
+                    if matches!(chars.peek(), Some(' ')) {
+                        chars.next();
+                    }
+                    continue;
+                }
+            }
+            out.push(ch);
+        }
+        out
+    }
+
+    /// Normalize rendered transcript output into a width-insensitive "logical text" string.
+    ///
+    /// This is used by resize/reflow tests:
+    ///
+    /// - Joiners tell us which visual line breaks are soft wraps (`Some(joiner)`) vs hard breaks
+    ///   (`None`).
+    /// - For soft-wrap continuation lines, we strip repeated blockquote markers so we can compare
+    ///   the underlying prose independent of prefix repetition.
+    /// - Finally, we collapse whitespace so wrapping differences (line breaks vs spaces) do not
+    ///   affect equality.
+    fn normalize_rendered_text_with_joiners(tr: &TranscriptLinesWithJoiners) -> String {
+        let mut rendered = render_lines(&tr.lines);
+        for (line, joiner) in rendered.iter_mut().zip(&tr.joiner_before) {
+            if joiner.is_some() {
+                *line = strip_leading_blockquote_marker(line);
+            }
+        }
+        rendered
+            .join("\n")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     #[test]
-    fn mcp_tools_output_masks_sensitive_values() {
-        let mut config = test_config();
+    fn agent_message_cell_reflows_streamed_prose_on_resize() {
+        let md = concat!(
+            "- This is a long list item that should reflow when the viewport width changes. ",
+            "The old streaming implementation used to bake soft wraps into hard line breaks.\n",
+            "> A blockquote line that is also long enough to wrap and should reflow cleanly.\n",
+        );
+        let logical_lines = crate::markdown_stream::simulate_stream_markdown_for_tests(&[md], true);
+        let cell = AgentMessageCell::new_logical(logical_lines, true);
+
+        let narrow = cell.transcript_lines_with_joiners(28);
+        let wide = cell.transcript_lines_with_joiners(80);
+
+        assert!(
+            narrow.lines.len() > wide.lines.len(),
+            "expected fewer visual lines at wider width; narrow={} wide={}",
+            narrow.lines.len(),
+            wide.lines.len()
+        );
+        assert_eq!(
+            normalize_rendered_text_with_joiners(&narrow),
+            normalize_rendered_text_with_joiners(&wide)
+        );
+
+        let snapshot = format!(
+            "narrow:\n{}\n\nwide:\n{}",
+            render_lines(&narrow.lines).join("\n"),
+            render_lines(&wide.lines).join("\n")
+        );
+        insta::assert_snapshot!("agent_message_cell_reflow_on_resize", snapshot);
+    }
+
+    #[test]
+    fn agent_message_cell_reflows_streamed_prose_vt100_snapshot() {
+        use crate::test_backend::VT100Backend;
+
+        let md = concat!(
+            "- This is a long list item that should reflow when the viewport width changes.\n",
+            "> A blockquote that also reflows across widths.\n",
+        );
+        let logical_lines = crate::markdown_stream::simulate_stream_markdown_for_tests(&[md], true);
+        let cell = AgentMessageCell::new_logical(logical_lines, true);
+
+        let render = |width, height| -> String {
+            let backend = VT100Backend::new(width, height);
+            let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+            terminal
+                .draw(|f| {
+                    let area = f.area();
+                    let lines = cell.display_lines(area.width);
+                    Paragraph::new(Text::from(lines))
+                        .wrap(Wrap { trim: false })
+                        .render(area, f.buffer_mut());
+                })
+                .expect("draw");
+            terminal.backend().vt100().screen().contents()
+        };
+
+        let narrow = render(30, 12);
+        let wide = render(70, 12);
+
+        insta::assert_snapshot!(
+            "agent_message_cell_reflow_on_resize_vt100",
+            format!("narrow:\n{narrow}\n\nwide:\n{wide}")
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_tools_output_masks_sensitive_values() {
+        let mut config = test_config().await;
         let mut env = HashMap::new();
         env.insert("TOKEN".to_string(), "secret".to_string());
         let stdio_config = McpServerConfig {
@@ -1572,12 +2074,14 @@ mod tests {
                 cwd: None,
             },
             enabled: true,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
         };
-        config.mcp_servers.insert("docs".to_string(), stdio_config);
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert("docs".to_string(), stdio_config);
 
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), "Bearer secret".to_string());
@@ -1591,12 +2095,17 @@ mod tests {
                 env_http_headers: Some(env_headers),
             },
             enabled: true,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
         };
-        config.mcp_servers.insert("http".to_string(), http_config);
+        servers.insert("http".to_string(), http_config);
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
 
         let mut tools: HashMap<String, Tool> = HashMap::new();
         tools.insert(
@@ -1671,6 +2180,50 @@ mod tests {
                 "  time".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn web_search_history_cell_snapshot() {
+        let cell = new_web_search_call(
+            "example search query with several generic words to exercise wrapping".to_string(),
+        );
+        let rendered = render_lines(&cell.display_lines(64)).join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn web_search_history_cell_wraps_with_indented_continuation() {
+        let cell = new_web_search_call(
+            "example search query with several generic words to exercise wrapping".to_string(),
+        );
+        let rendered = render_lines(&cell.display_lines(64));
+
+        assert_eq!(
+            rendered,
+            vec![
+                "• Searched example search query with several generic words to".to_string(),
+                "  exercise wrapping".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn web_search_history_cell_short_query_does_not_wrap() {
+        let cell = new_web_search_call("short query".to_string());
+        let rendered = render_lines(&cell.display_lines(64));
+
+        assert_eq!(rendered, vec!["• Searched short query".to_string()]);
+    }
+
+    #[test]
+    fn web_search_history_cell_transcript_snapshot() {
+        let cell = new_web_search_call(
+            "example search query with several generic words to exercise wrapping".to_string(),
+        );
+        let rendered = render_lines(&cell.transcript_lines(64)).join("\n");
+
+        insta::assert_snapshot!(rendered);
     }
 
     #[test]
@@ -1863,6 +2416,7 @@ mod tests {
     fn session_header_includes_reasoning_level_when_present() {
         let cell = SessionHeaderHistoryCell::new(
             "gpt-4o".to_string(),
+            Style::default(),
             Some(ReasoningEffortConfig::High),
             std::env::temp_dir(),
             "test",
@@ -2258,6 +2812,8 @@ mod tests {
         let msg = "one two three four five six seven";
         let cell = UserHistoryCell {
             message: msg.to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
         };
 
         // Small width to force wrapping more clearly. Effective wrap width is width-2 due to the ▌ prefix and trailing space.
@@ -2322,10 +2878,8 @@ mod tests {
     }
     #[test]
     fn reasoning_summary_block() {
-        let reasoning_format = ReasoningSummaryFormat::Experimental;
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-            reasoning_format,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -2337,32 +2891,20 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
-        let reasoning_format = ReasoningSummaryFormat::Experimental;
-        let cell = new_reasoning_summary_block(
-            "Detailed reasoning goes here.".to_string(),
-            reasoning_format,
-        );
+        let cell = new_reasoning_summary_block("Detailed reasoning goes here.".to_string());
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• Detailed reasoning goes here."]);
     }
 
-    #[test]
-    fn reasoning_summary_block_respects_config_overrides() {
-        let mut config = test_config();
+    #[tokio::test]
+    async fn reasoning_summary_block_respects_config_overrides() {
+        let mut config = test_config().await;
         config.model = Some("gpt-3.5-turbo".to_string());
         config.model_supports_reasoning_summaries = Some(true);
-        config.model_reasoning_summary_format = Some(ReasoningSummaryFormat::Experimental);
-        let model_family =
-            ModelsManager::construct_model_family_offline(&config.model.clone().unwrap(), &config);
-        assert_eq!(
-            model_family.reasoning_summary_format,
-            ReasoningSummaryFormat::Experimental
-        );
 
         let cell = new_reasoning_summary_block(
             "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
-            model_family.reasoning_summary_format,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));
@@ -2371,11 +2913,8 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_falls_back_when_header_is_missing() {
-        let reasoning_format = ReasoningSummaryFormat::Experimental;
-        let cell = new_reasoning_summary_block(
-            "**High level reasoning without closing".to_string(),
-            reasoning_format,
-        );
+        let cell =
+            new_reasoning_summary_block("**High level reasoning without closing".to_string());
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• **High level reasoning without closing"]);
@@ -2383,18 +2922,14 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_falls_back_when_summary_is_missing() {
-        let reasoning_format = ReasoningSummaryFormat::Experimental;
-        let cell = new_reasoning_summary_block(
-            "**High level reasoning without closing**".to_string(),
-            reasoning_format.clone(),
-        );
+        let cell =
+            new_reasoning_summary_block("**High level reasoning without closing**".to_string());
 
         let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["• High level reasoning without closing"]);
 
         let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**\n\n  ".to_string(),
-            reasoning_format,
         );
 
         let rendered = render_transcript(cell.as_ref());
@@ -2403,10 +2938,8 @@ mod tests {
 
     #[test]
     fn reasoning_summary_block_splits_header_and_summary_when_present() {
-        let reasoning_format = ReasoningSummaryFormat::Experimental;
         let cell = new_reasoning_summary_block(
             "**High level plan**\n\nWe should fix the bug next.".to_string(),
-            reasoning_format,
         );
 
         let rendered_display = render_lines(&cell.display_lines(80));

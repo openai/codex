@@ -6,7 +6,6 @@ use std::sync::Arc;
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
-use crate::exec_policy::create_exec_approval_requirement_for_command;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
@@ -17,6 +16,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::parse_arguments;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -105,12 +105,7 @@ impl ToolHandler for ShellHandler {
 
         match payload {
             ToolPayload::Function { arguments } => {
-                let params: ShellToolCallParams =
-                    serde_json::from_str(&arguments).map_err(|e| {
-                        FunctionCallError::RespondToModel(format!(
-                            "failed to parse function arguments: {e:?}"
-                        ))
-                    })?;
+                let params: ShellToolCallParams = parse_arguments(&arguments)?;
                 let exec_params = Self::to_exec_params(params, turn.as_ref());
                 Self::run_exec_like(
                     tool_name.as_str(),
@@ -183,9 +178,7 @@ impl ToolHandler for ShellCommandHandler {
             )));
         };
 
-        let params: ShellCommandToolCallParams = serde_json::from_str(&arguments).map_err(|e| {
-            FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e:?}"))
-        })?;
+        let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
         let exec_params = Self::to_exec_params(params, session.as_ref(), turn.as_ref());
         ShellHandler::run_exec_like(
             tool_name.as_str(),
@@ -252,15 +245,17 @@ impl ShellHandler {
         emitter.begin(event_ctx).await;
 
         let features = session.features();
-        let exec_approval_requirement = create_exec_approval_requirement_for_command(
-            &turn.exec_policy,
-            &features,
-            &exec_params.command,
-            turn.approval_policy,
-            &turn.sandbox_policy,
-            exec_params.sandbox_permissions,
-        )
-        .await;
+        let exec_approval_requirement = session
+            .services
+            .exec_policy
+            .create_exec_approval_requirement_for_command(
+                &features,
+                &exec_params.command,
+                turn.approval_policy,
+                &turn.sandbox_policy,
+                exec_params.sandbox_permissions,
+            )
+            .await;
 
         let req = ShellRequest {
             command: exec_params.command.clone(),
@@ -358,9 +353,9 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_context() {
-        let (session, turn_context) = make_session_and_context();
+    #[tokio::test]
+    async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_context() {
+        let (session, turn_context) = make_session_and_context().await;
 
         let command = "echo hello".to_string();
         let workdir = Some("subdir".to_string());

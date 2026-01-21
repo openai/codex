@@ -22,6 +22,8 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::PathBuf;
 use tokio::fs;
+use tokio::time::Duration;
+use tokio::time::sleep;
 
 #[derive(Debug)]
 struct SnapshotRun {
@@ -69,6 +71,7 @@ async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "run unified exec with shell snapshot".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd,
@@ -77,6 +80,7 @@ async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -99,7 +103,7 @@ async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
     })
     .await;
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     Ok(SnapshotRun {
         begin,
@@ -145,6 +149,7 @@ async fn run_shell_command_snapshot(command: &str) -> Result<SnapshotRun> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "run shell_command with shell snapshot".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd,
@@ -153,6 +158,7 @@ async fn run_shell_command_snapshot(command: &str) -> Result<SnapshotRun> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -175,7 +181,7 @@ async fn run_shell_command_snapshot(command: &str) -> Result<SnapshotRun> {
     })
     .await;
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     Ok(SnapshotRun {
         begin,
@@ -282,6 +288,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "apply patch via shell_command with snapshot".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.clone(),
@@ -290,10 +297,11 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
             model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     assert_eq!(fs::read_to_string(&target).await?, "hello from snapshot\n");
 
@@ -305,6 +313,41 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
         .expect("shell snapshot created");
     let snapshot_content = fs::read_to_string(&snapshot_path).await?;
     assert_posix_snapshot_sections(&snapshot_content);
+
+    Ok(())
+}
+
+#[cfg_attr(target_os = "windows", ignore)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_snapshot_deleted_after_shutdown_with_skills() -> Result<()> {
+    let builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::ShellSnapshot);
+    });
+    let harness = TestCodexHarness::with_builder(builder).await?;
+    let home = harness.test().home.clone();
+    let codex_home = home.path().to_path_buf();
+    let codex = harness.test().codex.clone();
+
+    let mut entries = fs::read_dir(codex_home.join("shell_snapshots")).await?;
+    let snapshot_path = entries
+        .next_entry()
+        .await?
+        .map(|entry| entry.path())
+        .expect("shell snapshot created");
+    assert!(snapshot_path.exists());
+
+    codex.submit(Op::Shutdown {}).await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+
+    drop(codex);
+    drop(harness);
+    sleep(Duration::from_millis(150)).await;
+
+    assert_eq!(
+        snapshot_path.exists(),
+        false,
+        "snapshot should be removed after shutdown"
+    );
 
     Ok(())
 }

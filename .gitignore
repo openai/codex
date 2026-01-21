@@ -9,6 +9,7 @@ node_modules
 
 # build
 dist/
+bazel-*
 build/
 out/
 storybook-static/
@@ -85,3 +86,8 @@ CHANGELOG.ignore.md
 # nix related
 .direnv
 .envrc
+
+# Python bytecode files
+__pycache__/
+*.pyc
+

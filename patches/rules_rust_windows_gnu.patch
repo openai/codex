@@ -1,0 +1,58 @@
+diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
+index af627fe50..d1c5142cb 100644
+--- a/rust/private/rustc.bzl
++++ b/rust/private/rustc.bzl
+@@ -560,9 +560,12 @@ def _symlink_for_ambiguous_lib(actions, toolchain, crate_info, lib):
+ 
+     # Take the absolute value of hash() since it could be negative.
+     path_hash = abs(hash(lib.path))
+-    lib_name = get_lib_name_for_windows(lib) if toolchain.target_os.startswith("windows") else get_lib_name_default(lib)
+-
+-    if toolchain.target_os.startswith("windows"):
++    if toolchain.target_os.startswith("windows") and toolchain.target_abi == "msvc":
++        lib_name = get_lib_name_for_windows(lib)
++    else:
++        lib_name = get_lib_name_default(lib)
++
++    if toolchain.target_os.startswith("windows") and toolchain.target_abi == "msvc":
+         prefix = ""
+         extension = ".lib"
+     elif lib_name.endswith(".pic"):
+@@ -1495,7 +1498,7 @@ def rustc_compile_action(
+     pdb_file = None
+     dsym_folder = None
+     if crate_info.type in ("cdylib", "bin") and not experimental_use_cc_common_link:
+-        if toolchain.target_os == "windows" and compilation_mode.strip_level == "none":
++        if toolchain.target_os == "windows" and toolchain.target_abi == "msvc" and compilation_mode.strip_level == "none":
+             pdb_file = ctx.actions.declare_file(crate_info.output.basename[:-len(crate_info.output.extension)] + "pdb", sibling = crate_info.output)
+             action_outputs.append(pdb_file)
+         elif toolchain.target_os in ["macos", "darwin"]:
+@@ -1626,7 +1629,7 @@ def rustc_compile_action(
+ 
+         additional_linker_outputs = []
+-        if crate_info.type in ("cdylib", "bin") and cc_common.is_enabled(feature_configuration = feature_configuration, feature_name = "generate_pdb_file"):
++        if crate_info.type in ("cdylib", "bin") and toolchain.target_abi == "msvc" and cc_common.is_enabled(feature_configuration = feature_configuration, feature_name = "generate_pdb_file"):
+             pdb_file = ctx.actions.declare_file(crate_info.output.basename[:-len(crate_info.output.extension)] + "pdb", sibling = crate_info.output)
+             additional_linker_outputs.append(pdb_file)
+ 
+@@ -2248,8 +2251,8 @@ def _portable_link_flags(lib, use_pic, ambiguous_libs, get_lib_name, for_windows
+                 ]
+             else:
+                 return [
+-                    "-lstatic=%s" % get_lib_name(artifact),
+-                    "-Clink-arg=-l{}".format(artifact.basename),
++                    "-lstatic=%s" % get_lib_name(artifact),
++                    "-Clink-arg=-l{}".format(get_lib_name(artifact)),
+                 ]
+         else:
+             return [
+@@ -2281,7 +2284,8 @@ def _make_link_flags_windows(make_link_flags_args, flavor_msvc, use_direct_drive
+                     ("-Clink-arg=%s--no-whole-archive" % prefix),
+                 ])
+         elif include_link_flags:
+-            ret.extend(_portable_link_flags(lib, use_pic, ambiguous_libs, get_lib_name_for_windows, for_windows = True, flavor_msvc = flavor_msvc))
++            get_name_fn = get_lib_name_for_windows if flavor_msvc else get_lib_name_default
++            ret.extend(_portable_link_flags(lib, use_pic, ambiguous_libs, get_name_fn, for_windows = True, flavor_msvc = flavor_msvc))
+     _add_user_link_flags(ret, linker_input)
+     return ret
+

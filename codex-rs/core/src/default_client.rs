@@ -4,7 +4,7 @@ pub use codex_client::CodexRequestBuilder;
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
 use std::sync::Mutex;
-use std::sync::OnceLock;
+use std::sync::RwLock;
 
 /// Set this to add a suffix to the User-Agent string.
 ///
@@ -30,7 +30,7 @@ pub struct Originator {
     pub value: String,
     pub header_value: HeaderValue,
 }
-static ORIGINATOR: OnceLock<Originator> = OnceLock::new();
+static ORIGINATOR: LazyLock<RwLock<Option<Originator>>> = LazyLock::new(|| RwLock::new(None));
 
 #[derive(Debug)]
 pub enum SetOriginatorError {
@@ -60,22 +60,48 @@ fn get_originator_value(provided: Option<String>) -> Originator {
 }
 
 pub fn set_default_originator(value: String) -> Result<(), SetOriginatorError> {
+    if HeaderValue::from_str(&value).is_err() {
+        return Err(SetOriginatorError::InvalidHeaderValue);
+    }
     let originator = get_originator_value(Some(value));
-    ORIGINATOR
-        .set(originator)
-        .map_err(|_| SetOriginatorError::AlreadyInitialized)
+    let Ok(mut guard) = ORIGINATOR.write() else {
+        return Err(SetOriginatorError::AlreadyInitialized);
+    };
+    if guard.is_some() {
+        return Err(SetOriginatorError::AlreadyInitialized);
+    }
+    *guard = Some(originator);
+    Ok(())
 }
 
-pub fn originator() -> &'static Originator {
-    ORIGINATOR.get_or_init(|| get_originator_value(None))
+pub fn originator() -> Originator {
+    if let Ok(guard) = ORIGINATOR.read()
+        && let Some(originator) = guard.as_ref()
+    {
+        return originator.clone();
+    }
+
+    if std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR).is_ok() {
+        let originator = get_originator_value(None);
+        if let Ok(mut guard) = ORIGINATOR.write() {
+            match guard.as_ref() {
+                Some(originator) => return originator.clone(),
+                None => *guard = Some(originator.clone()),
+            }
+        }
+        return originator;
+    }
+
+    get_originator_value(None)
 }
 
 pub fn get_codex_user_agent() -> String {
     let build_version = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();
+    let originator = originator();
     let prefix = format!(
         "{}/{build_version} ({} {}; {}) {}",
-        originator().value.as_str(),
+        originator.value.as_str(),
         os_info.os_type(),
         os_info.version(),
         os_info.architecture().unwrap_or("unknown"),
@@ -123,7 +149,7 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
         tracing::warn!(
             "Falling back to default Codex originator because base user agent string is invalid"
         );
-        originator().value.clone()
+        originator().value
     }
 }
 
@@ -137,13 +163,14 @@ pub fn build_reqwest_client() -> reqwest::Client {
     use reqwest::header::HeaderMap;
 
     let mut headers = HeaderMap::new();
-    headers.insert("originator", originator().header_value.clone());
+    headers.insert("originator", originator().header_value);
     let ua = get_codex_user_agent();
 
     let mut builder = reqwest::Client::builder()
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
-        .default_headers(headers);
+        .default_headers(headers)
+        .use_rustls_tls();
     if is_sandboxed() {
         builder = builder.no_proxy();
     }
@@ -163,7 +190,9 @@ mod tests {
     #[test]
     fn test_get_codex_user_agent() {
         let user_agent = get_codex_user_agent();
-        assert!(user_agent.starts_with("codex_cli_rs/"));
+        let originator = originator().value;
+        let prefix = format!("{originator}/");
+        assert!(user_agent.starts_with(&prefix));
     }
 
     #[tokio::test]
@@ -204,7 +233,7 @@ mod tests {
         let originator_header = headers
             .get("originator")
             .expect("originator header missing");
-        assert_eq!(originator_header.to_str().unwrap(), "codex_cli_rs");
+        assert_eq!(originator_header.to_str().unwrap(), originator().value);
 
         // User-Agent matches the computed Codex UA for that originator
         let expected_ua = get_codex_user_agent();
@@ -241,9 +270,10 @@ mod tests {
     fn test_macos() {
         use regex_lite::Regex;
         let user_agent = get_codex_user_agent();
-        let re = Regex::new(
-            r"^codex_cli_rs/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$",
-        )
+        let originator = regex_lite::escape(originator().value.as_str());
+        let re = Regex::new(&format!(
+            r"^{originator}/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$"
+        ))
         .unwrap();
         assert!(re.is_match(&user_agent));
     }

@@ -6,7 +6,8 @@ use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_protocol::ConversationId;
+use codex_protocol::ThreadId;
+use codex_protocol::models::BaseInstructions;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
@@ -19,13 +20,15 @@ use tracing::info;
 use tracing::warn;
 
 use super::SESSIONS_SUBDIR;
-use super::list::ConversationsPage;
 use super::list::Cursor;
-use super::list::get_conversations;
+use super::list::ThreadSortKey;
+use super::list::ThreadsPage;
+use super::list::get_threads;
 use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::default_client::originator;
 use crate::git_info::collect_git_info;
+use crate::path_utils;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
@@ -52,9 +55,10 @@ pub struct RolloutRecorder {
 #[derive(Clone)]
 pub enum RolloutRecorderParams {
     Create {
-        conversation_id: ConversationId,
-        instructions: Option<String>,
+        conversation_id: ThreadId,
+        forked_from_id: Option<ThreadId>,
         source: SessionSource,
+        base_instructions: BaseInstructions,
     },
     Resume {
         path: PathBuf,
@@ -74,14 +78,16 @@ enum RolloutCmd {
 
 impl RolloutRecorderParams {
     pub fn new(
-        conversation_id: ConversationId,
-        instructions: Option<String>,
+        conversation_id: ThreadId,
+        forked_from_id: Option<ThreadId>,
         source: SessionSource,
+        base_instructions: BaseInstructions,
     ) -> Self {
         Self::Create {
             conversation_id,
-            instructions,
+            forked_from_id,
             source,
+            base_instructions,
         }
     }
 
@@ -91,24 +97,60 @@ impl RolloutRecorderParams {
 }
 
 impl RolloutRecorder {
-    /// List conversations (rollout files) under the provided Codex home directory.
-    pub async fn list_conversations(
+    /// List threads (rollout files) under the provided Codex home directory.
+    pub async fn list_threads(
         codex_home: &Path,
         page_size: usize,
         cursor: Option<&Cursor>,
+        sort_key: ThreadSortKey,
         allowed_sources: &[SessionSource],
         model_providers: Option<&[String]>,
         default_provider: &str,
-    ) -> std::io::Result<ConversationsPage> {
-        get_conversations(
+    ) -> std::io::Result<ThreadsPage> {
+        get_threads(
             codex_home,
             page_size,
             cursor,
+            sort_key,
             allowed_sources,
             model_providers,
             default_provider,
         )
         .await
+    }
+
+    /// Find the newest recorded thread path, optionally filtering to a matching cwd.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn find_latest_thread_path(
+        codex_home: &Path,
+        page_size: usize,
+        cursor: Option<&Cursor>,
+        sort_key: ThreadSortKey,
+        allowed_sources: &[SessionSource],
+        model_providers: Option<&[String]>,
+        default_provider: &str,
+        filter_cwd: Option<&Path>,
+    ) -> std::io::Result<Option<PathBuf>> {
+        let mut cursor = cursor.cloned();
+        loop {
+            let page = Self::list_threads(
+                codex_home,
+                page_size,
+                cursor.as_ref(),
+                sort_key,
+                allowed_sources,
+                model_providers,
+                default_provider,
+            )
+            .await?;
+            if let Some(path) = select_resume_path(&page, filter_cwd) {
+                return Ok(Some(path));
+            }
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                return Ok(None);
+            }
+        }
     }
 
     /// Attempt to create a new [`RolloutRecorder`]. If the sessions directory
@@ -118,8 +160,9 @@ impl RolloutRecorder {
         let (file, rollout_path, meta) = match params {
             RolloutRecorderParams::Create {
                 conversation_id,
-                instructions,
+                forked_from_id,
                 source,
+                base_instructions,
             } => {
                 let LogFileInfo {
                     file,
@@ -141,13 +184,14 @@ impl RolloutRecorder {
                     path,
                     Some(SessionMeta {
                         id: session_id,
+                        forked_from_id,
                         timestamp,
                         cwd: config.cwd.clone(),
-                        originator: originator().value.clone(),
+                        originator: originator().value,
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
-                        instructions,
                         source,
                         model_provider: Some(config.model_provider_id.clone()),
+                        base_instructions: Some(base_instructions),
                     }),
                 )
             }
@@ -215,7 +259,7 @@ impl RolloutRecorder {
         }
 
         let mut items: Vec<RolloutItem> = Vec::new();
-        let mut conversation_id: Option<ConversationId> = None;
+        let mut thread_id: Option<ThreadId> = None;
         for line in text.lines() {
             if line.trim().is_empty() {
                 continue;
@@ -233,9 +277,9 @@ impl RolloutRecorder {
                 Ok(rollout_line) => match rollout_line.item {
                     RolloutItem::SessionMeta(session_meta_line) => {
                         // Use the FIRST SessionMeta encountered in the file as the canonical
-                        // conversation id and main session information. Keep all items intact.
-                        if conversation_id.is_none() {
-                            conversation_id = Some(session_meta_line.meta.id);
+                        // thread id and main session information. Keep all items intact.
+                        if thread_id.is_none() {
+                            thread_id = Some(session_meta_line.meta.id);
                         }
                         items.push(RolloutItem::SessionMeta(session_meta_line));
                     }
@@ -259,12 +303,12 @@ impl RolloutRecorder {
         }
 
         info!(
-            "Resumed rollout with {} items, conversation ID: {:?}",
+            "Resumed rollout with {} items, thread ID: {:?}",
             items.len(),
-            conversation_id
+            thread_id
         );
-        let conversation_id = conversation_id
-            .ok_or_else(|| IoError::other("failed to parse conversation ID from rollout file"))?;
+        let conversation_id = thread_id
+            .ok_or_else(|| IoError::other("failed to parse thread ID from rollout file"))?;
 
         if items.is_empty() {
             return Ok(InitialHistory::New);
@@ -302,16 +346,13 @@ struct LogFileInfo {
     path: PathBuf,
 
     /// Session ID (also embedded in filename).
-    conversation_id: ConversationId,
+    conversation_id: ThreadId,
 
     /// Timestamp for the start of the session.
     timestamp: OffsetDateTime,
 }
 
-fn create_log_file(
-    config: &Config,
-    conversation_id: ConversationId,
-) -> std::io::Result<LogFileInfo> {
+fn create_log_file(config: &Config, conversation_id: ThreadId) -> std::io::Result<LogFileInfo> {
     // Resolve ~/.codex/sessions/YYYY/MM/DD and create it if missing.
     let timestamp = OffsetDateTime::now_local()
         .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
@@ -421,4 +462,37 @@ impl JsonlWriter {
         self.file.flush().await?;
         Ok(())
     }
+}
+
+fn select_resume_path(page: &ThreadsPage, filter_cwd: Option<&Path>) -> Option<PathBuf> {
+    match filter_cwd {
+        Some(cwd) => page.items.iter().find_map(|item| {
+            if session_cwd_matches(&item.head, cwd) {
+                Some(item.path.clone())
+            } else {
+                None
+            }
+        }),
+        None => page.items.first().map(|item| item.path.clone()),
+    }
+}
+
+fn session_cwd_matches(head: &[serde_json::Value], cwd: &Path) -> bool {
+    let Some(session_cwd) = extract_session_cwd(head) else {
+        return false;
+    };
+    if let (Ok(ca), Ok(cb)) = (
+        path_utils::normalize_for_path_comparison(&session_cwd),
+        path_utils::normalize_for_path_comparison(cwd),
+    ) {
+        return ca == cb;
+    }
+    session_cwd == cwd
+}
+
+fn extract_session_cwd(head: &[serde_json::Value]) -> Option<PathBuf> {
+    head.iter().find_map(|value| {
+        let meta_line = serde_json::from_value::<SessionMetaLine>(value.clone()).ok()?;
+        Some(meta_line.meta.cwd)
+    })
 }

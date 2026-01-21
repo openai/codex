@@ -3,6 +3,7 @@ pub mod loader;
 pub mod manager;
 pub mod model;
 pub mod render;
+pub mod system;
 
 pub(crate) use injection::SkillInjections;
 pub(crate) use injection::build_skill_injections;

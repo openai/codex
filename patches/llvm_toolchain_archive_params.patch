@@ -1,0 +1,52 @@
+diff --git a/toolchain/cc_toolchain.bzl b/toolchain/cc_toolchain.bzl
+index 58da8ec..bf1fbdd 100644
+--- a/toolchain/cc_toolchain.bzl
++++ b/toolchain/cc_toolchain.bzl
+@@ -26,6 +26,7 @@ def cc_toolchain(name, tool_map):
+     cc_feature_set(
+         name = name + "_runtimes_only_known_features",
+         all_of = [
++            "//toolchain/features:archive_param_file",
+             # Always last (contains user_compile_flags and user_link_flags who should apply last).
+             "@rules_cc//cc/toolchains/args:experimental_replace_legacy_action_config_features",
+         ],
+@@ -45,6 +46,7 @@ def cc_toolchain(name, tool_map):
+             ],
+             "@platforms//os:none": [],
+         }) + [
++            "//toolchain/features:archive_param_file",
+             "//toolchain/features/legacy:all_legacy_builtin_features",
+             # Always last (contains user_compile_flags and user_link_flags who should apply last).
+             "@rules_cc//cc/toolchains/args:experimental_replace_legacy_action_config_features",
+@@ -54,6 +56,7 @@ def cc_toolchain(name, tool_map):
+     cc_feature_set(
+         name = name + "_runtimes_only_enabled_features",
+         all_of = [
++            "//toolchain/features:archive_param_file",
+             # Always last (contains user_compile_flags and user_link_flags who should apply last).
+             "@rules_cc//cc/toolchains/args:experimental_replace_legacy_action_config_features",
+         ],
+diff --git a/toolchain/features/BUILD.bazel b/toolchain/features/BUILD.bazel
+index e787484..bccd45b 100644
+--- a/toolchain/features/BUILD.bazel
++++ b/toolchain/features/BUILD.bazel
+@@ -17,6 +17,11 @@ cc_feature(
+     overrides = "@rules_cc//cc/toolchains/features:static_link_cpp_runtimes",
+ )
+ 
++cc_feature(
++    name = "archive_param_file",
++    feature_name = "archive_param_file",
++)
++
+ cc_args(
+     name = "opt_link_flags",
+     actions = [
+@@ -124,6 +129,7 @@ cc_feature(
+ cc_feature_set(
+     name = "all_non_legacy_builtin_features",
+     all_of = [
++        ":archive_param_file",
+         ":opt",
+         ":opt_stub",
+         ":dbg",

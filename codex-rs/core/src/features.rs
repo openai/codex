@@ -7,21 +7,59 @@
 
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
+use codex_otel::OtelManager;
+use schemars::JsonSchema;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 mod legacy;
 pub(crate) use legacy::LegacyFeatureToggles;
+pub(crate) use legacy::legacy_feature_keys;
 
 /// High-level lifecycle stage for a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
-    Experimental,
+    /// Closed beta features to be used while developing or within the company.
     Beta,
+    /// Experimental features made available to users through the `/experimental` menu
+    Experimental {
+        name: &'static str,
+        menu_description: &'static str,
+        announcement: &'static str,
+    },
+    /// Stable features. The feature flag is kept for ad-hoc enabling/disabling
     Stable,
+    /// Deprecated feature that should not be used anymore.
     Deprecated,
+    /// The feature flag is useless but kept for backward compatibility reason.
     Removed,
+}
+
+impl Stage {
+    pub fn beta_menu_name(self) -> Option<&'static str> {
+        match self {
+            Stage::Experimental { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
+    pub fn beta_menu_description(self) -> Option<&'static str> {
+        match self {
+            Stage::Experimental {
+                menu_description, ..
+            } => Some(menu_description),
+            _ => None,
+        }
+    }
+
+    pub fn beta_announcement(self) -> Option<&'static str> {
+        match self {
+            Stage::Experimental { announcement, .. } => Some(announcement),
+            _ => None,
+        }
+    }
 }
 
 /// Unique features toggled via configuration.
@@ -30,22 +68,19 @@ pub enum Feature {
     // Stable.
     /// Create a ghost commit at each turn.
     GhostCommit,
-    /// Include the view_image tool.
-    ViewImageTool,
-    /// Send warnings to the model to correct it on the tool usage.
-    ModelWarnings,
     /// Enable the default shell tool.
     ShellTool,
 
     // Experimental
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
-    /// Enable experimental RMCP features such as OAuth login.
-    RmcpClient,
     /// Include the freeform apply_patch tool.
     ApplyPatchFreeform,
-    /// Allow the model to request web searches.
+    /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
+    /// Allow the model to request web searches that fetch cached content.
+    /// Takes precedence over `WebSearchRequest`.
+    WebSearchCached,
     /// Gate the execpolicy enforcement for shell/unified exec.
     ExecPolicy,
     /// Enable Windows sandbox (restricted token) on Windows.
@@ -56,14 +91,22 @@ pub enum Feature {
     RemoteCompaction,
     /// Refresh remote models and emit AppReady once the list is available.
     RemoteModels,
-    /// Allow model to call multiple tools in parallel (only for models supporting it).
-    ParallelToolCalls,
-    /// Experimental skills injection (CLI flag-driven).
-    Skills,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Append additional AGENTS.md guidance to user instructions.
+    ChildAgentsMd,
     /// Experimental TUI v2 (viewport) implementation.
     Tui2,
+    /// Enforce UTF8 output in Powershell.
+    PowershellUtf8,
+    /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
+    EnableRequestCompression,
+    /// Enable collab tools.
+    Collab,
+    /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
+    Steer,
+    /// Enable collaboration modes (Plan, Pair Programming, Execute).
+    CollaborationModes,
 }
 
 impl Feature {
@@ -166,6 +209,21 @@ impl Features {
             .map(|usage| (usage.alias.as_str(), usage.feature))
     }
 
+    pub fn emit_metrics(&self, otel: &OtelManager) {
+        for feature in FEATURES {
+            if self.enabled(feature.id) != feature.default_enabled {
+                otel.counter(
+                    "codex.feature.state",
+                    1,
+                    &[
+                        ("feature", feature.key),
+                        ("value", &self.enabled(feature.id).to_string()),
+                    ],
+                );
+            }
+        }
+    }
+
     /// Apply a table of key -> bool toggles (e.g. from TOML).
     pub fn apply_map(&mut self, m: &BTreeMap<String, bool>) {
         for (k, v) in m {
@@ -197,9 +255,7 @@ impl Features {
         let base_legacy = LegacyFeatureToggles {
             experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
             experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
-            experimental_use_rmcp_client: cfg.experimental_use_rmcp_client,
             tools_web_search: cfg.tools.as_ref().and_then(|t| t.web_search),
-            tools_view_image: cfg.tools.as_ref().and_then(|t| t.view_image),
             ..Default::default()
         };
         base_legacy.apply(&mut features);
@@ -214,9 +270,7 @@ impl Features {
                 .experimental_use_freeform_apply_patch,
 
             experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
-            experimental_use_rmcp_client: config_profile.experimental_use_rmcp_client,
             tools_web_search: config_profile.tools_web_search,
-            tools_view_image: config_profile.tools_view_image,
         };
         profile_legacy.apply(&mut features);
         if let Some(profile_features) = config_profile.features.as_ref() {
@@ -226,6 +280,10 @@ impl Features {
         overrides.apply(&mut features);
 
         features
+    }
+
+    pub fn enabled_features(&self) -> Vec<Feature> {
+        self.enabled.iter().copied().collect()
     }
 }
 
@@ -245,7 +303,7 @@ pub fn is_known_feature_key(key: &str) -> bool {
 }
 
 /// Deserializable features table for TOML.
-#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 pub struct FeaturesToml {
     #[serde(flatten)]
     pub entries: BTreeMap<String, bool>,
@@ -266,19 +324,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::GhostCommit,
         key: "undo",
         stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::ParallelToolCalls,
-        key: "parallel",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::ViewImageTool,
-        key: "view_image_tool",
-        stage: Stage::Stable,
-        default_enabled: true,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ShellTool,
@@ -287,22 +333,42 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
-        id: Feature::ModelWarnings,
-        key: "warnings",
+        id: Feature::WebSearchRequest,
+        key: "web_search_request",
         stage: Stage::Stable,
-        default_enabled: true,
-    },
-    // Unstable features.
-    FeatureSpec {
-        id: Feature::UnifiedExec,
-        key: "unified_exec",
-        stage: Stage::Experimental,
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::RmcpClient,
-        key: "rmcp_client",
-        stage: Stage::Experimental,
+        id: Feature::WebSearchCached,
+        key: "web_search_cached",
+        stage: Stage::Beta,
+        default_enabled: false,
+    },
+    // Beta program. Rendered in the `/experimental` menu for users.
+    FeatureSpec {
+        id: Feature::UnifiedExec,
+        key: "unified_exec",
+        stage: Stage::Experimental {
+            name: "Background terminal",
+            menu_description: "Run long-running terminal commands in the background.",
+            announcement: "NEW! Try Background terminals for long-running commands. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ShellSnapshot,
+        key: "shell_snapshot",
+        stage: Stage::Experimental {
+            name: "Shell snapshot",
+            menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
+            announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ChildAgentsMd,
+        key: "child_agents_md",
+        stage: Stage::Beta,
         default_enabled: false,
     },
     FeatureSpec {
@@ -312,57 +378,87 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::WebSearchRequest,
-        key: "web_search_request",
-        stage: Stage::Stable,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::ExecPolicy,
         key: "exec_policy",
-        stage: Stage::Experimental,
+        stage: Stage::Beta,
         default_enabled: true,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,
-        key: "enable_experimental_windows_sandbox",
-        stage: Stage::Experimental,
+        key: "experimental_windows_sandbox",
+        stage: Stage::Beta,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandboxElevated,
-        key: "enable_elevated_windows_sandbox",
-        stage: Stage::Experimental,
+        key: "elevated_windows_sandbox",
+        stage: Stage::Beta,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::RemoteCompaction,
         key: "remote_compaction",
-        stage: Stage::Experimental,
+        stage: Stage::Beta,
         default_enabled: true,
     },
     FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
-        stage: Stage::Experimental,
+        stage: Stage::Beta,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::PowershellUtf8,
+        key: "powershell_utf8",
+        #[cfg(windows)]
+        stage: Stage::Experimental {
+            name: "Powershell UTF-8 support",
+            menu_description: "Enable UTF-8 output in Powershell.",
+            announcement: "Codex now supports UTF-8 output in Powershell. If you are seeing problems, disable in /experimental.",
+        },
+        #[cfg(windows)]
+        default_enabled: true,
+        #[cfg(not(windows))]
+        stage: Stage::Beta,
+        #[cfg(not(windows))]
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::Skills,
-        key: "skills",
-        stage: Stage::Experimental,
+        id: Feature::EnableRequestCompression,
+        key: "enable_request_compression",
+        stage: Stage::Beta,
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ShellSnapshot,
-        key: "shell_snapshot",
-        stage: Stage::Experimental,
+        id: Feature::Collab,
+        key: "collab",
+        stage: Stage::Experimental {
+            name: "Multi-agents",
+            menu_description: "Allow Codex to spawn and collaborate with other agents on request (formerly named `collab`).",
+            announcement: "NEW! Codex can now spawn other agents and work with them to solve your problems. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Tui2,
         key: "tui2",
-        stage: Stage::Experimental,
+        stage: Stage::Beta,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Steer,
+        key: "steer",
+        stage: Stage::Experimental {
+            name: "Steer conversation",
+            menu_description: "Enter submits immediately; Tab queues messages when a task is running.",
+            announcement: "NEW! Try Steer mode: Enter submits immediately, Tab queues. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CollaborationModes,
+        key: "collaboration_modes",
+        stage: Stage::Beta,
         default_enabled: false,
     },
 ];
