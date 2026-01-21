@@ -47,14 +47,30 @@ impl TextElement {
         }
     }
 
+    /// Returns a copy of this element with a remapped byte range.
+    ///
+    /// The placeholder is preserved as-is; callers must ensure the new range
+    /// still refers to the same logical element (and same placeholder)
+    /// within the new text.
+    pub fn map_range<F>(&self, map: F) -> Self
+    where
+        F: FnOnce(ByteRange) -> ByteRange,
+    {
+        Self {
+            byte_range: map(self.byte_range),
+            placeholder: self.placeholder.clone(),
+        }
+    }
+
     pub fn set_placeholder(&mut self, placeholder: Option<String>) {
         self.placeholder = placeholder;
     }
 
     /// Returns the stored placeholder without falling back to the text buffer.
     ///
-    /// This is intended only for protocol conversions where the full text is not
-    /// available; prefer `placeholder(text)` for UI logic.
+    /// This must only be used inside `From<TextElement>` implementations on equivalent
+    /// protocol types where the source text is unavailable. Prefer `placeholder(text)`
+    /// everywhere else.
     #[doc(hidden)]
     pub fn _placeholder_for_conversion_only(&self) -> Option<&str> {
         self.placeholder.as_deref()
