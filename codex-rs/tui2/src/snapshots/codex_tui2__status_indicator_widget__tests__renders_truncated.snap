@@ -1,6 +1,0 @@
----
-source: tui2/src/status_indicator_widget.rs
-expression: terminal.backend()
----
-"• Working (0s • esc "
-"                    "
