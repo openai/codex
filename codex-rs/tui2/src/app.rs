@@ -456,6 +456,8 @@ impl App {
 
     async fn shutdown_current_conversation(&mut self) {
         self.review_thread_ids.clear();
+        self.external_approval_routes.clear();
+        self.paused_codex_events.clear();
         if let Some(conversation_id) = self.chat_widget.conversation_id() {
             // Clear any in-flight rollback guard when switching conversations.
             self.backtrack.pending_rollback = None;
