@@ -2864,7 +2864,7 @@ ZIG_VAR = "3"
     async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
-        let cwd_path = PathBuf::from("/tmp/codex-mcp");
+        let cwd_path = AbsolutePathBuf::from_absolute_path("/tmp/codex-mcp").expect("expected cwd");
         let servers = BTreeMap::from([(
             "docs".to_string(),
             McpServerConfig {
@@ -2901,7 +2901,10 @@ ZIG_VAR = "3"
         let docs = loaded.get("docs").expect("docs entry");
         match &docs.transport {
             McpServerTransportConfig::Stdio { cwd, .. } => {
-                assert_eq!(cwd.as_deref(), Some(Path::new("/tmp/codex-mcp")));
+                assert_eq!(
+                    cwd.as_ref().map(AbsolutePathBuf::as_path),
+                    Some(Path::new("/tmp/codex-mcp"))
+                );
             }
             other => panic!("unexpected transport {other:?}"),
         }

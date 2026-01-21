@@ -865,6 +865,7 @@ async fn make_rmcp_client(
         } => {
             let command_os: OsString = command.into();
             let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
+            let cwd = cwd.map(codex_utils_absolute_path::AbsolutePathBuf::into_path_buf);
             RmcpClient::new_stdio_client(command_os, args_os, env, &env_vars, cwd)
                 .await
                 .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
