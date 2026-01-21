@@ -5,6 +5,8 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 #[cfg(test)]
+use std::sync::Mutex;
+#[cfg(test)]
 use std::sync::atomic::AtomicBool;
 
 use codex_core::error::CodexErr;
@@ -268,6 +270,39 @@ static FORCE_MAKE_MOUNTS_PRIVATE_PERMISSION_DENIED: AtomicBool = AtomicBool::new
 static FORCE_BIND_MOUNT_PERMISSION_DENIED: AtomicBool = AtomicBool::new(false);
 #[cfg(test)]
 static FORCE_DROP_CAPS_SUCCESS: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static FORCE_FLAGS_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+fn reset_force_flags() {
+    FORCE_UNSHARE_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
+    FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
+    FORCE_RUNNING_AS_ROOT.store(false, std::sync::atomic::Ordering::SeqCst);
+    FORCE_WRITE_USER_NAMESPACE_MAPS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
+    FORCE_WRITE_USER_NAMESPACE_MAPS_PERMISSION_DENIED
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    FORCE_MAKE_MOUNTS_PRIVATE_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
+    FORCE_MAKE_MOUNTS_PRIVATE_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
+    FORCE_BIND_MOUNT_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
+    FORCE_DROP_CAPS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[cfg(test)]
+struct ForceFlagsGuard(std::sync::MutexGuard<'static, ()>);
+
+#[cfg(test)]
+impl Drop for ForceFlagsGuard {
+    fn drop(&mut self) {
+        reset_force_flags();
+    }
+}
+
+#[cfg(test)]
+fn force_flags_guard() -> ForceFlagsGuard {
+    let guard = FORCE_FLAGS_LOCK.lock().expect("force flags lock");
+    reset_force_flags();
+    ForceFlagsGuard(guard)
+}
 
 fn sandbox_debug_enabled() -> bool {
     matches!(
@@ -525,6 +560,7 @@ mod tests {
 
     #[test]
     fn apply_read_only_mounts_falls_back_on_permission_denied() {
+        let _guard = force_flags_guard();
         FORCE_UNSHARE_PERMISSION_DENIED.store(true, std::sync::atomic::Ordering::SeqCst);
         let tempdir = tempfile::tempdir().expect("tempdir");
         let dot_git = tempdir.path().join(".git");
@@ -539,13 +575,12 @@ mod tests {
 
         let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
 
-        FORCE_UNSHARE_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
-        FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
         assert!(result.is_ok());
     }
 
     #[test]
     fn apply_read_only_mounts_root_falls_back_on_permission_denied() {
+        let _guard = force_flags_guard();
         FORCE_RUNNING_AS_ROOT.store(true, std::sync::atomic::Ordering::SeqCst);
         FORCE_UNSHARE_PERMISSION_DENIED.store(true, std::sync::atomic::Ordering::SeqCst);
         let tempdir = tempfile::tempdir().expect("tempdir");
@@ -561,14 +596,12 @@ mod tests {
 
         let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
 
-        FORCE_RUNNING_AS_ROOT.store(false, std::sync::atomic::Ordering::SeqCst);
-        FORCE_UNSHARE_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
-        FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
         assert!(result.is_ok());
     }
 
     #[test]
     fn apply_read_only_mounts_falls_back_on_user_namespace_map_permission_denied() {
+        let _guard = force_flags_guard();
         FORCE_UNSHARE_USERNS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
         FORCE_WRITE_USER_NAMESPACE_MAPS_PERMISSION_DENIED
             .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -586,14 +619,12 @@ mod tests {
         let err = apply_read_only_mounts(&sandbox_policy, tempdir.path())
             .expect_err("expected permission denied error");
 
-        FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
-        FORCE_WRITE_USER_NAMESPACE_MAPS_PERMISSION_DENIED
-            .store(false, std::sync::atomic::Ordering::SeqCst);
         assert!(is_permission_denied(&err));
     }
 
     #[test]
     fn apply_read_only_mounts_falls_back_on_make_mounts_private_permission_denied() {
+        let _guard = force_flags_guard();
         FORCE_UNSHARE_USERNS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
         FORCE_WRITE_USER_NAMESPACE_MAPS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
         FORCE_MAKE_MOUNTS_PRIVATE_PERMISSION_DENIED
@@ -612,16 +643,12 @@ mod tests {
 
         let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
 
-        FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
-        FORCE_WRITE_USER_NAMESPACE_MAPS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
-        FORCE_MAKE_MOUNTS_PRIVATE_PERMISSION_DENIED
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-        FORCE_DROP_CAPS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
         assert!(result.is_ok());
     }
 
     #[test]
     fn apply_read_only_mounts_falls_back_on_bind_mount_permission_denied() {
+        let _guard = force_flags_guard();
         FORCE_UNSHARE_USERNS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
         FORCE_WRITE_USER_NAMESPACE_MAPS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
         FORCE_MAKE_MOUNTS_PRIVATE_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -640,11 +667,6 @@ mod tests {
 
         let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
 
-        FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
-        FORCE_WRITE_USER_NAMESPACE_MAPS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
-        FORCE_MAKE_MOUNTS_PRIVATE_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
-        FORCE_BIND_MOUNT_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
-        FORCE_DROP_CAPS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
         assert!(result.is_ok());
     }
 }
