@@ -15,8 +15,10 @@ use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
+use codex_core::ThreadSortKey;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
@@ -24,6 +26,7 @@ use codex_core::config::resolve_oss_provider;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
+use codex_core::read_session_meta_line;
 use codex_core::terminal::Multiplexer;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
@@ -46,6 +49,8 @@ mod chatwidget;
 mod cli;
 mod clipboard_copy;
 mod clipboard_paste;
+mod collab;
+mod collaboration_modes;
 mod color;
 pub mod custom_terminal;
 mod diff_render;
@@ -138,7 +143,7 @@ pub async fn run_main(
     if cli.web_search {
         cli.config_overrides
             .raw_overrides
-            .push("features.web_search_request=true".to_string());
+            .push("web_search=\"live\"".to_string());
     }
 
     // When using `--oss`, let the bootstrapper pick the model (defaulting to
@@ -259,7 +264,6 @@ pub async fn run_main(
         std::process::exit(1);
     }
 
-    let active_profile = config.active_profile.clone();
     let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
@@ -352,16 +356,9 @@ pub async fn run_main(
     let terminal_info = codex_core::terminal::terminal_info();
     tracing::info!(terminal = ?terminal_info, "Detected terminal info");
 
-    run_ratatui_app(
-        cli,
-        config,
-        overrides,
-        cli_kv_overrides,
-        active_profile,
-        feedback,
-    )
-    .await
-    .map_err(|err| std::io::Error::other(err.to_string()))
+    run_ratatui_app(cli, config, overrides, cli_kv_overrides, feedback)
+        .await
+        .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 async fn run_ratatui_app(
@@ -369,7 +366,6 @@ async fn run_ratatui_app(
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
-    active_profile: Option<String>,
     feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
     color_eyre::install()?;
@@ -421,15 +417,15 @@ async fn run_ratatui_app(
         initial_config.cli_auth_credentials_store_mode,
     );
     let login_status = get_login_status(&initial_config);
-    let should_show_trust_screen = should_show_trust_screen(&initial_config);
+    let should_show_trust_screen_flag = should_show_trust_screen(&initial_config);
     let should_show_onboarding =
-        should_show_onboarding(login_status, &initial_config, should_show_trust_screen);
+        should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
 
     let config = if should_show_onboarding {
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
                 show_login_screen: should_show_login_screen(login_status, &initial_config),
-                show_trust_screen: should_show_trust_screen,
+                show_trust_screen: should_show_trust_screen_flag,
                 login_status,
                 auth_manager: auth_manager.clone(),
                 config: initial_config.clone(),
@@ -455,7 +451,7 @@ async fn run_ratatui_app(
             .map(|d| d == TrustDirectorySelection::Trust)
             .unwrap_or(false)
         {
-            load_config_or_exit(cli_kv_overrides, overrides).await
+            load_config_or_exit(cli_kv_overrides.clone(), overrides.clone()).await
         } else {
             initial_config
         }
@@ -499,6 +495,7 @@ async fn run_ratatui_app(
                 &config.codex_home,
                 1,
                 None,
+                ThreadSortKey::UpdatedAt,
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 &config.model_provider_id,
@@ -544,22 +541,25 @@ async fn run_ratatui_app(
         }
     } else if cli.resume_last {
         let provider_filter = vec![config.model_provider_id.clone()];
-        match RolloutRecorder::list_threads(
+        let filter_cwd = if cli.resume_show_all {
+            None
+        } else {
+            Some(config.cwd.as_path())
+        };
+        match RolloutRecorder::find_latest_thread_path(
             &config.codex_home,
             1,
             None,
+            ThreadSortKey::UpdatedAt,
             INTERACTIVE_SESSION_SOURCES,
             Some(provider_filter.as_slice()),
             &config.model_provider_id,
+            filter_cwd,
         )
         .await
         {
-            Ok(page) => page
-                .items
-                .first()
-                .map(|it| resume_picker::SessionSelection::Resume(it.path.clone()))
-                .unwrap_or(resume_picker::SessionSelection::StartFresh),
-            Err(_) => resume_picker::SessionSelection::StartFresh,
+            Ok(Some(path)) => resume_picker::SessionSelection::Resume(path),
+            _ => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
         match resume_picker::run_resume_picker(
@@ -586,6 +586,33 @@ async fn run_ratatui_app(
     } else {
         resume_picker::SessionSelection::StartFresh
     };
+
+    let config = match &session_selection {
+        resume_picker::SessionSelection::Resume(path)
+        | resume_picker::SessionSelection::Fork(path) => {
+            let history_cwd = match read_session_meta_line(path).await {
+                Ok(meta_line) => Some(meta_line.meta.cwd),
+                Err(err) => {
+                    let rollout_path = path.display().to_string();
+                    tracing::warn!(
+                        %rollout_path,
+                        %err,
+                        "Failed to read session metadata from rollout"
+                    );
+                    None
+                }
+            };
+            load_config_or_exit_with_fallback_cwd(
+                cli_kv_overrides.clone(),
+                overrides.clone(),
+                history_cwd,
+            )
+            .await
+        }
+        _ => config,
+    };
+    let active_profile = config.active_profile.clone();
+    let should_show_trust_screen = should_show_trust_screen(&config);
 
     let Cli {
         prompt,
@@ -693,8 +720,22 @@ async fn load_config_or_exit(
     cli_kv_overrides: Vec<(String, toml::Value)>,
     overrides: ConfigOverrides,
 ) -> Config {
+    load_config_or_exit_with_fallback_cwd(cli_kv_overrides, overrides, None).await
+}
+
+async fn load_config_or_exit_with_fallback_cwd(
+    cli_kv_overrides: Vec<(String, toml::Value)>,
+    overrides: ConfigOverrides,
+    fallback_cwd: Option<PathBuf>,
+) -> Config {
     #[allow(clippy::print_stderr)]
-    match Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await {
+    match ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides)
+        .harness_overrides(overrides)
+        .fallback_cwd(fallback_cwd)
+        .build()
+        .await
+    {
         Ok(config) => config,
         Err(err) => {
             eprintln!("Error loading configuration: {err}");

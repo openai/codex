@@ -28,7 +28,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use serde_json::Value;
 use serde_json::json;
-
 fn call_output(req: &ResponsesRequest, call_id: &str) -> (String, Option<bool>) {
     let raw = req.function_call_output(call_id);
     assert_eq!(
@@ -82,6 +81,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please run the shell command".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -90,6 +90,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -148,6 +149,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please update the plan".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -156,6 +158,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -224,6 +227,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please update the plan".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -232,6 +236,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -312,6 +317,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please apply a patch".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -320,6 +326,7 @@ async fn apply_patch_tool_executes_and_emits_patch_events() -> anyhow::Result<()
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -408,6 +415,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please apply a patch".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
@@ -416,6 +424,7 @@ async fn apply_patch_reports_parse_diagnostics() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 

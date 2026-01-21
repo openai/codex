@@ -24,6 +24,7 @@ libc = { workspace = true }
 seccompiler = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",

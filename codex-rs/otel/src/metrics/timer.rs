@@ -2,6 +2,7 @@ use crate::metrics::MetricsClient;
 use crate::metrics::error::Result;
 use std::time::Instant;
 
+#[derive(Debug)]
 pub struct Timer {
     name: String,
     tags: Vec<(String, String)>,
@@ -11,7 +12,7 @@ pub struct Timer {
 
 impl Drop for Timer {
     fn drop(&mut self) {
-        if let Err(e) = self.record() {
+        if let Err(e) = self.record(&[]) {
             tracing::error!("metrics client error: {}", e);
         }
     }
@@ -30,12 +31,10 @@ impl Timer {
         }
     }
 
-    pub fn record(&self) -> Result<()> {
-        let tags = self
-            .tags
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect::<Vec<_>>();
+    pub fn record(&self, additional_tags: &[(&str, &str)]) -> Result<()> {
+        let mut tags = Vec::with_capacity(self.tags.len() + additional_tags.len());
+        tags.extend(additional_tags);
+        tags.extend(self.tags.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         self.client
             .record_duration(&self.name, self.start_time.elapsed(), &tags)
     }

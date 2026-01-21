@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_core::features::Feature;
+use codex_protocol::config_types::WebSearchMode;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
 use core_test_support::responses::start_mock_server;
@@ -32,7 +34,13 @@ async fn collect_tool_identifiers_for_model(model: &str) -> Vec<String> {
     let sse = sse_completed(model);
     let resp_mock = responses::mount_sse_once(&server, sse).await;
 
-    let mut builder = test_codex().with_model(model);
+    let mut builder = test_codex()
+        .with_model(model)
+        // Keep tool expectations stable when the default web_search mode changes.
+        .with_config(|config| {
+            config.web_search_mode = Some(WebSearchMode::Cached);
+            config.features.enable(Feature::CollaborationModes);
+        });
     let test = builder
         .build(&server)
         .await
@@ -58,6 +66,8 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
+            "request_user_input".to_string(),
+            "web_search".to_string(),
             "view_image".to_string()
         ],
         "codex-mini-latest should expose the local shell tool",
@@ -72,7 +82,9 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
+            "request_user_input".to_string(),
             "apply_patch".to_string(),
+            "web_search".to_string(),
             "view_image".to_string()
         ],
         "gpt-5-codex should expose the apply_patch tool",
@@ -87,7 +99,9 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
+            "request_user_input".to_string(),
             "apply_patch".to_string(),
+            "web_search".to_string(),
             "view_image".to_string()
         ],
         "gpt-5.1-codex should expose the apply_patch tool",
@@ -102,6 +116,8 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
+            "request_user_input".to_string(),
+            "web_search".to_string(),
             "view_image".to_string()
         ],
         "gpt-5 should expose the apply_patch tool",
@@ -116,7 +132,9 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
+            "request_user_input".to_string(),
             "apply_patch".to_string(),
+            "web_search".to_string(),
             "view_image".to_string()
         ],
         "gpt-5.1 should expose the apply_patch tool",
@@ -131,7 +149,9 @@ async fn model_selects_expected_tools() {
             "list_mcp_resource_templates".to_string(),
             "read_mcp_resource".to_string(),
             "update_plan".to_string(),
+            "request_user_input".to_string(),
             "apply_patch".to_string(),
+            "web_search".to_string(),
             "view_image".to_string()
         ],
         "exp-5.1 should expose the apply_patch tool",

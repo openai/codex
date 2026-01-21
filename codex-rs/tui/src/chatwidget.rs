@@ -26,7 +26,9 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 
+use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
 use codex_core::config::Config;
@@ -54,6 +56,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExecCommandOutputDeltaEvent;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
@@ -84,11 +87,17 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::Settings;
+use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -98,6 +107,8 @@ use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
@@ -106,7 +117,10 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
 
+const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
+
 use crate::app_event::AppEvent;
+use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
@@ -116,14 +130,19 @@ use crate::bottom_pane::BetaFeatureItem;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::InputResult;
+use crate::bottom_pane::LocalImageAttachment;
+use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::clipboard_paste::paste_image_to_temp_png;
+use crate::collab;
+use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
@@ -135,6 +154,8 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::key_hint;
+use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
@@ -331,14 +352,13 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) config: Config,
     pub(crate) frame_requester: FrameRequester,
     pub(crate) app_event_tx: AppEventSender,
-    pub(crate) initial_prompt: Option<String>,
-    pub(crate) initial_images: Vec<PathBuf>,
+    pub(crate) initial_user_message: Option<UserMessage>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
-    pub(crate) model: String,
+    pub(crate) model: Option<String>,
 }
 
 #[derive(Default)]
@@ -357,12 +377,18 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
-/// Maintains the per-session UI state for the chat screen.
+/// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
-/// This type owns the state derived from a `codex_core::protocol` event stream (history cells,
-/// active streaming buffers, bottom-pane overlays, and transient status text). It is not
-/// responsible for running the agent itself; it only reflects progress by updating UI state and by
-/// sending `Op` requests back to codex-core.
+/// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
+/// buffers, bottom-pane overlays, and transient status text) and turns key presses into user
+/// intent (`Op` submissions and `AppEvent` requests).
+///
+/// It is not responsible for running the agent itself; it reflects progress by updating UI state
+/// and by sending requests back to codex-core.
+///
+/// Quit/interrupt behavior intentionally spans layers: the bottom pane owns local input routing
+/// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
+/// active work, arming the double-press quit shortcut, and requesting shutdown-first exit.
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -379,7 +405,12 @@ pub(crate) struct ChatWidget {
     /// where the overlay may briefly treat new tail content as already cached.
     active_cell_revision: u64,
     config: Config,
-    model: String,
+    /// Stored collaboration mode with model and reasoning effort.
+    ///
+    /// When collaboration modes feature is enabled, this is initialized to the first preset.
+    /// When disabled, this is Custom. The model and reasoning effort are stored here instead of
+    /// being read from config or current_model.
+    stored_collaboration_mode: CollaborationMode,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     session_header: SessionHeader,
@@ -420,6 +451,7 @@ pub(crate) struct ChatWidget {
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     thread_id: Option<ThreadId>,
+    forked_from: Option<ThreadId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -430,12 +462,29 @@ pub(crate) struct ChatWidget {
     queued_user_messages: VecDeque<UserMessage>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
+    /// When `Some`, the user has pressed a quit shortcut and the second press
+    /// must occur before `quit_shortcut_expires_at`.
+    quit_shortcut_expires_at: Option<Instant>,
+    /// Tracks which quit shortcut key was pressed first.
+    ///
+    /// We require the second press to match this key so `Ctrl+C` followed by
+    /// `Ctrl+D` (or vice versa) doesn't quit accidentally.
+    quit_shortcut_key: Option<KeyBinding>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
-    // Whether to add a final message separator after the last message
+    // Whether the next streamed assistant content should be preceded by a final message separator.
+    //
+    // This is set whenever we insert a visible history cell that conceptually belongs to a turn.
+    // The separator itself is only rendered if the turn recorded "work" activity (see
+    // `had_work_activity`).
     needs_final_message_separator: bool,
+    // Whether the current turn performed "work" (exec commands, MCP tool calls, patch applications).
+    //
+    // This gates rendering of the "Worked for …" separator so purely conversational turns don't
+    // show an empty divider. It is reset when the separator is emitted.
+    had_work_activity: bool,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
@@ -469,16 +518,19 @@ pub(crate) struct ActiveCellTranscriptKey {
     pub(crate) animation_tick: Option<u64>,
 }
 
-struct UserMessage {
+pub(crate) struct UserMessage {
     text: String,
-    image_paths: Vec<PathBuf>,
+    local_images: Vec<LocalImageAttachment>,
+    text_elements: Vec<TextElement>,
 }
 
 impl From<String> for UserMessage {
     fn from(text: String) -> Self {
         Self {
             text,
-            image_paths: Vec::new(),
+            local_images: Vec::new(),
+            // Plain text conversion has no UI element ranges.
+            text_elements: Vec::new(),
         }
     }
 }
@@ -487,16 +539,107 @@ impl From<&str> for UserMessage {
     fn from(text: &str) -> Self {
         Self {
             text: text.to_string(),
-            image_paths: Vec::new(),
+            local_images: Vec::new(),
+            // Plain text conversion has no UI element ranges.
+            text_elements: Vec::new(),
         }
     }
 }
 
-fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Option<UserMessage> {
-    if text.is_empty() && image_paths.is_empty() {
+pub(crate) fn create_initial_user_message(
+    text: Option<String>,
+    local_image_paths: Vec<PathBuf>,
+    text_elements: Vec<TextElement>,
+) -> Option<UserMessage> {
+    let text = text.unwrap_or_default();
+    if text.is_empty() && local_image_paths.is_empty() {
         None
     } else {
-        Some(UserMessage { text, image_paths })
+        let local_images = local_image_paths
+            .into_iter()
+            .enumerate()
+            .map(|(idx, path)| LocalImageAttachment {
+                placeholder: local_image_label_text(idx + 1),
+                path,
+            })
+            .collect();
+        Some(UserMessage {
+            text,
+            local_images,
+            text_elements,
+        })
+    }
+}
+
+// When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
+// its attachments at [Image #1]. Reassign placeholder labels based on the attachment list so
+// the combined local_image_paths order matches the labels, even if placeholders were moved
+// in the text (e.g., [Image #2] appearing before [Image #1]).
+fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) -> UserMessage {
+    let UserMessage {
+        text,
+        text_elements,
+        local_images,
+    } = message;
+    if local_images.is_empty() {
+        return UserMessage {
+            text,
+            text_elements,
+            local_images,
+        };
+    }
+
+    let mut mapping: HashMap<String, String> = HashMap::new();
+    let mut remapped_images = Vec::new();
+    for attachment in local_images {
+        let new_placeholder = local_image_label_text(*next_label);
+        *next_label += 1;
+        mapping.insert(attachment.placeholder.clone(), new_placeholder.clone());
+        remapped_images.push(LocalImageAttachment {
+            placeholder: new_placeholder,
+            path: attachment.path,
+        });
+    }
+
+    let mut elements = text_elements;
+    elements.sort_by_key(|elem| elem.byte_range.start);
+
+    let mut cursor = 0usize;
+    let mut rebuilt = String::new();
+    let mut rebuilt_elements = Vec::new();
+    for mut elem in elements {
+        let start = elem.byte_range.start.min(text.len());
+        let end = elem.byte_range.end.min(text.len());
+        if let Some(segment) = text.get(cursor..start) {
+            rebuilt.push_str(segment);
+        }
+
+        let original = text.get(start..end).unwrap_or("");
+        let placeholder = elem.placeholder(&text);
+        let replacement = placeholder
+            .and_then(|ph| mapping.get(ph))
+            .map(String::as_str)
+            .unwrap_or(original);
+
+        let elem_start = rebuilt.len();
+        rebuilt.push_str(replacement);
+        let elem_end = rebuilt.len();
+
+        if let Some(remapped) = placeholder.and_then(|ph| mapping.get(ph)) {
+            elem.set_placeholder(Some(remapped.clone()));
+        }
+        elem.byte_range = (elem_start..elem_end).into();
+        rebuilt_elements.push(elem);
+        cursor = end;
+    }
+    if let Some(segment) = text.get(cursor..) {
+        rebuilt.push_str(segment);
+    }
+
+    UserMessage {
+        text: rebuilt,
+        local_images: remapped_images,
+        text_elements: rebuilt_elements,
     }
 }
 
@@ -563,16 +706,31 @@ impl ChatWidget {
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
         self.thread_id = Some(event.session_id);
+        self.forked_from = event.forked_from_id;
         self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
-        self.add_to_history(history_cell::new_session_info(
+        // Only update stored collaboration settings when collaboration modes are disabled.
+        // When enabled, we preserve the selected variant (Plan/Pair/Execute/Custom) and its
+        // instructions as-is; the session configured event should not override it.
+        if !self.collaboration_modes_enabled() {
+            self.stored_collaboration_mode = self.stored_collaboration_mode.with_updates(
+                Some(model_for_header.clone()),
+                Some(event.reasoning_effort),
+                None,
+            );
+        }
+        let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
             event,
             self.show_welcome_banner,
-        ));
+            self.collaboration_modes_enabled(),
+            self.stored_collaboration_mode.clone(),
+        );
+        self.apply_session_info_cell(session_info_cell);
+
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
@@ -580,7 +738,7 @@ impl ChatWidget {
         self.submit_op(Op::ListCustomPrompts);
         self.submit_op(Op::ListSkills {
             cwds: Vec::new(),
-            force_reload: false,
+            force_reload: true,
         });
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
@@ -692,7 +850,9 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
-        self.bottom_pane.clear_ctrl_c_quit_hint();
+        self.bottom_pane.clear_quit_shortcut_hint();
+        self.quit_shortcut_expires_at = None;
+        self.quit_shortcut_key = None;
         self.update_task_running_state();
         self.retry_status_header = None;
         self.bottom_pane.set_interrupt_hint_visible(true);
@@ -713,6 +873,7 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
+        self.clear_unified_exec_processes();
         self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -814,7 +975,7 @@ impl ChatWidget {
 
             if high_usage
                 && !self.rate_limit_switch_prompt_hidden()
-                && self.model != NUDGE_MODEL_SLUG
+                && self.current_model() != NUDGE_MODEL_SLUG
                 && !matches!(
                     self.rate_limit_switch_prompt,
                     RateLimitSwitchPromptState::Shown
@@ -849,6 +1010,7 @@ impl ChatWidget {
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
+        self.clear_unified_exec_processes();
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
     }
@@ -941,8 +1103,6 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
-        self.unified_exec_processes.clear();
-        self.sync_unified_exec_footer();
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
@@ -950,29 +1110,74 @@ impl ChatWidget {
             ));
         }
 
-        // If any messages were queued during the task, restore them into the composer.
-        if !self.queued_user_messages.is_empty() {
-            let queued_text = self
-                .queued_user_messages
+        if let Some(combined) = self.drain_queued_messages_for_restore() {
+            let combined_local_image_paths = combined
+                .local_images
                 .iter()
-                .map(|m| m.text.clone())
-                .collect::<Vec<_>>()
-                .join("\n");
-            let existing_text = self.bottom_pane.composer_text();
-            let combined = if existing_text.is_empty() {
-                queued_text
-            } else if queued_text.is_empty() {
-                existing_text
-            } else {
-                format!("{queued_text}\n{existing_text}")
-            };
-            self.bottom_pane.set_composer_text(combined);
-            // Clear the queue and update the status indicator list.
-            self.queued_user_messages.clear();
+                .map(|img| img.path.clone())
+                .collect();
+            self.bottom_pane.set_composer_text(
+                combined.text,
+                combined.text_elements,
+                combined_local_image_paths,
+            );
             self.refresh_queued_user_messages();
         }
 
         self.request_redraw();
+    }
+
+    /// Merge queued drafts (plus the current composer state) into a single message for restore.
+    ///
+    /// Each queued draft numbers attachments from `[Image #1]`. When we concatenate drafts, we
+    /// must renumber placeholders in a stable order so the merged attachment list stays aligned
+    /// with the labels embedded in text. This helper drains the queue, remaps placeholders, and
+    /// fixes text element byte ranges as content is appended. Returns `None` when there is nothing
+    /// to restore.
+    fn drain_queued_messages_for_restore(&mut self) -> Option<UserMessage> {
+        if self.queued_user_messages.is_empty() {
+            return None;
+        }
+
+        let existing_message = UserMessage {
+            text: self.bottom_pane.composer_text(),
+            text_elements: self.bottom_pane.composer_text_elements(),
+            local_images: self.bottom_pane.composer_local_images(),
+        };
+
+        let mut to_merge: Vec<UserMessage> = self.queued_user_messages.drain(..).collect();
+        if !existing_message.text.is_empty() || !existing_message.local_images.is_empty() {
+            to_merge.push(existing_message);
+        }
+
+        let mut combined = UserMessage {
+            text: String::new(),
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        };
+        let mut combined_offset = 0usize;
+        let mut next_image_label = 1usize;
+
+        for (idx, message) in to_merge.into_iter().enumerate() {
+            if idx > 0 {
+                combined.text.push('\n');
+                combined_offset += 1;
+            }
+            let message = remap_placeholders_for_message(message, &mut next_image_label);
+            let base = combined_offset;
+            combined.text.push_str(&message.text);
+            combined_offset += message.text.len();
+            combined
+                .text_elements
+                .extend(message.text_elements.into_iter().map(|mut elem| {
+                    elem.byte_range.start += base;
+                    elem.byte_range.end += base;
+                    elem
+                }));
+            combined.local_images.extend(message.local_images);
+        }
+
+        Some(combined)
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
@@ -1005,6 +1210,14 @@ impl ChatWidget {
         );
     }
 
+    fn on_request_user_input(&mut self, ev: RequestUserInputEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_user_input(ev),
+            |s| s.handle_request_user_input_now(ev2),
+        );
+    }
+
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         if is_unified_exec_source(ev.source) {
@@ -1017,14 +1230,25 @@ impl ChatWidget {
         self.defer_or_handle(|q| q.push_exec_begin(ev), |s| s.handle_exec_begin_now(ev2));
     }
 
-    fn on_exec_command_output_delta(
-        &mut self,
-        _ev: codex_core::protocol::ExecCommandOutputDeltaEvent,
-    ) {
-        // TODO: Handle streaming exec output if/when implemented
+    fn on_exec_command_output_delta(&mut self, ev: ExecCommandOutputDeltaEvent) {
+        let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
+        else {
+            return;
+        };
+
+        if cell.append_output(&ev.call_id, std::str::from_utf8(&ev.chunk).unwrap_or("")) {
+            self.bump_active_cell_revision();
+            self.request_redraw();
+        }
     }
 
     fn on_terminal_interaction(&mut self, ev: TerminalInteractionEvent) {
+        if !self.bottom_pane.is_task_running() {
+            return;
+        }
         self.flush_answer_stream_with_separator();
         let command_display = self
             .unified_exec_processes
@@ -1155,6 +1379,14 @@ impl ChatWidget {
         self.bottom_pane.set_unified_exec_processes(processes);
     }
 
+    fn clear_unified_exec_processes(&mut self) {
+        if self.unified_exec_processes.is_empty() {
+            return;
+        }
+        self.unified_exec_processes.clear();
+        self.sync_unified_exec_footer();
+    }
+
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_mcp_begin(ev), |s| s.handle_mcp_begin_now(ev2));
@@ -1174,6 +1406,12 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_web_search_call(ev.query));
     }
 
+    fn on_collab_event(&mut self, cell: PlainHistoryCell) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(cell);
+        self.request_redraw();
+    }
+
     fn on_get_history_entry_response(
         &mut self,
         event: codex_core::protocol::GetHistoryEntryResponseEvent,
@@ -1188,7 +1426,7 @@ impl ChatWidget {
     }
 
     fn on_shutdown_complete(&mut self) {
-        self.request_exit();
+        self.request_immediate_exit();
     }
 
     fn on_turn_diff(&mut self, unified_diff: String) {
@@ -1293,12 +1531,18 @@ impl ChatWidget {
         self.flush_active_cell();
 
         if self.stream_controller.is_none() {
-            if self.needs_final_message_separator {
+            // If the previous turn inserted non-stream history (exec output, patch status, MCP
+            // calls), render a separator before starting the next streamed assistant message.
+            if self.needs_final_message_separator && self.had_work_activity {
                 let elapsed_seconds = self
                     .bottom_pane
                     .status_widget()
                     .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
                 self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
+                self.needs_final_message_separator = false;
+                self.had_work_activity = false;
+            } else if self.needs_final_message_separator {
+                // Reset the flag even if we don't show separator (no work was done)
                 self.needs_final_message_separator = false;
             }
             self.stream_controller = Some(StreamController::new(
@@ -1368,6 +1612,8 @@ impl ChatWidget {
                 self.request_redraw();
             }
         }
+        // Mark that actual work was done (command executed)
+        self.had_work_activity = true;
     }
 
     pub(crate) fn handle_patch_apply_end_now(
@@ -1379,6 +1625,8 @@ impl ChatWidget {
         if !event.success {
             self.add_to_history(history_cell::new_patch_apply_failure(event.stderr));
         }
+        // Mark that actual work was done (patch applied)
+        self.had_work_activity = true;
     }
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
@@ -1434,6 +1682,12 @@ impl ChatWidget {
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
+        self.request_redraw();
+    }
+
+    pub(crate) fn handle_request_user_input_now(&mut self, ev: RequestUserInputEvent) {
+        self.flush_answer_stream_with_separator();
+        self.bottom_pane.push_user_input_request(ev);
         self.request_redraw();
     }
 
@@ -1544,6 +1798,8 @@ impl ChatWidget {
         if let Some(extra) = extra_cell {
             self.add_boxed_history(extra);
         }
+        // Mark that actual work was done (MCP tool call)
+        self.had_work_activity = true;
     }
 
     pub(crate) fn new(common: ChatWidgetInit, thread_manager: Arc<ThreadManager>) -> Self {
@@ -1551,8 +1807,7 @@ impl ChatWidget {
             config,
             frame_requester,
             app_event_tx,
-            initial_prompt,
-            initial_images,
+            initial_user_message,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -1560,11 +1815,35 @@ impl ChatWidget {
             is_first_run,
             model,
         } = common;
+        let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
-        config.model = Some(model.clone());
+        config.model = model.clone();
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
+
+        let model_for_header = model.unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let stored_collaboration_mode = if config.features.enabled(Feature::CollaborationModes) {
+            collaboration_modes::default_mode(models_manager.as_ref()).unwrap_or_else(|| {
+                CollaborationMode::Custom(Settings {
+                    model: model_for_header.clone(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                })
+            })
+        } else {
+            CollaborationMode::Custom(Settings {
+                model: model_for_header.clone(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            })
+        };
+
+        let active_cell = Some(Self::placeholder_session_header_cell(
+            &config,
+            config.features.enabled(Feature::CollaborationModes),
+            stored_collaboration_mode.clone(),
+        ));
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -1580,17 +1859,14 @@ impl ChatWidget {
                 animations_enabled: config.animations,
                 skills: None,
             }),
-            active_cell: None,
+            active_cell,
             active_cell_revision: 0,
             config,
-            model: model.clone(),
+            stored_collaboration_mode,
             auth_manager,
             models_manager,
-            session_header: SessionHeader::new(model),
-            initial_user_message: create_initial_user_message(
-                initial_prompt.unwrap_or_default(),
-                initial_images,
-            ),
+            session_header: SessionHeader::new(model_for_header),
+            initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
             plan_type: None,
@@ -1612,13 +1888,17 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             thread_id: None,
+            forked_from: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
+            quit_shortcut_expires_at: None,
+            quit_shortcut_key: None,
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
+            had_work_activity: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -1629,6 +1909,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_collaboration_modes_enabled(
+            widget.config.features.enabled(Feature::CollaborationModes),
+        );
 
         widget
     }
@@ -1643,8 +1926,7 @@ impl ChatWidget {
             config,
             frame_requester,
             app_event_tx,
-            initial_prompt,
-            initial_images,
+            initial_user_message,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -1652,11 +1934,30 @@ impl ChatWidget {
             model,
             ..
         } = common;
+        let model = model.filter(|m| !m.trim().is_empty());
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
+        let header_model = model.unwrap_or_else(|| session_configured.model.clone());
+
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
+
+        let stored_collaboration_mode = if config.features.enabled(Feature::CollaborationModes) {
+            collaboration_modes::default_mode(models_manager.as_ref()).unwrap_or_else(|| {
+                CollaborationMode::Custom(Settings {
+                    model: header_model.clone(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                })
+            })
+        } else {
+            CollaborationMode::Custom(Settings {
+                model: header_model.clone(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            })
+        };
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -1675,14 +1976,11 @@ impl ChatWidget {
             active_cell: None,
             active_cell_revision: 0,
             config,
-            model: model.clone(),
+            stored_collaboration_mode,
             auth_manager,
             models_manager,
-            session_header: SessionHeader::new(model),
-            initial_user_message: create_initial_user_message(
-                initial_prompt.unwrap_or_default(),
-                initial_images,
-            ),
+            session_header: SessionHeader::new(header_model),
+            initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
             plan_type: None,
@@ -1704,13 +2002,17 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             thread_id: None,
+            forked_from: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
+            quit_shortcut_expires_at: None,
+            quit_shortcut_key: None,
             is_review_mode: false,
             pre_review_token_info: None,
             needs_final_message_separator: false,
+            had_work_activity: false,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -1721,6 +2023,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget.bottom_pane.set_collaboration_modes_enabled(
+            widget.config.features.enabled(Feature::CollaborationModes),
+        );
 
         widget
     }
@@ -1741,19 +2046,60 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } if c.eq_ignore_ascii_case(&'v')
-                && modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'d') => {
+                if self.on_ctrl_d() {
+                    return;
+                }
+                self.bottom_pane.clear_quit_shortcut_hint();
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
+            } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && c.eq_ignore_ascii_case(&'v') =>
             {
-                self.paste_image_from_clipboard();
+                match paste_image_to_temp_png() {
+                    Ok((path, info)) => {
+                        tracing::debug!(
+                            "pasted image size={}x{} format={}",
+                            info.width,
+                            info.height,
+                            info.encoded_format.label()
+                        );
+                        self.attach_image(path);
+                    }
+                    Err(err) => {
+                        tracing::warn!("failed to paste image: {err}");
+                        self.add_to_history(history_cell::new_error_event(format!(
+                            "Failed to paste image: {err}",
+                        )));
+                    }
+                }
                 return;
             }
             other if other.kind == KeyEventKind::Press => {
-                self.bottom_pane.clear_ctrl_c_quit_hint();
+                self.bottom_pane.clear_quit_shortcut_hint();
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
             }
             _ => {}
         }
 
         match key_event {
+            KeyEvent {
+                code: KeyCode::BackTab,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.collaboration_modes_enabled()
+                && !self.bottom_pane.is_task_running()
+                && self.bottom_pane.no_modal_or_popup_active() =>
+            {
+                self.cycle_collaboration_mode();
+            }
             KeyEvent {
                 code: KeyCode::Up,
                 modifiers: KeyModifiers::ALT,
@@ -1762,42 +2108,64 @@ impl ChatWidget {
             } if !self.queued_user_messages.is_empty() => {
                 // Prefer the most recently queued item.
                 if let Some(user_message) = self.queued_user_messages.pop_back() {
-                    self.bottom_pane.set_composer_text(user_message.text);
+                    let local_image_paths = user_message
+                        .local_images
+                        .iter()
+                        .map(|img| img.path.clone())
+                        .collect();
+                    self.bottom_pane.set_composer_text(
+                        user_message.text,
+                        user_message.text_elements,
+                        local_image_paths,
+                    );
                     self.refresh_queued_user_messages();
                     self.request_redraw();
                 }
             }
-            _ => {
-                match self.bottom_pane.handle_key_event(key_event) {
-                    InputResult::Submitted(text) => {
-                        // Enter always sends messages immediately (bypasses queue check)
-                        // Clear any reasoning status header when submitting a new message
+            _ => match self.bottom_pane.handle_key_event(key_event) {
+                InputResult::Submitted {
+                    text,
+                    text_elements,
+                } => {
+                    let user_message = UserMessage {
+                        text,
+                        local_images: self
+                            .bottom_pane
+                            .take_recent_submission_images_with_placeholders(),
+                        text_elements,
+                    };
+                    if self.is_session_configured() {
+                        // Submitted is only emitted when steer is enabled (Enter sends immediately).
+                        // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
                         self.set_status_header(String::from("Working"));
-                        let user_message = UserMessage {
-                            text,
-                            image_paths: self.bottom_pane.take_recent_submission_images(),
-                        };
                         self.submit_user_message(user_message);
-                    }
-                    InputResult::Queued(text) => {
-                        // Tab queues the message if a task is running, otherwise submits immediately
-                        let user_message = UserMessage {
-                            text,
-                            image_paths: self.bottom_pane.take_recent_submission_images(),
-                        };
+                    } else {
                         self.queue_user_message(user_message);
                     }
-                    InputResult::Command(cmd) => {
-                        self.dispatch_command(cmd);
-                    }
-                    InputResult::CommandWithArgs(cmd, args) => {
-                        self.dispatch_command_with_args(cmd, args);
-                    }
-                    InputResult::None => {}
                 }
-            }
+                InputResult::Queued {
+                    text,
+                    text_elements,
+                } => {
+                    let user_message = UserMessage {
+                        text,
+                        local_images: self
+                            .bottom_pane
+                            .take_recent_submission_images_with_placeholders(),
+                        text_elements,
+                    };
+                    self.queue_user_message(user_message);
+                }
+                InputResult::Command(cmd) => {
+                    self.dispatch_command(cmd);
+                }
+                InputResult::CommandWithArgs(cmd, args) => {
+                    self.dispatch_command_with_args(cmd, args);
+                }
+                InputResult::None => {}
+            },
         }
     }
 
@@ -1805,32 +2173,6 @@ impl ChatWidget {
         tracing::info!("attach_image path={path:?}");
         self.bottom_pane.attach_image(path);
         self.request_redraw();
-    }
-
-    /// Attempt to attach an image from the system clipboard.
-    ///
-    /// This is a best-effort path used when we receive an empty paste event,
-    /// which some terminals emit when the clipboard contains non-text data
-    /// (like images). When the clipboard can't be read or no image exists,
-    /// surface a helpful follow-up so the user can retry with a file path.
-    fn paste_image_from_clipboard(&mut self) {
-        match paste_image_to_temp_png() {
-            Ok((path, info)) => {
-                tracing::debug!(
-                    "pasted image size={}x{} format={}",
-                    info.width,
-                    info.height,
-                    info.encoded_format.label()
-                );
-                self.attach_image(path);
-            }
-            Err(err) => {
-                tracing::warn!("failed to paste image: {err}");
-                self.add_to_history(history_cell::new_error_event(format!(
-                    "Failed to paste image: {err}. Try saving the image to a file and pasting the file path instead.",
-                )));
-            }
-        }
     }
 
     pub(crate) fn composer_text_with_pending(&self) -> String {
@@ -1889,7 +2231,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
             SlashCommand::Fork => {
-                self.app_event_tx.send(AppEvent::OpenForkPicker);
+                self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
@@ -1912,6 +2254,11 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::Collab => {
+                if self.collaboration_modes_enabled() {
+                    self.open_collaboration_modes_popup();
+                }
             }
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
@@ -1959,7 +2306,7 @@ impl ChatWidget {
                 self.open_experimental_popup();
             }
             SlashCommand::Quit | SlashCommand::Exit => {
-                self.request_exit();
+                self.request_quit_without_confirmation();
             }
             SlashCommand::Logout => {
                 if let Err(e) = codex_core::auth::logout(
@@ -1968,7 +2315,7 @@ impl ChatWidget {
                 ) {
                     tracing::error!("failed to logout: {e}");
                 }
-                self.request_exit();
+                self.request_quit_without_confirmation();
             }
             // SlashCommand::Undo => {
             //     self.app_event_tx.send(AppEvent::CodexOp(Op::Undo));
@@ -2069,6 +2416,12 @@ impl ChatWidget {
 
         let trimmed = args.trim();
         match cmd {
+            SlashCommand::Collab => {
+                let _ = trimmed;
+                if self.collaboration_modes_enabled() {
+                    self.open_collaboration_modes_popup();
+                }
+            }
             SlashCommand::Review if !trimmed.is_empty() => {
                 self.submit_op(Op::Review {
                     review_request: ReviewRequest {
@@ -2085,20 +2438,6 @@ impl ChatWidget {
 
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
-    }
-
-    /// Route paste events through image detection.
-    ///
-    /// Terminals vary in how they represent paste: some emit an empty paste
-    /// payload when the clipboard isn't text (common for image-only clipboard
-    /// contents). Treat the empty payload as a hint to attempt a clipboard
-    /// image read; otherwise, fall back to text handling.
-    pub(crate) fn handle_paste_event(&mut self, text: String) {
-        if text.is_empty() {
-            self.paste_image_from_clipboard();
-        } else {
-            self.handle_paste(text);
-        }
     }
 
     // Returns true if caller should skip rendering this frame (a future frame is scheduled).
@@ -2131,7 +2470,15 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
-        if !cell.display_lines(u16::MAX).is_empty() {
+        // Keep the placeholder session header as the active cell until real session info arrives,
+        // so we can merge headers instead of committing a duplicate box to history.
+        let keep_placeholder_header_active = !self.is_session_configured()
+            && self
+                .active_cell
+                .as_ref()
+                .is_some_and(|c| c.as_any().is::<history_cell::SessionHeaderHistoryCell>());
+
+        if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_cell();
             self.needs_final_message_separator = true;
@@ -2140,7 +2487,10 @@ impl ChatWidget {
     }
 
     fn queue_user_message(&mut self, user_message: UserMessage) {
-        if self.bottom_pane.is_task_running() || self.is_review_mode {
+        if !self.is_session_configured()
+            || self.bottom_pane.is_task_running()
+            || self.is_review_mode
+        {
             self.queued_user_messages.push_back(user_message);
             self.refresh_queued_user_messages();
         } else {
@@ -2149,8 +2499,19 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        let UserMessage { text, image_paths } = user_message;
-        if text.is_empty() && image_paths.is_empty() {
+        if !self.is_session_configured() {
+            tracing::warn!("cannot submit user message before session is configured; queueing");
+            self.queued_user_messages.push_front(user_message);
+            self.refresh_queued_user_messages();
+            return;
+        }
+
+        let UserMessage {
+            text,
+            local_images,
+            text_elements,
+        } = user_message;
+        if text.is_empty() && local_images.is_empty() {
             return;
         }
 
@@ -2174,12 +2535,17 @@ impl ChatWidget {
             return;
         }
 
-        for path in image_paths {
-            items.push(UserInput::LocalImage { path });
+        for image in &local_images {
+            items.push(UserInput::LocalImage {
+                path: image.path.clone(),
+            });
         }
 
         if !text.is_empty() {
-            items.push(UserInput::Text { text: text.clone() });
+            items.push(UserInput::Text {
+                text: text.clone(),
+                text_elements: text_elements.clone(),
+            });
         }
 
         if let Some(skills) = self.bottom_pane.skills() {
@@ -2192,14 +2558,23 @@ impl ChatWidget {
             }
         }
 
-        self.codex_op_tx
-            .send(Op::UserInput {
-                items,
-                final_output_json_schema: None,
-            })
-            .unwrap_or_else(|e| {
-                tracing::error!("failed to send message: {e}");
-            });
+        let op = Op::UserTurn {
+            items,
+            cwd: self.config.cwd.clone(),
+            approval_policy: self.config.approval_policy.value(),
+            sandbox_policy: self.config.sandbox_policy.get().clone(),
+            model: self.stored_collaboration_mode.model().to_string(),
+            effort: self.stored_collaboration_mode.reasoning_effort(),
+            summary: self.config.model_reasoning_summary,
+            final_output_json_schema: None,
+            collaboration_mode: self
+                .collaboration_modes_enabled()
+                .then(|| self.stored_collaboration_mode.clone()),
+        };
+
+        self.codex_op_tx.send(op).unwrap_or_else(|e| {
+            tracing::error!("failed to send message: {e}");
+        });
 
         // Persist the text to cross-session message history.
         if !text.is_empty() {
@@ -2212,7 +2587,12 @@ impl ChatWidget {
 
         // Only show the text portion in conversation history.
         if !text.is_empty() {
-            self.add_to_history(history_cell::new_user_prompt(text));
+            let local_image_paths = local_images.into_iter().map(|img| img.path).collect();
+            self.add_to_history(history_cell::new_user_prompt(
+                text,
+                text_elements,
+                local_image_paths,
+            ));
         }
 
         self.needs_final_message_separator = false;
@@ -2309,6 +2689,9 @@ impl ChatWidget {
             EventMsg::ElicitationRequest(ev) => {
                 self.on_elicitation_request(ev);
             }
+            EventMsg::RequestUserInput(ev) => {
+                self.on_request_user_input(ev);
+            }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
@@ -2353,6 +2736,16 @@ impl ChatWidget {
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
+            EventMsg::CollabAgentSpawnBegin(_) => {}
+            EventMsg::CollabAgentSpawnEnd(ev) => self.on_collab_event(collab::spawn_end(ev)),
+            EventMsg::CollabAgentInteractionBegin(_) => {}
+            EventMsg::CollabAgentInteractionEnd(ev) => {
+                self.on_collab_event(collab::interaction_end(ev))
+            }
+            EventMsg::CollabWaitingBegin(ev) => self.on_collab_event(collab::waiting_begin(ev)),
+            EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
+            EventMsg::CollabCloseBegin(_) => {}
+            EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
             EventMsg::ThreadRolledBack(_) => {}
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
@@ -2417,14 +2810,33 @@ impl ChatWidget {
     }
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
-        let message = event.message.trim();
-        if !message.is_empty() {
-            self.add_to_history(history_cell::new_user_prompt(message.to_string()));
+        if !event.message.trim().is_empty() {
+            self.add_to_history(history_cell::new_user_prompt(
+                event.message,
+                event.text_elements,
+                event.local_images,
+            ));
         }
+
+        // User messages reset separator state so the next agent response doesn't add a stray break.
+        self.needs_final_message_separator = false;
     }
 
-    fn request_exit(&self) {
-        self.app_event_tx.send(AppEvent::ExitRequest);
+    /// Exit the UI immediately without waiting for shutdown.
+    ///
+    /// Prefer [`Self::request_quit_without_confirmation`] for user-initiated exits;
+    /// this is mainly a fallback for shutdown completion or emergency exits.
+    fn request_immediate_exit(&self) {
+        self.app_event_tx.send(AppEvent::Exit(ExitMode::Immediate));
+    }
+
+    /// Request a shutdown-first quit.
+    ///
+    /// This is used for explicit quit commands (`/quit`, `/exit`, `/logout`) and for
+    /// the double-press Ctrl+C/Ctrl+D quit shortcut.
+    fn request_quit_without_confirmation(&self) {
+        self.app_event_tx
+            .send(AppEvent::Exit(ExitMode::ShutdownFirst));
     }
 
     fn request_redraw(&mut self) {
@@ -2500,16 +2912,21 @@ impl ChatWidget {
         let total_usage = token_info
             .map(|ti| &ti.total_token_usage)
             .unwrap_or(&default_usage);
+        let collaboration_mode = self.collaboration_mode_label();
+        let reasoning_effort_override = Some(self.stored_collaboration_mode.reasoning_effort());
         self.add_to_history(crate::status::new_status_output(
             &self.config,
             self.auth_manager.as_ref(),
             token_info,
             total_usage,
             &self.thread_id,
+            self.forked_from,
             self.rate_limit_snapshot.as_ref(),
             self.plan_type,
             Local::now(),
-            &self.model,
+            self.model_display_name(),
+            collaboration_mode,
+            reasoning_effort_override,
         ));
     }
 
@@ -2603,6 +3020,7 @@ impl ChatWidget {
                 model: Some(switch_model.clone()),
                 effort: Some(Some(default_effort)),
                 summary: None,
+                collaboration_mode: None,
             }));
             tx.send(AppEvent::UpdateModel(switch_model.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
@@ -2663,6 +3081,14 @@ impl ChatWidget {
     /// Open a popup to choose a quick auto model. Selecting "All models"
     /// opens the full picker with every available preset.
     pub(crate) fn open_model_popup(&mut self) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Model selection is disabled until startup completes.".to_string(),
+                None,
+            );
+            return;
+        }
+
         let presets: Vec<ModelPreset> = match self.models_manager.try_list_models(&self.config) {
             Ok(models) => models,
             Err(_) => {
@@ -2721,11 +3147,12 @@ impl ChatWidget {
             .filter(|preset| preset.show_in_picker)
             .collect();
 
+        let current_model = self.current_model();
         let current_label = presets
             .iter()
-            .find(|preset| preset.model == self.model)
+            .find(|preset| preset.model.as_str() == current_model)
             .map(|preset| preset.display_name.to_string())
-            .unwrap_or_else(|| self.model.clone());
+            .unwrap_or_else(|| self.model_display_name().to_string());
 
         let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
             .into_iter()
@@ -2751,7 +3178,7 @@ impl ChatWidget {
                 SelectionItem {
                     name: preset.display_name.clone(),
                     description,
-                    is_current: model == self.model,
+                    is_current: model.as_str() == current_model,
                     is_default: preset.is_default,
                     actions,
                     dismiss_on_select: true,
@@ -2821,7 +3248,7 @@ impl ChatWidget {
         for preset in presets.into_iter() {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
-            let is_current = preset.model == self.model;
+            let is_current = preset.model.as_str() == self.current_model();
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -2853,6 +3280,49 @@ impl ChatWidget {
         });
     }
 
+    pub(crate) fn open_collaboration_modes_popup(&mut self) {
+        let presets = self.models_manager.list_collaboration_modes();
+        if presets.is_empty() {
+            self.add_info_message(
+                "No collaboration modes are available right now.".to_string(),
+                None,
+            );
+            return;
+        }
+
+        let items: Vec<SelectionItem> = presets
+            .into_iter()
+            .map(|preset| {
+                let name = match preset {
+                    CollaborationMode::Plan(_) => "Plan",
+                    CollaborationMode::PairProgramming(_) => "Pair Programming",
+                    CollaborationMode::Execute(_) => "Execute",
+                    CollaborationMode::Custom(_) => "Custom",
+                };
+                let is_current =
+                    collaboration_modes::same_variant(&self.stored_collaboration_mode, &preset);
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::UpdateCollaborationMode(preset.clone()));
+                })];
+                SelectionItem {
+                    name: name.to_string(),
+                    is_current,
+                    actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Select Collaboration Mode".to_string()),
+            subtitle: Some("Pick a collaboration preset.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
     fn model_selection_actions(
         model_for_action: String,
         effort_for_action: Option<ReasoningEffortConfig>,
@@ -2868,6 +3338,7 @@ impl ChatWidget {
                 model: Some(model_for_action.clone()),
                 effort: Some(effort_for_action),
                 summary: None,
+                collaboration_mode: None,
             }));
             tx.send(AppEvent::UpdateModel(model_for_action.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
@@ -2947,9 +3418,9 @@ impl ChatWidget {
             .or(Some(default_effort));
 
         let model_slug = preset.model.to_string();
-        let is_current_model = self.model == preset.model;
+        let is_current_model = self.current_model() == preset.model.as_str();
         let highlight_choice = if is_current_model {
-            self.config.model_reasoning_effort
+            self.stored_collaboration_mode.reasoning_effort()
         } else {
             default_choice
         };
@@ -3039,6 +3510,7 @@ impl ChatWidget {
                 model: Some(model.clone()),
                 effort: Some(effort),
                 summary: None,
+                collaboration_mode: None,
             }));
         self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
         self.app_event_tx
@@ -3207,6 +3679,7 @@ impl ChatWidget {
                 model: None,
                 effort: None,
                 summary: None,
+                collaboration_mode: None,
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
@@ -3747,6 +4220,21 @@ impl ChatWidget {
         if feature == Feature::Steer {
             self.bottom_pane.set_steer_enabled(enabled);
         }
+        if feature == Feature::CollaborationModes {
+            self.bottom_pane.set_collaboration_modes_enabled(enabled);
+            let settings = match &self.stored_collaboration_mode {
+                CollaborationMode::Plan(settings)
+                | CollaborationMode::PairProgramming(settings)
+                | CollaborationMode::Execute(settings)
+                | CollaborationMode::Custom(settings) => settings.clone(),
+            };
+            self.stored_collaboration_mode = if enabled {
+                collaboration_modes::default_mode(self.models_manager.as_ref())
+                    .unwrap_or(CollaborationMode::Custom(settings))
+            } else {
+                CollaborationMode::Custom(settings)
+            };
+        }
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
@@ -3772,15 +4260,148 @@ impl ChatWidget {
             .unwrap_or(false)
     }
 
-    /// Set the reasoning effort in the widget's config copy.
+    /// Set the reasoning effort in the stored collaboration mode.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.config.model_reasoning_effort = effort;
+        self.stored_collaboration_mode =
+            self.stored_collaboration_mode
+                .with_updates(None, Some(effort), None);
     }
 
-    /// Set the model in the widget's config copy.
+    /// Set the model in the widget's config copy and stored collaboration mode.
     pub(crate) fn set_model(&mut self, model: &str) {
         self.session_header.set_model(model);
-        self.model = model.to_string();
+        self.stored_collaboration_mode =
+            self.stored_collaboration_mode
+                .with_updates(Some(model.to_string()), None, None);
+    }
+
+    pub(crate) fn current_model(&self) -> &str {
+        self.stored_collaboration_mode.model()
+    }
+
+    #[allow(dead_code)] // Used in tests
+    pub(crate) fn stored_collaboration_mode(&self) -> &CollaborationMode {
+        &self.stored_collaboration_mode
+    }
+
+    #[cfg(test)]
+    pub(crate) fn current_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
+        self.stored_collaboration_mode.reasoning_effort()
+    }
+
+    fn is_session_configured(&self) -> bool {
+        self.thread_id.is_some()
+    }
+
+    fn collaboration_modes_enabled(&self) -> bool {
+        self.config.features.enabled(Feature::CollaborationModes)
+    }
+
+    fn model_display_name(&self) -> &str {
+        let model = self.current_model();
+        if model.is_empty() {
+            DEFAULT_MODEL_DISPLAY_NAME
+        } else {
+            model
+        }
+    }
+
+    /// Get the label for the current collaboration mode.
+    fn collaboration_mode_label(&self) -> Option<&'static str> {
+        if !self.collaboration_modes_enabled() {
+            return None;
+        }
+        match &self.stored_collaboration_mode {
+            CollaborationMode::Plan(_) => Some("Plan"),
+            CollaborationMode::PairProgramming(_) => Some("Pair Programming"),
+            CollaborationMode::Execute(_) => Some("Execute"),
+            CollaborationMode::Custom(_) => None,
+        }
+    }
+
+    /// Cycle to the next collaboration mode variant (Plan -> PairProgramming -> Execute -> Plan).
+    fn cycle_collaboration_mode(&mut self) {
+        if !self.collaboration_modes_enabled() {
+            return;
+        }
+
+        if let Some(next_mode) = collaboration_modes::next_mode(
+            self.models_manager.as_ref(),
+            &self.stored_collaboration_mode,
+        ) {
+            self.set_collaboration_mode(next_mode);
+        }
+    }
+
+    /// Update the stored collaboration mode.
+    ///
+    /// When collaboration modes are enabled, the current mode is attached to *every*
+    /// submission as `Op::UserTurn { collaboration_mode: Some(...) }`.
+    pub(crate) fn set_collaboration_mode(&mut self, mode: CollaborationMode) {
+        if !self.collaboration_modes_enabled() {
+            return;
+        }
+
+        self.stored_collaboration_mode = mode;
+
+        let label = self.collaboration_mode_label();
+        if let Some(label) = label {
+            let flash = Line::from(vec![
+                label.bold(),
+                " (".dim(),
+                key_hint::shift(KeyCode::Tab).into(),
+                " to change mode)".dim(),
+            ]);
+            const FLASH_DURATION: Duration = Duration::from_secs(2);
+            self.bottom_pane.flash_footer_hint(flash, FLASH_DURATION);
+        }
+        self.request_redraw();
+    }
+
+    /// Build a placeholder header cell while the session is configuring.
+    fn placeholder_session_header_cell(
+        config: &Config,
+        is_collaboration: bool,
+        collaboration_mode: CollaborationMode,
+    ) -> Box<dyn HistoryCell> {
+        let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
+        Box::new(history_cell::SessionHeaderHistoryCell::new_with_style(
+            DEFAULT_MODEL_DISPLAY_NAME.to_string(),
+            placeholder_style,
+            None,
+            config.cwd.clone(),
+            CODEX_CLI_VERSION,
+            is_collaboration,
+            collaboration_mode,
+        ))
+    }
+
+    /// Merge the real session info cell with any placeholder header to avoid double boxes.
+    fn apply_session_info_cell(&mut self, cell: history_cell::SessionInfoCell) {
+        let mut session_info_cell = Some(Box::new(cell) as Box<dyn HistoryCell>);
+        let merged_header = if let Some(active) = self.active_cell.take() {
+            if active
+                .as_any()
+                .is::<history_cell::SessionHeaderHistoryCell>()
+            {
+                // Reuse the existing placeholder header to avoid rendering two boxes.
+                if let Some(cell) = session_info_cell.take() {
+                    self.active_cell = Some(cell);
+                }
+                true
+            } else {
+                self.active_cell = Some(active);
+                false
+            }
+        } else {
+            false
+        };
+
+        self.flush_active_cell();
+
+        if !merged_header && let Some(cell) = session_info_cell {
+            self.add_boxed_history(cell);
+        }
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
@@ -3811,19 +4432,108 @@ impl ChatWidget {
         self.bottom_pane.on_file_search_result(query, matches);
     }
 
-    /// Handle Ctrl-C key press.
+    /// Handles a Ctrl+C press at the chat-widget layer.
+    ///
+    /// The first press arms a time-bounded quit shortcut and shows a footer hint via the bottom
+    /// pane. If cancellable work is active, Ctrl+C also submits `Op::Interrupt` after the shortcut
+    /// is armed.
+    ///
+    /// If the same quit shortcut is pressed again before expiry, this requests a shutdown-first
+    /// quit.
     fn on_ctrl_c(&mut self) {
+        let key = key_hint::ctrl(KeyCode::Char('c'));
+        let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
+            if DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
+                if modal_or_popup_active {
+                    self.quit_shortcut_expires_at = None;
+                    self.quit_shortcut_key = None;
+                    self.bottom_pane.clear_quit_shortcut_hint();
+                } else {
+                    self.arm_quit_shortcut(key);
+                }
+            }
             return;
         }
 
-        if self.bottom_pane.is_task_running() {
-            self.bottom_pane.show_ctrl_c_quit_hint();
+        if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
+            if self.is_cancellable_work_active() {
+                self.submit_op(Op::Interrupt);
+            } else {
+                self.request_quit_without_confirmation();
+            }
+            return;
+        }
+
+        if self.quit_shortcut_active_for(key) {
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.request_quit_without_confirmation();
+            return;
+        }
+
+        self.arm_quit_shortcut(key);
+
+        if self.is_cancellable_work_active() {
             self.submit_op(Op::Interrupt);
-            return;
+        }
+    }
+
+    /// Handles a Ctrl+D press at the chat-widget layer.
+    ///
+    /// Ctrl-D only participates in quit when the composer is empty and no modal/popup is active.
+    /// Otherwise it should be routed to the active view and not attempt to quit.
+    fn on_ctrl_d(&mut self) -> bool {
+        let key = key_hint::ctrl(KeyCode::Char('d'));
+        if !DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
+            if !self.bottom_pane.composer_is_empty() || !self.bottom_pane.no_modal_or_popup_active()
+            {
+                return false;
+            }
+
+            self.request_quit_without_confirmation();
+            return true;
         }
 
-        self.submit_op(Op::Shutdown);
+        if self.quit_shortcut_active_for(key) {
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.request_quit_without_confirmation();
+            return true;
+        }
+
+        if !self.bottom_pane.composer_is_empty() || !self.bottom_pane.no_modal_or_popup_active() {
+            return false;
+        }
+
+        self.arm_quit_shortcut(key);
+        true
+    }
+
+    /// True if `key` matches the armed quit shortcut and the window has not expired.
+    fn quit_shortcut_active_for(&self, key: KeyBinding) -> bool {
+        self.quit_shortcut_key == Some(key)
+            && self
+                .quit_shortcut_expires_at
+                .is_some_and(|expires_at| Instant::now() < expires_at)
+    }
+
+    /// Arm the double-press quit shortcut and show the footer hint.
+    ///
+    /// This keeps the state machine (`quit_shortcut_*`) in `ChatWidget`, since
+    /// it is the component that interprets Ctrl+C vs Ctrl+D and decides whether
+    /// quitting is currently allowed, while delegating rendering to `BottomPane`.
+    fn arm_quit_shortcut(&mut self, key: KeyBinding) {
+        self.quit_shortcut_expires_at = Instant::now()
+            .checked_add(QUIT_SHORTCUT_TIMEOUT)
+            .or_else(|| Some(Instant::now()));
+        self.quit_shortcut_key = Some(key);
+        self.bottom_pane.show_quit_shortcut_hint(key);
+    }
+
+    // Review mode counts as cancellable work so Ctrl+C interrupts instead of quitting.
+    fn is_cancellable_work_active(&self) -> bool {
+        self.bottom_pane.is_task_running() || self.is_review_mode
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
@@ -3842,8 +4552,14 @@ impl ChatWidget {
     }
 
     /// Replace the composer content with the provided text and reset cursor.
-    pub(crate) fn set_composer_text(&mut self, text: String) {
-        self.bottom_pane.set_composer_text(text);
+    pub(crate) fn set_composer_text(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+    ) {
+        self.bottom_pane
+            .set_composer_text(text, text_elements, local_image_paths);
     }
 
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
@@ -4315,6 +5031,14 @@ fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMe
                     name: skill.name.clone(),
                     description: skill.description.clone(),
                     short_description: skill.short_description.clone(),
+                    interface: skill.interface.clone().map(|interface| SkillInterface {
+                        display_name: interface.display_name,
+                        short_description: interface.short_description,
+                        icon_small: interface.icon_small,
+                        icon_large: interface.icon_large,
+                        brand_color: interface.brand_color,
+                        default_prompt: interface.default_prompt,
+                    }),
                     path: skill.path.clone(),
                     scope: skill.scope,
                 })

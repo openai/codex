@@ -87,7 +87,10 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
-            items: vec![UserInput::Text { text: "hi".into() }],
+            items: vec![UserInput::Text {
+                text: "hi".into(),
+                text_elements: Vec::new(),
+            }],
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: codex_core::protocol::AskForApproval::Never,
@@ -95,6 +98,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
             model: test.session_configured.model.clone(),
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 

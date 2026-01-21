@@ -197,12 +197,21 @@ impl ThreadHistoryBuilder {
         if !payload.message.trim().is_empty() {
             content.push(UserInput::Text {
                 text: payload.message.clone(),
+                text_elements: payload
+                    .text_elements
+                    .iter()
+                    .cloned()
+                    .map(Into::into)
+                    .collect(),
             });
         }
         if let Some(images) = &payload.images {
             for image in images {
                 content.push(UserInput::Image { url: image.clone() });
             }
+        }
+        for path in &payload.local_images {
+            content.push(UserInput::LocalImage { path: path.clone() });
         }
         content
     }
@@ -244,6 +253,8 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "First turn".into(),
                 images: Some(vec!["https://example.com/one.png".into()]),
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Hi there".into(),
@@ -257,6 +268,8 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Second turn".into(),
                 images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Reply two".into(),
@@ -277,6 +290,7 @@ mod tests {
                 content: vec![
                     UserInput::Text {
                         text: "First turn".into(),
+                        text_elements: Vec::new(),
                     },
                     UserInput::Image {
                         url: "https://example.com/one.png".into(),
@@ -308,7 +322,8 @@ mod tests {
             ThreadItem::UserMessage {
                 id: "item-4".into(),
                 content: vec![UserInput::Text {
-                    text: "Second turn".into()
+                    text: "Second turn".into(),
+                    text_elements: Vec::new(),
                 }],
             }
         );
@@ -327,6 +342,8 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Turn start".into(),
                 images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
             EventMsg::AgentReasoning(AgentReasoningEvent {
                 text: "first summary".into(),
@@ -371,6 +388,8 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Please do the thing".into(),
                 images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Working...".into(),
@@ -381,6 +400,8 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Let's try again".into(),
                 images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Second attempt complete.".into(),
@@ -398,7 +419,8 @@ mod tests {
             ThreadItem::UserMessage {
                 id: "item-1".into(),
                 content: vec![UserInput::Text {
-                    text: "Please do the thing".into()
+                    text: "Please do the thing".into(),
+                    text_elements: Vec::new(),
                 }],
             }
         );
@@ -418,7 +440,8 @@ mod tests {
             ThreadItem::UserMessage {
                 id: "item-3".into(),
                 content: vec![UserInput::Text {
-                    text: "Let's try again".into()
+                    text: "Let's try again".into(),
+                    text_elements: Vec::new(),
                 }],
             }
         );
@@ -437,6 +460,8 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "First".into(),
                 images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A1".into(),
@@ -444,6 +469,8 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Second".into(),
                 images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A2".into(),
@@ -452,6 +479,8 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Third".into(),
                 images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A3".into(),
@@ -469,6 +498,7 @@ mod tests {
                         id: "item-1".into(),
                         content: vec![UserInput::Text {
                             text: "First".into(),
+                            text_elements: Vec::new(),
                         }],
                     },
                     ThreadItem::AgentMessage {
@@ -486,6 +516,7 @@ mod tests {
                         id: "item-3".into(),
                         content: vec![UserInput::Text {
                             text: "Third".into(),
+                            text_elements: Vec::new(),
                         }],
                     },
                     ThreadItem::AgentMessage {
@@ -504,6 +535,8 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "One".into(),
                 images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A1".into(),
@@ -511,6 +544,8 @@ mod tests {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "Two".into(),
                 images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "A2".into(),

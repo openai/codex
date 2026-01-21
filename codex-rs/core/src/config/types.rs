@@ -3,10 +3,13 @@
 // Note this file should generally be restricted to simple struct/enum
 // definitions that do not contain business logic.
 
+use crate::config_loader::RequirementSource;
 pub use codex_protocol::config_types::AltScreenMode;
+pub use codex_protocol::config_types::WebSearchMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 use wildmatch::WildMatchPattern;
@@ -19,6 +22,23 @@ use serde::de::Error as SerdeError;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpServerDisabledReason {
+    Unknown,
+    Requirements { source: RequirementSource },
+}
+
+impl fmt::Display for McpServerDisabledReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            McpServerDisabledReason::Unknown => write!(f, "unknown"),
+            McpServerDisabledReason::Requirements { source } => {
+                write!(f, "requirements ({source})")
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     #[serde(flatten)]
@@ -27,6 +47,10 @@ pub struct McpServerConfig {
     /// When `false`, Codex skips initializing this MCP server.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+
+    /// Reason this server was disabled after applying requirements.
+    #[serde(skip)]
+    pub disabled_reason: Option<McpServerDisabledReason>,
 
     /// Startup timeout in seconds for initializing MCP server & initially listing tools.
     #[serde(
@@ -159,6 +183,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             startup_timeout_sec,
             tool_timeout_sec,
             enabled,
+            disabled_reason: None,
             enabled_tools,
             disabled_tools,
         })
@@ -398,21 +423,16 @@ impl Default for Notifications {
 /// Terminals generally encode both mouse wheels and trackpads as the same "scroll up/down" mouse
 /// button events, without a magnitude. This setting controls whether Codex uses a heuristic to
 /// infer wheel vs trackpad per stream, or forces a specific behavior.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ScrollInputMode {
     /// Infer wheel vs trackpad behavior per scroll stream.
+    #[default]
     Auto,
     /// Always treat scroll events as mouse-wheel input (fixed lines per tick).
     Wheel,
     /// Always treat scroll events as trackpad input (fractional accumulation).
     Trackpad,
-}
-
-impl Default for ScrollInputMode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 /// Collection of settings that are specific to the TUI.
@@ -580,6 +600,20 @@ impl Notice {
     pub(crate) const TABLE_KEY: &'static str = "notice";
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SkillConfig {
+    pub path: AbsolutePathBuf,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SkillsConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config: Vec<SkillConfig>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct SandboxWorkspaceWrite {
@@ -712,6 +746,14 @@ impl Default for ShellEnvironmentPolicy {
             use_profile: false,
         }
     }
+}
+
+#[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum Personality {
+    Friendly,
+    #[default]
+    Pragmatic,
 }
 
 #[cfg(test)]
