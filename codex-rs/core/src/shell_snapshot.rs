@@ -214,7 +214,7 @@ env | sort | while IFS='=' read -r key value; do
       ;;
   esac
   escaped=${value//\'/\'\"\'\"\'}
-  print "export $key='$escaped'"
+  print -r -- "export $key='$escaped'"
 done
 "##
 }
@@ -288,7 +288,19 @@ else
   echo '# aliases 0'
 fi
 tmp="${TMPDIR:-/tmp}/codex-env-$$"
-env > "$tmp"
+env_cmd=""
+if [ -x /usr/bin/env ]; then
+  env_cmd="/usr/bin/env"
+elif [ -x /bin/env ]; then
+  env_cmd="/bin/env"
+elif command -v env >/dev/null 2>&1; then
+  env_cmd="env"
+fi
+if [ -n "$env_cmd" ]; then
+  "$env_cmd" > "$tmp"
+else
+  export -p > "$tmp"
+fi
 if command -v sort >/dev/null 2>&1; then
   if sort "$tmp" > "${tmp}.sorted"; then
     mv "${tmp}.sorted" "$tmp"
@@ -297,27 +309,70 @@ if command -v sort >/dev/null 2>&1; then
   fi
 fi
 count=0
-while IFS= read -r line; do
-  key=${line%%=*}
-  case "$key" in
-    ""|[0-9]*|*[^A-Za-z0-9_]*)
-      continue
-      ;;
-  esac
-  count=$((count+1))
-done < "$tmp"
+if [ -n "$env_cmd" ]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      ""|[0-9]*|*[^A-Za-z0-9_]*)
+        continue
+        ;;
+    esac
+    count=$((count+1))
+  done < "$tmp"
+else
+  while IFS= read -r line; do
+    case "$line" in
+      export\ *)
+        rest=${line#export }
+        ;;
+      declare\ -x\ *)
+        rest=${line#declare -x }
+        ;;
+      *)
+        continue
+        ;;
+    esac
+    key=${rest%%=*}
+    case "$key" in
+      ""|[0-9]*|*[^A-Za-z0-9_]*)
+        continue
+        ;;
+    esac
+    count=$((count+1))
+  done < "$tmp"
+fi
 echo "# exports $count"
-while IFS= read -r line; do
-  key=${line%%=*}
-  value=${line#*=}
-  case "$key" in
-    ""|[0-9]*|*[^A-Za-z0-9_]*)
-      continue
-      ;;
-  esac
-  escaped=$(printf "%s" "$value" | sed "s/'/'\"'\"'/g")
-  printf "export %s='%s'\n" "$key" "$escaped"
-done < "$tmp"
+if [ -n "$env_cmd" ]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      ""|[0-9]*|*[^A-Za-z0-9_]*)
+        continue
+        ;;
+    esac
+    escaped=$(printf "%s" "$value" | sed "s/'/'\"'\"'/g")
+    printf "export %s='%s'\n" "$key" "$escaped"
+  done < "$tmp"
+else
+  while IFS= read -r line; do
+    case "$line" in
+      export\ *)
+        rest=${line#export }
+        ;;
+      declare\ -x\ *)
+        rest=${line#declare -x }
+        ;;
+      *)
+        continue
+        ;;
+    esac
+    key=${rest%%=*}
+    case "$key" in
+      ""|[0-9]*|*[^A-Za-z0-9_]*)
+        continue
+        ;;
+    esac
+    printf "export %s\n" "$rest"
+  done < "$tmp"
+fi
 rm -f "$tmp"
 "##
 }
@@ -610,10 +665,12 @@ mod tests {
         assert!(!sh_snapshot.contains(INVALID_KEY));
         assert!(sh_snapshot.contains(VALID_KEY));
 
-        let zsh_snapshot =
-            run_snapshot_script_with_env(ShellType::Zsh, zsh_snapshot_script()).await?;
-        assert!(!zsh_snapshot.contains(INVALID_KEY));
-        assert!(zsh_snapshot.contains(VALID_KEY));
+        if get_shell(ShellType::Zsh, None).is_some() {
+            let zsh_snapshot =
+                run_snapshot_script_with_env(ShellType::Zsh, zsh_snapshot_script()).await?;
+            assert!(!zsh_snapshot.contains(INVALID_KEY));
+            assert!(zsh_snapshot.contains(VALID_KEY));
+        }
 
         Ok(())
     }
