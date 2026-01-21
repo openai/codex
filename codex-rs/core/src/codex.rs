@@ -2794,10 +2794,28 @@ pub(crate) async fn run_turn(
             .await,
     );
 
+    let otel_manager = turn_context.client.get_otel_manager();
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
+        injected_ok,
+        injected_error,
     } = build_skill_injections(&input, skills_outcome.as_ref()).await;
+
+    if injected_ok > 0 {
+        otel_manager.counter(
+            "codex.skill.injected",
+            injected_ok as i64,
+            &[("status", "ok")],
+        );
+    }
+    if injected_error > 0 {
+        otel_manager.counter(
+            "codex.skill.injected",
+            injected_error as i64,
+            &[("status", "error")],
+        );
+    }
 
     for message in skill_warnings {
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))

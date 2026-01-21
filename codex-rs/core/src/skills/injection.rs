@@ -12,6 +12,8 @@ use tokio::fs;
 pub(crate) struct SkillInjections {
     pub(crate) items: Vec<ResponseItem>,
     pub(crate) warnings: Vec<String>,
+    pub(crate) injected_ok: usize,
+    pub(crate) injected_error: usize,
 }
 
 pub(crate) async fn build_skill_injections(
@@ -35,11 +37,14 @@ pub(crate) async fn build_skill_injections(
     let mut result = SkillInjections {
         items: Vec::with_capacity(mentioned_skills.len()),
         warnings: Vec::new(),
+        injected_ok: 0,
+        injected_error: 0,
     };
 
     for skill in mentioned_skills {
         match fs::read_to_string(&skill.path).await {
             Ok(contents) => {
+                result.injected_ok += 1;
                 result.items.push(ResponseItem::from(SkillInstructions {
                     name: skill.name,
                     path: skill.path.to_string_lossy().into_owned(),
@@ -47,6 +52,7 @@ pub(crate) async fn build_skill_injections(
                 }));
             }
             Err(err) => {
+                result.injected_error += 1;
                 let message = format!(
                     "Failed to load skill {name} at {path}: {err:#}",
                     name = skill.name,
