@@ -2537,11 +2537,19 @@ profile = "project"
         )?;
 
         assert!(config.features.enabled(Feature::ApplyPatchFreeform));
-        assert!(config.features.enabled(Feature::UnifiedExec));
+        if cfg!(target_os = "windows") {
+            assert!(!config.features.enabled(Feature::UnifiedExec));
+        } else {
+            assert!(config.features.enabled(Feature::UnifiedExec));
+        }
 
         assert!(config.include_apply_patch_tool);
 
-        assert!(config.use_experimental_unified_exec_tool);
+        if cfg!(target_os = "windows") {
+            assert!(!config.use_experimental_unified_exec_tool);
+        } else {
+            assert!(config.use_experimental_unified_exec_tool);
+        }
 
         Ok(())
     }

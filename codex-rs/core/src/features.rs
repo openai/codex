@@ -182,6 +182,9 @@ impl Features {
     }
 
     pub fn enable(&mut self, f: Feature) -> &mut Self {
+        if cfg!(target_os = "windows") && f == Feature::UnifiedExec {
+            return self;
+        }
         self.enabled.insert(f);
         self
     }
