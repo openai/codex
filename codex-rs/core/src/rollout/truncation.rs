@@ -3,7 +3,11 @@
 //! In core, "user turns" are detected by scanning `ResponseItem::Message` items and
 //! interpreting them via `event_mapping::parse_turn_item(...)`.
 
+use crate::compact::COMPACT_USER_MESSAGE_MAX_TOKENS;
 use crate::event_mapping;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::approx_token_count;
+use crate::truncate::truncate_text;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -66,6 +70,140 @@ pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
     // Cut strictly before the nth user message (do not keep the nth itself).
     let cut_idx = user_positions[n_from_start];
     items[..cut_idx].to_vec()
+}
+
+#[derive(Debug, Clone)]
+struct UserTurnRef {
+    source_index: usize,
+    text: String,
+}
+
+fn user_turn_from_item(item: &ResponseItem, source_index: usize) -> Option<UserTurnRef> {
+    let turn_item = event_mapping::parse_turn_item(item)?;
+    match turn_item {
+        TurnItem::UserMessage(user) => Some(UserTurnRef {
+            source_index,
+            text: user.message(),
+        }),
+        _ => None,
+    }
+}
+
+fn select_user_turns_for_compaction(turns: &[UserTurnRef]) -> Vec<UserTurnRef> {
+    let mut selected = Vec::new();
+    if COMPACT_USER_MESSAGE_MAX_TOKENS > 0 {
+        let mut remaining = COMPACT_USER_MESSAGE_MAX_TOKENS;
+        for turn in turns.iter().rev() {
+            if remaining == 0 {
+                break;
+            }
+            let tokens = approx_token_count(&turn.text);
+            if tokens <= remaining {
+                selected.push(turn.clone());
+                remaining = remaining.saturating_sub(tokens);
+            } else {
+                let truncated = truncate_text(&turn.text, TruncationPolicy::Tokens(remaining));
+                selected.push(UserTurnRef {
+                    source_index: turn.source_index,
+                    text: truncated,
+                });
+                break;
+            }
+        }
+        selected.reverse();
+    }
+    selected
+}
+
+fn user_turns_from_replacement(
+    replacement: &[ResponseItem],
+    source_index: usize,
+) -> Vec<UserTurnRef> {
+    replacement
+        .iter()
+        .filter_map(|item| user_turn_from_item(item, source_index))
+        .collect()
+}
+
+fn effective_user_turns(items: &[RolloutItem]) -> Vec<UserTurnRef> {
+    let mut user_turns = Vec::new();
+    for (idx, item) in items.iter().enumerate() {
+        match item {
+            RolloutItem::ResponseItem(item @ ResponseItem::Message { .. }) => {
+                if let Some(turn) = user_turn_from_item(item, idx) {
+                    user_turns.push(turn);
+                }
+            }
+            RolloutItem::Compacted(compacted) => {
+                user_turns = match &compacted.replacement_history {
+                    Some(replacement) => user_turns_from_replacement(replacement, idx),
+                    None => {
+                        let mut selected = select_user_turns_for_compaction(&user_turns);
+                        let summary = if compacted.message.is_empty() {
+                            "(no summary available)".to_string()
+                        } else {
+                            compacted.message.clone()
+                        };
+                        selected.push(UserTurnRef {
+                            source_index: idx,
+                            text: summary,
+                        });
+                        selected
+                    }
+                };
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                if num_turns >= user_turns.len() {
+                    user_turns.clear();
+                } else {
+                    user_turns.truncate(user_turns.len().saturating_sub(num_turns));
+                }
+            }
+            _ => {}
+        }
+    }
+    user_turns
+}
+
+/// Drop the last `num_turns` user turns from a rollout stream.
+///
+/// This uses the "effective" user-turn list, which includes compaction summaries
+/// and applies any rollback markers already present in the stream.
+pub(crate) fn truncate_rollout_drop_last_n_user_turns(
+    items: &[RolloutItem],
+    num_turns: u32,
+) -> Vec<RolloutItem> {
+    if num_turns == 0 {
+        return items.to_vec();
+    }
+
+    let user_turns = effective_user_turns(items);
+    let Some(first_turn) = user_turns.first() else {
+        return items.to_vec();
+    };
+
+    let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
+    let cut_idx = if n_from_end >= user_turns.len() {
+        first_turn.source_index
+    } else {
+        user_turns[user_turns.len().saturating_sub(n_from_end)].source_index
+    };
+
+    items[..cut_idx].to_vec()
+}
+
+/// Apply any `ThreadRolledBack` markers in a rollout stream and drop them.
+pub(crate) fn apply_rollbacks_to_rollout(items: &[RolloutItem]) -> Vec<RolloutItem> {
+    let mut effective = Vec::new();
+    for item in items {
+        if let RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) = item {
+            effective = truncate_rollout_drop_last_n_user_turns(&effective, rollback.num_turns);
+            continue;
+        }
+        effective.push(item.clone());
+    }
+    effective
 }
 
 #[cfg(test)]

@@ -31,7 +31,7 @@ use tracing::error;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
-const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
+pub(crate) const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
 pub(crate) fn should_use_remote_compact_task(
     session: &Session,

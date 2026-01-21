@@ -1754,8 +1754,9 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> Vec<ResponseItem> {
+        let rollout_items = crate::rollout::truncation::apply_rollbacks_to_rollout(rollout_items);
         let mut history = ContextManager::new();
-        for item in rollout_items {
+        for item in &rollout_items {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
                     history.record_items(
@@ -1775,9 +1776,6 @@ impl Session {
                         );
                         history.replace(rebuilt);
                     }
-                }
-                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
-                    history.drop_last_n_user_turns(rollback.num_turns);
                 }
                 _ => {}
             }
@@ -2975,13 +2973,40 @@ mod handlers {
         }
 
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        let mut replaced = false;
+        sess.flush_rollout().await;
 
-        let mut history = sess.clone_history().await;
-        history.drop_last_n_user_turns(num_turns);
+        let rollout_path = {
+            let rollout = sess.services.rollout.lock().await;
+            rollout.as_ref().map(|rec| rec.rollout_path.clone())
+        };
 
-        // Replace with the raw items. We don't want to replace with a normalized
-        // version of the history.
-        sess.replace_history(history.raw_items().to_vec()).await;
+        if let Some(path) = rollout_path
+            && let Ok(initial_history) =
+                crate::rollout::RolloutRecorder::get_rollout_history(path.as_path()).await
+        {
+            let rollout_items = initial_history.get_rollout_items();
+            let effective =
+                crate::rollout::truncation::apply_rollbacks_to_rollout(rollout_items.as_slice());
+            let truncated = crate::rollout::truncation::truncate_rollout_drop_last_n_user_turns(
+                effective.as_slice(),
+                num_turns,
+            );
+            let rebuilt = sess
+                .reconstruct_history_from_rollout(turn_context.as_ref(), &truncated)
+                .await;
+            sess.replace_history(rebuilt).await;
+            replaced = true;
+        }
+
+        if !replaced {
+            let mut history = sess.clone_history().await;
+            history.drop_last_n_user_turns(num_turns);
+
+            // Replace with the raw items. We don't want to replace with a normalized
+            // version of the history.
+            sess.replace_history(history.raw_items().to_vec()).await;
+        }
         sess.recompute_token_usage(turn_context.as_ref()).await;
 
         sess.send_event_raw_flushed(Event {
@@ -4502,6 +4527,8 @@ mod tests {
     use crate::protocol::TokenCountEvent;
     use crate::protocol::TokenUsage;
     use crate::protocol::TokenUsageInfo;
+    use crate::rollout::RolloutRecorder;
+    use crate::rollout::RolloutRecorderParams;
     use crate::state::TaskKind;
     use crate::tasks::SessionTask;
     use crate::tasks::SessionTaskContext;
@@ -4529,6 +4556,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
+    use tempfile::TempDir;
 
     struct InstructionsTestCase {
         slug: &'static str,
@@ -4864,6 +4892,82 @@ mod tests {
         let mut expected = Vec::new();
         expected.extend(initial_context);
         expected.extend(turn_1);
+
+        let history = sess.clone_history().await;
+        assert_eq!(expected, history.raw_items());
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_over_compaction_restores_pre_compact_history() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+        let _rollout_home = attach_rollout_recorder(&sess).await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        sess.record_conversation_items(tc.as_ref(), &initial_context)
+            .await;
+
+        let user1 = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "turn 1 user".to_string(),
+            }],
+            end_turn: None,
+        };
+        let assistant1 = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "turn 1 assistant".to_string(),
+            }],
+            end_turn: None,
+        };
+        sess.record_conversation_items(tc.as_ref(), &[user1.clone(), assistant1.clone()])
+            .await;
+
+        let history_snapshot = sess.clone_history().await;
+        let user_messages = collect_user_messages(history_snapshot.raw_items());
+        let summary_text = "summary one";
+        let compacted = compact::build_compacted_history(
+            sess.build_initial_context(tc.as_ref()).await,
+            &user_messages,
+            summary_text,
+        );
+        sess.replace_history(compacted).await;
+        sess.recompute_token_usage(tc.as_ref()).await;
+        sess.persist_rollout_items(&[RolloutItem::Compacted(CompactedItem {
+            message: summary_text.to_string(),
+            replacement_history: None,
+        })])
+        .await;
+
+        let user2 = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "turn 2 user".to_string(),
+            }],
+            end_turn: None,
+        };
+        let assistant2 = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "turn 2 assistant".to_string(),
+            }],
+            end_turn: None,
+        };
+        sess.record_conversation_items(tc.as_ref(), &[user2, assistant2])
+            .await;
+        sess.flush_rollout().await;
+
+        handlers::thread_rollback(&sess, "sub-1".to_string(), 2).await;
+        let rollback_event = wait_for_thread_rolled_back(&rx).await;
+        assert_eq!(rollback_event.num_turns, 2);
+
+        let mut expected = initial_context;
+        expected.push(user1);
+        expected.push(assistant1);
 
         let history = sess.clone_history().await;
         assert_eq!(expected, history.raw_items());
@@ -5506,6 +5610,30 @@ mod tests {
 
     fn mark_state_initial_context_seeded(state: &mut SessionState) {
         state.initial_context_seeded = true;
+    }
+
+    async fn attach_rollout_recorder(sess: &Arc<Session>) -> TempDir {
+        let codex_home = TempDir::new().expect("create temp dir");
+        let config = build_test_config(codex_home.path()).await;
+        let base_instructions = sess.get_base_instructions().await;
+        let recorder = RolloutRecorder::new(
+            &config,
+            RolloutRecorderParams::new(
+                sess.conversation_id,
+                None,
+                SessionSource::Exec,
+                base_instructions,
+            ),
+            None,
+            None,
+        )
+        .await
+        .expect("create rollout recorder");
+        {
+            let mut rollout = sess.services.rollout.lock().await;
+            *rollout = Some(recorder);
+        }
+        codex_home
     }
 
     #[tokio::test]
