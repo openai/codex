@@ -68,7 +68,7 @@ fn emit_skill_injected_metric(otel: Option<&OtelManager>, skill: &SkillMetadata,
     let Some(otel) = otel else {
         return;
     };
-    
+
     otel.counter(
         "codex.skill.injected",
         1,
