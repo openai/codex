@@ -464,7 +464,8 @@ impl ChatComposer {
         let Some(entry) = self.history.on_entry_response(log_id, offset, entry) else {
             return false;
         };
-        // Persistent history only carries text, but local entries rehydrate elements and attachments.
+        // Persistent ↑/↓ history is text-only (backwards-compatible and avoids persisting
+        // attachments), but local in-session ↑/↓ history can rehydrate elements and image paths.
         self.set_text_content(entry.text, entry.text_elements, entry.local_image_paths);
         true
     }
