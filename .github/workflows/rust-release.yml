@@ -441,7 +441,7 @@ jobs:
         env:
           DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
         run: |
-          curl -sS -X POST "$DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL"
+          curl --fail --show-error --silent -X POST "$DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL"
 
       - uses: facebook/dotslash-publish-release@v2
         env:
