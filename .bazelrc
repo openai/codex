@@ -4,6 +4,7 @@ common --repo_env=BAZEL_NO_APPLE_CPP_TOOLCHAIN=1
 common --disk_cache=~/.cache/bazel-disk-cache
 common --repo_contents_cache=~/.cache/bazel-repo-contents-cache
 common --repository_cache=~/.cache/bazel-repo-cache
+startup --experimental_remote_repo_contents_cache
 
 common --experimental_platform_in_output_dir
 
