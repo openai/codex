@@ -2812,10 +2812,11 @@ pub(crate) async fn run_turn(
             .await,
     );
 
+    let otel_manager = turn_context.client.get_otel_manager();
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
-    } = build_skill_injections(&input, skills_outcome.as_ref()).await;
+    } = build_skill_injections(&input, skills_outcome.as_ref(), Some(&otel_manager)).await;
 
     for message in skill_warnings {
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
