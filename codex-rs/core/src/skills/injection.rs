@@ -71,7 +71,7 @@ fn emit_skill_injected_metric(otel: Option<&OtelManager>, skill: &SkillMetadata,
     
     otel.counter(
         "codex.skill.injected",
-        1000000,
+        1,
         &[("status", status), ("skill", skill.name.as_str())],
     );
 }
