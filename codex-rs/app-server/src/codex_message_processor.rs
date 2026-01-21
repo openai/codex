@@ -4101,12 +4101,12 @@ async fn derive_config_for_cwd(
         )
         .collect::<Vec<_>>();
 
-    codex_core::config::load_with_cli_overrides_and_fallback_cwd(
-        merged_cli_overrides,
-        typesafe_overrides,
-        cwd,
-    )
-    .await
+    codex_core::config::ConfigBuilder::default()
+        .cli_overrides(merged_cli_overrides)
+        .harness_overrides(typesafe_overrides)
+        .fallback_cwd(cwd)
+        .build()
+        .await
 }
 
 pub(crate) async fn read_summary_from_rollout(

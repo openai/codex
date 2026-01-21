@@ -519,18 +519,6 @@ impl Config {
     }
 }
 
-/// Load config with CLI overrides and apply a fallback cwd when none is specified in overrides.
-pub async fn load_with_cli_overrides_and_fallback_cwd(
-    cli_overrides: Vec<(String, TomlValue)>,
-    mut overrides: ConfigOverrides,
-    fallback_cwd: Option<PathBuf>,
-) -> std::io::Result<Config> {
-    if overrides.cwd.is_none() {
-        overrides.cwd = fallback_cwd;
-    }
-    Config::load_with_cli_overrides_and_harness_overrides(cli_overrides, overrides).await
-}
-
 /// DEPRECATED: Use [Config::load_with_cli_overrides()] instead because working
 /// with [ConfigToml] directly means that [ConfigRequirements] have not been
 /// applied yet, which risks failing to enforce required constraints.
