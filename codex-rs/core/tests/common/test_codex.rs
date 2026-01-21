@@ -165,9 +165,8 @@ impl TestCodexBuilder {
 
         let new_conversation = match resume_from {
             Some(path) => {
-                let auth_manager = codex_core::AuthManager::from_auth_for_testing(auth);
                 thread_manager
-                    .resume_thread_from_rollout(config.clone(), path, auth_manager)
+                    .resume_thread_from_rollout(config.clone(), path)
                     .await?
             }
             None => thread_manager.start_thread(config.clone()).await?,

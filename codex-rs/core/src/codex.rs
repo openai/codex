@@ -2719,14 +2719,11 @@ async fn spawn_review_thread(
         text_elements: Vec::new(),
     }];
     let tc = Arc::new(review_turn_context);
-    sess.spawn_task(tc.clone(), input, ReviewTask::new()).await;
-
-    // Announce entering review mode so UIs can switch modes.
     let review_request = ReviewRequest {
         target: resolved.target,
         user_facing_hint: Some(resolved.user_facing_hint),
     };
-    sess.send_event(&tc, EventMsg::EnteredReviewMode(review_request))
+    sess.spawn_task(tc.clone(), input, ReviewTask::new(review_request))
         .await;
 }
 
@@ -3339,8 +3336,6 @@ pub(super) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -
 pub(crate) use tests::make_session_and_context;
 
 use crate::git_info::get_git_repo_root;
-#[cfg(test)]
-pub(crate) use tests::make_session_and_context_with_rx;
 
 #[cfg(test)]
 mod tests {
@@ -4407,7 +4402,13 @@ mod tests {
             text: "start review".to_string(),
             text_elements: Vec::new(),
         }];
-        sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
+        let review_request = ReviewRequest {
+            target: codex_protocol::protocol::ReviewTarget::Custom {
+                instructions: "start review".to_string(),
+            },
+            user_facing_hint: None,
+        };
+        sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new(review_request))
             .await;
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;

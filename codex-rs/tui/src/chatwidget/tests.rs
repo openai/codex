@@ -30,6 +30,7 @@ use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::CreditsSnapshot;
+use codex_core::protocol::EnteredReviewModeEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
@@ -546,11 +547,14 @@ async fn entered_review_mode_uses_request_hint() {
 
     chat.handle_codex_event(Event {
         id: "review-start".into(),
-        msg: EventMsg::EnteredReviewMode(ReviewRequest {
-            target: ReviewTarget::BaseBranch {
-                branch: "feature".to_string(),
+        msg: EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
+            review_request: ReviewRequest {
+                target: ReviewTarget::BaseBranch {
+                    branch: "feature".to_string(),
+                },
+                user_facing_hint: Some("feature branch".to_string()),
             },
-            user_facing_hint: Some("feature branch".to_string()),
+            review_thread_id: ThreadId::new(),
         }),
     });
 
@@ -567,9 +571,12 @@ async fn entered_review_mode_defaults_to_current_changes_banner() {
 
     chat.handle_codex_event(Event {
         id: "review-start".into(),
-        msg: EventMsg::EnteredReviewMode(ReviewRequest {
-            target: ReviewTarget::UncommittedChanges,
-            user_facing_hint: None,
+        msg: EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
+            review_request: ReviewRequest {
+                target: ReviewTarget::UncommittedChanges,
+                user_facing_hint: None,
+            },
+            review_thread_id: ThreadId::new(),
         }),
     });
 
@@ -599,11 +606,14 @@ async fn review_restores_context_window_indicator() {
 
     chat.handle_codex_event(Event {
         id: "review-start".into(),
-        msg: EventMsg::EnteredReviewMode(ReviewRequest {
-            target: ReviewTarget::BaseBranch {
-                branch: "feature".to_string(),
+        msg: EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
+            review_request: ReviewRequest {
+                target: ReviewTarget::BaseBranch {
+                    branch: "feature".to_string(),
+                },
+                user_facing_hint: Some("feature branch".to_string()),
             },
-            user_facing_hint: Some("feature branch".to_string()),
+            review_thread_id: ThreadId::new(),
         }),
     });
 
@@ -4554,9 +4564,12 @@ async fn review_queues_user_messages_snapshot() {
 
     chat.handle_codex_event(Event {
         id: "review-1".into(),
-        msg: EventMsg::EnteredReviewMode(ReviewRequest {
-            target: ReviewTarget::UncommittedChanges,
-            user_facing_hint: Some("current changes".to_string()),
+        msg: EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
+            review_request: ReviewRequest {
+                target: ReviewTarget::UncommittedChanges,
+                user_facing_hint: Some("current changes".to_string()),
+            },
+            review_thread_id: ThreadId::new(),
         }),
     });
     let _ = drain_insert_history(&mut rx);

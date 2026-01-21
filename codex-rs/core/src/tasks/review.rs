@@ -1,36 +1,44 @@
-use std::sync::Arc;
-
-use async_trait::async_trait;
-use codex_protocol::config_types::WebSearchMode;
-use codex_protocol::items::TurnItem;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::AgentMessageContentDeltaEvent;
-use codex_protocol::protocol::AgentMessageDeltaEvent;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ExitedReviewModeEvent;
-use codex_protocol::protocol::ItemCompletedEvent;
-use codex_protocol::protocol::ReviewOutputEvent;
-use tokio_util::sync::CancellationToken;
-
+use crate::agent::AgentStatus;
+use crate::agent::status::is_final;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
+use async_trait::async_trait;
+use codex_protocol::ThreadId;
+use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EnteredReviewModeEvent;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::ReviewRequest;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
+use std::sync::Arc;
+use std::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use super::SessionTask;
 use super::SessionTaskContext;
 
-#[derive(Clone, Copy)]
-pub(crate) struct ReviewTask;
+#[derive(Clone)]
+/// Task driver for review-mode turns.
+pub(crate) struct ReviewTask {
+    review_request: ReviewRequest,
+    sub_agent_thread_id: Arc<Mutex<Option<ThreadId>>>,
+}
 
 impl ReviewTask {
-    pub(crate) fn new() -> Self {
-        Self
+    /// Creates a new review task with the already-resolved request details.
+    pub(crate) fn new(review_request: ReviewRequest) -> Self {
+        Self {
+            review_request,
+            sub_agent_thread_id: Arc::new(Mutex::new(None)),
+        }
     }
 }
 
@@ -53,143 +61,156 @@ impl SessionTask for ReviewTask {
             .otel_manager
             .counter("codex.task.review", 1, &[]);
 
-        // Start sub-codex conversation and get the receiver for events.
-        let output = match start_review_conversation(
-            session.clone(),
-            ctx.clone(),
-            input,
-            cancellation_token.clone(),
-        )
-        .await
-        {
-            Some(receiver) => process_review_events(session.clone(), ctx.clone(), receiver).await,
-            None => None,
+        // Build review agent config.
+        let sub_agent_config = {
+            let config = ctx.client.config();
+            let mut sub_agent_config = config.as_ref().clone();
+            sub_agent_config.web_search_mode = Some(WebSearchMode::Disabled);
+            sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
+            let model = config
+                .review_model
+                .clone()
+                .unwrap_or_else(|| ctx.client.get_model());
+            sub_agent_config.model = Some(model);
+            sub_agent_config
         };
+
+        // Spawn the review agent.
+        let agent_control = session.agent_control();
+        let thread_id = match agent_control
+            .spawn_agent(
+                sub_agent_config,
+                None,
+                Some(SessionSource::SubAgent(SubAgentSource::Review)),
+            )
+            .await
+        {
+            Ok(thread_id) => thread_id,
+            Err(err) => {
+                tracing::error!("Error while spawning review agent: {err:?}");
+                if !cancellation_token.is_cancelled() {
+                    exit_review_mode(session.clone_session(), None, ctx.clone(), None).await;
+                }
+                return None;
+            }
+        };
+
+        if let Ok(mut guard) = self.sub_agent_thread_id.lock() {
+            *guard = Some(thread_id);
+        }
+
+        let mut status_rx = match agent_control.subscribe_status(thread_id).await {
+            Ok(status_rx) => status_rx,
+            Err(err) => {
+                tracing::error!("Error while subscribing to review agent status: {err:?}");
+                if !cancellation_token.is_cancelled() {
+                    exit_review_mode(session.clone_session(), None, ctx.clone(), Some(thread_id))
+                        .await;
+                }
+                return None;
+            }
+        };
+
+        session
+            .session
+            .send_event(
+                ctx.as_ref(),
+                EventMsg::EnteredReviewMode(EnteredReviewModeEvent {
+                    review_request: self.review_request.clone(),
+                    review_thread_id: thread_id,
+                }),
+            )
+            .await;
+
+        // Send input to the agent.
+        let output = match session.agent_control().send_input(thread_id, input).await {
+            Ok(_) => {
+                let mut status = status_rx.borrow().clone();
+                let parse_output = |message: String| {
+                    if let Ok(ev) = serde_json::from_str::<ReviewOutputEvent>(&message) {
+                        return ev;
+                    }
+                    if let (Some(start), Some(end)) = (message.find('{'), message.rfind('}'))
+                        && start < end
+                        && let Some(slice) = message.get(start..=end)
+                        && let Ok(ev) = serde_json::from_str::<ReviewOutputEvent>(slice)
+                    {
+                        return ev;
+                    }
+                    ReviewOutputEvent {
+                        overall_explanation: message,
+                        ..Default::default()
+                    }
+                };
+                loop {
+                    if is_final(&status) {
+                        break match status {
+                            AgentStatus::Completed(Some(message)) => Some(parse_output(message)),
+                            _ => None,
+                        };
+                    }
+                    tokio::select! {
+                        _ = cancellation_token.cancelled() => break None,
+                        changed = status_rx.changed() => {
+                            if changed.is_err() {
+                                break None;
+                            }
+                            status = status_rx.borrow().clone();
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::error!("Error while sending input to review agent {err:?}");
+                None
+            }
+        };
+
         if !cancellation_token.is_cancelled() {
-            exit_review_mode(session.clone_session(), output.clone(), ctx.clone()).await;
+            exit_review_mode(
+                session.clone_session(),
+                output.clone(),
+                ctx.clone(),
+                Some(thread_id),
+            )
+            .await;
         }
         None
     }
 
     async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
-        exit_review_mode(session.clone_session(), None, ctx).await;
-    }
-}
-
-async fn start_review_conversation(
-    session: Arc<SessionTaskContext>,
-    ctx: Arc<TurnContext>,
-    input: Vec<UserInput>,
-    cancellation_token: CancellationToken,
-) -> Option<async_channel::Receiver<Event>> {
-    let config = ctx.client.config();
-    let mut sub_agent_config = config.as_ref().clone();
-    // Carry over review-only feature restrictions so the delegate cannot
-    // re-enable blocked tools (web search, view image).
-    sub_agent_config.web_search_mode = Some(WebSearchMode::Disabled);
-
-    // Set explicit review rubric for the sub-agent
-    sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
-
-    let model = config
-        .review_model
-        .clone()
-        .unwrap_or_else(|| ctx.client.get_model());
-    sub_agent_config.model = Some(model);
-    (run_codex_thread_one_shot(
-        sub_agent_config,
-        session.auth_manager(),
-        session.models_manager(),
-        input,
-        session.clone_session(),
-        ctx.clone(),
-        cancellation_token,
-        None,
-    )
-    .await)
-        .ok()
-        .map(|io| io.rx_event)
-}
-
-async fn process_review_events(
-    session: Arc<SessionTaskContext>,
-    ctx: Arc<TurnContext>,
-    receiver: async_channel::Receiver<Event>,
-) -> Option<ReviewOutputEvent> {
-    let mut prev_agent_message: Option<Event> = None;
-    while let Ok(event) = receiver.recv().await {
-        match event.clone().msg {
-            EventMsg::AgentMessage(_) => {
-                if let Some(prev) = prev_agent_message.take() {
-                    session
-                        .clone_session()
-                        .send_event(ctx.as_ref(), prev.msg)
-                        .await;
-                }
-                prev_agent_message = Some(event);
-            }
-            // Suppress ItemCompleted only for assistant messages: forwarding it
-            // would trigger legacy AgentMessage via as_legacy_events(), which this
-            // review flow intentionally hides in favor of structured output.
-            EventMsg::ItemCompleted(ItemCompletedEvent {
-                item: TurnItem::AgentMessage(_),
-                ..
-            })
-            | EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { .. })
-            | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. }) => {}
-            EventMsg::TurnComplete(task_complete) => {
-                // Parse review output from the last agent message (if present).
-                let out = task_complete
-                    .last_agent_message
-                    .as_deref()
-                    .map(parse_review_output_event);
-                return out;
-            }
-            EventMsg::TurnAborted(_) => {
-                // Cancellation or abort: consumer will finalize with None.
-                return None;
-            }
-            other => {
-                session
-                    .clone_session()
-                    .send_event(ctx.as_ref(), other)
-                    .await;
-            }
+        let thread_id = self
+            .sub_agent_thread_id
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take());
+        if let Some(thread_id) = thread_id {
+            let _ = session.agent_control().interrupt_agent(thread_id).await;
         }
-    }
-    // Channel closed without TurnComplete: treat as interrupted.
-    None
-}
-
-/// Parse a ReviewOutputEvent from a text blob returned by the reviewer model.
-/// If the text is valid JSON matching ReviewOutputEvent, deserialize it.
-/// Otherwise, attempt to extract the first JSON object substring and parse it.
-/// If parsing still fails, return a structured fallback carrying the plain text
-/// in `overall_explanation`.
-fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
-    if let Ok(ev) = serde_json::from_str::<ReviewOutputEvent>(text) {
-        return ev;
-    }
-    if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}'))
-        && start < end
-        && let Some(slice) = text.get(start..=end)
-        && let Ok(ev) = serde_json::from_str::<ReviewOutputEvent>(slice)
-    {
-        return ev;
-    }
-    ReviewOutputEvent {
-        overall_explanation: text.to_string(),
-        ..Default::default()
+        exit_review_mode(session.clone_session(), None, ctx, thread_id).await;
     }
 }
 
-/// Emits an ExitedReviewMode Event with optional ReviewOutput,
-/// and records a developer message with the review output.
+/// Emits an ExitedReviewMode Event with optional ReviewOutput, close the review
+/// agent and records a developer message with the review output.
 pub(crate) async fn exit_review_mode(
     session: Arc<Session>,
     review_output: Option<ReviewOutputEvent>,
     ctx: Arc<TurnContext>,
+    review_thread_id: Option<ThreadId>,
 ) {
+    // Close and drop the agent
+    if let Some(thread_id) = review_thread_id
+        && let Err(e) = session
+            .services
+            .agent_control
+            .shutdown_agent(thread_id)
+            .await
+    {
+        tracing::error!("Error while shutting down review agent: {e:?}");
+    }
+
+    // Build the message to add in the parent thread.
     const REVIEW_USER_MESSAGE_ID: &str = "review_rollout_user";
     const REVIEW_ASSISTANT_MESSAGE_ID: &str = "review_rollout_assistant";
     let (user_message, assistant_message) = if let Some(out) = review_output.clone() {

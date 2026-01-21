@@ -791,7 +791,7 @@ pub enum EventMsg {
     ShutdownComplete,
 
     /// Entered review mode.
-    EnteredReviewMode(ReviewRequest),
+    EnteredReviewMode(EnteredReviewModeEvent),
 
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
@@ -1038,6 +1038,12 @@ impl HasLegacyEvent for EventMsg {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ExitedReviewModeEvent {
     pub review_output: Option<ReviewOutputEvent>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct EnteredReviewModeEvent {
+    pub review_request: ReviewRequest,
+    pub review_thread_id: ThreadId,
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -1494,6 +1500,7 @@ pub enum SessionSource {
 pub enum SubAgentSource {
     Review,
     Compact,
+    Collab,
     Other(String),
 }
 
@@ -1515,6 +1522,7 @@ impl fmt::Display for SubAgentSource {
         match self {
             SubAgentSource::Review => f.write_str("review"),
             SubAgentSource::Compact => f.write_str("compact"),
+            SubAgentSource::Collab => f.write_str("collab"),
             SubAgentSource::Other(other) => f.write_str(other),
         }
     }

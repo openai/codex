@@ -187,6 +187,7 @@ impl ThreadManager {
         }
     }
 
+    /// Subscribe on the channel that sends the ID of newly created threads.
     pub fn subscribe_thread_created(&self) -> broadcast::Receiver<ThreadId> {
         self.state.thread_created_tx.subscribe()
     }
@@ -197,12 +198,7 @@ impl ThreadManager {
 
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
         self.state
-            .spawn_thread(
-                config,
-                InitialHistory::New,
-                Arc::clone(&self.state.auth_manager),
-                self.agent_control(),
-            )
+            .start_thread(config, InitialHistory::New, self.agent_control(), None)
             .await
     }
 
@@ -210,10 +206,9 @@ impl ThreadManager {
         &self,
         config: Config,
         rollout_path: PathBuf,
-        auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        self.resume_thread_with_history(config, initial_history, auth_manager)
+        self.resume_thread_with_history(config, initial_history)
             .await
     }
 
@@ -221,10 +216,9 @@ impl ThreadManager {
         &self,
         config: Config,
         initial_history: InitialHistory,
-        auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewThread> {
         self.state
-            .spawn_thread(config, initial_history, auth_manager, self.agent_control())
+            .start_thread(config, initial_history, self.agent_control(), None)
             .await
     }
 
@@ -257,12 +251,7 @@ impl ThreadManager {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
         let history = truncate_before_nth_user_message(history, nth_user_message);
         self.state
-            .spawn_thread(
-                config,
-                history,
-                Arc::clone(&self.state.auth_manager),
-                self.agent_control(),
-            )
+            .start_thread(config, history, self.agent_control(), None)
             .await
     }
 
@@ -308,38 +297,24 @@ impl ThreadManagerState {
         self.threads.write().await.remove(thread_id)
     }
 
-    /// Spawn a new thread with no history using a provided config.
-    pub(crate) async fn spawn_new_thread(
-        &self,
-        config: Config,
-        agent_control: AgentControl,
-    ) -> CodexResult<NewThread> {
-        self.spawn_thread(
-            config,
-            InitialHistory::New,
-            Arc::clone(&self.auth_manager),
-            agent_control,
-        )
-        .await
-    }
-
-    /// Spawn a new thread with optional history and register it with the manager.
-    pub(crate) async fn spawn_thread(
+    /// Spawn a new thread with optional history and register it with the manager. If
+    /// `session_source_override` is not defined, fallback on the current session_source.
+    pub(crate) async fn start_thread(
         &self,
         config: Config,
         initial_history: InitialHistory,
-        auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
+        session_source_override: Option<SessionSource>,
     ) -> CodexResult<NewThread> {
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(
             config,
-            auth_manager,
+            self.auth_manager.clone(),
             Arc::clone(&self.models_manager),
             Arc::clone(&self.skills_manager),
             initial_history,
-            self.session_source.clone(),
+            session_source_override.unwrap_or_else(|| self.session_source.clone()),
             agent_control,
         )
         .await?;

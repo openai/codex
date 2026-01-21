@@ -43,7 +43,7 @@ pub(crate) enum WindowsSandboxFallbackReason {
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
-    ExternalApprovalRequest {
+    ExternalThreadEvent {
         thread_id: ThreadId,
         event: Event,
     },
