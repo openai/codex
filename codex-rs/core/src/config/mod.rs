@@ -1363,6 +1363,12 @@ impl Config {
             || cfg.sandbox_mode.is_some();
 
         let mut model_providers = built_in_model_providers();
+        if features.enabled(Feature::ResponsesWebsockets)
+            && let Some(provider) = model_providers.get_mut("openai")
+            && provider.is_openai()
+        {
+            provider.wire_api = crate::model_provider_info::WireApi::ResponsesWebsocket;
+        }
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
@@ -2507,6 +2513,30 @@ profile = "project"
         assert!(config.include_apply_patch_tool);
 
         assert!(config.use_experimental_unified_exec_tool);
+
+        Ok(())
+    }
+
+    #[test]
+    fn responses_websockets_feature_updates_openai_provider() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut entries = BTreeMap::new();
+        entries.insert("responses_websockets".to_string(), true);
+        let cfg = ConfigToml {
+            features: Some(crate::features::FeaturesToml { entries }),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.model_provider.wire_api,
+            crate::model_provider_info::WireApi::ResponsesWebsocket
+        );
 
         Ok(())
     }
