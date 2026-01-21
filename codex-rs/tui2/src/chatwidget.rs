@@ -3682,7 +3682,7 @@ impl ChatWidget {
             .is_some_and(|preset| {
                 Self::preset_matches_current(current_approval, current_sandbox, preset)
             });
-        let stay_actions = if stay_full_access {
+        let mut stay_actions = if stay_full_access {
             Vec::new()
         } else {
             presets
@@ -3693,11 +3693,21 @@ impl ChatWidget {
                 })
                 .unwrap_or_default()
         };
+        let stay_actions_otel = self.otel_manager.clone();
+        stay_actions.insert(
+            0,
+            Box::new(move |_tx| {
+                stay_actions_otel.counter("codex.windows_sandbox.elevated_prompt_decline", 1, &[]);
+            }),
+        );
         let stay_label = if stay_full_access {
             "Stay in Agent Full Access".to_string()
         } else {
             "Stay in Read-Only".to_string()
         };
+
+        self.otel_manager
+            .counter("codex.windows_sandbox.elevated_prompt_shown", 1, &[]);
 
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
@@ -3710,11 +3720,13 @@ impl ChatWidget {
             .wrap(Wrap { trim: false }),
         ));
 
+        let accept_otel = self.otel_manager.clone();
         let items = vec![
             SelectionItem {
                 name: "Set up agent sandbox (requires elevation)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
+                    accept_otel.counter("codex.windows_sandbox.elevated_prompt_accept", 1, &[]);
                     tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                         preset: preset.clone(),
                     });
@@ -3794,11 +3806,14 @@ impl ChatWidget {
 
         let elevated_preset = preset.clone();
         let legacy_preset = preset;
+        let otel = self.otel_manager.clone();
         let items = vec![
             SelectionItem {
                 name: "Try elevated agent sandbox setup again".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
+                    otel.clone()
+                        .counter("codex.windows_sandbox.fallback_retry_elevated", 1, &[]);
                     tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                         preset: elevated_preset.clone(),
                     });
@@ -3810,6 +3825,8 @@ impl ChatWidget {
                 name: "Use non-elevated agent sandbox".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
+                    otel.clone()
+                        .counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
                     tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                         preset: legacy_preset.clone(),
                         mode: WindowsSandboxEnableMode::Legacy,
@@ -3821,7 +3838,13 @@ impl ChatWidget {
             SelectionItem {
                 name: stay_label,
                 description: None,
-                actions: stay_actions,
+                actions: vec![Box::new(move |tx| {
+                    otel.clone()
+                        .counter("codex.windows_sandbox.fallback_stay_current", 1, &[]);
+                    for action in &stay_actions {
+                        action(tx);
+                    }
+                })],
                 dismiss_on_select: true,
                 ..Default::default()
             },
