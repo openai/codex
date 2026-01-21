@@ -950,6 +950,24 @@ impl App {
                             .submit_op(Op::PatchApproval { id, decision });
                     }
                 }
+                Op::UserInputAnswer { id, response } => {
+                    if let Some((thread_id, original_id)) =
+                        self.external_approval_routes.remove(&id)
+                    {
+                        self.forward_external_op(
+                            thread_id,
+                            Op::UserInputAnswer {
+                                id: original_id,
+                                response,
+                            },
+                        )
+                        .await;
+                        self.finish_external_approval();
+                    } else {
+                        self.chat_widget
+                            .submit_op(Op::UserInputAnswer { id, response });
+                    }
+                }
                 // Standard path where this is not an external approval response.
                 _ => self.chat_widget.submit_op(op),
             },
@@ -1454,6 +1472,14 @@ impl App {
     /// can be routed back to the correct thread.
     fn handle_external_approval_request(&mut self, thread_id: ThreadId, mut event: Event) {
         match &mut event.msg {
+            EventMsg::RequestUserInput(ev) => {
+                let original_id = ev.turn_id.clone();
+                let routing_id = format!("{thread_id}:{original_id}");
+                self.external_approval_routes
+                    .insert(routing_id.clone(), (thread_id, original_id));
+                ev.turn_id = routing_id.clone();
+                event.id = routing_id;
+            }
             EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_) => {
                 let original_id = event.id.clone();
                 let routing_id = format!("{thread_id}:{original_id}");
@@ -1506,7 +1532,9 @@ impl App {
                     }
                 };
                 match event.msg {
-                    EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_) => {
+                    EventMsg::ExecApprovalRequest(_)
+                    | EventMsg::ApplyPatchApprovalRequest(_)
+                    | EventMsg::RequestUserInput(_) => {
                         app_event_tx.send(AppEvent::ExternalApprovalRequest { thread_id, event });
                     }
                     _ => {}

@@ -96,6 +96,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
@@ -1209,6 +1210,14 @@ impl ChatWidget {
         );
     }
 
+    fn on_request_user_input(&mut self, ev: RequestUserInputEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_user_input(ev),
+            |s| s.handle_request_user_input_now(ev2),
+        );
+    }
+
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         if is_unified_exec_source(ev.source) {
@@ -1673,6 +1682,12 @@ impl ChatWidget {
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
+        self.request_redraw();
+    }
+
+    pub(crate) fn handle_request_user_input_now(&mut self, ev: RequestUserInputEvent) {
+        self.flush_answer_stream_with_separator();
+        self.bottom_pane.push_user_input_request(ev);
         self.request_redraw();
     }
 
@@ -2680,6 +2695,9 @@ impl ChatWidget {
             EventMsg::ElicitationRequest(ev) => {
                 self.on_elicitation_request(ev);
             }
+            EventMsg::RequestUserInput(ev) => {
+                self.on_request_user_input(ev);
+            }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
@@ -2740,8 +2758,7 @@ impl ChatWidget {
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ReasoningRawContentDelta(_)
-            | EventMsg::RequestUserInput(_) => {}
+            | EventMsg::ReasoningRawContentDelta(_) => {}
         }
     }
 
