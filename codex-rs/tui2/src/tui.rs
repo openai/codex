@@ -154,10 +154,14 @@ impl Tui {
 
         // Detect keyboard enhancement support before any EventStream is created so the
         // crossterm poller can acquire its lock without contention.
-        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+        // These terminal queries read from stdin, which can trigger SIGTTIN over SSH
+        // if the process is not yet in the foreground process group. Temporarily ignore
+        // SIGTTIN/SIGTTOU during the queries to avoid being suspended.
+        let enhanced_keys_supported =
+            with_tty_signals_ignored(|| supports_keyboard_enhancement().unwrap_or(false));
         // Cache this to avoid contention with the event reader.
         supports_color::on_cached(supports_color::Stream::Stdout);
-        let _ = crate::terminal_palette::default_colors();
+        let _ = with_tty_signals_ignored(crate::terminal_palette::default_colors);
 
         Self {
             frame_requester,
@@ -448,4 +452,57 @@ impl Tui {
         }
         Ok(None)
     }
+}
+
+/// Execute a closure with SIGTTIN and SIGTTOU temporarily ignored.
+///
+/// Terminal queries (e.g., `supports_keyboard_enhancement()`, `query_foreground_color()`)
+/// write an escape sequence to stdout and read the response from stdin. When running over
+/// SSH or in certain terminal configurations, the process may not be in the foreground
+/// process group when these queries are made, causing SIGTTIN to be delivered and
+/// suspending the process.
+///
+/// This function temporarily sets SIGTTIN/SIGTTOU to SIG_IGN before running the closure,
+/// then restores the previous handlers afterward. This allows terminal queries to fail
+/// gracefully (returning None or an error) instead of suspending the process.
+#[cfg(unix)]
+fn with_tty_signals_ignored<T>(f: impl FnOnce() -> T) -> T {
+    use std::mem::MaybeUninit;
+
+    // Save the current signal handlers for SIGTTIN and SIGTTOU.
+    let mut old_ttin = MaybeUninit::<libc::sigaction>::uninit();
+    let mut old_ttou = MaybeUninit::<libc::sigaction>::uninit();
+
+    // Set up the ignore action.
+    let mut ignore_action = MaybeUninit::<libc::sigaction>::uninit();
+    // Safety: zeroing a sigaction struct is valid.
+    unsafe {
+        std::ptr::write_bytes(ignore_action.as_mut_ptr(), 0, 1);
+        (*ignore_action.as_mut_ptr()).sa_sigaction = libc::SIG_IGN;
+    }
+
+    // Install SIG_IGN for SIGTTIN and SIGTTOU, saving the old handlers.
+    // Safety: sigaction is safe when given valid pointers.
+    unsafe {
+        libc::sigaction(libc::SIGTTIN, ignore_action.as_ptr(), old_ttin.as_mut_ptr());
+        libc::sigaction(libc::SIGTTOU, ignore_action.as_ptr(), old_ttou.as_mut_ptr());
+    }
+
+    // Run the closure.
+    let result = f();
+
+    // Restore the previous signal handlers.
+    // Safety: old_ttin and old_ttou were initialized by the sigaction calls above.
+    unsafe {
+        libc::sigaction(libc::SIGTTIN, old_ttin.as_ptr(), std::ptr::null_mut());
+        libc::sigaction(libc::SIGTTOU, old_ttou.as_ptr(), std::ptr::null_mut());
+    }
+
+    result
+}
+
+/// On non-Unix platforms, just run the closure directly.
+#[cfg(not(unix))]
+fn with_tty_signals_ignored<T>(f: impl FnOnce() -> T) -> T {
+    f()
 }
