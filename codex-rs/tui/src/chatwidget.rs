@@ -4126,15 +4126,15 @@ impl ChatWidget {
             SelectionItem {
                 name: "Try elevated agent sandbox setup again".to_string(),
                 description: None,
-                actions: vec![Box::new(move |tx| {
-                    self.otel_manager.counter(
-                        "codex.windows_sandbox.fallback_retry_elevated",
-                        1,
-                        &[],
-                    );
-                    tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
-                        preset: elevated_preset.clone(),
-                    });
+                actions: vec![Box::new({
+                    let otel = self.otel_manager.clone();
+                    let preset = elevated_preset;
+                    move |tx| {
+                        otel.counter("codex.windows_sandbox.fallback_retry_elevated", 1, &[]);
+                        tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
+                            preset: preset.clone(),
+                        });
+                    }
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
@@ -4142,13 +4142,16 @@ impl ChatWidget {
             SelectionItem {
                 name: "Use non-elevated agent sandbox".to_string(),
                 description: None,
-                actions: vec![Box::new(move |tx| {
-                    self.otel_manager
-                        .counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
-                    tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
-                        preset: legacy_preset.clone(),
-                        mode: WindowsSandboxEnableMode::Legacy,
-                    });
+                actions: vec![Box::new({
+                    let otel = self.otel_manager.clone();
+                    let preset = legacy_preset;
+                    move |tx| {
+                        otel.counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
+                        tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
+                            preset: preset.clone(),
+                            mode: WindowsSandboxEnableMode::Legacy,
+                        });
+                    }
                 })],
                 dismiss_on_select: true,
                 ..Default::default()
