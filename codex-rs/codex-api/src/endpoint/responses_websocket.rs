@@ -24,6 +24,7 @@ use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tracing::debug;
+use tracing::info;
 use tracing::trace;
 use url::Url;
 
@@ -151,15 +152,27 @@ async fn connect_websocket(
     headers: HeaderMap,
     turn_state: Option<Arc<OnceLock<String>>>,
 ) -> Result<(WsStream, bool), ApiError> {
+    info!("connecting to websocket: {url}");
+
     let mut request = url
         .as_str()
         .into_client_request()
         .map_err(|err| ApiError::Stream(format!("failed to build websocket request: {err}")))?;
     request.headers_mut().extend(headers);
 
-    let (stream, response) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|err| map_ws_error(err, &url))?;
+    let response = tokio_tungstenite::connect_async(request).await;
+
+    let (stream, response) = match response {
+        Ok((stream, response)) => {
+            info!("successfully connected to websocket: {url}");
+            (stream, response)
+        }
+        Err(err) => {
+            info!("failed to connect to websocket: {err}, url: {url}");
+            return Err(map_ws_error(err, &url));
+        }
+    };
+
     let reasoning_included = response.headers().contains_key(X_REASONING_INCLUDED_HEADER);
     if let Some(turn_state) = turn_state
         && let Some(header_value) = response
@@ -271,7 +284,7 @@ async fn run_websocket_response_stream(
             Message::Pong(_) => {}
             Message::Close(_) => {
                 return Err(ApiError::Stream(
-                    "websocket closed before response.completed".into(),
+                    "websocket closed by server before response.completed".into(),
                 ));
             }
             _ => {}
