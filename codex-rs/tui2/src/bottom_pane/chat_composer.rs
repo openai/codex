@@ -15,6 +15,18 @@
 //! [`ChatComposer::handle_key_event_without_popup`]. After every handled key, we call
 //! [`ChatComposer::sync_popups`] so UI state follows the latest buffer/cursor.
 //!
+//! # Submission and Prompt Expansion
+//!
+//! On submit/queue paths, the composer:
+//!
+//! - Expands pending paste placeholders so element ranges align with the final text.
+//! - Trims whitespace and rebases text elements accordingly.
+//! - Expands `/prompts:` custom prompts (named or numeric args), preserving text elements.
+//! - Prunes attached images so only placeholders that survive expansion are sent.
+//!
+//! The numeric auto-submit path used by the slash popup performs the same pending-paste expansion
+//! and attachment pruning, and clears pending paste state on success.
+//!
 //! # Non-bracketed Paste Bursts
 //!
 //! On some terminals (especially on Windows), pastes arrive as a rapid sequence of
