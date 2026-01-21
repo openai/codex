@@ -16718,15 +16718,6 @@ async fn run_risk_rerank_chunk(
             .await
             {
                 Ok(output) => {
-                    push_progress_log(
-                        &progress_sender,
-                        &log_sink,
-                        &mut logs,
-                        format!(
-                            "Risk rerank {cmd_label} `{}` returned content.",
-                            request.path.display(),
-                        ),
-                    );
                     conversation.push(format!(
                         "Tool {cmd_label} `{}`:\n{}",
                         request.path.display(),
