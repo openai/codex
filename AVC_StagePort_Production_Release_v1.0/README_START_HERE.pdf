@@ -1,0 +1,52 @@
+README — START HERE
+
+AVC StagePort Production Release v1.0
+
+Prepared for professional review
+
+1. What This Package Is
+This is a controlled production release containing discrete, versioned subsystems related to authorship, product development, operational records, legal posture, narrative structure, and evidentiary materials associated with the StagePort body of work.
+
+All materials are preserved in their original packaged form to maintain provenance, version integrity, and review clarity.
+
+This package is not a narrative presentation. It is a compiled release artifact.
+
+2. How This Package Is Structured
+Each folder contains one intact ZIP, representing a sovereign subsystem.
+No internal ZIP contents have been modified, merged, or recombined.
+
+01_CORE_RECORD            → Authorship & provenance
+02_PRODUCT_AND_SYSTEM     → Productized intelligence & demos
+03_OPERATIONS             → Operational and ledger records
+04_LEGAL_AND_RIGHTS       → Legal posture & rights signaling
+05_CASE_NARRATIVE         → Narrative freeze-frame (act structure)
+06_EVIDENCE_CONTROLLED    → Restricted evidentiary materials
+07_PUBLIC_PREVIEW         → Public-safe artifact
+
+This separation is intentional and must be preserved.
+
+3. Review Order (Recommended)
+For a first-time reviewer:
+1. 01_CORE_RECORD
+2. 02_PRODUCT_AND_SYSTEM
+3. 05_CASE_NARRATIVE
+4. 04_LEGAL_AND_RIGHTS
+5. 03_OPERATIONS
+
+Folders 06_EVIDENCE_CONTROLLED and 07_PUBLIC_PREVIEW are contextual and should be accessed only if relevant to the reviewer’s role.
+
+4. Access & Sensitivity Notes
+• Public-safe: 07_PUBLIC_PREVIEW
+• Professional review: 01–05
+• Restricted / controlled: 06_EVIDENCE_CONTROLLED
+
+Not all materials are intended for all audiences.
+
+5. Use Rights & Restrictions
+No component of this package may be redistributed, excerpted, decompiled, or removed from its original ZIP container without written authorization from the rights holder.
+
+6. Versioning
+This release: v1.0
+All subsystems retain their internal version identifiers.
+
+End of README
