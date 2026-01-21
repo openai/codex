@@ -205,9 +205,16 @@ alias_count=$(alias -L | wc -l | tr -d ' ')
 print "# aliases $alias_count"
 alias -L
 print ''
-export_count=$(export -p | wc -l | tr -d ' ')
+export_count=$(env | awk -F= '$1 ~ /^[A-Za-z_][A-Za-z0-9_]*$/ {count++} END{print count}')
 print "# exports $export_count"
-export -p
+env | sort | while IFS='=' read -r key value; do
+  case "$key" in
+    [A-Za-z_][A-Za-z0-9_]*)
+      escaped=${value//\'/\'\"\'\"\'}
+      print "export $key='$escaped'"
+      ;;
+  esac
+done
 "##
 }
 
@@ -232,9 +239,16 @@ alias_count=$(alias -p | wc -l | tr -d ' ')
 echo "# aliases $alias_count"
 alias -p
 echo ''
-export_count=$(export -p | wc -l | tr -d ' ')
+export_count=$(env | awk -F= '$1 ~ /^[A-Za-z_][A-Za-z0-9_]*$/ {count++} END{print count}')
 echo "# exports $export_count"
-export -p
+env | sort | while IFS='=' read -r key value; do
+  case "$key" in
+    [A-Za-z_][A-Za-z0-9_]*)
+      escaped=${value//\'/\'\"\'\"\'}
+      printf "export %s='%s'\n" "$key" "$escaped"
+      ;;
+  esac
+done
 "##
 }
 
@@ -271,18 +285,16 @@ if alias >/dev/null 2>&1; then
 else
   echo '# aliases 0'
 fi
-if export -p >/dev/null 2>&1; then
-  export_count=$(export -p | wc -l | tr -d ' ')
-  echo "# exports $export_count"
-  export -p
-else
-  export_count=$(env | wc -l | tr -d ' ')
-  echo "# exports $export_count"
-  env | sort | while IFS='=' read -r key value; do
-    escaped=$(printf "%s" "$value" | sed "s/'/'\"'\"'/g")
-    printf "export %s='%s'\n" "$key" "$escaped"
-  done
-fi
+export_count=$(env | awk -F= '$1 ~ /^[A-Za-z_][A-Za-z0-9_]*$/ {count++} END{print count}')
+echo "# exports $export_count"
+env | sort | while IFS='=' read -r key value; do
+  case "$key" in
+    [A-Za-z_][A-Za-z0-9_]*)
+      escaped=$(printf "%s" "$value" | sed "s/'/'\"'\"'/g")
+      printf "export %s='%s'\n" "$key" "$escaped"
+      ;;
+  esac
+done
 "##
 }
 
