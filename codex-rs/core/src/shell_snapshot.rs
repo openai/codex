@@ -209,11 +209,12 @@ export_count=$(env | awk -F= '$1 ~ /^[A-Za-z_][A-Za-z0-9_]*$/ {count++} END{prin
 print "# exports $export_count"
 env | sort | while IFS='=' read -r key value; do
   case "$key" in
-    [A-Za-z_][A-Za-z0-9_]*)
-      escaped=${value//\'/\'\"\'\"\'}
-      print "export $key='$escaped'"
+    ""|[0-9]*|*[^A-Za-z0-9_]*)
+      continue
       ;;
   esac
+  escaped=${value//\'/\'\"\'\"\'}
+  print "export $key='$escaped'"
 done
 "##
 }
@@ -243,11 +244,12 @@ export_count=$(env | awk -F= '$1 ~ /^[A-Za-z_][A-Za-z0-9_]*$/ {count++} END{prin
 echo "# exports $export_count"
 env | sort | while IFS='=' read -r key value; do
   case "$key" in
-    [A-Za-z_][A-Za-z0-9_]*)
-      escaped=${value//\'/\'\"\'\"\'}
-      printf "export %s='%s'\n" "$key" "$escaped"
+    ""|[0-9]*|*[^A-Za-z0-9_]*)
+      continue
       ;;
   esac
+  escaped=${value//\'/\'\"\'\"\'}
+  printf "export %s='%s'\n" "$key" "$escaped"
 done
 "##
 }
@@ -289,11 +291,12 @@ export_count=$(env | awk -F= '$1 ~ /^[A-Za-z_][A-Za-z0-9_]*$/ {count++} END{prin
 echo "# exports $export_count"
 env | sort | while IFS='=' read -r key value; do
   case "$key" in
-    [A-Za-z_][A-Za-z0-9_]*)
-      escaped=$(printf "%s" "$value" | sed "s/'/'\"'\"'/g")
-      printf "export %s='%s'\n" "$key" "$escaped"
+    ""|[0-9]*|*[^A-Za-z0-9_]*)
+      continue
       ;;
   esac
+  escaped=$(printf "%s" "$value" | sed "s/'/'\"'\"'/g")
+  printf "export %s='%s'\n" "$key" "$escaped"
 done
 "##
 }
@@ -546,6 +549,51 @@ mod tests {
     async fn linux_sh_snapshot_includes_sections() -> Result<()> {
         let snapshot = get_snapshot(ShellType::Sh).await?;
         assert_posix_snapshot_sections(&snapshot);
+        Ok(())
+    }
+
+    #[cfg_attr(target_os = "windows", ignore)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn posix_snapshot_filters_invalid_env_keys() -> Result<()> {
+        static INVALID_KEY: &str = "NEXTEST_BIN_EXE_codex-write-config-schema";
+        static VALID_KEY: &str = "NEXTEST_BIN_EXE_codex_write_config_schema";
+        async fn run_snapshot_script_with_env(
+            shell_type: ShellType,
+            script: &str,
+        ) -> Result<String> {
+            let shell = get_shell(shell_type.clone(), None)
+                .ok_or_else(|| anyhow!("No available shell for {shell_type:?}"))?;
+            let output = Command::new(shell.shell_path)
+                .arg("-c")
+                .arg(script)
+                .env(INVALID_KEY, "invalid-value")
+                .env(VALID_KEY, "valid-value")
+                .output()
+                .await?;
+
+            if !output.status.success() {
+                let status = output.status;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                bail!("Snapshot command exited with status {status}: {stderr}");
+            }
+
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        }
+
+        let bash_snapshot =
+            run_snapshot_script_with_env(ShellType::Bash, bash_snapshot_script()).await?;
+        assert!(!bash_snapshot.contains(INVALID_KEY));
+        assert!(bash_snapshot.contains(VALID_KEY));
+
+        let sh_snapshot = run_snapshot_script_with_env(ShellType::Sh, sh_snapshot_script()).await?;
+        assert!(!sh_snapshot.contains(INVALID_KEY));
+        assert!(sh_snapshot.contains(VALID_KEY));
+
+        let zsh_snapshot =
+            run_snapshot_script_with_env(ShellType::Zsh, zsh_snapshot_script()).await?;
+        assert!(!zsh_snapshot.contains(INVALID_KEY));
+        assert!(zsh_snapshot.contains(VALID_KEY));
+
         Ok(())
     }
 
