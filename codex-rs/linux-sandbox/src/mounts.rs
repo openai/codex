@@ -521,16 +521,11 @@ mod tests {
     fn apply_read_only_mounts_falls_back_on_permission_denied() {
         FORCE_UNSHARE_PERMISSION_DENIED.store(true, std::sync::atomic::Ordering::SeqCst);
         let tempdir = tempfile::tempdir().expect("tempdir");
-        let protected = tempdir.path().join("protected");
-        std::fs::create_dir_all(&protected).expect("create protected");
+        let dot_git = tempdir.path().join(".git");
+        std::fs::create_dir_all(&dot_git).expect("create .git");
         let root = AbsolutePathBuf::try_from(tempdir.path()).expect("root");
         let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![WritableRoot {
-                root,
-                read_only_subpaths: vec![
-                    AbsolutePathBuf::try_from(protected.as_path()).expect("protected"),
-                ],
-            }],
+            writable_roots: vec![root],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -548,16 +543,11 @@ mod tests {
         FORCE_RUNNING_AS_ROOT.store(true, std::sync::atomic::Ordering::SeqCst);
         FORCE_UNSHARE_PERMISSION_DENIED.store(true, std::sync::atomic::Ordering::SeqCst);
         let tempdir = tempfile::tempdir().expect("tempdir");
-        let protected = tempdir.path().join("protected");
-        std::fs::create_dir_all(&protected).expect("create protected");
+        let dot_git = tempdir.path().join(".git");
+        std::fs::create_dir_all(&dot_git).expect("create .git");
         let root = AbsolutePathBuf::try_from(tempdir.path()).expect("root");
         let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![WritableRoot {
-                root,
-                read_only_subpaths: vec![
-                    AbsolutePathBuf::try_from(protected.as_path()).expect("protected"),
-                ],
-            }],
+            writable_roots: vec![root],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -577,16 +567,11 @@ mod tests {
         FORCE_WRITE_USER_NAMESPACE_MAPS_PERMISSION_DENIED
             .store(true, std::sync::atomic::Ordering::SeqCst);
         let tempdir = tempfile::tempdir().expect("tempdir");
-        let protected = tempdir.path().join("protected");
-        std::fs::create_dir_all(&protected).expect("create protected");
+        let dot_git = tempdir.path().join(".git");
+        std::fs::create_dir_all(&dot_git).expect("create .git");
         let root = AbsolutePathBuf::try_from(tempdir.path()).expect("root");
         let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![WritableRoot {
-                root,
-                read_only_subpaths: vec![
-                    AbsolutePathBuf::try_from(protected.as_path()).expect("protected"),
-                ],
-            }],
+            writable_roots: vec![root],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -608,16 +593,11 @@ mod tests {
             .store(true, std::sync::atomic::Ordering::SeqCst);
         FORCE_DROP_CAPS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
         let tempdir = tempfile::tempdir().expect("tempdir");
-        let protected = tempdir.path().join("protected");
-        std::fs::create_dir_all(&protected).expect("create protected");
+        let dot_git = tempdir.path().join(".git");
+        std::fs::create_dir_all(&dot_git).expect("create .git");
         let root = AbsolutePathBuf::try_from(tempdir.path()).expect("root");
         let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![WritableRoot {
-                root,
-                read_only_subpaths: vec![
-                    AbsolutePathBuf::try_from(protected.as_path()).expect("protected"),
-                ],
-            }],
+            writable_roots: vec![root],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -641,16 +621,11 @@ mod tests {
         FORCE_BIND_MOUNT_PERMISSION_DENIED.store(true, std::sync::atomic::Ordering::SeqCst);
         FORCE_DROP_CAPS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
         let tempdir = tempfile::tempdir().expect("tempdir");
-        let protected = tempdir.path().join("protected");
-        std::fs::create_dir_all(&protected).expect("create protected");
+        let dot_git = tempdir.path().join(".git");
+        std::fs::create_dir_all(&dot_git).expect("create .git");
         let root = AbsolutePathBuf::try_from(tempdir.path()).expect("root");
         let sandbox_policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![WritableRoot {
-                root,
-                read_only_subpaths: vec![
-                    AbsolutePathBuf::try_from(protected.as_path()).expect("protected"),
-                ],
-            }],
+            writable_roots: vec![root],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
