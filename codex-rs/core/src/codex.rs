@@ -1518,6 +1518,11 @@ impl Session {
         self.features.clone()
     }
 
+    pub(crate) async fn collaboration_mode(&self) -> CollaborationMode {
+        let state = self.state.lock().await;
+        state.session_configuration.collaboration_mode.clone()
+    }
+
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
         for item in items {
             self.send_event(
