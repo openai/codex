@@ -1,6 +1,7 @@
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
@@ -12,9 +13,11 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use tokio::fs;
 use tokio::process::Command;
+use tokio::sync::watch;
 use tokio::time::timeout;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,7 +30,31 @@ const SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 7); // 7
 const SNAPSHOT_DIR: &str = "shell_snapshots";
 
 impl ShellSnapshot {
-    pub async fn try_new(codex_home: &Path, session_id: ThreadId, shell: &Shell) -> Option<Self> {
+    pub fn start_snapshotting(
+        codex_home: PathBuf,
+        session_id: ThreadId,
+        shell: &mut Shell,
+        otel_manager: OtelManager,
+    ) {
+        let (shell_snapshot_tx, shell_snapshot_rx) = watch::channel(None);
+        shell.shell_snapshot = shell_snapshot_rx;
+
+        let snapshot_shell = shell.clone();
+        let snapshot_session_id = session_id;
+        tokio::spawn(async move {
+            let timer = otel_manager.start_timer("codex.shell_snapshot.duration_ms", &[]);
+            let snapshot =
+                ShellSnapshot::try_new(&codex_home, snapshot_session_id, &snapshot_shell)
+                    .await
+                    .map(Arc::new);
+            let success = if snapshot.is_some() { "true" } else { "false" };
+            let _ = timer.map(|timer| timer.record(&[("success", success)]));
+            otel_manager.counter("codex.shell_snapshot", 1, &[("success", success)]);
+            let _ = shell_snapshot_tx.send(snapshot);
+        });
+    }
+
+    async fn try_new(codex_home: &Path, session_id: ThreadId, shell: &Shell) -> Option<Self> {
         // File to store the snapshot
         let extension = match shell.shell_type {
             ShellType::PowerShell => "ps1",
@@ -74,7 +101,7 @@ impl Drop for ShellSnapshot {
     }
 }
 
-pub async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> Result<PathBuf> {
+async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> Result<PathBuf> {
     if shell_type == ShellType::PowerShell || shell_type == ShellType::Cmd {
         bail!("Shell snapshot not supported yet for {shell_type:?}");
     }
@@ -407,7 +434,7 @@ mod tests {
         let shell = Shell {
             shell_type: ShellType::Bash,
             shell_path: PathBuf::from("/bin/bash"),
-            shell_snapshot: None,
+            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
         };
 
         let snapshot = ShellSnapshot::try_new(dir.path(), ThreadId::new(), &shell)
@@ -449,7 +476,7 @@ mod tests {
         let shell = Shell {
             shell_type: ShellType::Sh,
             shell_path,
-            shell_snapshot: None,
+            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
         };
 
         let err = run_shell_script_with_timeout(&shell, "ignored", Duration::from_millis(500))
