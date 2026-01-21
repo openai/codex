@@ -51,6 +51,7 @@ jobs:
         working-directory: codex-rs
         run: |
           set -euo pipefail
+          echo "If this fails, run: just write-config-schema to overwrite fixture with intentional changes."
           cargo run -p codex-core --bin codex-write-config-schema
           git diff --exit-code core/config.schema.json
 
