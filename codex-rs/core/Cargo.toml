@@ -49,6 +49,7 @@ env-flags = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
+httpdate = { workspace = true }
 include_dir = { workspace = true }
 indexmap = { workspace = true }
 indoc = { workspace = true }

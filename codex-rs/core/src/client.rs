@@ -1,6 +1,11 @@
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::SystemTime;
 
+use chrono::DateTime;
+use chrono::Utc;
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
@@ -50,7 +55,9 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::AuthManager;
+use crate::CodexAuth;
 use crate::auth::RefreshTokenError;
+use crate::auth::DEFAULT_OAUTH_NAMESPACE;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
@@ -68,6 +75,9 @@ use crate::tools::spec::create_tools_json_for_responses_api;
 
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+const DEFAULT_RATE_LIMIT_COOLDOWN_MS: u64 = 30_000;
+const DEFAULT_AUTH_FAILURE_COOLDOWN_MS: u64 = 5 * 60_000;
+const DEFAULT_NETWORK_RETRY_ATTEMPTS: u32 = 1;
 
 #[derive(Debug)]
 struct ModelClientState {
@@ -203,27 +213,7 @@ impl ModelClient {
             return Ok(Vec::new());
         }
         let auth_manager = self.state.auth_manager.clone();
-        let auth = match auth_manager.as_ref() {
-            Some(manager) => manager.auth().await,
-            None => None,
-        };
-        let api_provider = self
-            .state
-            .provider
-            .to_api_provider(auth.as_ref().map(|a| a.mode))?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
-        let transport = ReqwestTransport::new(build_reqwest_client());
-        let request_telemetry = self.build_request_telemetry();
-        let client = ApiCompactClient::new(transport, api_provider, api_auth)
-            .with_telemetry(Some(request_telemetry));
-
         let instructions = prompt.base_instructions.text.clone();
-        let payload = ApiCompactionInput {
-            model: &self.state.model_info.slug,
-            input: &prompt.input,
-            instructions: &instructions,
-        };
-
         let mut extra_headers = ApiHeaderMap::new();
         if let SessionSource::SubAgent(sub) = &self.state.session_source {
             let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
@@ -238,6 +228,60 @@ impl ModelClient {
                 extra_headers.insert("x-openai-subagent", val);
             }
         }
+
+        if let Some(manager) = auth_manager.clone()
+            && let Some(rotation) = OAuthRotationPlan::try_new(
+                manager,
+                &self.state.provider,
+                &self.state.config,
+                DEFAULT_OAUTH_NAMESPACE,
+            )
+            .await
+        {
+            let api_provider = self
+                .state
+                .provider
+                .to_api_provider(Some(AuthMode::ChatGPT))?;
+            let request_telemetry = self.build_request_telemetry();
+            let response = rotation
+                .execute(|_, auth| async {
+                    let api_auth = auth_provider_from_auth(Some(auth), &self.state.provider)
+                        .map_err(|err| ApiError::Stream(err.to_string()))?;
+                    let transport = ReqwestTransport::new(build_reqwest_client());
+                    let client = ApiCompactClient::new(transport, api_provider.clone(), api_auth)
+                        .with_telemetry(Some(request_telemetry.clone()));
+                    let payload = ApiCompactionInput {
+                        model: &self.state.model_info.slug,
+                        input: &prompt.input,
+                        instructions: &instructions,
+                    };
+                    client.compact_input(&payload, extra_headers.clone()).await
+                })
+                .await
+                .map_err(map_api_error)?;
+            return Ok(response);
+        }
+
+        let auth = match auth_manager.as_ref() {
+            Some(manager) => manager.auth().await,
+            None => None,
+        };
+        let api_provider = self
+            .state
+            .provider
+            .to_api_provider(auth.as_ref().map(|a| a.mode))?;
+        let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
+        let transport = ReqwestTransport::new(build_reqwest_client());
+        let request_telemetry = self.build_request_telemetry();
+        let client = ApiCompactClient::new(transport, api_provider, api_auth)
+            .with_telemetry(Some(request_telemetry));
+
+        let payload = ApiCompactionInput {
+            model: &self.state.model_info.slug,
+            input: &prompt.input,
+            instructions: &instructions,
+        };
+
         client
             .compact_input(&payload, extra_headers)
             .await
@@ -284,73 +328,7 @@ impl ModelClientSession {
         prompt: &Prompt,
         compression: Compression,
     ) -> ApiResponsesOptions {
-        let model_info = &self.state.model_info;
-
-        let default_reasoning_effort = model_info.default_reasoning_level;
-        let reasoning = if model_info.supports_reasoning_summaries {
-            Some(Reasoning {
-                effort: self.state.effort.or(default_reasoning_effort),
-                summary: if self.state.summary == ReasoningSummaryConfig::None {
-                    None
-                } else {
-                    Some(self.state.summary)
-                },
-            })
-        } else {
-            None
-        };
-
-        let include = if reasoning.is_some() {
-            vec!["reasoning.encrypted_content".to_string()]
-        } else {
-            Vec::new()
-        };
-
-        let verbosity = if model_info.support_verbosity {
-            self.state
-                .config
-                .model_verbosity
-                .or(model_info.default_verbosity)
-        } else {
-            if self.state.config.model_verbosity.is_some() {
-                warn!(
-                    "model_verbosity is set but ignored as the model does not support verbosity: {}",
-                    model_info.slug
-                );
-            }
-            None
-        };
-
-        let text = create_text_param_for_request(verbosity, &prompt.output_schema);
-        let conversation_id = self.state.conversation_id.to_string();
-
-        ApiResponsesOptions {
-            reasoning,
-            include,
-            prompt_cache_key: Some(conversation_id.clone()),
-            text,
-            store_override: None,
-            conversation_id: Some(conversation_id),
-            session_source: Some(self.state.session_source.clone()),
-            extra_headers: build_responses_headers(&self.state.config, Some(&self.turn_state)),
-            compression,
-            turn_state: Some(Arc::clone(&self.turn_state)),
-        }
-    }
-
-    fn get_incremental_items(&self, input_items: &[ResponseItem]) -> Option<Vec<ResponseItem>> {
-        // Checks whether the current request input is an incremental append to the previous request.
-        // If items in the new request contain all the items from the previous request we build
-        // a response.append request otherwise we start with a fresh response.create request.
-        let previous_len = self.websocket_last_items.len();
-        let can_append = previous_len > 0
-            && input_items.starts_with(&self.websocket_last_items)
-            && previous_len < input_items.len();
-        if can_append {
-            Some(input_items[previous_len..].to_vec())
-        } else {
-            None
-        }
+        build_responses_options_from_state(&self.state, &self.turn_state, prompt, compression)
     }
 
     fn prepare_websocket_request(
@@ -358,38 +336,12 @@ impl ModelClientSession {
         api_prompt: &ApiPrompt,
         options: &ApiResponsesOptions,
     ) -> ResponsesWsRequest {
-        if let Some(append_items) = self.get_incremental_items(&api_prompt.input) {
-            return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
-                input: append_items,
-            });
-        }
-
-        let ApiResponsesOptions {
-            reasoning,
-            include,
-            prompt_cache_key,
-            text,
-            store_override,
-            ..
-        } = options;
-
-        let store = store_override.unwrap_or(false);
-        let payload = ResponseCreateWsRequest {
-            model: self.state.model_info.slug.clone(),
-            instructions: api_prompt.instructions.clone(),
-            input: api_prompt.input.clone(),
-            tools: api_prompt.tools.clone(),
-            tool_choice: "auto".to_string(),
-            parallel_tool_calls: api_prompt.parallel_tool_calls,
-            reasoning: reasoning.clone(),
-            store,
-            stream: true,
-            include: include.clone(),
-            prompt_cache_key: prompt_cache_key.clone(),
-            text: text.clone(),
-        };
-
-        ResponsesWsRequest::ResponseCreate(payload)
+        prepare_websocket_request_with_last_items(
+            &self.state.model_info.slug,
+            api_prompt,
+            options,
+            &self.websocket_last_items,
+        )
     }
 
     async fn websocket_connection(
@@ -419,18 +371,7 @@ impl ModelClientSession {
     }
 
     fn responses_request_compression(&self, auth: Option<&crate::auth::CodexAuth>) -> Compression {
-        if self
-            .state
-            .config
-            .features
-            .enabled(Feature::EnableRequestCompression)
-            && auth.is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
-            && self.state.provider.is_openai()
-        {
-            Compression::Zstd
-        } else {
-            Compression::None
-        }
+        responses_request_compression_from_state(&self.state, auth)
     }
 
     /// Streams a turn via the OpenAI Chat Completions API.
@@ -450,6 +391,42 @@ impl ModelClientSession {
         let api_prompt = build_api_prompt(prompt, instructions, tools_json);
         let conversation_id = self.state.conversation_id.to_string();
         let session_source = self.state.session_source.clone();
+
+        if let Some(manager) = auth_manager.clone()
+            && let Some(rotation) = OAuthRotationPlan::try_new(
+                manager,
+                &self.state.provider,
+                &self.state.config,
+                DEFAULT_OAUTH_NAMESPACE,
+            )
+            .await
+        {
+            let api_provider = self
+                .state
+                .provider
+                .to_api_provider(Some(AuthMode::ChatGPT))?;
+            let api_stream = rotation
+                .execute(|_, auth| async {
+                    let api_auth = auth_provider_from_auth(Some(auth), &self.state.provider)
+                        .map_err(|err| ApiError::Stream(err.to_string()))?;
+                    let transport = ReqwestTransport::new(build_reqwest_client());
+                    let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
+                    let client = ApiChatClient::new(transport, api_provider.clone(), api_auth)
+                        .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+
+                    client
+                        .stream_prompt(
+                            &self.state.model_info.slug,
+                            &api_prompt,
+                            Some(conversation_id.clone()),
+                            Some(session_source.clone()),
+                        )
+                        .await
+                })
+                .await
+                .map_err(map_api_error)?;
+            return Ok(api_stream);
+        }
 
         let mut auth_recovery = auth_manager
             .as_ref()
@@ -507,6 +484,40 @@ impl ModelClientSession {
         let auth_manager = self.state.auth_manager.clone();
         let api_prompt = self.build_responses_request(prompt)?;
 
+        if let Some(manager) = auth_manager.clone()
+            && let Some(rotation) = OAuthRotationPlan::try_new(
+                manager,
+                &self.state.provider,
+                &self.state.config,
+                DEFAULT_OAUTH_NAMESPACE,
+            )
+            .await
+        {
+            let api_provider = self
+                .state
+                .provider
+                .to_api_provider(Some(AuthMode::ChatGPT))?;
+            let api_stream = rotation
+                .execute(|_, auth| async {
+                    let transport = ReqwestTransport::new(build_reqwest_client());
+                    let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
+                    let compression = responses_request_compression_from_state(&self.state, Some(&auth));
+                    let api_auth = auth_provider_from_auth(Some(auth), &self.state.provider)
+                        .map_err(|err| ApiError::Stream(err.to_string()))?;
+                    let options = self.build_responses_options(prompt, compression);
+
+                    let client = ApiResponsesClient::new(transport, api_provider.clone(), api_auth)
+                        .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+
+                    client
+                        .stream_prompt(&self.state.model_info.slug, &api_prompt, options)
+                        .await
+                })
+                .await
+                .map_err(map_api_error)?;
+            return Ok(map_response_stream(api_stream, self.state.otel_manager.clone()));
+        }
+
         let mut auth_recovery = auth_manager
             .as_ref()
             .map(super::auth::AuthManager::unauthorized_recovery);
@@ -552,6 +563,88 @@ impl ModelClientSession {
     async fn stream_responses_websocket(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
         let auth_manager = self.state.auth_manager.clone();
         let api_prompt = self.build_responses_request(prompt)?;
+
+        if let Some(manager) = auth_manager.clone()
+            && let Some(rotation) = OAuthRotationPlan::try_new(
+                manager,
+                &self.state.provider,
+                &self.state.config,
+                DEFAULT_OAUTH_NAMESPACE,
+            )
+            .await
+        {
+            let api_provider = self
+                .state
+                .provider
+                .to_api_provider(Some(AuthMode::ChatGPT))?;
+            let state = Arc::clone(&self.state);
+            let turn_state = Arc::clone(&self.turn_state);
+            let api_prompt_for_request = api_prompt.clone();
+            let last_items = self.websocket_last_items.clone();
+            let connection_cell =
+                Arc::new(tokio::sync::Mutex::new(self.connection.take()));
+            let stream_result = rotation
+                .execute({
+                    let connection_cell = Arc::clone(&connection_cell);
+                    let state = Arc::clone(&state);
+                    let turn_state = Arc::clone(&turn_state);
+                    let api_prompt = api_prompt_for_request.clone();
+                    let last_items = last_items.clone();
+                    let api_provider = api_provider.clone();
+                    move |_, auth| {
+                        let connection_cell = Arc::clone(&connection_cell);
+                        let state = Arc::clone(&state);
+                        let turn_state = Arc::clone(&turn_state);
+                        let api_prompt = api_prompt.clone();
+                        let last_items = last_items.clone();
+                        let api_provider = api_provider.clone();
+                        async move {
+                            let compression =
+                                responses_request_compression_from_state(&state, Some(&auth));
+                            let api_auth =
+                                auth_provider_from_auth(Some(auth), &state.provider)
+                                    .map_err(|err| ApiError::Stream(err.to_string()))?;
+                            let options = build_responses_options_from_state(
+                                &state,
+                                &turn_state,
+                                prompt,
+                                compression,
+                            );
+                            let request = prepare_websocket_request_with_last_items(
+                                &state.model_info.slug,
+                                &api_prompt,
+                                &options,
+                                &last_items,
+                            );
+
+                            let mut headers = options.extra_headers.clone();
+                            headers.extend(build_conversation_headers(
+                                options.conversation_id.clone(),
+                            ));
+                            let new_conn = ApiWebSocketResponsesClient::new(
+                                api_provider.clone(),
+                                api_auth,
+                            )
+                            .connect(headers, options.turn_state.clone())
+                            .await?;
+                            let stream = new_conn.stream_request(request).await?;
+                            {
+                                let mut guard = connection_cell.lock().await;
+                                *guard = Some(new_conn);
+                            }
+                            Ok(stream)
+                        }
+                    }
+                })
+                .await
+                .map_err(map_api_error)?;
+            self.websocket_last_items = api_prompt.input.clone();
+            self.connection = connection_cell.lock().await.take();
+            return Ok(map_response_stream(
+                stream_result,
+                self.state.otel_manager.clone(),
+            ));
+        }
 
         let mut auth_recovery = auth_manager
             .as_ref()
@@ -614,6 +707,583 @@ impl ModelClient {
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry;
         request_telemetry
     }
+}
+
+#[derive(Clone, Debug)]
+struct OAuthRotationConfigResolved {
+    max_attempts: usize,
+    rate_limit_cooldown: Duration,
+    auth_failure_cooldown: Duration,
+    network_retry_attempts: u32,
+}
+
+struct OAuthRotationPlan {
+    auth_manager: Arc<AuthManager>,
+    namespace: String,
+    candidates: Vec<String>,
+    record_by_id: HashMap<String, crate::auth::OAuthPoolRecord>,
+    config: OAuthRotationConfigResolved,
+}
+
+impl OAuthRotationPlan {
+    async fn try_new(
+        auth_manager: Arc<AuthManager>,
+        provider: &ModelProviderInfo,
+        config: &Config,
+        namespace: &str,
+    ) -> Option<Self> {
+        if !provider.is_openai() {
+            return None;
+        }
+        let auth = auth_manager.auth().await?;
+        if auth.mode != AuthMode::ChatGPT {
+            return None;
+        }
+
+        let snapshot = auth_manager.oauth_snapshot(namespace).ok()?;
+        if snapshot.records.len() <= 1 {
+            return None;
+        }
+
+        let record_by_id: HashMap<_, _> = snapshot
+            .records
+            .into_iter()
+            .map(|record| (record.id.clone(), record))
+            .collect();
+        let candidates: Vec<String> = snapshot
+            .ordered_ids
+            .into_iter()
+            .filter(|id| record_by_id.contains_key(id))
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+
+        let resolved = resolve_oauth_rotation_config(config, candidates.len());
+
+        Some(Self {
+            auth_manager,
+            namespace: namespace.to_string(),
+            candidates,
+            record_by_id,
+            config: resolved,
+        })
+    }
+
+    fn refreshed_snapshot(
+        &self,
+    ) -> (
+        Vec<String>,
+        HashMap<String, crate::auth::OAuthPoolRecord>,
+    ) {
+        if let Ok(snapshot) = self.auth_manager.oauth_snapshot(&self.namespace) {
+            let record_by_id: HashMap<_, _> = snapshot
+                .records
+                .into_iter()
+                .map(|record| (record.id.clone(), record))
+                .collect();
+            if !record_by_id.is_empty() {
+                let candidates: Vec<String> = snapshot
+                    .ordered_ids
+                    .into_iter()
+                    .filter(|id| self.candidates.contains(id))
+                    .collect();
+                if !candidates.is_empty() {
+                    return (candidates, record_by_id);
+                }
+                return (self.candidates.clone(), record_by_id);
+            }
+        }
+
+        (self.candidates.clone(), self.record_by_id.clone())
+    }
+
+    async fn execute<T, F, Fut>(&self, mut request_fn: F) -> std::result::Result<T, ApiError>
+    where
+        F: FnMut(&str, CodexAuth) -> Fut,
+        Fut: std::future::Future<Output = std::result::Result<T, ApiError>>,
+    {
+        let mut attempted: HashSet<String> = HashSet::new();
+        let mut refreshed: HashSet<String> = HashSet::new();
+        let mut last_error: Option<ApiError> = None;
+
+        let max_attempts = self
+            .config
+            .max_attempts
+            .max(1)
+            .min(self.candidates.len().max(1));
+
+        for attempt in 0..max_attempts {
+            let (candidates, record_by_id) = self.refreshed_snapshot();
+            let Some(record_id) =
+                pick_next_candidate(&candidates, &record_by_id, &attempted)
+            else {
+                break;
+            };
+            attempted.insert(record_id.clone());
+
+            let mut network_attempt = 0u32;
+            loop {
+                let Some(auth) = self.auth_manager.auth_for_record(&record_id) else {
+                    break;
+                };
+
+                let result = request_fn(&record_id, auth).await;
+                match result {
+                    Ok(value) => {
+                        let _ = self
+                            .auth_manager
+                            .oauth_record_outcome(&record_id, 200, true, None);
+                        return Ok(value);
+                    }
+                    Err(ApiError::Transport(TransportError::Http {
+                        status,
+                        url,
+                        headers,
+                        body,
+                    })) => {
+                        let status_code = status.as_u16();
+                        let headers_ref = headers.as_ref();
+
+                        if status == StatusCode::TOO_MANY_REQUESTS {
+                            let cooldown = retry_after_duration(headers_ref)
+                                .unwrap_or(self.config.rate_limit_cooldown);
+                            let cooldown_until = cooldown_until_from_duration(cooldown);
+                            let _ = self.auth_manager.oauth_record_outcome(
+                                &record_id,
+                                status_code,
+                                false,
+                                Some(cooldown_until),
+                            );
+                            let _ =
+                                self.auth_manager
+                                    .oauth_move_to_back(&self.namespace, &record_id);
+                            let err = ApiError::Transport(TransportError::Http {
+                                status,
+                                url,
+                                headers,
+                                body,
+                            });
+                            if attempt + 1 >= max_attempts {
+                                return Err(err);
+                            }
+                            last_error = Some(err);
+                            break;
+                        }
+
+                        if is_auth_failure_status(status) {
+                            if !refreshed.contains(&record_id) {
+                                refreshed.insert(record_id.clone());
+                                match self.auth_manager.refresh_record(&record_id).await {
+                                    Ok(()) => {
+                                        let Some(auth) = self.auth_manager.auth_for_record(&record_id) else {
+                                            break;
+                                        };
+                                        let retry = request_fn(&record_id, auth).await;
+                                        match retry {
+                                            Ok(value) => {
+                                                let _ = self.auth_manager.oauth_record_outcome(
+                                                    &record_id,
+                                                    200,
+                                                    true,
+                                                    None,
+                                                );
+                                                return Ok(value);
+                                            }
+                                            Err(ApiError::Transport(TransportError::Http {
+                                                status,
+                                                url,
+                                                headers,
+                                                body,
+                                            })) => {
+                                                if status == StatusCode::TOO_MANY_REQUESTS {
+                                                    let cooldown = retry_after_duration(headers.as_ref())
+                                                        .unwrap_or(self.config.rate_limit_cooldown);
+                                                    let cooldown_until =
+                                                        cooldown_until_from_duration(cooldown);
+                                                    let _ = self.auth_manager.oauth_record_outcome(
+                                                        &record_id,
+                                                        status.as_u16(),
+                                                        false,
+                                                        Some(cooldown_until),
+                                                    );
+                                                    let _ = self.auth_manager.oauth_move_to_back(
+                                                        &self.namespace,
+                                                        &record_id,
+                                                    );
+                                                    let err = ApiError::Transport(
+                                                        TransportError::Http {
+                                                            status,
+                                                            url,
+                                                            headers,
+                                                            body,
+                                                        },
+                                                    );
+                                                    if attempt + 1 >= max_attempts {
+                                                        return Err(err);
+                                                    }
+                                                    last_error = Some(err);
+                                                    break;
+                                                }
+
+                                                let cooldown_until = cooldown_until_from_duration(
+                                                    self.config.auth_failure_cooldown,
+                                                );
+                                                let _ = self.auth_manager.oauth_record_outcome(
+                                                    &record_id,
+                                                    status.as_u16(),
+                                                    false,
+                                                    Some(cooldown_until),
+                                                );
+                                                let _ = self.auth_manager.oauth_move_to_back(
+                                                    &self.namespace,
+                                                    &record_id,
+                                                );
+                                                let err = ApiError::Transport(TransportError::Http {
+                                                    status,
+                                                    url,
+                                                    headers,
+                                                    body,
+                                                });
+                                                if attempt + 1 >= max_attempts {
+                                                    return Err(err);
+                                                }
+                                                last_error = Some(err);
+                                                break;
+                                            }
+                                            Err(ApiError::Transport(TransportError::Timeout))
+                                            | Err(ApiError::Transport(TransportError::Network(_)))
+                                            | Err(ApiError::Transport(TransportError::Build(_))) => {
+                                                return retry;
+                                            }
+                                            Err(err) => return Err(err),
+                                        }
+                                    }
+                                    Err(_) => {
+                                        let cooldown_until = cooldown_until_from_duration(
+                                            self.config.auth_failure_cooldown,
+                                        );
+                                        let _ = self.auth_manager.oauth_record_outcome(
+                                            &record_id,
+                                            status_code,
+                                            false,
+                                            Some(cooldown_until),
+                                        );
+                                        let _ = self.auth_manager.oauth_move_to_back(
+                                            &self.namespace,
+                                            &record_id,
+                                        );
+                                        let err = ApiError::Transport(TransportError::Http {
+                                            status,
+                                            url,
+                                            headers,
+                                            body,
+                                        });
+                                        if attempt + 1 >= max_attempts {
+                                            return Err(err);
+                                        }
+                                        last_error = Some(err);
+                                        break;
+                                    }
+                                }
+                            } else {
+                                let cooldown_until =
+                                    cooldown_until_from_duration(self.config.auth_failure_cooldown);
+                                let _ = self.auth_manager.oauth_record_outcome(
+                                    &record_id,
+                                    status_code,
+                                    false,
+                                    Some(cooldown_until),
+                                );
+                                let _ = self
+                                    .auth_manager
+                                    .oauth_move_to_back(&self.namespace, &record_id);
+                                let err = ApiError::Transport(TransportError::Http {
+                                    status,
+                                    url,
+                                    headers,
+                                    body,
+                                });
+                                if attempt + 1 >= max_attempts {
+                                    return Err(err);
+                                }
+                                last_error = Some(err);
+                                break;
+                            }
+                        }
+
+                        let _ = self
+                            .auth_manager
+                            .oauth_record_outcome(&record_id, status_code, false, None);
+                        let _ = self
+                            .auth_manager
+                            .oauth_move_to_back(&self.namespace, &record_id);
+                        let err = ApiError::Transport(TransportError::Http {
+                            status,
+                            url,
+                            headers,
+                            body,
+                        });
+                        if attempt + 1 >= max_attempts {
+                            return Err(err);
+                        }
+                        last_error = Some(err);
+                        break;
+                    }
+                    Err(ApiError::Transport(TransportError::Timeout)) => {
+                        let err = ApiError::Transport(TransportError::Timeout);
+                        let _ =
+                            self.auth_manager
+                                .oauth_record_outcome(&record_id, 0, false, None);
+                        if network_attempt < self.config.network_retry_attempts {
+                            network_attempt += 1;
+                            continue;
+                        }
+                        last_error = Some(err);
+                        break;
+                    }
+                    Err(ApiError::Transport(TransportError::Network(msg))) => {
+                        let err = ApiError::Transport(TransportError::Network(msg));
+                        let _ =
+                            self.auth_manager
+                                .oauth_record_outcome(&record_id, 0, false, None);
+                        if network_attempt < self.config.network_retry_attempts {
+                            network_attempt += 1;
+                            continue;
+                        }
+                        last_error = Some(err);
+                        break;
+                    }
+                    Err(ApiError::Transport(TransportError::Build(msg))) => {
+                        let err = ApiError::Transport(TransportError::Build(msg));
+                        let _ =
+                            self.auth_manager
+                                .oauth_record_outcome(&record_id, 0, false, None);
+                        if network_attempt < self.config.network_retry_attempts {
+                            network_attempt += 1;
+                            continue;
+                        }
+                        last_error = Some(err);
+                        break;
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+
+        match last_error {
+            Some(err) => Err(err),
+            None => Err(ApiError::Stream("OAuth rotation exhausted".to_string())),
+        }
+    }
+}
+
+fn resolve_oauth_rotation_config(config: &Config, candidate_len: usize) -> OAuthRotationConfigResolved {
+    let settings = &config.oauth_rotation;
+    let max_attempts = settings
+        .max_attempts
+        .unwrap_or(candidate_len as u32)
+        .max(1) as usize;
+    let max_attempts = max_attempts.min(candidate_len.max(1));
+    let rate_limit_cooldown = Duration::from_millis(
+        settings
+            .rate_limit_cooldown_ms
+            .unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN_MS),
+    );
+    let auth_failure_cooldown = Duration::from_millis(
+        settings
+            .auth_failure_cooldown_ms
+            .unwrap_or(DEFAULT_AUTH_FAILURE_COOLDOWN_MS),
+    );
+    let network_retry_attempts = settings
+        .network_retry_attempts
+        .unwrap_or(DEFAULT_NETWORK_RETRY_ATTEMPTS);
+
+    OAuthRotationConfigResolved {
+        max_attempts,
+        rate_limit_cooldown,
+        auth_failure_cooldown,
+        network_retry_attempts,
+    }
+}
+
+fn pick_next_candidate(
+    candidates: &[String],
+    record_by_id: &HashMap<String, crate::auth::OAuthPoolRecord>,
+    attempted: &HashSet<String>,
+) -> Option<String> {
+    let now = Utc::now();
+    candidates
+        .iter()
+        .find(|id| {
+            if attempted.contains(*id) {
+                return false;
+            }
+            let cooldown = record_by_id
+                .get(*id)
+                .and_then(|record| record.health.cooldown_until);
+            cooldown.map(|until| until <= now).unwrap_or(true)
+        })
+        .or_else(|| candidates.iter().find(|id| !attempted.contains(*id)))
+        .cloned()
+}
+
+fn retry_after_duration(headers: Option<&ApiHeaderMap>) -> Option<Duration> {
+    let headers = headers?;
+    let value = headers.get("retry-after")?;
+    let value = value.to_str().ok()?.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+
+    match httpdate::parse_http_date(value) {
+        Ok(time) => Some(time.duration_since(SystemTime::now()).unwrap_or_default()),
+        Err(_) => None,
+    }
+}
+
+fn cooldown_until_from_duration(duration: Duration) -> DateTime<Utc> {
+    let chrono_duration = chrono::Duration::from_std(duration)
+        .unwrap_or_else(|_| chrono::Duration::zero());
+    Utc::now() + chrono_duration
+}
+
+fn is_auth_failure_status(status: StatusCode) -> bool {
+    status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN
+}
+
+fn responses_request_compression_from_state(
+    state: &ModelClientState,
+    auth: Option<&CodexAuth>,
+) -> Compression {
+    if state
+        .config
+        .features
+        .enabled(Feature::EnableRequestCompression)
+        && auth.is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
+        && state.provider.is_openai()
+    {
+        Compression::Zstd
+    } else {
+        Compression::None
+    }
+}
+
+fn build_responses_options_from_state(
+    state: &ModelClientState,
+    turn_state: &Arc<OnceLock<String>>,
+    prompt: &Prompt,
+    compression: Compression,
+) -> ApiResponsesOptions {
+    let model_info = &state.model_info;
+
+    let default_reasoning_effort = model_info.default_reasoning_level;
+    let reasoning = if model_info.supports_reasoning_summaries {
+        Some(Reasoning {
+            effort: state.effort.or(default_reasoning_effort),
+            summary: if state.summary == ReasoningSummaryConfig::None {
+                None
+            } else {
+                Some(state.summary)
+            },
+        })
+    } else {
+        None
+    };
+
+    let include = if reasoning.is_some() {
+        vec!["reasoning.encrypted_content".to_string()]
+    } else {
+        Vec::new()
+    };
+
+    let verbosity = if model_info.support_verbosity {
+        state.config.model_verbosity.or(model_info.default_verbosity)
+    } else {
+        if state.config.model_verbosity.is_some() {
+            warn!(
+                "model_verbosity is set but ignored as the model does not support verbosity: {}",
+                model_info.slug
+            );
+        }
+        None
+    };
+
+    let text = create_text_param_for_request(verbosity, &prompt.output_schema);
+    let conversation_id = state.conversation_id.to_string();
+
+    ApiResponsesOptions {
+        reasoning,
+        include,
+        prompt_cache_key: Some(conversation_id.clone()),
+        text,
+        store_override: None,
+        conversation_id: Some(conversation_id),
+        session_source: Some(state.session_source.clone()),
+        extra_headers: build_responses_headers(&state.config, Some(turn_state)),
+        compression,
+        turn_state: Some(Arc::clone(turn_state)),
+    }
+}
+
+fn get_incremental_items_from(
+    last_items: &[ResponseItem],
+    input_items: &[ResponseItem],
+) -> Option<Vec<ResponseItem>> {
+    // Checks whether the current request input is an incremental append to the previous request.
+    // If items in the new request contain all the items from the previous request we build
+    // a response.append request otherwise we start with a fresh response.create request.
+    let previous_len = last_items.len();
+    let can_append = previous_len > 0
+        && input_items.starts_with(last_items)
+        && previous_len < input_items.len();
+    if can_append {
+        Some(input_items[previous_len..].to_vec())
+    } else {
+        None
+    }
+}
+
+fn prepare_websocket_request_with_last_items(
+    model_slug: &str,
+    api_prompt: &ApiPrompt,
+    options: &ApiResponsesOptions,
+    last_items: &[ResponseItem],
+) -> ResponsesWsRequest {
+    if let Some(append_items) = get_incremental_items_from(last_items, &api_prompt.input) {
+        return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest { input: append_items });
+    }
+
+    let ApiResponsesOptions {
+        reasoning,
+        include,
+        prompt_cache_key,
+        text,
+        store_override,
+        ..
+    } = options;
+
+    let store = store_override.unwrap_or(false);
+    let payload = ResponseCreateWsRequest {
+        model: model_slug.to_string(),
+        instructions: api_prompt.instructions.clone(),
+        input: api_prompt.input.clone(),
+        tools: api_prompt.tools.clone(),
+        tool_choice: "auto".to_string(),
+        parallel_tool_calls: api_prompt.parallel_tool_calls,
+        reasoning: reasoning.clone(),
+        store,
+        stream: true,
+        include: include.clone(),
+        prompt_cache_key: prompt_cache_key.clone(),
+        text: text.clone(),
+    };
+
+    ResponsesWsRequest::ResponseCreate(payload)
 }
 
 /// Adapts the core `Prompt` type into the `codex-api` payload shape.

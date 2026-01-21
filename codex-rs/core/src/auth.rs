@@ -1,5 +1,6 @@
 mod storage;
 
+use chrono::DateTime;
 use chrono::Utc;
 use reqwest::StatusCode;
 use serde::Deserialize;
@@ -12,14 +13,26 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
+use std::time::Instant;
 
 use codex_app_server_protocol::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 pub use crate::auth::storage::AuthCredentialsStoreMode;
 pub use crate::auth::storage::AuthDotJson;
+use crate::auth::storage::AuthProviderEntry;
 use crate::auth::storage::AuthStorageBackend;
+use crate::auth::storage::AuthStore;
+pub(crate) use crate::auth::storage::DEFAULT_OAUTH_NAMESPACE;
+use crate::auth::storage::DEFAULT_OAUTH_PROVIDER_ID;
+use crate::auth::storage::OAuthHealth;
+use crate::auth::storage::OAuthProvider;
+use crate::auth::storage::OAuthRecord;
+use crate::auth::storage::auth_dot_json_from_store;
+use crate::auth::storage::auth_store_from_legacy;
 use crate::auth::storage::create_auth_storage;
+use crate::auth::storage::normalize_oauth_namespace;
 use crate::config::Config;
 use crate::error::RefreshTokenFailedError;
 use crate::error::RefreshTokenFailedReason;
@@ -32,12 +45,14 @@ use codex_client::CodexHttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
 use serde_json::Value;
 use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct CodexAuth {
     pub mode: AuthMode,
 
     pub(crate) api_key: Option<String>,
+    pub(crate) oauth_record_id: Option<String>,
     pub(crate) auth_dot_json: Arc<Mutex<Option<AuthDotJson>>>,
     storage: Arc<dyn AuthStorageBackend>,
     pub(crate) client: CodexHttpClient,
@@ -46,6 +61,8 @@ pub struct CodexAuth {
 impl PartialEq for CodexAuth {
     fn eq(&self, other: &Self) -> bool {
         self.mode == other.mode
+            && self.api_key == other.api_key
+            && self.oauth_record_id == other.oauth_record_id
     }
 }
 
@@ -59,6 +76,12 @@ const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
     "Your access token could not be refreshed. Please log out and sign in again.";
 const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
+
+const STORE_LOCK_TIMEOUT_MS: u64 = 5_000;
+const STORE_LOCK_STALE_MS: u64 = 30_000;
+const STORE_LOCK_RETRY_MS: u64 = 25;
+const STORE_LOCK_BEST_EFFORT_TIMEOUT_MS: u64 = 250;
+const STORE_LOCK_BEST_EFFORT_RETRY_MS: u64 = 10;
 
 #[derive(Debug, Error)]
 pub enum RefreshTokenError {
@@ -84,6 +107,183 @@ impl From<RefreshTokenError> for std::io::Error {
             RefreshTokenError::Transient(inner) => inner,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct StoreLockOptions {
+    timeout: Duration,
+    stale: Duration,
+    retry: Duration,
+}
+
+fn default_lock_options() -> StoreLockOptions {
+    StoreLockOptions {
+        timeout: Duration::from_millis(STORE_LOCK_TIMEOUT_MS),
+        stale: Duration::from_millis(STORE_LOCK_STALE_MS),
+        retry: Duration::from_millis(STORE_LOCK_RETRY_MS),
+    }
+}
+
+fn best_effort_lock_options() -> StoreLockOptions {
+    StoreLockOptions {
+        timeout: Duration::from_millis(STORE_LOCK_BEST_EFFORT_TIMEOUT_MS),
+        stale: Duration::from_millis(STORE_LOCK_STALE_MS),
+        retry: Duration::from_millis(STORE_LOCK_BEST_EFFORT_RETRY_MS),
+    }
+}
+
+struct StoreLock {
+    path: PathBuf,
+}
+
+impl Drop for StoreLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn store_lock_path(codex_home: &Path) -> PathBuf {
+    codex_home.join("auth.json.lock")
+}
+
+fn acquire_store_lock(codex_home: &Path, options: StoreLockOptions) -> std::io::Result<StoreLock> {
+    let lock_path = store_lock_path(codex_home);
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let start = Instant::now();
+    loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(file) => {
+                drop(file);
+                return Ok(StoreLock { path: lock_path });
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                let stale = std::fs::metadata(&lock_path)
+                    .and_then(|meta| meta.modified())
+                    .ok()
+                    .and_then(|modified| modified.elapsed().ok())
+                    .map(|elapsed| elapsed > options.stale)
+                    .unwrap_or(false);
+                if stale {
+                    let _ = std::fs::remove_file(&lock_path);
+                    continue;
+                }
+                if start.elapsed() > options.timeout {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "timed out waiting for auth store lock",
+                    ));
+                }
+                std::thread::sleep(options.retry);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn with_store_lock<T>(
+    codex_home: &Path,
+    options: StoreLockOptions,
+    f: impl FnOnce() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let _lock = acquire_store_lock(codex_home, options)?;
+    f()
+}
+
+fn update_auth_store<T>(
+    codex_home: &Path,
+    storage: &Arc<dyn AuthStorageBackend>,
+    options: StoreLockOptions,
+    f: impl FnOnce(&mut AuthStore) -> std::io::Result<(T, bool)>,
+) -> std::io::Result<T> {
+    with_store_lock(codex_home, options, || {
+        let mut store = storage.load()?.unwrap_or_default();
+        let (value, changed) = f(&mut store)?;
+        if changed {
+            storage.save(&store)?;
+        }
+        Ok(value)
+    })
+}
+
+fn update_auth_store_best_effort(
+    codex_home: &Path,
+    storage: &Arc<dyn AuthStorageBackend>,
+    f: impl FnOnce(&mut AuthStore) -> std::io::Result<bool>,
+) -> std::io::Result<()> {
+    match update_auth_store(codex_home, storage, best_effort_lock_options(), |store| {
+        let changed = f(store)?;
+        Ok(((), changed))
+    }) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::TimedOut => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn ensure_oauth_provider<'a>(store: &'a mut AuthStore, provider_id: &str) -> &'a mut OAuthProvider {
+    let entry = store
+        .providers
+        .entry(provider_id.to_string())
+        .or_insert_with(|| AuthProviderEntry::Oauth(OAuthProvider::default()));
+    match entry {
+        AuthProviderEntry::Oauth(provider) => provider,
+        AuthProviderEntry::Api { .. } => {
+            *entry = AuthProviderEntry::Oauth(OAuthProvider::default());
+            match entry {
+                AuthProviderEntry::Oauth(provider) => provider,
+                _ => unreachable!("just replaced with oauth provider"),
+            }
+        }
+    }
+}
+
+fn normalize_record_order(ids: &[String], order: &[String]) -> Vec<String> {
+    let mut ordered: Vec<String> = Vec::new();
+    for id in order {
+        if ids.iter().any(|candidate| candidate == id) && !ordered.contains(id) {
+            ordered.push(id.clone());
+        }
+    }
+    for id in ids {
+        if !ordered.contains(id) {
+            ordered.push(id.clone());
+        }
+    }
+    ordered
+}
+
+fn record_ids_for_namespace(provider: &OAuthProvider, namespace: &str) -> Vec<String> {
+    let ids: Vec<String> = provider
+        .records
+        .iter()
+        .filter(|record| record.namespace == namespace)
+        .map(|record| record.id.clone())
+        .collect();
+    let order = provider.order.get(namespace).cloned().unwrap_or_default();
+    normalize_record_order(&ids, &order)
+}
+
+fn active_record_id(provider: &OAuthProvider, namespace: &str) -> Option<String> {
+    provider
+        .active
+        .get(namespace)
+        .cloned()
+        .or_else(|| provider.order.get(namespace).and_then(|order| order.first().cloned()))
+}
+
+fn find_record_mut<'a>(provider: &'a mut OAuthProvider, record_id: &str) -> Option<&'a mut OAuthRecord> {
+    provider.records.iter_mut().find(|record| record.id == record_id)
+}
+
+fn find_record<'a>(provider: &'a OAuthProvider, record_id: &str) -> Option<&'a OAuthRecord> {
+    provider.records.iter().find(|record| record.id == record_id)
 }
 
 impl CodexAuth {
@@ -174,6 +374,7 @@ impl CodexAuth {
         Self {
             api_key: None,
             mode: AuthMode::ChatGPT,
+            oauth_record_id: Some("test-record".to_string()),
             storage: create_auth_storage(PathBuf::new(), AuthCredentialsStoreMode::File),
             auth_dot_json,
             client: crate::default_client::create_client(),
@@ -184,6 +385,7 @@ impl CodexAuth {
         Self {
             api_key: Some(api_key.to_owned()),
             mode: AuthMode::ApiKey,
+            oauth_record_id: None,
             storage: create_auth_storage(PathBuf::new(), AuthCredentialsStoreMode::File),
             auth_dot_json: Arc::new(Mutex::new(None)),
             client,
@@ -228,12 +430,11 @@ pub fn login_with_api_key(
     api_key: &str,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
-    let auth_dot_json = AuthDotJson {
-        openai_api_key: Some(api_key.to_string()),
-        tokens: None,
-        last_refresh: None,
-    };
-    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
+    set_openai_api_key(
+        codex_home,
+        auth_credentials_store_mode,
+        Some(api_key.to_string()),
+    )
 }
 
 /// Persist the provided auth payload using the specified backend.
@@ -243,7 +444,8 @@ pub fn save_auth(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    storage.save(auth)
+    let store = auth_store_from_legacy(auth.clone());
+    with_store_lock(codex_home, default_lock_options(), || storage.save(&store))
 }
 
 /// Load CLI auth data using the configured credential store backend.
@@ -256,7 +458,231 @@ pub fn load_auth_dot_json(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<Option<AuthDotJson>> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    storage.load()
+    let Some(store) = storage.load()? else {
+        return Ok(None);
+    };
+
+    let oauth_view = auth_dot_json_from_store(&store, DEFAULT_OAUTH_PROVIDER_ID, DEFAULT_OAUTH_NAMESPACE);
+    let (tokens, last_refresh) = match oauth_view {
+        Some(view) => (view.tokens, view.last_refresh),
+        None => (None, None),
+    };
+
+    Ok(Some(AuthDotJson {
+        openai_api_key: store.openai_api_key,
+        tokens,
+        last_refresh,
+    }))
+}
+
+#[derive(Debug, Clone)]
+pub struct OAuthHealthSummary {
+    pub cooldown_until: Option<DateTime<Utc>>,
+    pub last_status_code: Option<u16>,
+    pub last_error_at: Option<DateTime<Utc>>,
+    pub success_count: u64,
+    pub failure_count: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct OAuthAccountSummary {
+    pub record_id: String,
+    pub namespace: String,
+    pub label: Option<String>,
+    pub email: Option<String>,
+    pub account_id: Option<String>,
+    pub last_refresh: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub health: OAuthHealthSummary,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct OAuthPoolRecord {
+    pub id: String,
+    pub health: OAuthHealth,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct OAuthPoolSnapshot {
+    pub records: Vec<OAuthPoolRecord>,
+    pub ordered_ids: Vec<String>,
+}
+
+pub fn add_oauth_account(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    tokens: TokenData,
+    last_refresh: Option<DateTime<Utc>>,
+    label: Option<String>,
+) -> std::io::Result<String> {
+    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let namespace = DEFAULT_OAUTH_NAMESPACE.to_string();
+    update_auth_store(codex_home, &storage, default_lock_options(), |store| {
+        let provider = ensure_oauth_provider(store, DEFAULT_OAUTH_PROVIDER_ID);
+        let now = Utc::now();
+        let existing_id = provider
+            .records
+            .iter()
+            .find(|record| record.namespace == namespace && record.tokens.refresh_token == tokens.refresh_token)
+            .map(|record| record.id.clone());
+
+        let record_id = if let Some(existing_id) = existing_id {
+            if let Some(record) = find_record_mut(provider, &existing_id) {
+                record.tokens = tokens;
+                record.last_refresh = last_refresh.or(Some(now));
+                record.updated_at = now;
+                if label.is_some() {
+                    record.label = label;
+                }
+            }
+            existing_id
+        } else {
+            let record_id = Uuid::new_v4().to_string();
+            provider.records.push(OAuthRecord {
+                id: record_id.clone(),
+                namespace: namespace.clone(),
+                label: label.or_else(|| tokens.id_token.email.clone()),
+                tokens,
+                last_refresh: last_refresh.or(Some(now)),
+                created_at: now,
+                updated_at: now,
+                health: OAuthHealth::default(),
+            });
+            record_id
+        };
+
+        let order = provider.order.entry(namespace.clone()).or_default();
+        if !order.contains(&record_id) {
+            order.push(record_id.clone());
+        }
+        provider.active.insert(namespace.clone(), record_id.clone());
+
+        Ok((record_id, true))
+    })
+}
+
+pub fn set_openai_api_key(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    api_key: Option<String>,
+) -> std::io::Result<()> {
+    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    update_auth_store(codex_home, &storage, default_lock_options(), |store| {
+        let changed = store.openai_api_key != api_key;
+        store.openai_api_key = api_key;
+        Ok(((), changed))
+    })
+}
+
+pub fn list_oauth_accounts(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<Vec<OAuthAccountSummary>> {
+    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let store = storage.load()?.unwrap_or_default();
+    let provider = match store.providers.get(DEFAULT_OAUTH_PROVIDER_ID) {
+        Some(AuthProviderEntry::Oauth(provider)) => provider,
+        _ => return Ok(Vec::new()),
+    };
+
+    let namespace = DEFAULT_OAUTH_NAMESPACE;
+    let ordered = record_ids_for_namespace(provider, namespace);
+    let active = active_record_id(provider, namespace);
+
+    let mut out = Vec::new();
+    for id in ordered {
+        if let Some(record) = find_record(provider, &id) {
+            let health = OAuthHealthSummary {
+                cooldown_until: record.health.cooldown_until,
+                last_status_code: record.health.last_status_code,
+                last_error_at: record.health.last_error_at,
+                success_count: record.health.success_count,
+                failure_count: record.health.failure_count,
+            };
+            out.push(OAuthAccountSummary {
+                record_id: record.id.clone(),
+                namespace: record.namespace.clone(),
+                label: record.label.clone(),
+                email: record.tokens.id_token.email.clone(),
+                account_id: record.tokens.account_id.clone(),
+                last_refresh: record.last_refresh,
+                created_at: record.created_at,
+                updated_at: record.updated_at,
+                health,
+                active: Some(record.id.clone()) == active,
+            });
+        }
+    }
+
+    Ok(out)
+}
+
+pub fn remove_oauth_account(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    record_id: &str,
+) -> std::io::Result<bool> {
+    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    update_auth_store(codex_home, &storage, default_lock_options(), |store| {
+        let mut remove_provider = false;
+        let changed = match store.providers.get_mut(DEFAULT_OAUTH_PROVIDER_ID) {
+            Some(AuthProviderEntry::Oauth(provider)) => {
+                let before = provider.records.len();
+                provider.records.retain(|record| record.id != record_id);
+                if provider.records.len() == before {
+                    return Ok((false, false));
+                }
+
+                let mut namespaces: Vec<String> = provider
+                    .order
+                    .keys()
+                    .chain(provider.active.keys())
+                    .map(|ns| ns.to_string())
+                    .collect();
+                namespaces.sort();
+                namespaces.dedup();
+
+                for ns in namespaces {
+                    let ids = record_ids_for_namespace(provider, &ns);
+                    if ids.is_empty() {
+                        provider.order.remove(&ns);
+                        provider.active.remove(&ns);
+                        continue;
+                    }
+                    provider.order.insert(ns.clone(), ids.clone());
+                    let next_active = match provider.active.get(&ns) {
+                        Some(active_id) if ids.contains(active_id) => active_id.clone(),
+                        _ => ids[0].clone(),
+                    };
+                    provider.active.insert(ns.clone(), next_active);
+                }
+
+                if provider.records.is_empty() {
+                    remove_provider = true;
+                }
+                true
+            }
+            _ => return Ok((false, false)),
+        };
+
+        if remove_provider {
+            store.providers.remove(DEFAULT_OAUTH_PROVIDER_ID);
+        }
+        Ok((changed, changed))
+    })
+}
+
+pub fn remove_all_oauth_accounts(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<bool> {
+    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    update_auth_store(codex_home, &storage, default_lock_options(), |store| {
+        let removed = store.providers.remove(DEFAULT_OAUTH_PROVIDER_ID).is_some();
+        Ok((removed, removed))
+    })
 }
 
 pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
@@ -345,6 +771,24 @@ fn logout_with_message(
     }
 }
 
+fn chatgpt_auth_from_record(
+    storage: Arc<dyn AuthStorageBackend>,
+    record: &OAuthRecord,
+) -> CodexAuth {
+    CodexAuth {
+        api_key: None,
+        mode: AuthMode::ChatGPT,
+        oauth_record_id: Some(record.id.clone()),
+        storage,
+        auth_dot_json: Arc::new(Mutex::new(Some(AuthDotJson {
+            openai_api_key: None,
+            tokens: Some(record.tokens.clone()),
+            last_refresh: record.last_refresh,
+        }))),
+        client: crate::default_client::create_client(),
+    }
+}
+
 fn load_auth(
     codex_home: &Path,
     enable_codex_api_key_env: bool,
@@ -361,58 +805,98 @@ fn load_auth(
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
 
     let client = crate::default_client::create_client();
-    let auth_dot_json = match storage.load()? {
-        Some(auth) => auth,
+    let store = match storage.load()? {
+        Some(store) => store,
         None => return Ok(None),
     };
 
-    let AuthDotJson {
-        openai_api_key: auth_json_api_key,
-        tokens,
-        last_refresh,
-    } = auth_dot_json;
-
-    // Prefer AuthMode.ApiKey if it's set in the auth.json.
-    if let Some(api_key) = &auth_json_api_key {
+    // Prefer AuthMode.ApiKey if it's set in the auth store.
+    if let Some(api_key) = &store.openai_api_key {
         return Ok(Some(CodexAuth::from_api_key_with_client(api_key, client)));
     }
 
-    Ok(Some(CodexAuth {
-        api_key: None,
-        mode: AuthMode::ChatGPT,
-        storage: storage.clone(),
-        auth_dot_json: Arc::new(Mutex::new(Some(AuthDotJson {
-            openai_api_key: None,
-            tokens,
-            last_refresh,
-        }))),
-        client,
-    }))
+    let provider = match store.providers.get(DEFAULT_OAUTH_PROVIDER_ID) {
+        Some(AuthProviderEntry::Oauth(provider)) => provider,
+        _ => return Ok(None),
+    };
+
+    let namespace = DEFAULT_OAUTH_NAMESPACE;
+    let record_id = match active_record_id(provider, namespace) {
+        Some(id) => id,
+        None => return Ok(None),
+    };
+    let record = match find_record(provider, &record_id) {
+        Some(record) => record,
+        None => return Ok(None),
+    };
+
+    Ok(Some(chatgpt_auth_from_record(storage.clone(), record)))
 }
 
 async fn update_tokens(
+    codex_home: &Path,
     storage: &Arc<dyn AuthStorageBackend>,
+    record_id: Option<&str>,
     id_token: Option<String>,
     access_token: Option<String>,
     refresh_token: Option<String>,
 ) -> std::io::Result<AuthDotJson> {
-    let mut auth_dot_json = storage
-        .load()?
-        .ok_or(std::io::Error::other("Token data is not available."))?;
+    update_auth_store(codex_home, storage, default_lock_options(), |store| {
+        let openai_api_key = store.openai_api_key.clone();
+        let (tokens, last_refresh) = {
+            let provider = ensure_oauth_provider(store, DEFAULT_OAUTH_PROVIDER_ID);
+            let namespace = DEFAULT_OAUTH_NAMESPACE;
+            let mut target_id = record_id.map(|id| id.to_string());
+            if let Some(ref id) = target_id {
+                if !provider.records.iter().any(|record| record.id == *id) {
+                    target_id = None;
+                }
+            }
 
-    let tokens = auth_dot_json.tokens.get_or_insert_with(TokenData::default);
-    if let Some(id_token) = id_token {
-        tokens.id_token = parse_id_token(&id_token).map_err(std::io::Error::other)?;
-    }
-    if let Some(access_token) = access_token {
-        tokens.access_token = access_token;
-    }
-    if let Some(refresh_token) = refresh_token {
-        tokens.refresh_token = refresh_token;
-    }
-    auth_dot_json.last_refresh = Some(Utc::now());
-    storage.save(&auth_dot_json)?;
-    Ok(auth_dot_json)
+            if target_id.is_none() {
+                if let Some(refresh) = refresh_token.as_deref() {
+                    target_id = provider
+                        .records
+                        .iter()
+                        .find(|record| {
+                            record.namespace == namespace && record.tokens.refresh_token == refresh
+                        })
+                        .map(|record| record.id.clone());
+                }
+            }
+
+            if target_id.is_none() {
+                target_id = active_record_id(provider, namespace);
+            }
+
+            let target_id =
+                target_id.ok_or_else(|| std::io::Error::other("Token data is not available."))?;
+            let record = find_record_mut(provider, &target_id)
+                .ok_or_else(|| std::io::Error::other("Token data is not available."))?;
+
+            if let Some(id_token) = id_token {
+                record.tokens.id_token = parse_id_token(&id_token).map_err(std::io::Error::other)?;
+            }
+            if let Some(access_token) = access_token {
+                record.tokens.access_token = access_token;
+            }
+            if let Some(refresh_token) = refresh_token {
+                record.tokens.refresh_token = refresh_token;
+            }
+            record.last_refresh = Some(Utc::now());
+            record.updated_at = Utc::now();
+            (record.tokens.clone(), record.last_refresh)
+        };
+
+        Ok((
+            AuthDotJson {
+                openai_api_key,
+                tokens: Some(tokens),
+                last_refresh,
+            },
+            true,
+        ))
+    })
 }
 
 async fn try_refresh_token(
@@ -710,6 +1194,182 @@ impl AuthManager {
         self.auth_cached()
     }
 
+    fn auth_storage(&self) -> Arc<dyn AuthStorageBackend> {
+        create_auth_storage(self.codex_home.clone(), self.auth_credentials_store_mode)
+    }
+
+    /// Build a CodexAuth for a specific OAuth record.
+    pub fn auth_for_record(&self, record_id: &str) -> Option<CodexAuth> {
+        let storage = self.auth_storage();
+        let store = storage.load().ok().flatten()?;
+        let provider = match store.providers.get(DEFAULT_OAUTH_PROVIDER_ID) {
+            Some(AuthProviderEntry::Oauth(provider)) => provider,
+            _ => return None,
+        };
+        let record = find_record(provider, record_id)?;
+        Some(chatgpt_auth_from_record(storage, record))
+    }
+
+    pub(crate) fn oauth_snapshot(&self, namespace: &str) -> std::io::Result<OAuthPoolSnapshot> {
+        let storage = self.auth_storage();
+        let store = storage.load()?.unwrap_or_default();
+        let provider = match store.providers.get(DEFAULT_OAUTH_PROVIDER_ID) {
+            Some(AuthProviderEntry::Oauth(provider)) => provider,
+            _ => {
+                return Ok(OAuthPoolSnapshot {
+                    records: Vec::new(),
+                    ordered_ids: Vec::new(),
+                });
+            }
+        };
+        let namespace = normalize_oauth_namespace(namespace);
+        let ordered_ids = record_ids_for_namespace(provider, &namespace);
+        let records = provider
+            .records
+            .iter()
+            .filter(|record| record.namespace == namespace)
+            .map(|record| OAuthPoolRecord {
+                id: record.id.clone(),
+                health: record.health.clone(),
+            })
+            .collect();
+        Ok(OAuthPoolSnapshot { records, ordered_ids })
+    }
+
+    pub(crate) fn oauth_move_to_back(&self, namespace: &str, record_id: &str) -> std::io::Result<()> {
+        let storage = self.auth_storage();
+        let namespace = normalize_oauth_namespace(namespace);
+        update_auth_store_best_effort(&self.codex_home, &storage, |store| {
+            let provider = match store.providers.get_mut(DEFAULT_OAUTH_PROVIDER_ID) {
+                Some(AuthProviderEntry::Oauth(provider)) => provider,
+                _ => return Ok(false),
+            };
+            let mut order = record_ids_for_namespace(provider, &namespace);
+            if order.is_empty() {
+                return Ok(false);
+            }
+            if let Some(pos) = order.iter().position(|id| id == record_id) {
+                let id = order.remove(pos);
+                order.push(id);
+            } else {
+                return Ok(false);
+            }
+            provider.order.insert(namespace.clone(), order.clone());
+            if let Some(first) = order.first() {
+                provider.active.insert(namespace.clone(), first.clone());
+            }
+            Ok(true)
+        })
+    }
+
+    pub(crate) fn oauth_record_outcome(
+        &self,
+        record_id: &str,
+        status_code: u16,
+        ok: bool,
+        cooldown_until: Option<DateTime<Utc>>,
+    ) -> std::io::Result<()> {
+        let storage = self.auth_storage();
+        update_auth_store_best_effort(&self.codex_home, &storage, |store| {
+            let provider = match store.providers.get_mut(DEFAULT_OAUTH_PROVIDER_ID) {
+                Some(AuthProviderEntry::Oauth(provider)) => provider,
+                _ => return Ok(false),
+            };
+            let record = match find_record_mut(provider, record_id) {
+                Some(record) => record,
+                None => return Ok(false),
+            };
+            let now = Utc::now();
+            let prev_cooldown = record
+                .health
+                .cooldown_until
+                .filter(|until| *until > now);
+            let cooldown_until = if ok { None } else { cooldown_until.or(prev_cooldown) };
+            record.health = OAuthHealth {
+                cooldown_until,
+                last_status_code: Some(status_code),
+                last_error_at: if ok { None } else { Some(now) },
+                success_count: record.health.success_count + if ok { 1 } else { 0 },
+                failure_count: record.health.failure_count + if ok { 0 } else { 1 },
+            };
+            record.updated_at = now;
+            Ok(true)
+        })
+    }
+
+    pub async fn refresh_record(&self, record_id: &str) -> Result<(), RefreshTokenError> {
+        let storage = self.auth_storage();
+        let store = storage
+            .load()
+            .map_err(RefreshTokenError::Transient)?
+            .ok_or_else(|| RefreshTokenError::Transient(std::io::Error::other("Token data is not available.")))?;
+        let provider = match store.providers.get(DEFAULT_OAUTH_PROVIDER_ID) {
+            Some(AuthProviderEntry::Oauth(provider)) => provider,
+            _ => {
+                return Err(RefreshTokenError::Transient(std::io::Error::other(
+                    "Token data is not available.",
+                )))
+            }
+        };
+        let record = find_record(provider, record_id).ok_or_else(|| {
+            RefreshTokenError::Transient(std::io::Error::other("Token data is not available."))
+        })?;
+        let refresh_token = record.tokens.refresh_token.clone();
+        let access_token = record.tokens.access_token.clone();
+        let client = crate::default_client::create_client();
+        let refresh_response = match try_refresh_token(refresh_token.clone(), &client).await {
+            Ok(response) => response,
+            Err(err) => {
+                let refreshed_elsewhere = match storage.load().ok().flatten() {
+                    Some(store) => match store.providers.get(DEFAULT_OAUTH_PROVIDER_ID) {
+                        Some(AuthProviderEntry::Oauth(provider)) => {
+                            find_record(provider, record_id).is_some_and(|latest| {
+                                latest.tokens.refresh_token != refresh_token
+                                    || latest.tokens.access_token != access_token
+                            })
+                        }
+                        _ => false,
+                    },
+                    None => false,
+                };
+
+                if refreshed_elsewhere {
+                    if self
+                        .auth_cached()
+                        .as_ref()
+                        .and_then(|auth| auth.oauth_record_id.as_deref())
+                        == Some(record_id)
+                    {
+                        self.reload();
+                    }
+                    return Ok(());
+                }
+
+                return Err(err);
+            }
+        };
+        update_tokens(
+            &self.codex_home,
+            &storage,
+            Some(record_id),
+            refresh_response.id_token,
+            refresh_response.access_token,
+            refresh_response.refresh_token,
+        )
+        .await
+        .map_err(RefreshTokenError::from)?;
+
+        if self
+            .auth_cached()
+            .as_ref()
+            .and_then(|auth| auth.oauth_record_id.as_deref())
+            == Some(record_id)
+        {
+            self.reload();
+        }
+        Ok(())
+    }
+
     /// Force a reload of the auth information from auth.json. Returns
     /// whether the auth value changed.
     pub fn reload(&self) -> bool {
@@ -856,7 +1516,9 @@ impl AuthManager {
         let refresh_response = try_refresh_token(refresh_token, &auth.client).await?;
 
         update_tokens(
+            &self.codex_home,
             &auth.storage,
+            auth.oauth_record_id.as_deref(),
             refresh_response.id_token,
             refresh_response.access_token,
             refresh_response.refresh_token,
@@ -905,7 +1567,9 @@ mod tests {
             AuthCredentialsStoreMode::File,
         );
         let updated = super::update_tokens(
+            codex_home.path(),
             &storage,
+            None,
             None,
             Some("new-access-token".to_string()),
             Some("new-refresh-token".to_string()),
@@ -942,11 +1606,11 @@ mod tests {
             .expect("login_with_api_key should succeed");
 
         let storage = FileAuthStorage::new(dir.path().to_path_buf());
-        let auth = storage
-            .try_read_auth_json(&auth_path)
-            .expect("auth.json should parse");
-        assert_eq!(auth.openai_api_key.as_deref(), Some("sk-new"));
-        assert!(auth.tokens.is_none(), "tokens should be cleared");
+        let store = storage
+            .load()
+            .expect("auth.json should parse")
+            .expect("auth.json should exist");
+        assert_eq!(store.openai_api_key.as_deref(), Some("sk-new"));
     }
 
     #[test]

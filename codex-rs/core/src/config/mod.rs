@@ -8,6 +8,7 @@ use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
 use crate::config::types::Notice;
 use crate::config::types::Notifications;
+use crate::config::types::OAuthRotationConfig;
 use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
@@ -291,6 +292,9 @@ pub struct Config {
 
     /// When set, restricts the login mechanism users may use.
     pub forced_login_method: Option<ForcedLoginMethod>,
+
+    /// OAuth rotation settings for ChatGPT auth.
+    pub oauth_rotation: OAuthRotationConfig,
 
     /// Include the `apply_patch` tool for models that benefit from invoking
     /// file edits as a structured tool call. When unset, this falls back to the
@@ -787,6 +791,10 @@ pub struct ConfigToml {
     /// When set, restricts the login mechanism users may use.
     #[serde(default)]
     pub forced_login_method: Option<ForcedLoginMethod>,
+
+    /// OAuth rotation settings for ChatGPT auth.
+    #[serde(default)]
+    pub oauth_rotation: Option<OAuthRotationConfig>,
 
     /// Preferred backend for storing CLI auth credentials.
     /// file (default): Use a file in the Codex home directory.
@@ -1532,6 +1540,7 @@ impl Config {
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             forced_chatgpt_workspace_id,
             forced_login_method,
+            oauth_rotation: cfg.oauth_rotation.unwrap_or_default(),
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode,
             use_experimental_unified_exec_tool,
@@ -3683,6 +3692,7 @@ model_verbosity = "high"
                 compact_prompt: None,
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
+                oauth_rotation: OAuthRotationConfig::default(),
                 include_apply_patch_tool: false,
                 web_search_mode: None,
                 use_experimental_unified_exec_tool: false,
@@ -3763,7 +3773,8 @@ model_verbosity = "high"
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
-            include_apply_patch_tool: false,
+                oauth_rotation: OAuthRotationConfig::default(),
+                include_apply_patch_tool: false,
             web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
@@ -3858,7 +3869,8 @@ model_verbosity = "high"
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
-            include_apply_patch_tool: false,
+                oauth_rotation: OAuthRotationConfig::default(),
+                include_apply_patch_tool: false,
             web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
@@ -3939,7 +3951,8 @@ model_verbosity = "high"
             compact_prompt: None,
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
-            include_apply_patch_tool: false,
+                oauth_rotation: OAuthRotationConfig::default(),
+                include_apply_patch_tool: false,
             web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),

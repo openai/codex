@@ -15,8 +15,8 @@ use crate::pkce::generate_pkce;
 use base64::Engine;
 use chrono::Utc;
 use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::AuthDotJson;
-use codex_core::auth::save_auth;
+use codex_core::auth::add_oauth_account;
+use codex_core::auth::set_openai_api_key;
 use codex_core::default_client::originator;
 use codex_core::token_data::TokenData;
 use codex_core::token_data::parse_id_token;
@@ -558,12 +558,9 @@ pub(crate) async fn persist_tokens_async(
         {
             tokens.account_id = Some(acc.to_string());
         }
-        let auth = AuthDotJson {
-            openai_api_key: api_key,
-            tokens: Some(tokens),
-            last_refresh: Some(Utc::now()),
-        };
-        save_auth(&codex_home, &auth, auth_credentials_store_mode)
+        let last_refresh = Some(Utc::now());
+        add_oauth_account(&codex_home, auth_credentials_store_mode, tokens, last_refresh, None)?;
+        set_openai_api_key(&codex_home, auth_credentials_store_mode, api_key)
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?

@@ -4,7 +4,10 @@ use codex_core::CodexAuth;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
+use codex_core::auth::list_oauth_accounts;
 use codex_core::auth::logout;
+use codex_core::auth::remove_all_oauth_accounts;
+use codex_core::auth::remove_oauth_account;
 use codex_core::config::Config;
 use codex_login::ServerOptions;
 use codex_login::run_device_code_login;
@@ -252,8 +255,155 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     }
 }
 
-pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
+pub async fn run_login_accounts(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
+
+    let accounts =
+        match list_oauth_accounts(&config.codex_home, config.cli_auth_credentials_store_mode) {
+            Ok(accounts) => accounts,
+            Err(e) => {
+                eprintln!("Error listing ChatGPT accounts: {e}");
+                std::process::exit(1);
+            }
+        };
+
+    if accounts.is_empty() {
+        eprintln!("No ChatGPT accounts stored.");
+        std::process::exit(0);
+    }
+
+    eprintln!("ChatGPT accounts:");
+    for account in accounts {
+        let active = if account.active { "*" } else { " " };
+        let label = account
+            .label
+            .as_deref()
+            .or(account.email.as_deref())
+            .unwrap_or("unknown");
+        let email = account.email.as_deref().unwrap_or("-");
+        let account_id = account.account_id.as_deref().unwrap_or("-");
+        let last_refresh = account
+            .last_refresh
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let cooldown = account
+            .health
+            .cooldown_until
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        eprintln!(
+            "{active} {label}  id={id}  email={email}  account={account_id}  last_refresh={last_refresh}  cooldown={cooldown}",
+            id = account.record_id
+        );
+    }
+    std::process::exit(0);
+}
+
+pub async fn run_logout(
+    cli_config_overrides: CliConfigOverrides,
+    account: Option<String>,
+    all_accounts: bool,
+) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+
+    if let Some(selector) = account {
+        let accounts =
+            match list_oauth_accounts(&config.codex_home, config.cli_auth_credentials_store_mode) {
+                Ok(accounts) => accounts,
+                Err(e) => {
+                    eprintln!("Error listing ChatGPT accounts: {e}");
+                    std::process::exit(1);
+                }
+            };
+        let matches: Vec<_> = accounts
+            .iter()
+            .filter(|acc| {
+                acc.record_id == selector
+                    || acc.email.as_deref() == Some(selector.as_str())
+                    || acc.label.as_deref() == Some(selector.as_str())
+            })
+            .collect();
+
+        if matches.is_empty() {
+            eprintln!("No ChatGPT account matches '{selector}'.");
+            std::process::exit(1);
+        }
+
+        if matches.len() > 1 {
+            eprintln!(
+                "Multiple ChatGPT accounts match '{selector}'. Use the record id instead."
+            );
+            std::process::exit(1);
+        }
+
+        let record_id = &matches[0].record_id;
+        match remove_oauth_account(
+            &config.codex_home,
+            config.cli_auth_credentials_store_mode,
+            record_id,
+        ) {
+            Ok(true) => {
+                eprintln!("Logged out ChatGPT account {record_id}");
+                std::process::exit(0);
+            }
+            Ok(false) => {
+                eprintln!("ChatGPT account {record_id} was not found.");
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Error logging out ChatGPT account {record_id}: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if all_accounts {
+        if !std::io::stdin().is_terminal() {
+            eprintln!(
+                "Refusing to log out all ChatGPT accounts without confirmation (stdin is not a TTY)."
+            );
+            std::process::exit(1);
+        }
+
+        let confirmed = match confirm("This will log out all ChatGPT accounts. Continue? [y/N]: ") {
+            Ok(value) => value,
+            Err(e) => {
+                eprintln!("Error reading confirmation: {e}");
+                std::process::exit(1);
+            }
+        };
+        if !confirmed {
+            eprintln!("Canceled.");
+            std::process::exit(1);
+        }
+
+        let accounts =
+            match list_oauth_accounts(&config.codex_home, config.cli_auth_credentials_store_mode) {
+                Ok(accounts) => accounts,
+                Err(e) => {
+                    eprintln!("Error listing ChatGPT accounts: {e}");
+                    std::process::exit(1);
+                }
+            };
+        let count = accounts.len();
+        match remove_all_oauth_accounts(
+            &config.codex_home,
+            config.cli_auth_credentials_store_mode,
+        ) {
+            Ok(true) => {
+                eprintln!("Logged out {count} ChatGPT account(s).");
+                std::process::exit(0);
+            }
+            Ok(false) => {
+                eprintln!("No ChatGPT accounts stored.");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("Error logging out ChatGPT accounts: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     match logout(&config.codex_home, config.cli_auth_credentials_store_mode) {
         Ok(true) => {
@@ -269,6 +419,14 @@ pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
             std::process::exit(1);
         }
     }
+}
+
+fn confirm(prompt: &str) -> std::io::Result<bool> {
+    eprintln!("{prompt}");
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let answer = input.trim();
+    Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
 async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config {
