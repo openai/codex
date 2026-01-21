@@ -76,7 +76,7 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
 }
 
 fn should_skip_landlock(err: &CodexErr) -> bool {
-    matches!(err, CodexErr::Sandbox(SandboxErr::LandlockRestrict))
+    matches!(err, CodexErr::Sandbox(SandboxErr::LandlockRestrict)) || is_permission_denied(err)
 }
 
 fn is_permission_denied(err: &CodexErr) -> bool {
@@ -120,30 +120,6 @@ fn set_no_new_privs() -> Result<()> {
         return Err(std::io::Error::last_os_error().into());
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn should_skip_landlock_returns_false_for_permission_denied() {
-        let err: CodexErr =
-            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "nope").into();
-        assert!(!should_skip_landlock(&err));
-    }
-
-    #[test]
-    fn should_skip_landlock_on_restrict_not_enforced() {
-        let err = CodexErr::Sandbox(SandboxErr::LandlockRestrict);
-        assert!(should_skip_landlock(&err));
-    }
-
-    #[test]
-    fn should_skip_landlock_returns_false_for_other_errors() {
-        let err = CodexErr::UnsupportedOperation("nope".to_string());
-        assert!(!should_skip_landlock(&err));
-    }
 }
 
 /// Installs Landlock file-system rules on the current thread allowing read
@@ -238,4 +214,28 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
     apply_filter(&prog)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_skip_landlock_on_permission_denied() {
+        let err: CodexErr =
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "nope").into();
+        assert!(should_skip_landlock(&err));
+    }
+
+    #[test]
+    fn should_skip_landlock_on_restrict_not_enforced() {
+        let err = CodexErr::Sandbox(SandboxErr::LandlockRestrict);
+        assert!(should_skip_landlock(&err));
+    }
+
+    #[test]
+    fn should_skip_landlock_returns_false_for_other_errors() {
+        let err = CodexErr::UnsupportedOperation("nope".to_string());
+        assert!(!should_skip_landlock(&err));
+    }
 }
