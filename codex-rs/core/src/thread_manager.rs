@@ -366,7 +366,8 @@ impl ThreadManagerState {
             codex,
             session_configured.rollout_path.clone(),
         ));
-        self.threads.write().await.insert(thread_id, thread.clone());
+        let mut threads = self.threads.write().await;
+        threads.insert(thread_id, thread.clone());
 
         Ok(NewThread {
             thread_id,

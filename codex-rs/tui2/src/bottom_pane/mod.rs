@@ -27,20 +27,29 @@ use bottom_pane_view::BottomPaneView;
 use codex_core::features::Features;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
+use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::text::Line;
 use std::time::Duration;
 
 mod approval_overlay;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 mod bottom_pane_view;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LocalImageAttachment {
+    pub(crate) placeholder: String,
+    pub(crate) path: PathBuf,
+}
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 pub mod custom_prompt_view;
+mod experimental_features_view;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
@@ -91,6 +100,8 @@ pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
+pub(crate) use experimental_features_view::BetaFeatureItem;
+pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
 
@@ -178,6 +189,11 @@ impl BottomPane {
 
     pub fn set_steer_enabled(&mut self, enabled: bool) {
         self.composer.set_steer_enabled(enabled);
+    }
+
+    pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
+        self.composer.set_collaboration_modes_enabled(enabled);
+        self.request_redraw();
     }
 
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
@@ -301,8 +317,14 @@ impl BottomPane {
     }
 
     /// Replace the composer text with `text`.
-    pub(crate) fn set_composer_text(&mut self, text: String) {
-        self.composer.set_text_content(text);
+    pub(crate) fn set_composer_text(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+    ) {
+        self.composer
+            .set_text_content(text, text_elements, local_image_paths);
         self.request_redraw();
     }
 
@@ -324,6 +346,19 @@ impl BottomPane {
     /// Get the current composer text (for tests and programmatic checks).
     pub(crate) fn composer_text(&self) -> String {
         self.composer.current_text()
+    }
+
+    pub(crate) fn composer_text_elements(&self) -> Vec<TextElement> {
+        self.composer.text_elements()
+    }
+
+    pub(crate) fn composer_local_images(&self) -> Vec<LocalImageAttachment> {
+        self.composer.local_images()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn composer_local_image_paths(&self) -> Vec<PathBuf> {
+        self.composer.local_image_paths()
     }
 
     /// Update the status indicator header (defaults to "Working") and details below it.
@@ -500,6 +535,23 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn flash_footer_hint(&mut self, line: Line<'static>, duration: Duration) {
+        self.composer.show_footer_flash(line, duration);
+        let frame_requester = self.frame_requester.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                tokio::time::sleep(duration).await;
+                frame_requester.schedule_frame();
+            });
+        } else {
+            std::thread::spawn(move || {
+                std::thread::sleep(duration);
+                frame_requester.schedule_frame();
+            });
+        }
+        self.request_redraw();
+    }
+
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.composer.is_empty()
     }
@@ -619,8 +671,16 @@ impl BottomPane {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
         self.composer.take_recent_submission_images()
+    }
+
+    pub(crate) fn take_recent_submission_images_with_placeholders(
+        &mut self,
+    ) -> Vec<LocalImageAttachment> {
+        self.composer
+            .take_recent_submission_images_with_placeholders()
     }
 
     fn as_renderable(&'_ self) -> RenderableItem<'_> {
@@ -631,8 +691,13 @@ impl BottomPane {
             if let Some(status) = &self.status {
                 flex.push(0, RenderableItem::Borrowed(status));
             }
+            let has_queued_messages = !self.queued_user_messages.messages.is_empty();
+            let has_status = self.status.is_some();
+            if has_queued_messages && has_status {
+                flex.push(0, RenderableItem::Owned("".into()));
+            }
             flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
-            if self.status.is_some() || !self.queued_user_messages.messages.is_empty() {
+            if !has_queued_messages && has_status {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
             let mut flex2 = FlexRenderable::new();
@@ -870,6 +935,60 @@ mod tests {
         let area = Rect::new(0, 0, 30, height);
         assert_snapshot!(
             "status_and_composer_fill_height_without_bottom_padding",
+            render_snapshot(&pane, area)
+        );
+    }
+
+    #[test]
+    fn status_only_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        assert_snapshot!("status_only_snapshot", render_snapshot(&pane, area));
+    }
+
+    #[test]
+    fn status_with_details_and_queued_messages_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.update_status(
+            "Working".to_string(),
+            Some("First detail line\nSecond detail line".to_string()),
+        );
+        pane.set_queued_user_messages(vec!["Queued follow-up question".to_string()]);
+
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        assert_snapshot!(
+            "status_with_details_and_queued_messages_snapshot",
             render_snapshot(&pane, area)
         );
     }

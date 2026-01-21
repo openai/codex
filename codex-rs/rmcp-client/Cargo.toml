@@ -23,7 +23,8 @@ oauth2 = "5"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "stream",
-    "rustls-tls",
+    "rustls-tls-webpki-roots",
+    "rustls-tls-native-roots",
 ] }
 rmcp = { workspace = true, default-features = false, features = [
     "auth",

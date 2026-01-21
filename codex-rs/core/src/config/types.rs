@@ -748,6 +748,14 @@ impl Default for ShellEnvironmentPolicy {
     }
 }
 
+#[derive(Default, Debug, Clone, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum Personality {
+    Friendly,
+    #[default]
+    Pragmatic,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

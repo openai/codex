@@ -362,6 +362,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 .collect();
             items.push(UserInput::Text {
                 text: prompt_text.clone(),
+                // CLI input doesn't track UI element ranges, so none are available here.
                 text_elements: Vec::new(),
             });
             let output_schema = load_output_schema(output_schema_path.clone());
@@ -381,6 +382,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 .collect();
             items.push(UserInput::Text {
                 text: prompt_text.clone(),
+                // CLI input doesn't track UI element ranges, so none are available here.
                 text_elements: Vec::new(),
             });
             let output_schema = load_output_schema(output_schema_path);

@@ -20,11 +20,12 @@ use codex_rmcp_client::perform_oauth_login;
 use codex_rmcp_client::supports_oauth_login;
 
 /// Subcommands:
-/// - `serve`  — run the MCP server on stdio
 /// - `list`   — list configured servers (with `--json`)
 /// - `get`    — show a single server (with `--json`)
 /// - `add`    — add a server launcher entry to `~/.codex/config.toml`
 /// - `remove` — delete a server entry
+/// - `login`  — authenticate with MCP server using OAuth
+/// - `logout` — remove OAuth credentials for MCP server
 #[derive(Debug, clap::Parser)]
 pub struct McpCli {
     #[clap(flatten)]

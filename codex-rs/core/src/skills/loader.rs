@@ -550,15 +550,20 @@ fn extract_frontmatter(contents: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CONFIG_TOML_FILE;
     use crate::config::ConfigBuilder;
     use crate::config::ConfigOverrides;
+    use crate::config::ConfigToml;
+    use crate::config::ProjectConfig;
     use crate::config_loader::ConfigLayerEntry;
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
     use crate::config_loader::ConfigRequirementsToml;
+    use codex_protocol::config_types::TrustLevel;
     use codex_protocol::protocol::SkillScope;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
     use std::path::Path;
     use tempfile::TempDir;
     use toml::Value as TomlValue;
@@ -570,6 +575,21 @@ mod tests {
     }
 
     async fn make_config_for_cwd(codex_home: &TempDir, cwd: PathBuf) -> Config {
+        fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            toml::to_string(&ConfigToml {
+                projects: Some(HashMap::from([(
+                    cwd.to_string_lossy().to_string(),
+                    ProjectConfig {
+                        trust_level: Some(TrustLevel::Trusted),
+                    },
+                )])),
+                ..Default::default()
+            })
+            .expect("serialize config"),
+        )
+        .unwrap();
+
         let harness_overrides = ConfigOverrides {
             cwd: Some(cwd),
             ..Default::default()

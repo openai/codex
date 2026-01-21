@@ -36,7 +36,51 @@ pub struct TextElement {
     /// Byte range in the parent `text` buffer that this element occupies.
     pub byte_range: ByteRange,
     /// Optional human-readable placeholder for the element, displayed in the UI.
-    pub placeholder: Option<String>,
+    placeholder: Option<String>,
+}
+
+impl TextElement {
+    pub fn new(byte_range: ByteRange, placeholder: Option<String>) -> Self {
+        Self {
+            byte_range,
+            placeholder,
+        }
+    }
+
+    /// Returns a copy of this element with a remapped byte range.
+    ///
+    /// The placeholder is preserved as-is; callers must ensure the new range
+    /// still refers to the same logical element (and same placeholder)
+    /// within the new text.
+    pub fn map_range<F>(&self, map: F) -> Self
+    where
+        F: FnOnce(ByteRange) -> ByteRange,
+    {
+        Self {
+            byte_range: map(self.byte_range),
+            placeholder: self.placeholder.clone(),
+        }
+    }
+
+    pub fn set_placeholder(&mut self, placeholder: Option<String>) {
+        self.placeholder = placeholder;
+    }
+
+    /// Returns the stored placeholder without falling back to the text buffer.
+    ///
+    /// This must only be used inside `From<TextElement>` implementations on equivalent
+    /// protocol types where the source text is unavailable. Prefer `placeholder(text)`
+    /// everywhere else.
+    #[doc(hidden)]
+    pub fn _placeholder_for_conversion_only(&self) -> Option<&str> {
+        self.placeholder.as_deref()
+    }
+
+    pub fn placeholder<'a>(&'a self, text: &'a str) -> Option<&'a str> {
+        self.placeholder
+            .as_deref()
+            .or_else(|| text.get(self.byte_range.start..self.byte_range.end))
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS, JsonSchema)]

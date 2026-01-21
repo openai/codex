@@ -19,13 +19,8 @@ use uuid::Uuid;
 
 use crate::instructions::SkillInstructions;
 use crate::instructions::UserInstructions;
+use crate::session_prefix::is_session_prefix;
 use crate::user_shell_command::is_user_shell_command_text;
-
-fn is_session_prefix(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with("<environment_context>")
-}
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
     if UserInstructions::is_user_instructions(message)
@@ -52,7 +47,7 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 }
                 content.push(UserInput::Text {
                     text: text.clone(),
-                    // Plain text conversion has no UI element ranges.
+                    // Model input content does not carry UI element ranges.
                     text_elements: Vec::new(),
                 });
             }

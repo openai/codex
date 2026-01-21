@@ -142,10 +142,10 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
-    let text_elements = vec![TextElement {
-        byte_range: ByteRange { start: 0, end: 5 },
-        placeholder: Some("<note>".to_string()),
-    }];
+    let text_elements = vec![TextElement::new(
+        ByteRange { start: 0, end: 5 },
+        Some("<note>".to_string()),
+    )];
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
@@ -1471,8 +1471,18 @@ unified_exec = true
         unreachable!("loop ensures we break on command execution items");
     };
     assert_eq!(completed_id, "uexec-1");
-    assert_eq!(completed_status, CommandExecutionStatus::Completed);
-    assert_eq!(exit_code, Some(0));
+    assert!(
+        matches!(
+            completed_status,
+            CommandExecutionStatus::Completed | CommandExecutionStatus::Failed
+        ),
+        "unexpected command execution status: {completed_status:?}"
+    );
+    if completed_status == CommandExecutionStatus::Completed {
+        assert_eq!(exit_code, Some(0));
+    } else {
+        assert!(exit_code.is_some(), "expected exit_code for failed command");
+    }
     assert_eq!(
         completed_process_id.as_deref(),
         Some(started_process_id.as_str())

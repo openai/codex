@@ -76,14 +76,15 @@ impl SessionTask for UserShellCommandTask {
         // We do not source rc files or otherwise reformat the script.
         let use_login_shell = true;
         let session_shell = session.user_shell();
-        let command = session_shell.derive_exec_args(&self.command, use_login_shell);
-        let command = maybe_wrap_shell_lc_with_snapshot(&command, session_shell.as_ref());
+        let display_command = session_shell.derive_exec_args(&self.command, use_login_shell);
+        let exec_command =
+            maybe_wrap_shell_lc_with_snapshot(&display_command, session_shell.as_ref());
 
         let call_id = Uuid::new_v4().to_string();
         let raw_command = self.command.clone();
         let cwd = turn_context.cwd.clone();
 
-        let parsed_cmd = parse_command(&command);
+        let parsed_cmd = parse_command(&display_command);
         session
             .send_event(
                 turn_context.as_ref(),
@@ -91,7 +92,7 @@ impl SessionTask for UserShellCommandTask {
                     call_id: call_id.clone(),
                     process_id: None,
                     turn_id: turn_context.sub_id.clone(),
-                    command: command.clone(),
+                    command: display_command.clone(),
                     cwd: cwd.clone(),
                     parsed_cmd: parsed_cmd.clone(),
                     source: ExecCommandSource::UserShell,
@@ -101,7 +102,7 @@ impl SessionTask for UserShellCommandTask {
             .await;
 
         let exec_env = ExecEnv {
-            command: command.clone(),
+            command: exec_command.clone(),
             cwd: cwd.clone(),
             env: create_env(&turn_context.shell_environment_policy),
             // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
@@ -150,7 +151,7 @@ impl SessionTask for UserShellCommandTask {
                             call_id,
                             process_id: None,
                             turn_id: turn_context.sub_id.clone(),
-                            command: command.clone(),
+                            command: display_command.clone(),
                             cwd: cwd.clone(),
                             parsed_cmd: parsed_cmd.clone(),
                             source: ExecCommandSource::UserShell,
@@ -173,7 +174,7 @@ impl SessionTask for UserShellCommandTask {
                             call_id: call_id.clone(),
                             process_id: None,
                             turn_id: turn_context.sub_id.clone(),
-                            command: command.clone(),
+                            command: display_command.clone(),
                             cwd: cwd.clone(),
                             parsed_cmd: parsed_cmd.clone(),
                             source: ExecCommandSource::UserShell,
@@ -218,7 +219,7 @@ impl SessionTask for UserShellCommandTask {
                             call_id,
                             process_id: None,
                             turn_id: turn_context.sub_id.clone(),
-                            command,
+                            command: display_command,
                             cwd,
                             parsed_cmd,
                             source: ExecCommandSource::UserShell,

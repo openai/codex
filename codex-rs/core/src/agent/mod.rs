@@ -1,4 +1,6 @@
 pub(crate) mod control;
+// Do not put in `pub` or `pub(crate)`. This code should not be used somewhere else.
+mod guards;
 pub(crate) mod role;
 pub(crate) mod status;
 
