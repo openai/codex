@@ -383,8 +383,8 @@ pub(crate) fn app_state_for_policy(policy: crate::config::NetworkPolicy) -> AppS
         },
     };
 
-    let allow_set = crate::policy::compile_globset(&config.network_proxy.policy.allowed_domains)
-        .unwrap();
+    let allow_set =
+        crate::policy::compile_globset(&config.network_proxy.policy.allowed_domains).unwrap();
     let deny_set =
         crate::policy::compile_globset(&config.network_proxy.policy.denied_domains).unwrap();
 
