@@ -2307,7 +2307,7 @@ pub struct FileChangeRequestApprovalResponse {
 pub struct DynamicToolCallParams {
     pub thread_id: String,
     pub turn_id: String,
-    pub item_id: String,
+    pub call_id: String,
     pub tool: String,
     pub arguments: JsonValue,
 }
@@ -2316,7 +2316,6 @@ pub struct DynamicToolCallParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct DynamicToolCallResponse {
-    pub call_id: String,
     pub output: String,
     pub success: bool,
 }

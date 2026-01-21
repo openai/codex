@@ -323,7 +323,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let params = DynamicToolCallParams {
                     thread_id: conversation_id.to_string(),
                     turn_id: request.turn_id,
-                    item_id: call_id.clone(),
+                    call_id: call_id.clone(),
                     tool: request.tool,
                     arguments: request.arguments,
                 };

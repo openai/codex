@@ -192,7 +192,7 @@ async fn dynamic_tool_call_round_trip_sends_output_to_model() -> Result<()> {
     let expected = DynamicToolCallParams {
         thread_id: thread.id,
         turn_id: turn.id,
-        item_id: call_id.to_string(),
+        call_id: call_id.to_string(),
         tool: tool_name.to_string(),
         arguments: tool_args.clone(),
     };
@@ -200,7 +200,6 @@ async fn dynamic_tool_call_round_trip_sends_output_to_model() -> Result<()> {
 
     // Respond to the tool call so the model receives a function_call_output.
     let response = DynamicToolCallResponse {
-        call_id: call_id.to_string(),
         output: "dynamic-ok".to_string(),
         success: true,
     };

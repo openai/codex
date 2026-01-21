@@ -32,7 +32,7 @@ pub(crate) const RESERVED_DYNAMIC_TOOL_NAMES: &[&str] = &[
 ];
 
 pub(crate) async fn on_call_response(
-    fallback_call_id: String,
+    call_id: String,
     receiver: oneshot::Receiver<serde_json::Value>,
     conversation: Arc<CodexThread>,
 ) {
@@ -42,13 +42,13 @@ pub(crate) async fn on_call_response(
         Err(err) => {
             error!("request failed: {err:?}");
             let fallback = CoreDynamicToolResponse {
-                call_id: fallback_call_id.clone(),
+                call_id: call_id.clone(),
                 output: "dynamic tool request failed".to_string(),
                 success: false,
             };
             if let Err(err) = conversation
                 .submit(Op::DynamicToolResponse {
-                    id: fallback_call_id.clone(),
+                    id: call_id.clone(),
                     response: fallback,
                 })
                 .await
@@ -62,16 +62,10 @@ pub(crate) async fn on_call_response(
     let response = serde_json::from_value::<DynamicToolCallResponse>(value).unwrap_or_else(|err| {
         error!("failed to deserialize DynamicToolCallResponse: {err}");
         DynamicToolCallResponse {
-            call_id: fallback_call_id.clone(),
             output: "dynamic tool response was invalid".to_string(),
             success: false,
         }
     });
-    let call_id = if response.call_id.is_empty() {
-        fallback_call_id
-    } else {
-        response.call_id
-    };
     let response = CoreDynamicToolResponse {
         call_id: call_id.clone(),
         output: response.output,
