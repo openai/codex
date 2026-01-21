@@ -285,7 +285,7 @@ impl Codex {
             .base_instructions
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| model_info.base_instructions.clone());
+            .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality));
 
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
@@ -3741,7 +3741,7 @@ mod tests {
             base_instructions: config
                 .base_instructions
                 .clone()
-                .unwrap_or_else(|| model_info.base_instructions.clone()),
+                .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality)),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -3816,7 +3816,7 @@ mod tests {
             base_instructions: config
                 .base_instructions
                 .clone()
-                .unwrap_or_else(|| model_info.base_instructions.clone()),
+                .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality)),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -4075,7 +4075,7 @@ mod tests {
             base_instructions: config
                 .base_instructions
                 .clone()
-                .unwrap_or_else(|| model_info.base_instructions.clone()),
+                .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality)),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -4179,7 +4179,7 @@ mod tests {
             base_instructions: config
                 .base_instructions
                 .clone()
-                .unwrap_or_else(|| model_info.base_instructions.clone()),
+                .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality)),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
