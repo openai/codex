@@ -236,6 +236,9 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
             }
         };
 
+        let mut skill_path_exact: Option<PathBuf> = None;
+        let mut skill_path_case_insensitive: Option<PathBuf> = None;
+
         for entry in entries.flatten() {
             let path = entry.path();
             let file_name = match path.file_name().and_then(|f| f.to_str()) {
@@ -299,18 +302,28 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
                 continue;
             }
 
-            if file_type.is_file() && file_name == SKILLS_FILENAME {
-                match parse_skill_file(&path, scope) {
-                    Ok(skill) => {
-                        outcome.skills.push(skill);
-                    }
-                    Err(err) => {
-                        if scope != SkillScope::System {
-                            outcome.errors.push(SkillError {
-                                path,
-                                message: err.to_string(),
-                            });
-                        }
+            if file_type.is_file() {
+                if file_name == SKILLS_FILENAME {
+                    skill_path_exact = Some(path);
+                } else if file_name.eq_ignore_ascii_case(SKILLS_FILENAME)
+                    && skill_path_case_insensitive.is_none()
+                {
+                    skill_path_case_insensitive = Some(path);
+                }
+            }
+        }
+
+        if let Some(skill_path) = skill_path_exact.or(skill_path_case_insensitive) {
+            match parse_skill_file(&skill_path, scope) {
+                Ok(skill) => {
+                    outcome.skills.push(skill);
+                }
+                Err(err) => {
+                    if scope != SkillScope::System {
+                        outcome.errors.push(SkillError {
+                            path: skill_path,
+                            message: err.to_string(),
+                        });
                     }
                 }
             }
@@ -370,9 +383,11 @@ fn load_skill_interface(skill_path: &Path) -> Option<SkillInterface> {
     // Fail open: optional SKILL.toml metadata should not block loading SKILL.md.
     let skill_dir = skill_path.parent()?;
     let interface_path = skill_dir.join(SKILLS_TOML_FILENAME);
-    if !interface_path.exists() {
-        return None;
-    }
+    let interface_path = if interface_path.exists() {
+        interface_path
+    } else {
+        find_case_insensitive_file(skill_dir, SKILLS_TOML_FILENAME)?
+    };
 
     let contents = match fs::read_to_string(&interface_path) {
         Ok(contents) => contents,
@@ -547,6 +562,33 @@ fn extract_frontmatter(contents: &str) -> Option<String> {
     Some(frontmatter_lines.join("\n"))
 }
 
+fn find_case_insensitive_file(dir: &Path, file_name: &str) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(entry_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !entry_name.eq_ignore_ascii_case(file_name) {
+            continue;
+        }
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(_) => continue,
+        };
+        if file_type.is_file() {
+            return Some(path);
+        }
+        if file_type.is_symlink() {
+            let metadata = fs::metadata(&path).ok()?;
+            if metadata.is_file() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,22 +723,100 @@ mod tests {
         )
     }
 
-    fn write_skill_at(root: &Path, dir: &str, name: &str, description: &str) -> PathBuf {
+    fn write_skill_at_with_filename(
+        root: &Path,
+        dir: &str,
+        filename: &str,
+        name: &str,
+        description: &str,
+    ) -> PathBuf {
         let skill_dir = root.join(dir);
         fs::create_dir_all(&skill_dir).unwrap();
         let indented_description = description.replace('\n', "\n  ");
         let content = format!(
             "---\nname: {name}\ndescription: |-\n  {indented_description}\n---\n\n# Body\n"
         );
-        let path = skill_dir.join(SKILLS_FILENAME);
+        let path = skill_dir.join(filename);
         fs::write(&path, content).unwrap();
         path
+    }
+
+    fn write_skill_at(root: &Path, dir: &str, name: &str, description: &str) -> PathBuf {
+        write_skill_at_with_filename(root, dir, SKILLS_FILENAME, name, description)
     }
 
     fn write_skill_interface_at(skill_dir: &Path, contents: &str) -> PathBuf {
         let path = skill_dir.join(SKILLS_TOML_FILENAME);
         fs::write(&path, contents).unwrap();
         path
+    }
+
+    #[tokio::test]
+    async fn loads_skills_case_insensitive_filename() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill_at_with_filename(
+            &codex_home.path().join("skills"),
+            "demo",
+            "skill.md",
+            "case-skill",
+            "from lower",
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "case-skill".to_string(),
+                description: "from lower".to_string(),
+                short_description: None,
+                interface: None,
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn prefers_exact_skill_filename_when_both_present() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let exact_path = write_skill(&codex_home, "demo", "exact-skill", "from exact");
+        let lower_path = write_skill_at_with_filename(
+            &codex_home.path().join("skills"),
+            "demo",
+            "skill.md",
+            "lower-skill",
+            "from lower",
+        );
+        if normalized(&exact_path) == normalized(&lower_path) {
+            return;
+        }
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "exact-skill".to_string(),
+                description: "from exact".to_string(),
+                short_description: None,
+                interface: None,
+                path: normalized(&exact_path),
+                scope: SkillScope::User,
+            }]
+        );
     }
 
     #[tokio::test]
@@ -740,6 +860,49 @@ default_prompt = "  default   prompt   "
                     icon_large: Some(normalized_skill_dir.join("assets/large-logo.svg")),
                     brand_color: Some("#3B82F6".to_string()),
                     default_prompt: Some("default prompt".to_string()),
+                }),
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn loads_skill_interface_metadata_case_insensitive_filename() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from toml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+
+        fs::write(
+            skill_dir.join("skill.toml"),
+            r#"
+[interface]
+display_name = "UI Skill"
+"#,
+        )
+        .unwrap();
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "ui-skill".to_string(),
+                description: "from toml".to_string(),
+                short_description: None,
+                interface: Some(SkillInterface {
+                    display_name: Some("UI Skill".to_string()),
+                    short_description: None,
+                    icon_small: None,
+                    icon_large: None,
+                    brand_color: None,
+                    default_prompt: None,
                 }),
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
