@@ -1816,7 +1816,7 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
                 ..
-            } => self.handle_submission(true),
+            } if self.is_task_running => self.handle_submission(true),
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,

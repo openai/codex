@@ -826,7 +826,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
             .get("reasoning")
             .and_then(|t| t.get("effort"))
             .and_then(|v| v.as_str()),
-        None
+        Some("medium")
     );
 
     Ok(())
