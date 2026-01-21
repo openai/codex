@@ -1,0 +1,26 @@
+AVC_STAGEPORT_PRODUCTION_RELEASE
+VERSION: 1.0
+DATE_CREATED: 2026-01-21
+RELEASE_TYPE: WRAPPER_ARCHIVE
+AUTHORSHIP_HOLDER: Allison Van Cura
+
+STRUCTURE:
+01_CORE_RECORD/AVC_PROOF_OF_RECORD_CORE.zip
+02_PRODUCT_AND_SYSTEM/StagePort_Product_Pilot.zip
+03_OPERATIONS/Extraction_Ledger_Notion_Import_v1.zip
+04_LEGAL_AND_RIGHTS/StagePort_Full_Legal_Presence_Pack_v1.zip
+05_CASE_NARRATIVE/CASE_ACT1_FREEZE_EXPORT_3.zip
+06_EVIDENCE_CONTROLLED/GLISSE_FULL_EVIDENCE_ROOM_v2.zip
+07_PUBLIC_PREVIEW/GLISSE_LOCAL_SHOW.zip
+
+INTEGRITY_RULES:
+- All subsystem ZIPs remain intact
+- No internal recombination permitted
+- Wrapper archive preserves original filenames and versions
+
+DISTRIBUTION_POLICY:
+- Tiered access by folder
+- Evidence-controlled materials restricted
+- Public preview isolated by design
+
+END_MANIFEST
