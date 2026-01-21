@@ -3394,6 +3394,38 @@ async fn interrupt_clears_unified_exec_processes() {
 }
 
 #[tokio::test]
+async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+        }),
+    });
+
+    let begin = begin_unified_exec_startup(&mut chat, "call-1", "process-1", "just fix");
+    terminal_interaction(&mut chat, "call-1a", "process-1", "");
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    end_exec(&mut chat, begin, "", "", 0);
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let snapshot = format!("cells={}\n{combined}", cells.len());
+    assert_snapshot!("interrupt_clears_unified_exec_wait_streak", snapshot);
+}
+
+#[tokio::test]
 async fn turn_complete_clears_unified_exec_processes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

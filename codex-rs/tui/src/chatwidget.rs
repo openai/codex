@@ -1010,6 +1010,7 @@ impl ChatWidget {
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
+        self.unified_exec_wait_streak = None;
         self.clear_unified_exec_processes();
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
