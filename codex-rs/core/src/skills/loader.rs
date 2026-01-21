@@ -575,11 +575,17 @@ mod tests {
     }
 
     async fn make_config_for_cwd(codex_home: &TempDir, cwd: PathBuf) -> Config {
+        let trust_root = cwd
+            .ancestors()
+            .find(|ancestor| ancestor.join(".git").exists())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| cwd.clone());
+
         fs::write(
             codex_home.path().join(CONFIG_TOML_FILE),
             toml::to_string(&ConfigToml {
                 projects: Some(HashMap::from([(
-                    cwd.to_string_lossy().to_string(),
+                    trust_root.to_string_lossy().to_string(),
                     ProjectConfig {
                         trust_level: Some(TrustLevel::Trusted),
                     },
