@@ -88,7 +88,7 @@ impl ToolsConfig {
 /// Generic JSON‑Schema subset needed for our tool definitions
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub(crate) enum JsonSchema {
+pub enum JsonSchema {
     Boolean {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
@@ -124,7 +124,7 @@ pub(crate) enum JsonSchema {
 /// Whether additional properties are allowed, and if so, any required schema
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
-pub(crate) enum AdditionalProperties {
+pub enum AdditionalProperties {
     Boolean(bool),
     Schema(Box<JsonSchema>),
 }
@@ -1105,9 +1105,7 @@ pub(crate) fn mcp_tool_to_openai_tool(
 fn dynamic_tool_to_openai_tool(
     tool: &DynamicToolSpec,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let mut input_schema = tool.input_schema.clone();
-    sanitize_json_schema(&mut input_schema);
-    let input_schema = serde_json::from_value::<JsonSchema>(input_schema)?;
+    let input_schema = parse_tool_input_schema(&tool.input_schema)?;
 
     Ok(ResponsesApiTool {
         name: tool.name.clone(),
@@ -1115,6 +1113,13 @@ fn dynamic_tool_to_openai_tool(
         strict: false,
         parameters: input_schema,
     })
+}
+
+/// Parse the tool input_schema or return an error for invalid schema
+pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, serde_json::Error> {
+    let mut input_schema = input_schema.clone();
+    sanitize_json_schema(&mut input_schema);
+    serde_json::from_value::<JsonSchema>(input_schema)
 }
 
 /// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
