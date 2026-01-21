@@ -1876,6 +1876,7 @@ mod tests {
     use codex_core::protocol::SessionSource;
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
+    use codex_protocol::user_input::TextElement;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
@@ -2168,11 +2169,14 @@ mod tests {
     async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
-        let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
+        let user_cell = |text: &str,
+                         text_elements: Vec<TextElement>,
+                         local_image_paths: Vec<PathBuf>|
+         -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
                 message: text.to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
+                text_elements,
+                local_image_paths,
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
@@ -2210,18 +2214,28 @@ mod tests {
             )) as Arc<dyn HistoryCell>
         };
 
+        let placeholder = "[Image #1]";
+        let edited_text = format!("follow-up (edited) {placeholder}");
+        let edited_range = edited_text.len().saturating_sub(placeholder.len())..edited_text.len();
+        let edited_text_elements = vec![TextElement::new(edited_range.into(), None)];
+        let edited_local_image_paths = vec![PathBuf::from("/tmp/fake-image.png")];
+
         // Simulate a transcript with duplicated history (e.g., from prior backtracks)
         // and an edited turn appended after a session header boundary.
         app.transcript_cells = vec![
             make_header(true),
-            user_cell("first question"),
+            user_cell("first question", Vec::new(), Vec::new()),
             agent_cell("answer first"),
-            user_cell("follow-up"),
+            user_cell("follow-up", Vec::new(), Vec::new()),
             agent_cell("answer follow-up"),
             make_header(false),
-            user_cell("first question"),
+            user_cell("first question", Vec::new(), Vec::new()),
             agent_cell("answer first"),
-            user_cell("follow-up (edited)"),
+            user_cell(
+                &edited_text,
+                edited_text_elements.clone(),
+                edited_local_image_paths.clone(),
+            ),
             agent_cell("answer edited"),
         ];
 
@@ -2254,7 +2268,9 @@ mod tests {
             .confirm_backtrack_from_main()
             .expect("backtrack selection");
         assert_eq!(selection.nth_user_message, 1);
-        assert_eq!(selection.prefill, "follow-up (edited)");
+        assert_eq!(selection.prefill, edited_text);
+        assert_eq!(selection.text_elements, edited_text_elements);
+        assert_eq!(selection.local_image_paths, edited_local_image_paths);
 
         app.apply_backtrack_rollback(selection);
 
