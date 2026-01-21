@@ -91,7 +91,6 @@ Key effects when disabled:
 Built-in slash command availability is centralized in
 `codex-rs/tui/src/bottom_pane/slash_commands.rs` and reused by both the composer and the command
 popup so gating stays in sync.
-
 ## Submission flow (Enter/Tab)
 
 There are multiple submission paths, but they share the same core rules:
