@@ -212,6 +212,10 @@
       "format": "uint16",
       "minimum": 0.0
     },
+    "mcp_oauth_callback_url_template": {
+      "description": "Optional template for the MCP OAuth `redirect_uri`.\n\nBy default Codex uses a `http://127.0.0.1:{port}/callback` style URL that only works when Codex and the browser run on the same machine. When this field is set, `{port}` will be replaced with the actual callback port and the resulting URL will be sent as `redirect_uri` to the MCP server, allowing non-localhost callbacks on remotes, when used in conjunction with port forwarding.",
+      "type": "string"
+    },
     "mcp_oauth_credentials_store": {
       "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2 file: Use a file in the Codex home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file.",
       "default": null,
