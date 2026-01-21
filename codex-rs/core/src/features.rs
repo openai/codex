@@ -107,6 +107,8 @@ pub enum Feature {
     Steer,
     /// Enable collaboration modes (Plan, Pair Programming, Execute).
     CollaborationModes,
+    /// Use the Responses API WebSocket transport for OpenAI by default.
+    ResponsesWebsockets,
 }
 
 impl Feature {
@@ -405,7 +407,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::RemoteModels,
         key: "remote_models",
         stage: Stage::Beta,
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::PowershellUtf8,
@@ -458,6 +460,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CollaborationModes,
         key: "collaboration_modes",
+        stage: Stage::Beta,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResponsesWebsockets,
+        key: "responses_websockets",
         stage: Stage::Beta,
         default_enabled: false,
     },

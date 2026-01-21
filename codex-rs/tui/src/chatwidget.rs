@@ -96,6 +96,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
@@ -1009,6 +1010,7 @@ impl ChatWidget {
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
+        self.unified_exec_wait_streak = None;
         self.clear_unified_exec_processes();
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
@@ -1206,6 +1208,14 @@ impl ChatWidget {
         self.defer_or_handle(
             |q| q.push_elicitation(ev),
             |s| s.handle_elicitation_request_now(ev2),
+        );
+    }
+
+    fn on_request_user_input(&mut self, ev: RequestUserInputEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_user_input(ev),
+            |s| s.handle_request_user_input_now(ev2),
         );
     }
 
@@ -1519,6 +1529,7 @@ impl ChatWidget {
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
         // Before streaming agent content, flush any active exec cell group.
+        self.flush_unified_exec_wait_streak();
         self.flush_active_cell();
 
         if self.stream_controller.is_none() {
@@ -1676,6 +1687,12 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn handle_request_user_input_now(&mut self, ev: RequestUserInputEvent) {
+        self.flush_answer_stream_with_separator();
+        self.bottom_pane.push_user_input_request(ev);
+        self.request_redraw();
+    }
+
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
         self.running_commands.insert(
@@ -1807,9 +1824,7 @@ impl ChatWidget {
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
 
-        let model_for_header = model
-            .clone()
-            .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let model_for_header = model.unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
         let stored_collaboration_mode = if config.features.enabled(Feature::CollaborationModes) {
             collaboration_modes::default_mode(models_manager.as_ref()).unwrap_or_else(|| {
                 CollaborationMode::Custom(Settings {
@@ -1826,15 +1841,11 @@ impl ChatWidget {
             })
         };
 
-        let active_cell = if model.is_none() {
-            Some(Self::placeholder_session_header_cell(
-                &config,
-                config.features.enabled(Feature::CollaborationModes),
-                stored_collaboration_mode.clone(),
-            ))
-        } else {
-            None
-        };
+        let active_cell = Some(Self::placeholder_session_header_cell(
+            &config,
+            config.features.enabled(Feature::CollaborationModes),
+            stored_collaboration_mode.clone(),
+        ));
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -2680,6 +2691,9 @@ impl ChatWidget {
             EventMsg::ElicitationRequest(ev) => {
                 self.on_elicitation_request(ev);
             }
+            EventMsg::RequestUserInput(ev) => {
+                self.on_request_user_input(ev);
+            }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
@@ -2741,7 +2755,6 @@ impl ChatWidget {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
-            | EventMsg::RequestUserInput(_)
             | EventMsg::DynamicToolCallRequest(_) => {}
         }
     }

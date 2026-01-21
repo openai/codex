@@ -47,6 +47,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
@@ -1991,6 +1992,39 @@ impl App {
                     }
                 }
             }
+            AppEvent::UpdateFeatureFlags { updates } => {
+                if updates.is_empty() {
+                    return Ok(AppRunControl::Continue);
+                }
+
+                let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(self.active_profile.as_deref());
+                for (feature, enabled) in &updates {
+                    let key = feature.key();
+                    if *enabled {
+                        self.config.features.enable(*feature);
+                        self.chat_widget.set_feature_enabled(*feature, true);
+                        builder = builder.set_feature_enabled(key, true);
+                    } else {
+                        self.config.features.disable(*feature);
+                        self.chat_widget.set_feature_enabled(*feature, false);
+                        if feature.default_enabled() {
+                            builder = builder.set_feature_enabled(key, false);
+                        } else {
+                            builder = builder.with_edits([ConfigEdit::ClearPath {
+                                segments: vec!["features".to_string(), key.to_string()],
+                            }]);
+                        }
+                    }
+                }
+
+                if let Err(err) = builder.apply().await {
+                    tracing::error!(error = %err, "failed to persist feature flags");
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to update experimental features: {err}"
+                    ));
+                }
+            }
             AppEvent::SkipNextWorldWritableScan => {
                 self.skip_world_writable_scan_once = true;
             }
@@ -2685,6 +2719,14 @@ mod tests {
                 app.chat_widget.current_model(),
                 event,
                 is_first,
+                false,
+                codex_protocol::config_types::CollaborationMode::Custom(
+                    codex_protocol::config_types::Settings {
+                        model: "gpt-test".to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                ),
             )) as Arc<dyn HistoryCell>
         };
 

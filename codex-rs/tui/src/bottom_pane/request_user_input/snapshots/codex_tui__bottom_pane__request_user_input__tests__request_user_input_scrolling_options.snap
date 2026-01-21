@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/request_user_input/mod.rs
+expression: "render_snapshot(&overlay, area)"
+---
+Question 1/1                                                        
+Next Step                                                           
+What would you like to do next?                                     
+( ) Discuss a code change (Recommended)  Walk through a plan and    
+                                         edit code together.        
+( ) Run tests                            Pick a crate and run its   
+                                         tests.                     
+( ) Review a diff                        Summarize or review current
+Notes: Add notes (optional)                                         
+Option 4 of 5 | ↑/↓ scroll | enter next question | esc interrupt

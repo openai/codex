@@ -113,7 +113,9 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         extra_headers: HeaderMap,
         turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
-        let ws_url = Url::parse(&self.provider.url_for_path("responses"))
+        let ws_url = self
+            .provider
+            .websocket_url_for_path("responses")
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
 
         let mut headers = self.provider.headers.clone();
