@@ -235,6 +235,7 @@ jobs:
           for binary in codex codex-responses-api-proxy; do
             path="${dest}/${binary}-${{ matrix.target }}"
             echo "Stapling: ${binary}"
+            test -f "$path" || { echo "Missing binary: $path"; exit 1; }
             xcrun stapler staple "$path"
 
             if ! xcrun stapler validate "$path" >/dev/null 2>&1; then
