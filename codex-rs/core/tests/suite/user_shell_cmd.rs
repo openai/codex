@@ -1,6 +1,7 @@
 use anyhow::Context;
 use codex_core::NewThread;
 use codex_core::ThreadManager;
+use codex_core::features::Feature;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
@@ -25,7 +26,6 @@ use core_test_support::wait_for_event_match;
 use regex_lite::escape;
 use std::path::PathBuf;
 use tempfile::TempDir;
-use codex_core::features::Feature;
 
 #[tokio::test]
 async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
