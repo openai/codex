@@ -561,7 +561,6 @@ impl ModelClientSession {
                 Some(manager) => manager.auth().await,
                 None => None,
             };
-
             let api_provider = self
                 .state
                 .provider
