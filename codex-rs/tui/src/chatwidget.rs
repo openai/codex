@@ -3988,30 +3988,6 @@ impl ChatWidget {
             .is_some_and(|preset| {
                 Self::preset_matches_current(current_approval, current_sandbox, preset)
             });
-        let mut stay_actions = if stay_full_access {
-            Vec::new()
-        } else {
-            presets
-                .iter()
-                .find(|preset| preset.id == "read-only")
-                .map(|preset| {
-                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
-                })
-                .unwrap_or_default()
-        };
-        let stay_actions_otel = self.otel_manager.clone();
-        stay_actions.insert(
-            0,
-            Box::new(move |_tx| {
-                stay_actions_otel.counter("codex.windows_sandbox.elevated_prompt_decline", 1, &[]);
-            }),
-        );
-        let stay_label = if stay_full_access {
-            "Stay in Agent Full Access".to_string()
-        } else {
-            "Stay in Read-Only".to_string()
-        };
-
         self.otel_manager
             .counter("codex.windows_sandbox.elevated_prompt_shown", 1, &[]);
 
@@ -4025,6 +4001,32 @@ impl ChatWidget {
             ])
             .wrap(Wrap { trim: false }),
         ));
+
+        let stay_label = if stay_full_access {
+            "Stay in Agent Full Access".to_string()
+        } else {
+            "Stay in Read-Only".to_string()
+        };
+        let mut stay_actions = if stay_full_access {
+            Vec::new()
+        } else {
+            presets
+                .iter()
+                .find(|preset| preset.id == "read-only")
+                .map(|preset| {
+                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                })
+                .unwrap_or_default()
+        };
+        stay_actions.insert(
+            0,
+            Box::new({
+                let otel = self.otel_manager.clone();
+                move |_tx| {
+                    otel.counter("codex.windows_sandbox.elevated_prompt_decline", 1, &[]);
+                }
+            }),
+        );
 
         let accept_otel = self.otel_manager.clone();
         let items = vec![
@@ -4080,23 +4082,6 @@ impl ChatWidget {
             .is_some_and(|preset| {
                 Self::preset_matches_current(current_approval, current_sandbox, preset)
             });
-        let stay_actions = if stay_full_access {
-            Vec::new()
-        } else {
-            presets
-                .iter()
-                .find(|preset| preset.id == "read-only")
-                .map(|preset| {
-                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
-                })
-                .unwrap_or_default()
-        };
-        let stay_label = if stay_full_access {
-            "Stay in Agent Full Access".to_string()
-        } else {
-            "Stay in Read-Only".to_string()
-        };
-
         let mut lines = Vec::new();
         lines.push(line!["Use Non-Elevated Sandbox?".bold()]);
         lines.push(line![""]);
@@ -4112,14 +4097,41 @@ impl ChatWidget {
 
         let elevated_preset = preset.clone();
         let legacy_preset = preset;
-        let otel = self.otel_manager.clone();
+        let stay_label = if stay_full_access {
+            "Stay in Agent Full Access".to_string()
+        } else {
+            "Stay in Read-Only".to_string()
+        };
+        let mut stay_actions = if stay_full_access {
+            Vec::new()
+        } else {
+            presets
+                .iter()
+                .find(|preset| preset.id == "read-only")
+                .map(|preset| {
+                    Self::approval_preset_actions(preset.approval, preset.sandbox.clone())
+                })
+                .unwrap_or_default()
+        };
+        stay_actions.insert(
+            0,
+            Box::new({
+                let otel = self.otel_manager.clone();
+                move |_tx| {
+                    otel.counter("codex.windows_sandbox.fallback_stay_current", 1, &[]);
+                }
+            }),
+        );
         let items = vec![
             SelectionItem {
                 name: "Try elevated agent sandbox setup again".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    otel.clone()
-                        .counter("codex.windows_sandbox.fallback_retry_elevated", 1, &[]);
+                    self.otel_manager.counter(
+                        "codex.windows_sandbox.fallback_retry_elevated",
+                        1,
+                        &[],
+                    );
                     tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                         preset: elevated_preset.clone(),
                     });
@@ -4131,7 +4143,7 @@ impl ChatWidget {
                 name: "Use non-elevated agent sandbox".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    otel.clone()
+                    self.otel_manager
                         .counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
                     tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                         preset: legacy_preset.clone(),
@@ -4144,13 +4156,7 @@ impl ChatWidget {
             SelectionItem {
                 name: stay_label,
                 description: None,
-                actions: vec![Box::new(move |tx| {
-                    otel.clone()
-                        .counter("codex.windows_sandbox.fallback_stay_current", 1, &[]);
-                    for action in &stay_actions {
-                        action(tx);
-                    }
-                })],
+                actions: stay_actions,
                 dismiss_on_select: true,
                 ..Default::default()
             },
