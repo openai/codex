@@ -28,6 +28,7 @@ use codex_tui::ExitReason;
 use codex_tui::update_action::UpdateAction;
 use codex_tui2 as tui2;
 use owo_colors::OwoColorize;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
 
@@ -45,6 +46,7 @@ use codex_core::features::Feature;
 use codex_core::features::FeatureOverrides;
 use codex_core::features::Features;
 use codex_core::features::is_known_feature_key;
+use codex_core::terminal::TerminalName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 /// Codex CLI
@@ -735,12 +737,40 @@ async fn run_interactive_tui(
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
         interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
     }
+
+    let terminal_info = codex_core::terminal::terminal_info();
+    if terminal_info.name == TerminalName::Dumb {
+        if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+            return Ok(AppExitInfo::fatal(
+                "TERM is set to \"dumb\". Refusing to start the interactive TUI because no terminal is available for a confirmation prompt (stdin/stderr is not a TTY). Run in a supported terminal or unset TERM.",
+            ));
+        }
+
+        eprintln!(
+            "WARNING: TERM is set to \"dumb\". Codex's interactive TUI may not work in this terminal."
+        );
+        if !confirm("Continue anyway? [y/N]: ")? {
+            return Ok(AppExitInfo::fatal(
+                "Refusing to start the interactive TUI because TERM is set to \"dumb\". Run in a supported terminal or unset TERM.",
+            ));
+        }
+    }
+
     if is_tui2_enabled(&interactive).await? {
         let result = tui2::run_main(interactive.into(), codex_linux_sandbox_exe).await?;
         Ok(result.into())
     } else {
         codex_tui::run_main(interactive, codex_linux_sandbox_exe).await
     }
+}
+
+fn confirm(prompt: &str) -> std::io::Result<bool> {
+    eprintln!("{prompt}");
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let answer = input.trim();
+    Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
 /// Returns `Ok(true)` when the resolved configuration enables the `tui2` feature flag.

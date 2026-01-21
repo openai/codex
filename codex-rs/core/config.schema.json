@@ -4,6 +4,14 @@
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "type": "object",
   "properties": {
+    "agents": {
+      "description": "Agent-related settings (thread limits, etc.).",
+      "allOf": [
+        {
+          "$ref": "#/definitions/AgentsToml"
+        }
+      ]
+    },
     "analytics": {
       "description": "When `false`, disables analytics across Codex product surfaces in this machine. Defaults to `true`.",
       "allOf": [
@@ -52,14 +60,6 @@
     },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
-    },
-    "experimental_instructions_file": {
-      "description": "Legacy, now use features",
-      "allOf": [
-        {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        }
-      ]
     },
     "experimental_use_freeform_apply_patch": {
       "type": "boolean"
@@ -115,6 +115,9 @@
           "type": "boolean"
         },
         "remote_models": {
+          "type": "boolean"
+        },
+        "responses_websockets": {
           "type": "boolean"
         },
         "shell_snapshot": {
@@ -240,6 +243,22 @@
       "type": "integer",
       "format": "int64"
     },
+    "model_instructions_file": {
+      "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Codex will likely degrade model performance.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ]
+    },
+    "model_personality": {
+      "description": "EXPERIMENTAL Optionally specify a personality for the model",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Personality"
+        }
+      ]
+    },
     "model_provider": {
       "description": "Provider to use from the model_providers map.",
       "type": "string"
@@ -359,12 +378,12 @@
     },
     "shell_environment_policy": {
       "default": {
-        "inherit": null,
-        "ignore_default_excludes": null,
         "exclude": null,
-        "set": null,
+        "experimental_use_profile": null,
+        "ignore_default_excludes": null,
         "include_only": null,
-        "experimental_use_profile": null
+        "inherit": null,
+        "set": null
       },
       "allOf": [
         {
@@ -424,6 +443,18 @@
     "AbsolutePathBuf": {
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
+    },
+    "AgentsToml": {
+      "type": "object",
+      "properties": {
+        "max_threads": {
+          "description": "Maximum number of agent threads that can be open concurrently. When unset, no limit is enforced.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1.0
+        }
+      },
+      "additionalProperties": false
     },
     "AltScreenMode": {
       "description": "Controls whether the TUI uses the terminal's alternate screen buffer.\n\n**Background:** The alternate screen buffer provides a cleaner fullscreen experience without polluting the terminal's scrollback history. However, it conflicts with terminal multiplexers like Zellij that strictly follow the xterm specification, which defines that alternate screen buffers should not have scrollback.\n\n**Zellij's behavior:** Zellij intentionally disables scrollback in alternate screen mode (see https://github.com/zellij-org/zellij/pull/1032) to comply with the xterm spec. This is by design and not configurable in Zellij—there is no option to enable scrollback in alternate screen mode.\n\n**Solution:** This setting provides a pragmatic workaround: - `auto` (default): Automatically detect the terminal multiplexer. If running in Zellij, disable alternate screen to preserve scrollback. Enable it everywhere else. - `always`: Always use alternate screen mode (original behavior before this fix). - `never`: Never use alternate screen mode. Runs in inline mode, preserving scrollback in all multiplexers.\n\nThe CLI flag `--no-alt-screen` can override this setting at runtime.",
@@ -537,9 +568,6 @@
         "experimental_compact_prompt_file": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
-        "experimental_instructions_file": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        },
         "experimental_use_freeform_apply_patch": {
           "type": "boolean"
         },
@@ -596,6 +624,9 @@
             "remote_models": {
               "type": "boolean"
             },
+            "responses_websockets": {
+              "type": "boolean"
+            },
             "shell_snapshot": {
               "type": "boolean"
             },
@@ -631,6 +662,17 @@
         },
         "model": {
           "type": "string"
+        },
+        "model_instructions_file": {
+          "description": "Optional path to a file containing model instructions.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ]
+        },
+        "model_personality": {
+          "$ref": "#/definitions/Personality"
         },
         "model_provider": {
           "description": "The key in the `model_providers` map identifying the [`ModelProviderInfo`] to use.",
@@ -1050,6 +1092,13 @@
         }
       },
       "additionalProperties": false
+    },
+    "Personality": {
+      "type": "string",
+      "enum": [
+        "friendly",
+        "pragmatic"
+      ]
     },
     "ProjectConfig": {
       "type": "object",
