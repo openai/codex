@@ -14,21 +14,16 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
-    pub(crate) thread_name: Option<String>,
 }
 
 impl SessionState {
     /// Create a new session state mirroring previous `State::default()` semantics.
-    pub(crate) fn new(
-        session_configuration: SessionConfiguration,
-        thread_name: Option<String>,
-    ) -> Self {
+    pub(crate) fn new(session_configuration: SessionConfiguration) -> Self {
         let history = ContextManager::new();
         Self {
             session_configuration,
             history,
             latest_rate_limits: None,
-            thread_name,
         }
     }
 

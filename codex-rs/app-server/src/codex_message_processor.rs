@@ -1576,15 +1576,14 @@ impl CodexMessageProcessor {
 
     async fn thread_set_name(&self, request_id: RequestId, params: ThreadSetNameParams) {
         let ThreadSetNameParams { thread_id, name } = params;
-        let trimmed = name.trim();
-        if trimmed.is_empty() {
+        let Some(name) = codex_core::util::normalize_thread_name(&name) else {
             self.send_invalid_request_error(
                 request_id,
                 "thread name must not be empty".to_string(),
             )
             .await;
             return;
-        }
+        };
 
         let (_, thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
@@ -1594,12 +1593,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        if let Err(err) = thread
-            .submit(Op::SetThreadName {
-                name: trimmed.to_string(),
-            })
-            .await
-        {
+        if let Err(err) = thread.submit(Op::SetThreadName { name }).await {
             self.send_internal_error(request_id, format!("failed to set thread name: {err}"))
                 .await;
             return;

@@ -637,8 +637,8 @@ impl ChatWidget {
     fn on_thread_name_updated(&mut self, event: codex_core::protocol::ThreadNameUpdatedEvent) {
         if self.thread_id == Some(event.thread_id) {
             self.thread_name = event.thread_name;
+            self.request_redraw();
         }
-        self.request_redraw();
     }
 
     fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
@@ -2214,9 +2214,18 @@ impl ChatWidget {
 
     fn show_rename_prompt(&mut self) {
         let tx = self.app_event_tx.clone();
+        let has_name = self
+            .thread_name
+            .as_ref()
+            .is_some_and(|name| !name.is_empty());
+        let title = if has_name {
+            "Rename thread"
+        } else {
+            "Name thread"
+        };
         let view = CustomPromptView::new(
-            "Rename thread".to_string(),
-            "Type a new name and press Enter".to_string(),
+            title.to_string(),
+            "Type a name and press Enter".to_string(),
             None,
             Box::new(move |name: String| {
                 tx.send(AppEvent::InsertHistoryCell(Box::new(

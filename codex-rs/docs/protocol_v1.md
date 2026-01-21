@@ -133,10 +133,6 @@ sequenceDiagram
     task->>-user: Event::TurnComplete
 ```
 
-### Session Metadata
-
-Sessions may include an optional user-facing name. `Event::SessionConfigured` can include `thread_name` when available, and clients may receive `Event::ThreadNameUpdated` when the thread name changes. When unset, `thread_name` is omitted (not sent as `null`). Thread names accept any non-empty string and are persisted in `CODEX_HOME/session_index.jsonl` as an append-only index where the newest entry wins.
-
 ### Task Interrupt
 
 Interrupting a task and continuing with additional user input.

@@ -291,6 +291,7 @@ impl Codex {
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source,
         };
@@ -459,6 +460,8 @@ pub(crate) struct SessionConfiguration {
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
     cwd: PathBuf,
+    /// Optional user-facing name for the thread, updated during the session.
+    thread_name: Option<String>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -467,6 +470,10 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
+    pub(crate) fn codex_home(&self) -> &PathBuf {
+        &self.original_config_do_not_use.codex_home
+    }
+
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
         if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
@@ -509,6 +516,11 @@ impl Session {
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.features = config.features.clone();
         per_turn_config
+    }
+
+    pub(crate) async fn codex_home(&self) -> PathBuf {
+        let state = self.state.lock().await;
+        state.session_configuration.codex_home().clone()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -567,7 +579,7 @@ impl Session {
 
     #[allow(clippy::too_many_arguments)]
     async fn new(
-        session_configuration: SessionConfiguration,
+        mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
@@ -705,10 +717,10 @@ impl Session {
                     None
                 }
             };
-        let state = SessionState::new(session_configuration.clone(), thread_name.clone());
+        session_configuration.thread_name = thread_name.clone();
+        let state = SessionState::new(session_configuration.clone());
 
         let services = SessionServices {
-            codex_home: config.codex_home.clone(),
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
@@ -745,7 +757,7 @@ impl Session {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 forked_from_id,
-                thread_name,
+                thread_name: session_configuration.thread_name.clone(),
                 model: session_configuration.collaboration_mode.model().to_string(),
                 model_provider_id: config.model_provider_id.clone(),
                 approval_policy: session_configuration.approval_policy.value(),
@@ -2452,12 +2464,11 @@ mod handlers {
     /// a `ThreadNameUpdated` event on success.
     ///
     /// This appends the name to `CODEX_HOME/sessions_index.jsonl` via `session_index::append_thread_name` for the
-    /// current `thread_id`, then updates `SessionState::thread_name`.
+    /// current `thread_id`, then updates `SessionConfiguration::thread_name`.
     ///
     /// Returns an error event if the name is empty or session persistence is disabled.
     pub async fn set_thread_name(sess: &Arc<Session>, sub_id: String, name: String) {
-        let name = name.trim().to_string();
-        if name.is_empty() {
+        let Some(name) = crate::util::normalize_thread_name(&name) else {
             let event = Event {
                 id: sub_id,
                 msg: EventMsg::Error(ErrorEvent {
@@ -2467,7 +2478,7 @@ mod handlers {
             };
             sess.send_event_raw(event).await;
             return;
-        }
+        };
 
         let persistence_enabled = sess.services.rollout.lock().await.is_some();
         if !persistence_enabled {
@@ -2482,12 +2493,9 @@ mod handlers {
             return;
         };
 
-        if let Err(e) = session_index::append_thread_name(
-            &sess.services.codex_home,
-            sess.conversation_id,
-            &name,
-        )
-        .await
+        let codex_home = sess.codex_home().await;
+        if let Err(e) =
+            session_index::append_thread_name(&codex_home, sess.conversation_id, &name).await
         {
             let event = Event {
                 id: sub_id,
@@ -2502,7 +2510,7 @@ mod handlers {
 
         {
             let mut state = sess.state.lock().await;
-            state.thread_name = Some(name.clone());
+            state.session_configuration.thread_name = Some(name.clone());
         }
 
         sess.send_event_raw(Event {
@@ -3613,11 +3621,12 @@ mod tests {
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
         };
 
-        let mut state = SessionState::new(session_configuration, None);
+        let mut state = SessionState::new(session_configuration);
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 10.0,
@@ -3684,11 +3693,12 @@ mod tests {
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
         };
 
-        let mut state = SessionState::new(session_configuration, None);
+        let mut state = SessionState::new(session_configuration);
         let initial = RateLimitSnapshot {
             primary: Some(RateLimitWindow {
                 used_percent: 15.0,
@@ -3939,6 +3949,7 @@ mod tests {
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
         };
@@ -3954,11 +3965,10 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let state = SessionState::new(session_configuration.clone(), None);
+        let state = SessionState::new(session_configuration.clone());
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let services = SessionServices {
-            codex_home: config.codex_home.clone(),
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
@@ -4040,6 +4050,7 @@ mod tests {
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
         };
@@ -4055,11 +4066,10 @@ mod tests {
             session_configuration.session_source.clone(),
         );
 
-        let state = SessionState::new(session_configuration.clone(), None);
+        let state = SessionState::new(session_configuration.clone());
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let services = SessionServices {
-            codex_home: config.codex_home.clone(),
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),

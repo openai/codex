@@ -80,7 +80,7 @@ Example (from OpenAI's official VSCode extension):
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders` filtering.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
-- `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success.
+- `thread/name/set` — set or update a thread’s user-facing name; returns `{}` on success. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.

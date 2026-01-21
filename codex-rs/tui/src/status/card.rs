@@ -352,6 +352,7 @@ impl HistoryCell for StatusHistoryCell {
                 .map(str::to_string)
                 .collect();
         let mut seen: BTreeSet<String> = labels.iter().cloned().collect();
+        let thread_name = self.thread_name.as_deref().filter(|name| !name.is_empty());
 
         if self.model_provider.is_some() {
             push_label(&mut labels, &mut seen, "Model provider");
@@ -359,7 +360,9 @@ impl HistoryCell for StatusHistoryCell {
         if account_value.is_some() {
             push_label(&mut labels, &mut seen, "Account");
         }
-        push_label(&mut labels, &mut seen, "Thread name");
+        if thread_name.is_some() {
+            push_label(&mut labels, &mut seen, "Thread name");
+        }
         if self.session_id.is_some() {
             push_label(&mut labels, &mut seen, "Session");
         }
@@ -415,8 +418,9 @@ impl HistoryCell for StatusHistoryCell {
             lines.push(formatter.line("Account", vec![Span::from(account_value)]));
         }
 
-        let thread_name = self.thread_name.as_deref().unwrap_or("<none>");
-        lines.push(formatter.line("Thread name", vec![Span::from(thread_name.to_string())]));
+        if let Some(thread_name) = thread_name {
+            lines.push(formatter.line("Thread name", vec![Span::from(thread_name.to_string())]));
+        }
         if let Some(session) = self.session_id.as_ref() {
             lines.push(formatter.line("Session", vec![Span::from(session.clone())]));
         }

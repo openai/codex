@@ -93,6 +93,7 @@ pub mod turn_diff_tracker;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;
+pub use rollout::RolloutRecorderParams;
 pub use rollout::SESSIONS_SUBDIR;
 pub use rollout::SessionMeta;
 #[deprecated(note = "use find_thread_path_by_id_str")]

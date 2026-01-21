@@ -15,7 +15,6 @@ expression: sanitized
 │  Approval:         on-request                                         │
 │  Sandbox:          read-only                                          │
 │  Agents.md:        <none>                                             │
-│  Thread name:      <none>                                             │
 │                                                                       │
 │  Token usage:      750 total  (500 input + 250 output)                │
 │  Context window:   100% left (750 used / 272K)                        │

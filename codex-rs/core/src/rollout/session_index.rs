@@ -20,6 +20,8 @@ pub struct SessionIndexEntry {
     pub updated_at: String,
 }
 
+/// Append a thread name update to the session index.
+/// The index is append-only; the most recent entry wins when resolving names or ids.
 pub async fn append_thread_name(
     codex_home: &Path,
     thread_id: ThreadId,
@@ -39,6 +41,8 @@ pub async fn append_thread_name(
     append_session_index_entry(codex_home, &entry).await
 }
 
+/// Append a raw session index entry to `session_index.jsonl`.
+/// The file is append-only; consumers scan from the end to find the newest match.
 pub async fn append_session_index_entry(
     codex_home: &Path,
     entry: &SessionIndexEntry,
@@ -56,6 +60,7 @@ pub async fn append_session_index_entry(
     Ok(())
 }
 
+/// Find the latest thread name for a thread id, if any.
 pub async fn find_thread_name_by_id(
     codex_home: &Path,
     thread_id: &ThreadId,
@@ -71,6 +76,7 @@ pub async fn find_thread_name_by_id(
     Ok(entry.map(|entry| entry.thread_name))
 }
 
+/// Find the most recently updated thread id for a thread name, if any.
 pub async fn find_thread_id_by_name(
     codex_home: &Path,
     name: &str,
