@@ -2327,8 +2327,7 @@ pub struct ToolRequestUserInputParams {
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL. Captures a user's answer to a request_user_input question.
 pub struct ToolRequestUserInputAnswer {
-    pub selected: Vec<String>,
-    pub other: Option<String>,
+    pub answers: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
