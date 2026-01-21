@@ -17047,6 +17047,16 @@ async fn rerank_bugs_by_risk(
     let mut logs: Vec<String> = Vec::new();
     let mut decisions: HashMap<usize, RiskDecision> = HashMap::new();
     if total_chunks > 0 {
+        let rerank_reasoning_label = reasoning_effort_label(normalize_reasoning_effort_for_model(
+            model,
+            reasoning_effort,
+        ));
+        push_progress_log(
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+            format!("Running risk rerank (model: {model}, reasoning: {rerank_reasoning_label})."),
+        );
         push_progress_log(
             &progress_sender,
             &log_sink,
@@ -17055,6 +17065,11 @@ async fn rerank_bugs_by_risk(
                 "Risk rerank starting for {} finding(s) with concurrency {max_concurrency}.",
                 summaries.len()
             ),
+        );
+        emit_progress_log(
+            &progress_sender,
+            &log_sink,
+            format!("  └ Launching parallel risk rerank ({max_concurrency} workers)"),
         );
     }
 
@@ -17100,12 +17115,15 @@ async fn rerank_bugs_by_risk(
             && (completed_findings >= total_findings || completed_findings.is_multiple_of(5))
         {
             let clamped_completed = completed_findings.min(total_findings);
+            let percent = if total_findings == 0 {
+                0
+            } else {
+                (clamped_completed * 100) / total_findings
+            };
             emit_progress_log(
                 &progress_sender,
                 &log_sink,
-                format!(
-                    "Risk rerank progress: {clamped_completed}/{total_findings} finding(s) complete.",
-                ),
+                format!("Risk rerank progress: {clamped_completed}/{total_findings} - {percent}%.",),
             );
         }
 
