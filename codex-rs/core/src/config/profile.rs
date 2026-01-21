@@ -27,6 +27,10 @@ pub struct ConfigProfile {
     pub model_verbosity: Option<Verbosity>,
     pub model_personality: Option<Personality>,
     pub chatgpt_base_url: Option<String>,
+    /// Optional path to a file containing model instructions.
+    pub model_instructions_file: Option<AbsolutePathBuf>,
+    /// Deprecated: ignored. Use `model_instructions_file`.
+    #[schemars(skip)]
     pub experimental_instructions_file: Option<AbsolutePathBuf>,
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub include_apply_patch_tool: Option<bool>,

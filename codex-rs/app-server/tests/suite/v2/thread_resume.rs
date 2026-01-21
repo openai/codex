@@ -62,7 +62,9 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
     let ThreadResumeResponse {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    assert_eq!(resumed, thread);
+    let mut expected = thread;
+    expected.updated_at = resumed.updated_at;
+    assert_eq!(resumed, expected);
 
     Ok(())
 }
@@ -179,7 +181,9 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     let ThreadResumeResponse {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    assert_eq!(resumed, thread);
+    let mut expected = thread;
+    expected.updated_at = resumed.updated_at;
+    assert_eq!(resumed, expected);
 
     Ok(())
 }

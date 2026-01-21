@@ -656,7 +656,7 @@ mod unit_tests {
         let contents = r#"
 # This is a field recognized by config.toml that is an AbsolutePathBuf in
 # the ConfigToml struct.
-experimental_instructions_file = "./some_file.md"
+model_instructions_file = "./some_file.md"
 
 # This is a field recognized by config.toml.
 model = "gpt-1000"
@@ -669,7 +669,7 @@ foo = "xyzzy"
         let normalized_toml_value = resolve_relative_paths_in_config_toml(user_config, base_dir)?;
         let mut expected_toml_value = toml::map::Map::new();
         expected_toml_value.insert(
-            "experimental_instructions_file".to_string(),
+            "model_instructions_file".to_string(),
             TomlValue::String(
                 AbsolutePathBuf::resolve_path_against_base("./some_file.md", base_dir)?
                     .as_path()

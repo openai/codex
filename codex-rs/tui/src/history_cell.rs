@@ -1123,7 +1123,9 @@ impl HistoryCell for SessionHeaderHistoryCell {
                 label_width = label_width
             );
             let mut spans = vec![Span::from(format!("{collab_label} ")).dim()];
-            if let Some(mode_label) = self.collaboration_mode_label() {
+            if self.model == "loading" {
+                spans.push(Span::styled(self.model.clone(), self.model_style));
+            } else if let Some(mode_label) = self.collaboration_mode_label() {
                 spans.push(Span::styled(mode_label.to_string(), self.model_style));
             } else {
                 spans.push(Span::styled("Custom", self.model_style));

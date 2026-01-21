@@ -19,6 +19,7 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::key_hint;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
@@ -27,6 +28,7 @@ use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
 use crate::tooltips;
+use crate::ui_consts::DEFAULT_MODEL_DISPLAY_NAME;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
@@ -40,11 +42,13 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::user_input::TextElement;
+use crossterm::event::KeyCode;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -971,6 +975,8 @@ pub(crate) fn new_session_info(
     requested_model: &str,
     event: SessionConfiguredEvent,
     is_first_event: bool,
+    is_collaboration: bool,
+    collaboration_mode: CollaborationMode,
 ) -> SessionInfoCell {
     let SessionConfiguredEvent {
         model,
@@ -984,6 +990,8 @@ pub(crate) fn new_session_info(
         reasoning_effort,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
+        is_collaboration,
+        collaboration_mode,
     );
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
@@ -1060,6 +1068,8 @@ pub(crate) struct SessionHeaderHistoryCell {
     model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
+    is_collaboration: bool,
+    collaboration_mode: CollaborationMode,
 }
 
 impl SessionHeaderHistoryCell {
@@ -1069,8 +1079,18 @@ impl SessionHeaderHistoryCell {
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
         version: &'static str,
+        is_collaboration: bool,
+        collaboration_mode: CollaborationMode,
     ) -> Self {
-        Self::new_with_style(model, model_style, reasoning_effort, directory, version)
+        Self::new_with_style(
+            model,
+            model_style,
+            reasoning_effort,
+            directory,
+            version,
+            is_collaboration,
+            collaboration_mode,
+        )
     }
 
     pub(crate) fn new_with_style(
@@ -1079,6 +1099,8 @@ impl SessionHeaderHistoryCell {
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
         version: &'static str,
+        is_collaboration: bool,
+        collaboration_mode: CollaborationMode,
     ) -> Self {
         Self {
             version,
@@ -1086,6 +1108,20 @@ impl SessionHeaderHistoryCell {
             model_style,
             reasoning_effort,
             directory,
+            is_collaboration,
+            collaboration_mode,
+        }
+    }
+
+    fn collaboration_mode_label(&self) -> Option<&'static str> {
+        if !self.is_collaboration {
+            return None;
+        }
+        match &self.collaboration_mode {
+            CollaborationMode::Plan(_) => Some("Plan"),
+            CollaborationMode::PairProgramming(_) => Some("Pair Programming"),
+            CollaborationMode::Execute(_) => Some("Execute"),
+            CollaborationMode::Custom(_) => None,
         }
     }
 
@@ -1146,25 +1182,48 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
+        const CHANGE_MODE_HINT_EXPLANATION: &str = " to change mode";
         const DIR_LABEL: &str = "directory:";
         let label_width = DIR_LABEL.len();
-        let model_label = format!(
-            "{model_label:<label_width$}",
-            model_label = "model:",
-            label_width = label_width
-        );
-        let reasoning_label = self.reasoning_label();
-        let mut model_spans: Vec<Span<'static>> = vec![
-            Span::from(format!("{model_label} ")).dim(),
-            Span::styled(self.model.clone(), self.model_style),
-        ];
-        if let Some(reasoning) = reasoning_label {
-            model_spans.push(Span::from(" "));
-            model_spans.push(Span::from(reasoning));
-        }
-        model_spans.push("   ".dim());
-        model_spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
-        model_spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
+        let model_spans: Vec<Span<'static>> = if self.is_collaboration {
+            let collab_label = format!(
+                "{collab_label:<label_width$}",
+                collab_label = "mode:",
+                label_width = label_width
+            );
+            let mut spans = vec![Span::from(format!("{collab_label} ")).dim()];
+            if self.model == DEFAULT_MODEL_DISPLAY_NAME {
+                spans.push(Span::styled(self.model.clone(), self.model_style));
+            } else if let Some(mode_label) = self.collaboration_mode_label() {
+                spans.push(Span::styled(mode_label.to_string(), self.model_style));
+            } else {
+                spans.push(Span::styled("Custom", self.model_style));
+            }
+            spans.push("   ".dim());
+            let shift_tab_span: Span<'static> = key_hint::shift(KeyCode::Tab).into();
+            spans.push(shift_tab_span.cyan());
+            spans.push(CHANGE_MODE_HINT_EXPLANATION.dim());
+            spans
+        } else {
+            let model_label = format!(
+                "{model_label:<label_width$}",
+                model_label = "model:",
+                label_width = label_width
+            );
+            let reasoning_label = self.reasoning_label();
+            let mut spans = vec![
+                Span::from(format!("{model_label} ")).dim(),
+                Span::styled(self.model.clone(), self.model_style),
+            ];
+            if let Some(reasoning) = reasoning_label {
+                spans.push(Span::from(" "));
+                spans.push(Span::from(reasoning));
+            }
+            spans.push("   ".dim());
+            spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
+            spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
+            spans
+        };
 
         let dir_label = format!("{DIR_LABEL:<label_width$}");
         let dir_prefix = format!("{dir_label} ");
@@ -1893,11 +1952,14 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
+    use crate::ui_consts::DEFAULT_MODEL_DISPLAY_NAME;
     use codex_core::config::Config;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
     use codex_core::protocol::McpAuthStatus;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::Settings;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
@@ -1917,6 +1979,22 @@ mod tests {
             .build()
             .await
             .expect("config")
+    }
+
+    fn default_collaboration_mode(model: &str) -> CollaborationMode {
+        CollaborationMode::Custom(Settings {
+            model: model.to_string(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        })
+    }
+
+    fn plan_collaboration_mode(model: &str) -> CollaborationMode {
+        CollaborationMode::Plan(Settings {
+            model: model.to_string(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        })
     }
 
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -2420,6 +2498,8 @@ mod tests {
             Some(ReasoningEffortConfig::High),
             std::env::temp_dir(),
             "test",
+            false,
+            default_collaboration_mode("gpt-4o"),
         );
 
         let lines = render_lines(&cell.display_lines(80));
@@ -2430,6 +2510,51 @@ mod tests {
 
         assert!(model_line.contains("gpt-4o high"));
         assert!(model_line.contains("/model to change"));
+    }
+
+    #[test]
+    fn session_header_collaboration_mode_includes_label_and_hint() {
+        let cell = SessionHeaderHistoryCell::new(
+            "gpt-4o".to_string(),
+            Style::default(),
+            None,
+            std::env::temp_dir(),
+            "test",
+            true,
+            plan_collaboration_mode("gpt-4o"),
+        );
+
+        let lines = render_lines(&cell.display_lines(80));
+        let mode_line = lines
+            .into_iter()
+            .find(|line| line.contains("mode:"))
+            .expect("mode line");
+
+        assert!(mode_line.contains("Plan"));
+        assert!(mode_line.contains("shift + tab"));
+        assert!(mode_line.contains("to change mode"));
+    }
+
+    #[test]
+    fn session_header_collaboration_mode_uses_placeholder_when_loading() {
+        let cell = SessionHeaderHistoryCell::new(
+            DEFAULT_MODEL_DISPLAY_NAME.to_string(),
+            Style::default(),
+            None,
+            std::env::temp_dir(),
+            "test",
+            true,
+            plan_collaboration_mode("gpt-4o"),
+        );
+
+        let lines = render_lines(&cell.display_lines(80));
+        let mode_line = lines
+            .into_iter()
+            .find(|line| line.contains("mode:"))
+            .expect("mode line");
+
+        assert!(mode_line.contains(DEFAULT_MODEL_DISPLAY_NAME));
+        assert!(!mode_line.contains("Plan"));
     }
 
     #[test]
