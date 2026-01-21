@@ -163,8 +163,7 @@ const CLASSIFICATION_PROMPT_SPEC_LIMIT: usize = 16_000;
 const BUG_RERANK_CHUNK_SIZE: usize = 1;
 const BUG_RERANK_MAX_CONCURRENCY: usize = 32;
 const BUG_RERANK_CONTEXT_MAX_CHARS: usize = 6_000;
-const BUG_RERANK_MAX_TOOL_ROUNDS: usize = 4;
-const BUG_RERANK_MAX_COMMAND_ERRORS: usize = 5;
+const BUG_RERANK_MAX_COMMAND_ERRORS: usize = 10;
 const SPEC_COMBINE_MAX_TOOL_ROUNDS: usize = 6;
 const SPEC_COMBINE_MAX_COMMAND_ERRORS: usize = 5;
 // see BUG_RERANK_PROMPT_TEMPLATE in security_prompts
@@ -16594,33 +16593,11 @@ async fn run_risk_rerank_chunk(
     let mut seen_search_requests: HashSet<String> = HashSet::new();
     let mut seen_read_requests: HashSet<String> = HashSet::new();
     let mut command_error_count = 0usize;
-    let mut tool_rounds = 0usize;
     let mut logs: Vec<String> = Vec::new();
 
-    let id_list = ids
-        .iter()
-        .map(std::string::ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
     let repo_display = repo_root.display().to_string();
 
     loop {
-        if tool_rounds > BUG_RERANK_MAX_TOOL_ROUNDS {
-            push_progress_log(
-                &progress_sender,
-                &log_sink,
-                &mut logs,
-                format!(
-                    "Risk rerank chunk for bug id(s) {id_list} exceeded {BUG_RERANK_MAX_TOOL_ROUNDS} tool rounds."
-                ),
-            );
-            return Err(RiskRerankChunkFailure {
-                ids,
-                error: format!("Risk rerank exceeded {BUG_RERANK_MAX_TOOL_ROUNDS} tool rounds"),
-                logs,
-            });
-        }
-
         let mut prompt = base_prompt.clone();
         if !conversation.is_empty() {
             prompt.push_str("\n\n# Conversation history\n");
@@ -16683,9 +16660,11 @@ async fn run_risk_rerank_chunk(
         let (after_read, read_requests) = extract_read_requests(&text);
         let (cleaned_text, search_requests) = parse_search_requests(&after_read);
 
-        let mut executed_command = false;
+        let mut saw_tool_request = false;
+        let mut executed_new_tool = false;
 
         for request in read_requests {
+            saw_tool_request = true;
             let cmd_label = request.command.label();
             let key = request.dedupe_key();
             if !seen_read_requests.insert(key) {
@@ -16702,11 +16681,10 @@ async fn run_risk_rerank_chunk(
                     "Tool {cmd_label} `{}` already provided earlier.",
                     request.path.display()
                 ));
-                executed_command = true;
                 continue;
             }
 
-            executed_command = true;
+            executed_new_tool = true;
             match execute_auto_scope_read(
                 &repo_root,
                 &request.path,
@@ -16762,6 +16740,7 @@ async fn run_risk_rerank_chunk(
 
         let mut new_requests: Vec<ToolRequest> = Vec::new();
         for request in search_requests {
+            saw_tool_request = true;
             let key = request.dedupe_key();
             if seen_search_requests.insert(key) {
                 new_requests.push(request);
@@ -16807,11 +16786,11 @@ async fn run_risk_rerank_chunk(
                             .push(format!("Tool GREP_FILES {shown} already provided earlier."));
                     }
                 }
-                executed_command = true;
             }
         }
 
         for request in new_requests {
+            executed_new_tool = true;
             if let Some(reason) = request.reason()
                 && !reason.trim().is_empty()
             {
@@ -16829,7 +16808,6 @@ async fn run_risk_rerank_chunk(
 
             match request {
                 ToolRequest::Content { term, mode, .. } => {
-                    executed_command = true;
                     let display_term = summarize_search_term(&term, 80);
                     push_progress_log(
                         &progress_sender,
@@ -16898,7 +16876,6 @@ async fn run_risk_rerank_chunk(
                     }
                 }
                 ToolRequest::GrepFiles { args, .. } => {
-                    executed_command = true;
                     let mut shown = serde_json::json!({
                         "pattern": args.pattern,
                     });
@@ -16964,8 +16941,12 @@ async fn run_risk_rerank_chunk(
             }
         }
 
-        if executed_command {
-            tool_rounds += 1;
+        if saw_tool_request {
+            if !executed_new_tool {
+                conversation.push(
+                    "Note:\nAll requested tool outputs above were already provided. Return the final JSON Lines output without requesting more tools.".to_string(),
+                );
+            }
             continue;
         }
 
