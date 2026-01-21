@@ -7,6 +7,7 @@ pub enum TransportError {
     #[error("http {status}: {body:?}")]
     Http {
         status: StatusCode,
+        url: Option<String>,
         headers: Option<HeaderMap>,
         body: Option<String>,
     },

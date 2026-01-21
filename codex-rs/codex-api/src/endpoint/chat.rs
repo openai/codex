@@ -87,6 +87,7 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
                 extra_headers,
                 RequestCompression::None,
                 spawn_chat_stream,
+                None,
             )
             .await
     }
@@ -155,6 +156,9 @@ impl Stream for AggregatedStream {
                     }
 
                     return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item))));
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::ServerReasoningIncluded(included)))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::ServerReasoningIncluded(included))));
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot)))) => {
                     return Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot))));

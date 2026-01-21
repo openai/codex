@@ -21,8 +21,10 @@ pub enum SlashCommand {
     Review,
     New,
     Resume,
+    Fork,
     Init,
     Compact,
+    Collab,
     // Undo,
     Diff,
     Mention,
@@ -47,6 +49,7 @@ impl SlashCommand {
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Resume => "resume a saved chat",
+            SlashCommand::Fork => "fork the current chat",
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
@@ -55,6 +58,7 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::Experimental => "toggle beta features",
@@ -76,6 +80,7 @@ impl SlashCommand {
         match self {
             SlashCommand::New
             | SlashCommand::Resume
+            | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
             // | SlashCommand::Undo
@@ -96,6 +101,7 @@ impl SlashCommand {
             | SlashCommand::Exit => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
+            SlashCommand::Collab => true,
         }
     }
 

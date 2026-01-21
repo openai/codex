@@ -14,4 +14,7 @@ codex_rust_crate(
     ),
     test_data_extra = glob(["src/**/snapshots/**"]),
     integration_compile_data_extra = ["src/test_backend.rs"],
+    extra_binaries = [
+        "//codex-rs/cli:codex",
+    ],
 )

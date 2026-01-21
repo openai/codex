@@ -1,6 +1,6 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
-use app_test_support::create_fake_rollout;
+use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -15,6 +15,9 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::user_input::ByteRange;
+use codex_protocol::user_input::TextElement;
+use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -59,7 +62,9 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
     let ThreadResumeResponse {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    assert_eq!(resumed, thread);
+    let mut expected = thread;
+    expected.updated_at = resumed.updated_at;
+    assert_eq!(resumed, expected);
 
     Ok(())
 }
@@ -71,11 +76,19 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let preview = "Saved user message";
-    let conversation_id = create_fake_rollout(
+    let text_elements = vec![TextElement::new(
+        ByteRange { start: 0, end: 5 },
+        Some("<note>".into()),
+    )];
+    let conversation_id = create_fake_rollout_with_text_elements(
         codex_home.path(),
         "2025-01-05T12-00-00",
         "2025-01-05T12:00:00Z",
         preview,
+        text_elements
+            .iter()
+            .map(|elem| serde_json::to_value(elem).expect("serialize text element"))
+            .collect(),
         Some("mock_provider"),
         None,
     )?;
@@ -118,7 +131,8 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
             assert_eq!(
                 content,
                 &vec![UserInput::Text {
-                    text: preview.to_string()
+                    text: preview.to_string(),
+                    text_elements: text_elements.clone().into_iter().map(Into::into).collect(),
                 }]
             );
         }
@@ -167,7 +181,9 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     let ThreadResumeResponse {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    assert_eq!(resumed, thread);
+    let mut expected = thread;
+    expected.updated_at = resumed.updated_at;
+    assert_eq!(resumed, expected);
 
     Ok(())
 }

@@ -1,3 +1,15 @@
+//! Transcript/history cells for the Codex TUI.
+//!
+//! A `HistoryCell` is the unit of display in the conversation UI, representing both committed
+//! transcript entries and, transiently, an in-flight active cell that can mutate in place while
+//! streaming.
+//!
+//! The transcript overlay (`Ctrl+T`) appends a cached live tail derived from the active cell, and
+//! that cached tail is refreshed based on an active-cell cache key. Cells that change based on
+//! elapsed time expose `transcript_animation_tick()`, and code that mutates the active cell in place
+//! bumps the active-cell revision tracked by `ChatWidget`, so the cache key changes whenever the
+//! rendered transcript output can change.
+
 use crate::diff_render::create_diff_summary;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -7,6 +19,7 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::key_hint;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
@@ -15,6 +28,7 @@ use crate::style::user_message_style;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
 use crate::tooltips;
+use crate::ui_consts::DEFAULT_MODEL_DISPLAY_NAME;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
@@ -28,10 +42,13 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::user_input::TextElement;
+use crossterm::event::KeyCode;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -39,6 +56,7 @@ use mcp_types::Resource;
 use mcp_types::ResourceLink;
 use mcp_types::ResourceTemplate;
 use ratatui::prelude::*;
+use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Styled;
@@ -58,33 +76,26 @@ use unicode_width::UnicodeWidthStr;
 /// Visual transcript lines plus soft-wrap joiners.
 ///
 /// A history cell can produce multiple "visual lines" once prefixes/indents and wrapping are
-/// applied. Clipboard reconstruction needs more information than just those lines: users expect
-/// soft-wrapped prose to copy as a single logical line, while explicit newlines and spacer rows
-/// should remain hard breaks.
+/// applied. Clipboard reconstruction needs more information than just those lines because users
+/// expect soft-wrapped prose to copy as a single logical line, while explicit newlines and spacer
+/// rows should remain hard breaks.
 ///
 /// `joiner_before` records, for each output line, whether it is a continuation created by the
 /// wrapping algorithm and what string should be inserted at the wrap boundary when joining lines.
 /// This avoids heuristics like always inserting a space, and instead preserves the exact whitespace
 /// that was skipped at the boundary.
 ///
-/// ## Note for `codex-tui` vs `codex-tui2`
+/// In `codex-tui`, `HistoryCell` only exposes `transcript_lines(...)` and the UI generally does not
+/// need to reconstruct clipboard text across off-screen history or soft-wrap boundaries. In
+/// `codex-tui2`, transcript selection and copy are app-driven (not terminal-driven) and may span
+/// content that is not currently visible, so we need extra metadata to distinguish hard breaks from
+/// soft wraps and to preserve the exact whitespace at wrap boundaries.
 ///
-/// In `codex-tui`, `HistoryCell` only exposes `transcript_lines(...)` and the UI generally doesn't
-/// need to reconstruct clipboard text across off-screen history or soft-wrap boundaries.
-///
-/// In `codex-tui2`, transcript selection and copy are app-driven (not terminal-driven) and may span
-/// content that isn't currently visible. That means we need additional metadata to distinguish hard
-/// breaks from soft wraps and to preserve the exact whitespace at wrap boundaries.
-///
-/// Invariants:
-/// - `joiner_before.len() == lines.len()`
-/// - `joiner_before[0]` is always `None`
-/// - `None` represents a hard break
-/// - `Some(joiner)` represents a soft wrap continuation
-///
-/// Consumers:
-/// - `transcript_render` threads joiners through transcript flattening/wrapping.
-/// - `transcript_copy` uses them to join wrapped prose while preserving hard breaks.
+/// The invariant is that `joiner_before.len() == lines.len()` and `joiner_before[0]` is always
+/// `None`. A `None` entry represents a hard break (copy inserts a newline), while `Some(joiner)`
+/// represents a soft wrap continuation (copy inserts `joiner` and continues on the same logical
+/// line). This data is produced by transcript rendering and consumed by transcript copy to keep
+/// clipboard output faithful to what the user saw.
 #[derive(Debug, Clone)]
 pub(crate) struct TranscriptLinesWithJoiners {
     /// Visual transcript lines for a history cell, including any indent/prefix spans.
@@ -162,6 +173,20 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     fn is_stream_continuation(&self) -> bool {
         false
     }
+
+    /// Returns a coarse "animation tick" when transcript output is time-dependent.
+    ///
+    /// The transcript overlay caches the rendered output of the in-flight active cell, so cells
+    /// that include time-based UI (spinner, shimmer, etc.) should return a tick that changes over
+    /// time to signal that the cached tail should be recomputed. Returning `None` means the
+    /// transcript lines are stable, while returning `Some(tick)` during an in-flight animation
+    /// allows the overlay to keep up with the main viewport.
+    ///
+    /// If a cell uses time-based visuals but always returns `None`, `Ctrl+T` can appear "frozen" on
+    /// the first rendered frame even though the main viewport is animating.
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        None
+    }
 }
 
 impl Renderable for Box<dyn HistoryCell> {
@@ -195,6 +220,75 @@ impl dyn HistoryCell {
 #[derive(Debug)]
 pub(crate) struct UserHistoryCell {
     pub message: String,
+    pub text_elements: Vec<TextElement>,
+    #[allow(dead_code)]
+    pub local_image_paths: Vec<PathBuf>,
+}
+
+/// Build logical lines for a user message with styled text elements.
+///
+/// This preserves explicit newlines while interleaving element spans and skips
+/// malformed byte ranges instead of panicking during history rendering.
+fn build_user_message_lines_with_elements(
+    message: &str,
+    elements: &[TextElement],
+    style: Style,
+    element_style: Style,
+) -> Vec<Line<'static>> {
+    let mut elements = elements.to_vec();
+    elements.sort_by_key(|e| e.byte_range.start);
+    let mut offset = 0usize;
+    let mut raw_lines: Vec<Line<'static>> = Vec::new();
+    for line_text in message.split('\n') {
+        let line_start = offset;
+        let line_end = line_start + line_text.len();
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        // Track how much of the line we've emitted to interleave plain and styled spans.
+        let mut cursor = line_start;
+        for elem in &elements {
+            let start = elem.byte_range.start.max(line_start);
+            let end = elem.byte_range.end.min(line_end);
+            if start >= end {
+                continue;
+            }
+            let rel_start = start - line_start;
+            let rel_end = end - line_start;
+            // Guard against malformed UTF-8 byte ranges from upstream data; skip
+            // invalid elements rather than panicking while rendering history.
+            if !line_text.is_char_boundary(rel_start) || !line_text.is_char_boundary(rel_end) {
+                continue;
+            }
+            let rel_cursor = cursor - line_start;
+            if cursor < start
+                && line_text.is_char_boundary(rel_cursor)
+                && let Some(segment) = line_text.get(rel_cursor..rel_start)
+            {
+                spans.push(Span::from(segment.to_string()));
+            }
+            if let Some(segment) = line_text.get(rel_start..rel_end) {
+                spans.push(Span::styled(segment.to_string(), element_style));
+                cursor = end;
+            }
+        }
+        let rel_cursor = cursor - line_start;
+        if cursor < line_end
+            && line_text.is_char_boundary(rel_cursor)
+            && let Some(segment) = line_text.get(rel_cursor..)
+        {
+            spans.push(Span::from(segment.to_string()));
+        }
+        let line = if spans.is_empty() {
+            Line::from(line_text.to_string()).style(style)
+        } else {
+            Line::from(spans).style(style)
+        };
+        raw_lines.push(line);
+        // Split on '\n' so any '\r' stays in the line; advancing by 1 accounts
+        // for the separator byte.
+        offset = line_end + 1;
+    }
+
+    raw_lines
 }
 
 impl HistoryCell for UserHistoryCell {
@@ -210,13 +304,28 @@ impl HistoryCell for UserHistoryCell {
             .max(1);
 
         let style = user_message_style();
+        let element_style = style.fg(Color::Cyan);
 
-        let (wrapped, joiner_before) = crate::wrapping::word_wrap_lines_with_joiners(
-            self.message.lines().map(|l| Line::from(l).style(style)),
-            // Wrap algorithm matches textarea.rs.
-            RtOptions::new(usize::from(wrap_width))
-                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
-        );
+        let (wrapped, joiner_before) = if self.text_elements.is_empty() {
+            crate::wrapping::word_wrap_lines_with_joiners(
+                self.message.split('\n').map(|l| Line::from(l).style(style)),
+                // Wrap algorithm matches textarea.rs.
+                RtOptions::new(usize::from(wrap_width))
+                    .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+            )
+        } else {
+            let raw_lines = build_user_message_lines_with_elements(
+                &self.message,
+                &self.text_elements,
+                style,
+                element_style,
+            );
+            crate::wrapping::word_wrap_lines_with_joiners(
+                raw_lines,
+                RtOptions::new(usize::from(wrap_width))
+                    .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+            )
+        };
 
         let mut lines: Vec<Line<'static>> = Vec::new();
         let mut joins: Vec<Option<String>> = Vec::new();
@@ -866,6 +975,8 @@ pub(crate) fn new_session_info(
     requested_model: &str,
     event: SessionConfiguredEvent,
     is_first_event: bool,
+    is_collaboration: bool,
+    collaboration_mode: CollaborationMode,
 ) -> SessionInfoCell {
     let SessionConfiguredEvent {
         model,
@@ -875,9 +986,12 @@ pub(crate) fn new_session_info(
     // Header box rendered as history (so it appears at the very top)
     let header = SessionHeaderHistoryCell::new(
         model.clone(),
+        Style::default(),
         reasoning_effort,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
+        is_collaboration,
+        collaboration_mode,
     );
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
@@ -935,30 +1049,79 @@ pub(crate) fn new_session_info(
     SessionInfoCell(CompositeHistoryCell { parts })
 }
 
-pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
-    UserHistoryCell { message }
+pub(crate) fn new_user_prompt(
+    message: String,
+    text_elements: Vec<TextElement>,
+    local_image_paths: Vec<PathBuf>,
+) -> UserHistoryCell {
+    UserHistoryCell {
+        message,
+        text_elements,
+        local_image_paths,
+    }
 }
 
 #[derive(Debug)]
-struct SessionHeaderHistoryCell {
+pub(crate) struct SessionHeaderHistoryCell {
     version: &'static str,
     model: String,
+    model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
+    is_collaboration: bool,
+    collaboration_mode: CollaborationMode,
 }
 
 impl SessionHeaderHistoryCell {
-    fn new(
+    pub(crate) fn new(
         model: String,
+        model_style: Style,
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
         version: &'static str,
+        is_collaboration: bool,
+        collaboration_mode: CollaborationMode,
+    ) -> Self {
+        Self::new_with_style(
+            model,
+            model_style,
+            reasoning_effort,
+            directory,
+            version,
+            is_collaboration,
+            collaboration_mode,
+        )
+    }
+
+    pub(crate) fn new_with_style(
+        model: String,
+        model_style: Style,
+        reasoning_effort: Option<ReasoningEffortConfig>,
+        directory: PathBuf,
+        version: &'static str,
+        is_collaboration: bool,
+        collaboration_mode: CollaborationMode,
     ) -> Self {
         Self {
             version,
             model,
+            model_style,
             reasoning_effort,
             directory,
+            is_collaboration,
+            collaboration_mode,
+        }
+    }
+
+    fn collaboration_mode_label(&self) -> Option<&'static str> {
+        if !self.is_collaboration {
+            return None;
+        }
+        match &self.collaboration_mode {
+            CollaborationMode::Plan(_) => Some("Plan"),
+            CollaborationMode::PairProgramming(_) => Some("Pair Programming"),
+            CollaborationMode::Execute(_) => Some("Execute"),
+            CollaborationMode::Custom(_) => None,
         }
     }
 
@@ -1019,25 +1182,48 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
+        const CHANGE_MODE_HINT_EXPLANATION: &str = " to change mode";
         const DIR_LABEL: &str = "directory:";
         let label_width = DIR_LABEL.len();
-        let model_label = format!(
-            "{model_label:<label_width$}",
-            model_label = "model:",
-            label_width = label_width
-        );
-        let reasoning_label = self.reasoning_label();
-        let mut model_spans: Vec<Span<'static>> = vec![
-            Span::from(format!("{model_label} ")).dim(),
-            Span::from(self.model.clone()),
-        ];
-        if let Some(reasoning) = reasoning_label {
-            model_spans.push(Span::from(" "));
-            model_spans.push(Span::from(reasoning));
-        }
-        model_spans.push("   ".dim());
-        model_spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
-        model_spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
+        let model_spans: Vec<Span<'static>> = if self.is_collaboration {
+            let collab_label = format!(
+                "{collab_label:<label_width$}",
+                collab_label = "mode:",
+                label_width = label_width
+            );
+            let mut spans = vec![Span::from(format!("{collab_label} ")).dim()];
+            if self.model == DEFAULT_MODEL_DISPLAY_NAME {
+                spans.push(Span::styled(self.model.clone(), self.model_style));
+            } else if let Some(mode_label) = self.collaboration_mode_label() {
+                spans.push(Span::styled(mode_label.to_string(), self.model_style));
+            } else {
+                spans.push(Span::styled("Custom", self.model_style));
+            }
+            spans.push("   ".dim());
+            let shift_tab_span: Span<'static> = key_hint::shift(KeyCode::Tab).into();
+            spans.push(shift_tab_span.cyan());
+            spans.push(CHANGE_MODE_HINT_EXPLANATION.dim());
+            spans
+        } else {
+            let model_label = format!(
+                "{model_label:<label_width$}",
+                model_label = "model:",
+                label_width = label_width
+            );
+            let reasoning_label = self.reasoning_label();
+            let mut spans = vec![
+                Span::from(format!("{model_label} ")).dim(),
+                Span::styled(self.model.clone(), self.model_style),
+            ];
+            if let Some(reasoning) = reasoning_label {
+                spans.push(Span::from(" "));
+                spans.push(Span::from(reasoning));
+            }
+            spans.push("   ".dim());
+            spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
+            spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
+            spans
+        };
 
         let dir_label = format!("{DIR_LABEL:<label_width$}");
         let dir_prefix = format!("{dir_label} ");
@@ -1253,6 +1439,13 @@ impl HistoryCell for McpToolCallCell {
 
         lines
     }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled || self.result.is_some() {
+            return None;
+        }
+        Some((self.start_time.elapsed().as_millis() / 50) as u64)
+    }
 }
 
 pub(crate) fn new_active_mcp_tool_call(
@@ -1355,7 +1548,8 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         "  • No MCP servers configured.".italic().into(),
         Line::from(vec![
             "    See the ".into(),
-            "\u{1b}]8;;https://github.com/openai/codex/blob/main/docs/config.md#mcp_servers\u{7}MCP docs\u{1b}]8;;\u{7}".underlined(),
+            "\u{1b}]8;;https://developers.openai.com/codex/mcp\u{7}MCP docs\u{1b}]8;;\u{7}"
+                .underlined(),
             " to configure them.".into(),
         ])
         .style(Style::default().add_modifier(Modifier::DIM)),
@@ -1382,7 +1576,6 @@ pub(crate) fn new_mcp_tools_output(
     if tools.is_empty() {
         lines.push("  • No MCP tools available.".italic().into());
         lines.push("".into());
-        return PlainHistoryCell { lines };
     }
 
     let mut servers: Vec<_> = config.mcp_servers.iter().collect();
@@ -1406,6 +1599,9 @@ pub(crate) fn new_mcp_tools_output(
             header.push(" ".into());
             header.push("(disabled)".red());
             lines.push(header.into());
+            if let Some(reason) = cfg.disabled_reason.as_ref().map(ToString::to_string) {
+                lines.push(vec!["    • Reason: ".into(), reason.dim()].into());
+            }
             lines.push(Line::from(""));
             continue;
         }
@@ -1694,10 +1890,16 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
 }
 
 #[derive(Debug)]
+/// A visual divider between turns, optionally showing how long the assistant "worked for".
+///
+/// This separator is only emitted for turns that performed concrete work (e.g., running commands,
+/// applying patches, making MCP tool calls), so purely conversational turns do not show an empty
+/// divider.
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
 }
 impl FinalMessageSeparator {
+    /// Creates a separator; `elapsed_seconds` typically comes from the status indicator timer.
     pub(crate) fn new(elapsed_seconds: Option<u64>) -> Self {
         Self { elapsed_seconds }
     }
@@ -1750,11 +1952,14 @@ mod tests {
     use crate::exec_cell::CommandOutput;
     use crate::exec_cell::ExecCall;
     use crate::exec_cell::ExecCell;
+    use crate::ui_consts::DEFAULT_MODEL_DISPLAY_NAME;
     use codex_core::config::Config;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
     use codex_core::protocol::McpAuthStatus;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::Settings;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
@@ -1774,6 +1979,22 @@ mod tests {
             .build()
             .await
             .expect("config")
+    }
+
+    fn default_collaboration_mode(model: &str) -> CollaborationMode {
+        CollaborationMode::Custom(Settings {
+            model: model.to_string(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        })
+    }
+
+    fn plan_collaboration_mode(model: &str) -> CollaborationMode {
+        CollaborationMode::Plan(Settings {
+            model: model.to_string(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        })
     }
 
     fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
@@ -1931,12 +2152,14 @@ mod tests {
                 cwd: None,
             },
             enabled: true,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
         };
-        config.mcp_servers.insert("docs".to_string(), stdio_config);
+        let mut servers = config.mcp_servers.get().clone();
+        servers.insert("docs".to_string(), stdio_config);
 
         let mut headers = HashMap::new();
         headers.insert("Authorization".to_string(), "Bearer secret".to_string());
@@ -1950,12 +2173,17 @@ mod tests {
                 env_http_headers: Some(env_headers),
             },
             enabled: true,
+            disabled_reason: None,
             startup_timeout_sec: None,
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
         };
-        config.mcp_servers.insert("http".to_string(), http_config);
+        servers.insert("http".to_string(), http_config);
+        config
+            .mcp_servers
+            .set(servers)
+            .expect("test mcp servers should accept any configuration");
 
         let mut tools: HashMap<String, Tool> = HashMap::new();
         tools.insert(
@@ -2266,9 +2494,12 @@ mod tests {
     fn session_header_includes_reasoning_level_when_present() {
         let cell = SessionHeaderHistoryCell::new(
             "gpt-4o".to_string(),
+            Style::default(),
             Some(ReasoningEffortConfig::High),
             std::env::temp_dir(),
             "test",
+            false,
+            default_collaboration_mode("gpt-4o"),
         );
 
         let lines = render_lines(&cell.display_lines(80));
@@ -2279,6 +2510,51 @@ mod tests {
 
         assert!(model_line.contains("gpt-4o high"));
         assert!(model_line.contains("/model to change"));
+    }
+
+    #[test]
+    fn session_header_collaboration_mode_includes_label_and_hint() {
+        let cell = SessionHeaderHistoryCell::new(
+            "gpt-4o".to_string(),
+            Style::default(),
+            None,
+            std::env::temp_dir(),
+            "test",
+            true,
+            plan_collaboration_mode("gpt-4o"),
+        );
+
+        let lines = render_lines(&cell.display_lines(80));
+        let mode_line = lines
+            .into_iter()
+            .find(|line| line.contains("mode:"))
+            .expect("mode line");
+
+        assert!(mode_line.contains("Plan"));
+        assert!(mode_line.contains("shift + tab"));
+        assert!(mode_line.contains("to change mode"));
+    }
+
+    #[test]
+    fn session_header_collaboration_mode_uses_placeholder_when_loading() {
+        let cell = SessionHeaderHistoryCell::new(
+            DEFAULT_MODEL_DISPLAY_NAME.to_string(),
+            Style::default(),
+            None,
+            std::env::temp_dir(),
+            "test",
+            true,
+            plan_collaboration_mode("gpt-4o"),
+        );
+
+        let lines = render_lines(&cell.display_lines(80));
+        let mode_line = lines
+            .into_iter()
+            .find(|line| line.contains("mode:"))
+            .expect("mode line");
+
+        assert!(mode_line.contains(DEFAULT_MODEL_DISPLAY_NAME));
+        assert!(!mode_line.contains("Plan"));
     }
 
     #[test]
@@ -2661,6 +2937,8 @@ mod tests {
         let msg = "one two three four five six seven";
         let cell = UserHistoryCell {
             message: msg.to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
         };
 
         // Small width to force wrapping more clearly. Effective wrap width is width-2 due to the ▌ prefix and trailing space.

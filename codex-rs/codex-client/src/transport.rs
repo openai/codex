@@ -131,6 +131,7 @@ impl HttpTransport for ReqwestTransport {
             );
         }
 
+        let url = req.url.clone();
         let builder = self.build(req)?;
         let resp = builder.send().await.map_err(Self::map_error)?;
         let status = resp.status();
@@ -140,6 +141,7 @@ impl HttpTransport for ReqwestTransport {
             let body = String::from_utf8(bytes.to_vec()).ok();
             return Err(TransportError::Http {
                 status,
+                url: Some(url),
                 headers: Some(headers),
                 body,
             });
@@ -161,6 +163,7 @@ impl HttpTransport for ReqwestTransport {
             );
         }
 
+        let url = req.url.clone();
         let builder = self.build(req)?;
         let resp = builder.send().await.map_err(Self::map_error)?;
         let status = resp.status();
@@ -169,6 +172,7 @@ impl HttpTransport for ReqwestTransport {
             let body = resp.text().await.ok();
             return Err(TransportError::Http {
                 status,
+                url: Some(url),
                 headers: Some(headers),
                 body,
             });

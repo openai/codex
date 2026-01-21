@@ -88,6 +88,7 @@ async fn continue_after_stream_error() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "first message".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -106,6 +107,7 @@ async fn continue_after_stream_error() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "follow up".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })

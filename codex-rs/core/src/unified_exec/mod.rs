@@ -45,6 +45,8 @@ pub(crate) use errors::UnifiedExecError;
 pub(crate) use process::UnifiedExecProcess;
 
 pub(crate) const MIN_YIELD_TIME_MS: u64 = 250;
+// Minimum yield time for an empty `write_stdin`.
+pub(crate) const MIN_EMPTY_YIELD_TIME_MS: u64 = 5_000;
 pub(crate) const MAX_YIELD_TIME_MS: u64 = 30_000;
 pub(crate) const DEFAULT_MAX_OUTPUT_TOKENS: usize = 10_000;
 pub(crate) const UNIFIED_EXEC_OUTPUT_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
@@ -77,6 +79,7 @@ pub(crate) struct ExecCommandRequest {
     pub yield_time_ms: u64,
     pub max_output_tokens: Option<usize>,
     pub workdir: Option<PathBuf>,
+    pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
 }
@@ -130,11 +133,10 @@ impl Default for UnifiedExecProcessManager {
 
 struct ProcessEntry {
     process: Arc<UnifiedExecProcess>,
-    session_ref: Arc<Session>,
-    turn_ref: Arc<TurnContext>,
     call_id: String,
     process_id: String,
     command: Vec<String>,
+    tty: bool,
     last_used: tokio::time::Instant,
 }
 
@@ -200,6 +202,7 @@ mod tests {
                     yield_time_ms,
                     max_output_tokens: None,
                     workdir: None,
+                    tty: true,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     justification: None,
                 },
@@ -351,6 +354,8 @@ mod tests {
     async fn unified_exec_timeouts() -> anyhow::Result<()> {
         skip_if_sandbox!(Ok(()));
 
+        const TEST_VAR_VALUE: &str = "unified_exec_var_123";
+
         let (session, turn) = test_session_and_turn().await;
 
         let open_shell = exec_command(&session, &turn, "bash -i", 2_500).await?;
@@ -363,7 +368,7 @@ mod tests {
         write_stdin(
             &session,
             process_id,
-            "export CODEX_INTERACTIVE_SHELL_VAR=codex\n",
+            format!("export CODEX_INTERACTIVE_SHELL_VAR={TEST_VAR_VALUE}\n").as_str(),
             2_500,
         )
         .await?;
@@ -376,7 +381,7 @@ mod tests {
         )
         .await?;
         assert!(
-            !out_2.output.contains("codex"),
+            !out_2.output.contains(TEST_VAR_VALUE),
             "timeout too short should yield incomplete output"
         );
 
@@ -385,7 +390,7 @@ mod tests {
         let out_3 = write_stdin(&session, process_id, "", 100).await?;
 
         assert!(
-            out_3.output.contains("codex"),
+            out_3.output.contains(TEST_VAR_VALUE),
             "subsequent poll should retrieve output"
         );
 

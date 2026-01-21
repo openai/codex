@@ -25,11 +25,14 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
         ApiError::Api { status, message } => CodexErr::UnexpectedStatus(UnexpectedResponseError {
             status,
             body: message,
+            url: None,
             request_id: None,
         }),
+        ApiError::InvalidRequest { message } => CodexErr::InvalidRequest(message),
         ApiError::Transport(transport) => match transport {
             TransportError::Http {
                 status,
+                url,
                 headers,
                 body,
             } => {
@@ -71,6 +74,7 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                     CodexErr::UnexpectedStatus(UnexpectedResponseError {
                         status,
                         body: body_text,
+                        url,
                         request_id: extract_request_id(headers.as_ref()),
                     })
                 }

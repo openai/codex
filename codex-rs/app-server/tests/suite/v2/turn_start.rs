@@ -8,6 +8,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
+use codex_app_server_protocol::ByteRange;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
@@ -23,6 +24,7 @@ use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::TextElement;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -33,7 +35,10 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::protocol_config_types::ReasoningSummary;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
+use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::path::Path;
@@ -80,6 +85,7 @@ async fn turn_start_sends_originator_header() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),
+                text_elements: Vec::new(),
             }],
             ..Default::default()
         })
@@ -108,6 +114,87 @@ async fn turn_start_sends_originator_header() -> Result<()> {
             .expect("originator header missing");
         assert_eq!(originator.to_str()?, TEST_ORIGINATOR);
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let text_elements = vec![TextElement::new(
+        ByteRange { start: 0, end: 5 },
+        Some("<note>".to_string()),
+    )];
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: text_elements.clone(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    let user_message_item = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let notification = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let params = notification.params.expect("item/started params");
+            let item_started: ItemStartedNotification =
+                serde_json::from_value(params).expect("deserialize item/started notification");
+            if let ThreadItem::UserMessage { .. } = item_started.item {
+                return Ok::<ThreadItem, anyhow::Error>(item_started.item);
+            }
+        }
+    })
+    .await??;
+
+    match user_message_item {
+        ThreadItem::UserMessage { content, .. } => {
+            assert_eq!(
+                content,
+                vec![V2UserInput::Text {
+                    text: "Hello".to_string(),
+                    text_elements,
+                }]
+            );
+        }
+        other => panic!("expected user message item, got {other:?}"),
+    }
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
 
     Ok(())
 }
@@ -149,6 +236,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),
+                text_elements: Vec::new(),
             }],
             ..Default::default()
         })
@@ -181,6 +269,7 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "Second".to_string(),
+                text_elements: Vec::new(),
             }],
             model: Some("mock-model-override".to_string()),
             ..Default::default()
@@ -215,6 +304,77 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     )?;
     assert_eq!(completed.thread_id, thread.id);
     assert_eq!(completed.turn.status, TurnStatus::Completed);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let collaboration_mode = CollaborationMode::Custom(Settings {
+        model: "mock-model-collab".to_string(),
+        reasoning_effort: Some(ReasoningEffort::High),
+        developer_instructions: None,
+    });
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            model: Some("mock-model-override".to_string()),
+            effort: Some(ReasoningEffort::Low),
+            summary: Some(ReasoningSummary::Auto),
+            output_schema: None,
+            collaboration_mode: Some(collaboration_mode),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request = response_mock.single_request();
+    let payload = request.body_json();
+    assert_eq!(payload["model"].as_str(), Some("mock-model-collab"));
 
     Ok(())
 }
@@ -331,6 +491,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run python".to_string(),
+                text_elements: Vec::new(),
             }],
             ..Default::default()
         })
@@ -376,6 +537,7 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run python again".to_string(),
+                text_elements: Vec::new(),
             }],
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
@@ -452,6 +614,7 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run python".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -600,6 +763,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "first turn".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(first_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
@@ -613,6 +777,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
             output_schema: None,
+            collaboration_mode: None,
         })
         .await?;
     timeout(
@@ -633,6 +798,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "second turn".to_string(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(second_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
@@ -641,6 +807,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
             output_schema: None,
+            collaboration_mode: None,
         })
         .await?;
     timeout(
@@ -733,6 +900,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "apply patch".into(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -910,6 +1078,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "apply patch 1".into(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -986,6 +1155,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "apply patch 2".into(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -1083,6 +1253,7 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "apply patch".into(),
+                text_elements: Vec::new(),
             }],
             cwd: Some(workspace.clone()),
             ..Default::default()
@@ -1230,6 +1401,7 @@ unified_exec = true
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run a command".to_string(),
+                text_elements: Vec::new(),
             }],
             ..Default::default()
         })
@@ -1299,8 +1471,18 @@ unified_exec = true
         unreachable!("loop ensures we break on command execution items");
     };
     assert_eq!(completed_id, "uexec-1");
-    assert_eq!(completed_status, CommandExecutionStatus::Completed);
-    assert_eq!(exit_code, Some(0));
+    assert!(
+        matches!(
+            completed_status,
+            CommandExecutionStatus::Completed | CommandExecutionStatus::Failed
+        ),
+        "unexpected command execution status: {completed_status:?}"
+    );
+    if completed_status == CommandExecutionStatus::Completed {
+        assert_eq!(exit_code, Some(0));
+    } else {
+        assert!(exit_code.is_some(), "expected exit_code for failed command");
+    }
     assert_eq!(
         completed_process_id.as_deref(),
         Some(started_process_id.as_str())

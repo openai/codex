@@ -14,6 +14,7 @@ use codex_core::ThreadManager;
 use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
+use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::EventMsg;
@@ -21,7 +22,9 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ReasoningItemContent;
@@ -43,6 +46,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use dunce::canonicalize as normalize_path;
 use futures::StreamExt;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::io::Write;
 use std::sync::Arc;
@@ -284,11 +288,12 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let expected_initial_json = json!([]);
     assert_eq!(initial_json, expected_initial_json);
 
-    // 2) Submit new input; the request body must include the prior item followed by the new user input.
+    // 2) Submit new input; the request body must include the prior items, then initial context, then new user input.
     codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -298,24 +303,55 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
     let request = resp_mock.single_request();
     let request_body = request.body_json();
-    let expected_input = json!([
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{ "type": "input_text", "text": "resumed user message" }]
-        },
-        {
-            "type": "message",
-            "role": "assistant",
-            "content": [{ "type": "output_text", "text": "resumed assistant message" }]
-        },
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{ "type": "input_text", "text": "hello" }]
-        }
-    ]);
-    assert_eq!(request_body["input"], expected_input);
+    let input = request_body["input"].as_array().expect("input array");
+    let messages: Vec<(String, String)> = input
+        .iter()
+        .filter_map(|item| {
+            let role = item.get("role")?.as_str()?;
+            let text = item
+                .get("content")?
+                .as_array()?
+                .first()?
+                .get("text")?
+                .as_str()?;
+            Some((role.to_string(), text.to_string()))
+        })
+        .collect();
+    let pos_prior_user = messages
+        .iter()
+        .position(|(role, text)| role == "user" && text == "resumed user message")
+        .expect("prior user message");
+    let pos_prior_assistant = messages
+        .iter()
+        .position(|(role, text)| role == "assistant" && text == "resumed assistant message")
+        .expect("prior assistant message");
+    let pos_permissions = messages
+        .iter()
+        .position(|(role, text)| role == "developer" && text.contains("`approval_policy`"))
+        .expect("permissions message");
+    let pos_user_instructions = messages
+        .iter()
+        .position(|(role, text)| {
+            role == "user"
+                && text.contains("be nice")
+                && (text.starts_with("# AGENTS.md instructions for ")
+                    || text.starts_with("<user_instructions>"))
+        })
+        .expect("user instructions");
+    let pos_environment = messages
+        .iter()
+        .position(|(role, text)| role == "user" && text.contains("<environment_context>"))
+        .expect("environment context");
+    let pos_new_user = messages
+        .iter()
+        .position(|(role, text)| role == "user" && text == "hello")
+        .expect("new user message");
+
+    assert!(pos_prior_user < pos_prior_assistant);
+    assert!(pos_prior_assistant < pos_permissions);
+    assert!(pos_permissions < pos_user_instructions);
+    assert!(pos_user_instructions < pos_environment);
+    assert!(pos_environment < pos_new_user);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -344,7 +380,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     );
     let NewThread {
         thread: codex,
-        thread_id: conversation_id,
+        thread_id: session_id,
         session_configured: _,
         ..
     } = thread_manager
@@ -356,6 +392,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -366,16 +403,14 @@ async fn includes_conversation_id_and_model_headers_in_request() {
 
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/v1/responses");
-    let request_conversation_id = request
-        .header("conversation_id")
-        .expect("conversation_id header");
+    let request_session_id = request.header("session_id").expect("session_id header");
     let request_authorization = request
         .header("authorization")
         .expect("authorization header");
     let request_originator = request.header("originator").expect("originator header");
 
-    assert_eq!(request_conversation_id, conversation_id.to_string());
-    assert_eq!(request_originator, "codex_cli_rs");
+    assert_eq!(request_session_id, session_id.to_string());
+    assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Test API Key");
 }
 
@@ -411,6 +446,7 @@ async fn includes_base_instructions_override_in_request() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -455,7 +491,7 @@ async fn chatgpt_auth_sends_correct_request() {
     );
     let NewThread {
         thread: codex,
-        thread_id: conversation_id,
+        thread_id,
         session_configured: _,
         ..
     } = thread_manager
@@ -467,6 +503,7 @@ async fn chatgpt_auth_sends_correct_request() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -477,9 +514,6 @@ async fn chatgpt_auth_sends_correct_request() {
 
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/api/codex/responses");
-    let request_conversation_id = request
-        .header("conversation_id")
-        .expect("conversation_id header");
     let request_authorization = request
         .header("authorization")
         .expect("authorization header");
@@ -489,8 +523,10 @@ async fn chatgpt_auth_sends_correct_request() {
         .expect("chatgpt-account-id header");
     let request_body = request.body_json();
 
-    assert_eq!(request_conversation_id, conversation_id.to_string());
-    assert_eq!(request_originator, "codex_cli_rs");
+    let session_id = request.header("session_id").expect("session_id header");
+    assert_eq!(session_id, thread_id.to_string());
+
+    assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Access Token");
     assert_eq!(request_chatgpt_account_id, "account_id");
     assert!(request_body["stream"].as_bool().unwrap());
@@ -560,6 +596,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -601,6 +638,7 @@ async fn includes_user_instructions_message_in_request() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -618,17 +656,26 @@ async fn includes_user_instructions_message_in_request() {
             .unwrap()
             .contains("be nice")
     );
-    assert_message_role(&request_body["input"][0], "user");
-    assert_message_starts_with(&request_body["input"][0], "# AGENTS.md instructions for ");
-    assert_message_ends_with(&request_body["input"][0], "</INSTRUCTIONS>");
-    let ui_text = request_body["input"][0]["content"][0]["text"]
+    assert_message_role(&request_body["input"][0], "developer");
+    let permissions_text = request_body["input"][0]["content"][0]["text"]
+        .as_str()
+        .expect("invalid permissions message content");
+    assert!(
+        permissions_text.contains("`sandbox_mode`"),
+        "expected permissions message to mention sandbox_mode, got {permissions_text:?}"
+    );
+
+    assert_message_role(&request_body["input"][1], "user");
+    assert_message_starts_with(&request_body["input"][1], "# AGENTS.md instructions for ");
+    assert_message_ends_with(&request_body["input"][1], "</INSTRUCTIONS>");
+    let ui_text = request_body["input"][1]["content"][0]["text"]
         .as_str()
         .expect("invalid message content");
     assert!(ui_text.contains("<INSTRUCTIONS>"));
     assert!(ui_text.contains("be nice"));
-    assert_message_role(&request_body["input"][1], "user");
-    assert_message_starts_with(&request_body["input"][1], "<environment_context>");
-    assert_message_ends_with(&request_body["input"][1], "</environment_context>");
+    assert_message_role(&request_body["input"][2], "user");
+    assert_message_starts_with(&request_body["input"][2], "<environment_context>");
+    assert_message_ends_with(&request_body["input"][2], "</environment_context>");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -671,6 +718,7 @@ async fn skills_append_to_instructions() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -682,8 +730,10 @@ async fn skills_append_to_instructions() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
 
-    assert_message_role(&request_body["input"][0], "user");
-    let instructions_text = request_body["input"][0]["content"][0]["text"]
+    assert_message_role(&request_body["input"][0], "developer");
+
+    assert_message_role(&request_body["input"][1], "user");
+    let instructions_text = request_body["input"][1]["content"][0]["text"]
         .as_str()
         .expect("instructions text");
     assert!(
@@ -721,6 +771,7 @@ async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -758,41 +809,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
-            }],
-            final_output_json_schema: None,
-        })
-        .await
-        .unwrap();
-
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    let request = resp_mock.single_request();
-    let request_body = request.body_json();
-
-    assert_eq!(
-        request_body
-            .get("reasoning")
-            .and_then(|t| t.get("effort"))
-            .and_then(|v| v.as_str()),
-        None
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info()
--> anyhow::Result<()> {
-    skip_if_no_network!(Ok(()));
-    let server = MockServer::start().await;
-
-    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
-    let TestCodex { codex, .. } = test_codex().with_model("gpt-5.1").build(&server).await?;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -816,6 +833,96 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
+    let TestCodex { codex, .. } = test_codex().with_model("gpt-5.1").build(&server).await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+
+    assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|t| t.get("effort"))
+            .and_then(|v| v.as_str()),
+        Some("medium")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(&server, sse_completed("resp1")).await;
+    let TestCodex {
+        codex,
+        config,
+        session_configured,
+        ..
+    } = test_codex()
+        .with_model("gpt-5.1-codex")
+        .build(&server)
+        .await?;
+
+    let collaboration_mode = CollaborationMode::Custom(Settings {
+        model: "gpt-5.1".to_string(),
+        reasoning_effort: Some(ReasoningEffort::High),
+        developer_instructions: None,
+    });
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            cwd: config.cwd.clone(),
+            approval_policy: config.approval_policy.value(),
+            sandbox_policy: config.sandbox_policy.get().clone(),
+            model: session_configured.model.clone(),
+            effort: Some(ReasoningEffort::Low),
+            summary: config.model_reasoning_summary,
+            collaboration_mode: Some(collaboration_mode),
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request_body = resp_mock.single_request().body_json();
+    assert_eq!(request_body["model"].as_str(), Some("gpt-5.1"));
+    assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|t| t.get("effort"))
+            .and_then(|v| v.as_str()),
+        Some("high")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
@@ -832,6 +939,7 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -871,6 +979,7 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -904,6 +1013,7 @@ async fn includes_default_verbosity_in_request() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -944,6 +1054,7 @@ async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::R
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -983,6 +1094,7 @@ async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1038,6 +1150,7 @@ async fn includes_developer_instructions_message_in_request() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1049,6 +1162,10 @@ async fn includes_developer_instructions_message_in_request() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
 
+    let permissions_text = request_body["input"][0]["content"][0]["text"]
+        .as_str()
+        .expect("invalid permissions message content");
+
     assert!(
         !request_body["instructions"]
             .as_str()
@@ -1056,18 +1173,24 @@ async fn includes_developer_instructions_message_in_request() {
             .contains("be nice")
     );
     assert_message_role(&request_body["input"][0], "developer");
-    assert_message_equals(&request_body["input"][0], "be useful");
-    assert_message_role(&request_body["input"][1], "user");
-    assert_message_starts_with(&request_body["input"][1], "# AGENTS.md instructions for ");
-    assert_message_ends_with(&request_body["input"][1], "</INSTRUCTIONS>");
-    let ui_text = request_body["input"][1]["content"][0]["text"]
+    assert!(
+        permissions_text.contains("`sandbox_mode`"),
+        "expected permissions message to mention sandbox_mode, got {permissions_text:?}"
+    );
+
+    assert_message_role(&request_body["input"][1], "developer");
+    assert_message_equals(&request_body["input"][1], "be useful");
+    assert_message_role(&request_body["input"][2], "user");
+    assert_message_starts_with(&request_body["input"][2], "# AGENTS.md instructions for ");
+    assert_message_ends_with(&request_body["input"][2], "</INSTRUCTIONS>");
+    let ui_text = request_body["input"][2]["content"][0]["text"]
         .as_str()
         .expect("invalid message content");
     assert!(ui_text.contains("<INSTRUCTIONS>"));
     assert!(ui_text.contains("be nice"));
-    assert_message_role(&request_body["input"][2], "user");
-    assert_message_starts_with(&request_body["input"][2], "<environment_context>");
-    assert_message_ends_with(&request_body["input"][2], "</environment_context>");
+    assert_message_role(&request_body["input"][3], "user");
+    assert_message_starts_with(&request_body["input"][3], "<environment_context>");
+    assert_message_ends_with(&request_body["input"][3], "</environment_context>");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1122,7 +1245,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         SessionSource::Exec,
     );
 
-    let client = ModelClient::new(
+    let mut client = ModelClient::new(
         Arc::clone(&config),
         None,
         model_info,
@@ -1132,7 +1255,8 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         summary,
         conversation_id,
         SessionSource::Exec,
-    );
+    )
+    .new_session();
 
     let mut prompt = Prompt::default();
     prompt.input.push(ResponseItem::Reasoning {
@@ -1276,6 +1400,7 @@ async fn token_count_includes_rate_limits_snapshot() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1434,6 +1559,7 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1504,6 +1630,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "seed turn".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1515,6 +1642,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "trigger context window".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1635,6 +1763,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1718,6 +1847,7 @@ async fn env_var_overrides_loaded_auth() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1790,7 +1920,10 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Turn 1: user sends U1; wait for completion.
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text { text: "U1".into() }],
+            items: vec![UserInput::Text {
+                text: "U1".into(),
+                text_elements: Vec::new(),
+            }],
             final_output_json_schema: None,
         })
         .await
@@ -1800,7 +1933,10 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Turn 2: user sends U2; wait for completion.
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text { text: "U2".into() }],
+            items: vec![UserInput::Text {
+                text: "U2".into(),
+                text_elements: Vec::new(),
+            }],
             final_output_json_schema: None,
         })
         .await
@@ -1810,7 +1946,10 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Turn 3: user sends U3; wait for completion.
     codex
         .submit(Op::UserInput {
-            items: vec![UserInput::Text { text: "U3".into() }],
+            items: vec![UserInput::Text {
+                text: "U3".into(),
+                text_elements: Vec::new(),
+            }],
             final_output_json_schema: None,
         })
         .await

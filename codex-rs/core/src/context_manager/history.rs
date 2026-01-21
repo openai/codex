@@ -1,12 +1,13 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
+use crate::instructions::SkillInstructions;
+use crate::instructions::UserInstructions;
+use crate::session_prefix::is_session_prefix;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
-use crate::user_instructions::SkillInstructions;
-use crate::user_instructions::UserInstructions;
 use crate::user_shell_command::is_user_shell_command_text;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -97,7 +98,11 @@ impl ContextManager {
                 }
                 | ResponseItem::Compaction {
                     encrypted_content: content,
-                } => estimate_reasoning_length(content.len()) as i64,
+                } => {
+                    let reasoning_bytes = estimate_reasoning_length(content.len());
+                    i64::try_from(approx_tokens_from_byte_count(reasoning_bytes))
+                        .unwrap_or(i64::MAX)
+                }
                 item => {
                     let serialized = serde_json::to_string(item).unwrap_or_default();
                     i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX)
@@ -124,34 +129,35 @@ impl ContextManager {
         self.items = items;
     }
 
-    pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) {
-        let Some(last_item) = self.items.last_mut() else {
-            return;
+    /// Replace image content in the last turn if it originated from a tool output.
+    /// Returns true when a tool image was replaced, false otherwise.
+    pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) -> bool {
+        let Some(index) = self.items.iter().rposition(|item| {
+            matches!(item, ResponseItem::FunctionCallOutput { .. })
+                || matches!(item, ResponseItem::Message { role, .. } if role == "user")
+        }) else {
+            return false;
         };
 
-        match last_item {
-            ResponseItem::Message { role, content, .. } if role == "user" => {
-                for item in content.iter_mut() {
-                    if matches!(item, ContentItem::InputImage { .. }) {
-                        *item = ContentItem::InputText {
-                            text: placeholder.to_string(),
-                        };
-                    }
-                }
-            }
+        match &mut self.items[index] {
             ResponseItem::FunctionCallOutput { output, .. } => {
                 let Some(content_items) = output.content_items.as_mut() else {
-                    return;
+                    return false;
                 };
+                let mut replaced = false;
+                let placeholder = placeholder.to_string();
                 for item in content_items.iter_mut() {
                     if matches!(item, FunctionCallOutputContentItem::InputImage { .. }) {
                         *item = FunctionCallOutputContentItem::InputText {
-                            text: placeholder.to_string(),
+                            text: placeholder.clone(),
                         };
+                        replaced = true;
                     }
                 }
+                replaced
             }
-            _ => {}
+            ResponseItem::Message { role, .. } if role == "user" => false,
+            _ => false,
         }
     }
 
@@ -230,12 +236,19 @@ impl ContextManager {
         token_estimate as usize
     }
 
-    pub(crate) fn get_total_token_usage(&self) -> i64 {
-        self.token_info
+    /// When true, the server already accounted for past reasoning tokens and
+    /// the client should not re-estimate them.
+    pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {
+        let last_tokens = self
+            .token_info
             .as_ref()
             .map(|info| info.last_token_usage.total_tokens)
-            .unwrap_or(0)
-            .saturating_add(self.get_non_last_reasoning_items_tokens() as i64)
+            .unwrap_or(0);
+        if server_reasoning_included {
+            last_tokens
+        } else {
+            last_tokens.saturating_add(self.get_non_last_reasoning_items_tokens() as i64)
+        }
     }
 
     /// This function enforces a couple of invariants on the in-memory history:
@@ -314,12 +327,6 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
         .checked_div(4)
         .unwrap_or(0)
         .saturating_sub(650)
-}
-
-fn is_session_prefix(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with("<environment_context>")
 }
 
 pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {

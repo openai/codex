@@ -42,6 +42,10 @@ pub enum ResponseEvent {
     Created,
     OutputItemDone(ResponseItem),
     OutputItemAdded(ResponseItem),
+    /// Emitted when `X-Reasoning-Included: true` is present on the response,
+    /// meaning the server already accounted for past reasoning tokens and the
+    /// client should not re-estimate them.
+    ServerReasoningIncluded(bool),
     Completed {
         response_id: String,
         token_usage: Option<TokenUsage>,
@@ -134,6 +138,38 @@ pub struct ResponsesApiRequest<'a> {
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResponseCreateWsRequest {
+    pub model: String,
+    pub instructions: String,
+    pub input: Vec<ResponseItem>,
+    pub tools: Vec<Value>,
+    pub tool_choice: String,
+    pub parallel_tool_calls: bool,
+    pub reasoning: Option<Reasoning>,
+    pub store: bool,
+    pub stream: bool,
+    pub include: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<TextControls>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResponseAppendWsRequest {
+    pub input: Vec<ResponseItem>,
+}
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
+pub enum ResponsesWsRequest {
+    #[serde(rename = "response.create")]
+    ResponseCreate(ResponseCreateWsRequest),
+    #[serde(rename = "response.append")]
+    ResponseAppend(ResponseAppendWsRequest),
 }
 
 pub fn create_text_param_for_request(

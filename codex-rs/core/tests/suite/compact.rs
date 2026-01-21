@@ -32,11 +32,13 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::mount_compact_json_once;
+use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::sse_failed;
+use core_test_support::responses::sse_response;
 use core_test_support::responses::start_mock_server;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -159,6 +161,7 @@ async fn summarize_context_three_requests_and_instructions() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello world".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -180,6 +183,7 @@ async fn summarize_context_three_requests_and_instructions() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: THIRD_USER_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -573,6 +577,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: user_message.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -604,8 +609,14 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                     .and_then(|item| item.get("text"))
                     .and_then(|text| text.as_str());
 
-                // Ignore the cached UI prefix (project docs + skills) since it is not relevant to
-                // compaction behavior and can change as bundled skills evolve.
+                // Ignore cached prefix messages (project docs + permissions) since they are not
+                // relevant to compaction behavior and can change as bundled prompts evolve.
+                let role = value.get("role").and_then(|role| role.as_str());
+                if role == Some("developer")
+                    && text.is_some_and(|text| text.contains("`sandbox_mode`"))
+                {
+                    return false;
+                }
                 !text.is_some_and(|text| text.starts_with("# AGENTS.md instructions for "))
             })
             .cloned()
@@ -1043,6 +1054,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1055,6 +1067,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1067,6 +1080,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: POST_AUTO_USER_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1267,6 +1281,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: follow_up_user.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: resumed.cwd.path().to_path_buf(),
@@ -1275,6 +1290,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             model: resumed.session_configured.model.clone(),
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await
         .unwrap();
@@ -1376,6 +1392,7 @@ async fn auto_compact_persists_rollout_entries() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1387,6 +1404,7 @@ async fn auto_compact_persists_rollout_entries() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1398,6 +1416,7 @@ async fn auto_compact_persists_rollout_entries() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: POST_AUTO_USER_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1490,6 +1509,7 @@ async fn manual_compact_retries_after_context_window_error() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "first turn".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1623,6 +1643,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: first_user_message.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1637,6 +1658,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: second_user_message.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1651,6 +1673,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: final_user_message.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1726,9 +1749,11 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         .into_iter()
         .collect::<VecDeque<_>>();
 
-    // System prompt
+    // Permissions developer message
     final_output.pop_front();
-    // Developer instructions
+    // User instructions (project docs/skills)
+    final_output.pop_front();
+    // Environment context
     final_output.pop_front();
 
     let _ = final_output
@@ -1827,7 +1852,10 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     for user in [MULTI_AUTO_MSG, follow_up_user, final_user] {
         codex
             .submit(Op::UserInput {
-                items: vec![UserInput::Text { text: user.into() }],
+                items: vec![UserInput::Text {
+                    text: user.into(),
+                    text_elements: Vec::new(),
+                }],
                 final_output_json_schema: None,
             })
             .await
@@ -1940,6 +1968,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: FUNCTION_CALL_LIMIT_MSG.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -1952,6 +1981,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: follow_up_user.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -2067,7 +2097,10 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     {
         codex
             .submit(Op::UserInput {
-                items: vec![UserInput::Text { text: user.into() }],
+                items: vec![UserInput::Text {
+                    text: user.into(),
+                    text_elements: Vec::new(),
+                }],
                 final_output_json_schema: None,
             })
             .await
@@ -2114,5 +2147,87 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
     assert!(
         third_request_body.contains("ENCRYPTED_COMPACTION_SUMMARY"),
         "third turn should include compaction summary item"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let first_user = "SERVER_INCLUDED_FIRST";
+    let second_user = "SERVER_INCLUDED_SECOND";
+    let third_user = "SERVER_INCLUDED_THIRD";
+
+    let pre_last_reasoning_content = "a".repeat(2_400);
+    let post_last_reasoning_content = "b".repeat(4_000);
+
+    let first_turn = sse(vec![
+        ev_reasoning_item("pre-reasoning", &["pre"], &[&pre_last_reasoning_content]),
+        ev_completed_with_tokens("r1", 10),
+    ]);
+    let second_turn = sse(vec![
+        ev_reasoning_item("post-reasoning", &["post"], &[&post_last_reasoning_content]),
+        ev_completed_with_tokens("r2", 80),
+    ]);
+    let third_turn = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_tokens("r4", 1),
+    ]);
+
+    let responses = vec![
+        sse_response(first_turn).insert_header("X-Reasoning-Included", "true"),
+        sse_response(second_turn),
+        sse_response(third_turn),
+    ];
+    mount_response_sequence(&server, responses).await;
+
+    let compacted_history = vec![
+        codex_protocol::models::ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![codex_protocol::models::ContentItem::OutputText {
+                text: "REMOTE_COMPACT_SUMMARY".to_string(),
+            }],
+        },
+        codex_protocol::models::ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        },
+    ];
+    let compact_mock =
+        mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
+
+    let codex = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(300);
+            config.features.enable(Feature::RemoteCompaction);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    for user in [first_user, second_user, third_user] {
+        codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: user.into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            })
+            .await
+            .unwrap();
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    }
+
+    let compact_requests = compact_mock.requests();
+    assert_eq!(
+        compact_requests.len(),
+        1,
+        "remote compaction should run once after the reasoning header clears"
     );
 }

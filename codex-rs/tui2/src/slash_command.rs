@@ -16,12 +16,15 @@ pub enum SlashCommand {
     Approvals,
     #[strum(serialize = "setup-elevated-sandbox")]
     ElevateSandbox,
+    Experimental,
     Skills,
     Review,
     New,
     Resume,
+    Fork,
     Init,
     Compact,
+    Collab,
     // Undo,
     Diff,
     Mention,
@@ -45,6 +48,7 @@ impl SlashCommand {
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Resume => "resume a saved chat",
+            SlashCommand::Fork => "fork the current chat",
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
@@ -52,8 +56,10 @@ impl SlashCommand {
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
+            SlashCommand::Experimental => "toggle beta features",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
@@ -72,12 +78,14 @@ impl SlashCommand {
         match self {
             SlashCommand::New
             | SlashCommand::Resume
+            | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
             // | SlashCommand::Undo
             | SlashCommand::Model
             | SlashCommand::Approvals
             | SlashCommand::ElevateSandbox
+            | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::Logout => false,
             SlashCommand::Diff
@@ -90,6 +98,7 @@ impl SlashCommand {
             | SlashCommand::Exit => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
+            SlashCommand::Collab => true,
         }
     }
 

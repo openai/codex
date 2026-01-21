@@ -1,0 +1,14 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 2116
+expression: terminal.backend()
+---
+"                                                                                                    "
+"› [Image #1][Image #2]                                                                              "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"                                                                                                    "
+"  100% context left                                                                                 "

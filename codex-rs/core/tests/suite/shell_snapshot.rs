@@ -20,9 +20,11 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::path::Path;
 use std::path::PathBuf;
 use tokio::fs;
 use tokio::time::Duration;
+use tokio::time::Instant;
 use tokio::time::sleep;
 
 #[derive(Debug)]
@@ -32,6 +34,24 @@ struct SnapshotRun {
     snapshot_path: PathBuf,
     snapshot_content: String,
     codex_home: PathBuf,
+}
+
+async fn wait_for_snapshot(codex_home: &Path) -> Result<PathBuf> {
+    let snapshot_dir = codex_home.join("shell_snapshots");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(mut entries) = fs::read_dir(&snapshot_dir).await
+            && let Some(entry) = entries.next_entry().await?
+        {
+            return Ok(entry.path());
+        }
+
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for shell snapshot");
+        }
+
+        sleep(Duration::from_millis(25)).await;
+    }
 }
 
 #[allow(clippy::expect_used)]
@@ -71,6 +91,7 @@ async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "run unified exec with shell snapshot".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd,
@@ -79,6 +100,7 @@ async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -87,12 +109,7 @@ async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
         _ => None,
     })
     .await;
-    let mut entries = fs::read_dir(codex_home.join("shell_snapshots")).await?;
-    let snapshot_path = entries
-        .next_entry()
-        .await?
-        .map(|entry| entry.path())
-        .expect("shell snapshot created");
+    let snapshot_path = wait_for_snapshot(&codex_home).await?;
     let snapshot_content = fs::read_to_string(&snapshot_path).await?;
 
     let end = wait_for_event_match(&codex, |ev| match ev {
@@ -147,6 +164,7 @@ async fn run_shell_command_snapshot(command: &str) -> Result<SnapshotRun> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "run shell_command with shell snapshot".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd,
@@ -155,6 +173,7 @@ async fn run_shell_command_snapshot(command: &str) -> Result<SnapshotRun> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -163,12 +182,7 @@ async fn run_shell_command_snapshot(command: &str) -> Result<SnapshotRun> {
         _ => None,
     })
     .await;
-    let mut entries = fs::read_dir(codex_home.join("shell_snapshots")).await?;
-    let snapshot_path = entries
-        .next_entry()
-        .await?
-        .map(|entry| entry.path())
-        .expect("shell snapshot created");
+    let snapshot_path = wait_for_snapshot(&codex_home).await?;
     let snapshot_content = fs::read_to_string(&snapshot_path).await?;
 
     let end = wait_for_event_match(&codex, |ev| match ev {
@@ -284,6 +298,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "apply patch via shell_command with snapshot".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: cwd.clone(),
@@ -292,6 +307,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
             model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -299,12 +315,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
 
     assert_eq!(fs::read_to_string(&target).await?, "hello from snapshot\n");
 
-    let mut entries = fs::read_dir(codex_home.join("shell_snapshots")).await?;
-    let snapshot_path = entries
-        .next_entry()
-        .await?
-        .map(|entry| entry.path())
-        .expect("shell snapshot created");
+    let snapshot_path = wait_for_snapshot(&codex_home).await?;
     let snapshot_content = fs::read_to_string(&snapshot_path).await?;
     assert_posix_snapshot_sections(&snapshot_content);
 
@@ -322,12 +333,7 @@ async fn shell_snapshot_deleted_after_shutdown_with_skills() -> Result<()> {
     let codex_home = home.path().to_path_buf();
     let codex = harness.test().codex.clone();
 
-    let mut entries = fs::read_dir(codex_home.join("shell_snapshots")).await?;
-    let snapshot_path = entries
-        .next_entry()
-        .await?
-        .map(|entry| entry.path())
-        .expect("shell snapshot created");
+    let snapshot_path = wait_for_snapshot(&codex_home).await?;
     assert!(snapshot_path.exists());
 
     codex.submit(Op::Shutdown {}).await?;

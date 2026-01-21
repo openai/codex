@@ -16,6 +16,8 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::user_input::ByteRange as CoreByteRange;
+use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -126,6 +128,7 @@ pub struct ConversationSummary {
     pub path: PathBuf,
     pub preview: String,
     pub timestamp: Option<String>,
+    pub updated_at: Option<String>,
     pub model_provider: String,
     pub cwd: PathBuf,
     pub cli_version: String,
@@ -444,9 +447,71 @@ pub struct RemoveConversationListenerParams {
 #[serde(rename_all = "camelCase")]
 #[serde(tag = "type", content = "data")]
 pub enum InputItem {
-    Text { text: String },
-    Image { image_url: String },
-    LocalImage { path: PathBuf },
+    Text {
+        text: String,
+        /// UI-defined spans within `text` used to render or persist special elements.
+        #[serde(default)]
+        text_elements: Vec<V1TextElement>,
+    },
+    Image {
+        image_url: String,
+    },
+    LocalImage {
+        path: PathBuf,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename = "ByteRange")]
+pub struct V1ByteRange {
+    /// Start byte offset (inclusive) within the UTF-8 text buffer.
+    pub start: usize,
+    /// End byte offset (exclusive) within the UTF-8 text buffer.
+    pub end: usize,
+}
+
+impl From<CoreByteRange> for V1ByteRange {
+    fn from(value: CoreByteRange) -> Self {
+        Self {
+            start: value.start,
+            end: value.end,
+        }
+    }
+}
+
+impl From<V1ByteRange> for CoreByteRange {
+    fn from(value: V1ByteRange) -> Self {
+        Self {
+            start: value.start,
+            end: value.end,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename = "TextElement")]
+pub struct V1TextElement {
+    /// Byte range in the parent `text` buffer that this element occupies.
+    pub byte_range: V1ByteRange,
+    /// Optional human-readable placeholder for the element, displayed in the UI.
+    pub placeholder: Option<String>,
+}
+
+impl From<CoreTextElement> for V1TextElement {
+    fn from(value: CoreTextElement) -> Self {
+        Self {
+            byte_range: value.byte_range.into(),
+            placeholder: value._placeholder_for_conversion_only().map(str::to_string),
+        }
+    }
+}
+
+impl From<V1TextElement> for CoreTextElement {
+    fn from(value: V1TextElement) -> Self {
+        Self::new(value.byte_range.into(), value.placeholder)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

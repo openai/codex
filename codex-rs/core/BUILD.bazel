@@ -18,7 +18,20 @@ codex_rust_crate(
     ),
     integration_compile_data_extra = [
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
+        "models.json",
         "prompt.md",
+    ],
+    test_data_extra = [
+        "config.schema.json",
+        # This is a bit of a hack, but empirically, some of our integration tests
+        # are relying on the presence of this file as a repo root marker. When
+        # running tests locally, this "just works," but in remote execution,
+        # the working directory is different and so the file is not found unless it
+        # is explicitly added as test data.
+        #
+        # TODO(aibrahim): Update the tests so that `just bazel-remote-test`
+        # succeeds without this workaround.
+        "//:AGENTS.md",
     ],
     integration_deps_extra = ["//codex-rs/core/tests/common:common"],
     test_tags = ["no-sandbox"],

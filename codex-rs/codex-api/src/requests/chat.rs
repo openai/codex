@@ -394,10 +394,6 @@ mod tests {
             .expect("request");
 
         assert_eq!(
-            req.headers.get("conversation_id"),
-            Some(&HeaderValue::from_static("conv-1"))
-        );
-        assert_eq!(
             req.headers.get("session_id"),
             Some(&HeaderValue::from_static("conv-1"))
         );

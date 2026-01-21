@@ -23,7 +23,8 @@ oauth2 = "5"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "stream",
-    "rustls-tls",
+    "rustls-tls-webpki-roots",
+    "rustls-tls-native-roots",
 ] }
 rmcp = { workspace = true, default-features = false, features = [
     "auth",
@@ -36,6 +37,7 @@ rmcp = { workspace = true, default-features = false, features = [
     "transport-streamable-http-client-reqwest",
     "transport-streamable-http-server",
 ] }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
