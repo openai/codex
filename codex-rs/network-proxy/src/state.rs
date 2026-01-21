@@ -161,14 +161,29 @@ impl AppState {
             return Ok((true, "denied".to_string()));
         }
 
-        if !allow_local_binding && !allow_set.is_match(host) {
+        let is_allowlisted = allow_set.is_match(host);
+        if !allow_local_binding {
             // If the intent is "prevent access to local/internal networks", we must not rely solely
             // on string checks like `localhost` / `127.0.0.1`. Attackers can use DNS rebinding or
             // public suffix services that map hostnames onto private IPs.
             //
             // We therefore do a best-effort DNS + IP classification check before allowing the
-            // request. This closes the obvious bypass where the hostname itself isn't loopback.
-            if is_loopback_host(host) || host_resolves_to_non_public_ip(host, port).await? {
+            // request. Explicit local/loopback literals are allowed only when explicitly
+            // allowlisted; hostnames that resolve to local/private IPs are blocked even if
+            // allowlisted.
+            let local_literal = if is_loopback_host(host) {
+                true
+            } else if let Ok(ip) = host.parse::<IpAddr>() {
+                is_non_public_ip(ip)
+            } else {
+                false
+            };
+
+            if local_literal {
+                if !is_allowlisted {
+                    return Ok((true, "not_allowed_local".to_string()));
+                }
+            } else if host_resolves_to_non_public_ip(host, port).await? {
                 return Ok((true, "not_allowed_local".to_string()));
             }
         }
@@ -177,7 +192,7 @@ impl AppState {
             return Ok((true, "not_allowed".to_string()));
         }
 
-        if !allow_set.is_match(host) {
+        if !is_allowlisted {
             return Ok((true, "not_allowed".to_string()));
         }
         Ok((false, String::new()))
@@ -337,9 +352,9 @@ async fn build_config_state() -> Result<ConfigState> {
     // trusted/managed layers (e.g., MDM). Enforce this before building runtime state.
     let constraints = enforce_trusted_constraints(&codex_cfg.config_layer_stack, &config)?;
 
-    // Permit relative MITM paths for ergonomics; resolve them relative to the directory containing
-    // `config.toml` so the config is relocatable.
-    resolve_mitm_paths(&mut config, &cfg_path);
+    // Permit relative MITM paths for ergonomics; resolve them relative to CODEX_HOME so the
+    // proxy can be configured from multiple config locations without changing cert paths.
+    resolve_mitm_paths(&mut config, &codex_cfg.codex_home);
     let mtime = cfg_path.metadata().and_then(|m| m.modified()).ok();
     let deny_set = compile_globset(&config.network_proxy.policy.denied_domains)?;
     let allow_set = compile_globset(&config.network_proxy.policy.allowed_domains)?;
@@ -363,8 +378,8 @@ async fn build_config_state() -> Result<ConfigState> {
     })
 }
 
-fn resolve_mitm_paths(config: &mut Config, cfg_path: &Path) {
-    let base = cfg_path.parent().unwrap_or_else(|| Path::new("."));
+fn resolve_mitm_paths(config: &mut Config, codex_home: &Path) {
+    let base = codex_home;
     if config.network_proxy.mitm.ca_cert_path.is_relative() {
         config.network_proxy.mitm.ca_cert_path = base.join(&config.network_proxy.mitm.ca_cert_path);
     }
@@ -988,6 +1003,20 @@ mod tests {
 
         assert_eq!(
             state.host_blocked("localhost", 80).await.unwrap(),
+            (false, String::new())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_allows_private_ip_literal_when_explicitly_allowlisted() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["10.0.0.1".to_string()],
+            allow_local_binding: false,
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("10.0.0.1", 80).await.unwrap(),
             (false, String::new())
         );
     }

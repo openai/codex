@@ -133,6 +133,12 @@ impl NetworkProxy {
     }
 
     pub async fn run(&self) -> Result<NetworkProxyHandle> {
+        let current_cfg = self.state.current_cfg().await?;
+        if !current_cfg.network_proxy.enabled {
+            warn!("network_proxy.enabled is false; skipping proxy listeners");
+            return Ok(NetworkProxyHandle::noop());
+        }
+
         if cfg!(not(target_os = "macos")) {
             warn!("allowUnixSockets is macOS-only; requests will be rejected on this platform");
         }
@@ -165,6 +171,14 @@ pub struct NetworkProxyHandle {
 }
 
 impl NetworkProxyHandle {
+    fn noop() -> Self {
+        Self {
+            http_task: tokio::spawn(async { Ok(()) }),
+            socks_task: tokio::spawn(async { Ok(()) }),
+            admin_task: tokio::spawn(async { Ok(()) }),
+        }
+    }
+
     pub async fn wait(self) -> Result<()> {
         self.http_task.await??;
         self.socks_task.await??;

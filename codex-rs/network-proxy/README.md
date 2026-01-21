@@ -21,8 +21,7 @@ Example config:
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
 admin_url = "http://127.0.0.1:8080"
-# Note: `enabled` is a policy toggle today; the binary still binds listeners unless
-# the embedding app checks the flag before calling `run()`.
+# When `enabled` is false, the proxy no-ops and does not bind listeners.
 # When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests (HTTP(S) proxies only),
 # including CONNECT tunnels in full mode.
 allow_upstream_proxy = false
@@ -38,8 +37,9 @@ mode = "limited" # or "full"
 allowed_domains = ["*.openai.com"]
 denied_domains = ["evil.example"]
 
-# If false, local/private networking is rejected unless the host is explicitly allowlisted.
-# This includes `localhost`, loopback, and common private ranges (RFC1918, IPv6 ULA, link-local).
+# If false, local/private networking is rejected. Explicit allowlisting of local IP literals
+# (or `localhost`) is required to permit them.
+# Hostnames that resolve to local/private IPs are still blocked even if allowlisted.
 allow_local_binding = false
 
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
@@ -53,7 +53,7 @@ enabled = true
 inspect = false
 max_body_bytes = 4096
 
-# These are relative to the directory containing config.toml when relative.
+# These are resolved relative to $CODEX_HOME when relative.
 ca_cert_path = "network_proxy/mitm/ca.pem"
 ca_key_path = "network_proxy/mitm/ca.key"
 ```
@@ -186,8 +186,9 @@ what it can reasonably guarantee.
 - Allowlist-first policy: if `allowed_domains` is empty, requests are blocked until an allowlist is configured.
 - Deny wins: entries in `denied_domains` always override the allowlist.
 - Local/private network protection: when `allow_local_binding = false`, the proxy blocks loopback
-  and common private/link-local ranges (and does a best-effort DNS lookup to catch hostnames that
-  resolve to those ranges).
+  and common private/link-local ranges. Explicit allowlisting of local IP literals (or `localhost`)
+  is required to permit them; hostnames that resolve to local/private IPs are still blocked even if
+  allowlisted (best-effort DNS lookup).
 - Limited mode enforcement:
   - only `GET`, `HEAD`, and `OPTIONS` are allowed
   - HTTPS `CONNECT` requires MITM to be enabled, otherwise CONNECT is blocked (to avoid “tunnel hides method” bypass).
@@ -198,8 +199,7 @@ what it can reasonably guarantee.
     `dangerously_allow_non_loopback_proxy`
 - when unix socket proxying is enabled, both listeners are forced to loopback to avoid turning the
     proxy into a remote bridge into local daemons.
-- the `enabled` flag is a policy toggle today; the binary does not currently short-circuit
-    startup based on it.
+- `enabled` is enforced at runtime; when false the proxy no-ops and does not bind listeners.
 - MITM CA key handling:
   - the CA key file is created with restrictive permissions (`0600`) and written atomically using
     create-new + fsync + rename, to avoid partial writes or transiently-permissive modes.
