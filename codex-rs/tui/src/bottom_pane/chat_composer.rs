@@ -15,6 +15,16 @@
 //! [`ChatComposer::handle_key_event_without_popup`]. After every handled key, we call
 //! [`ChatComposer::sync_popups`] so UI state follows the latest buffer/cursor.
 //!
+//! # History Navigation (↑/↓)
+//!
+//! The Up/Down history path is managed by [`ChatComposerHistory`]. It merges:
+//!
+//! - Persistent cross-session history (text-only; no element ranges or attachments).
+//! - Local in-session history (full text + text elements + local image paths).
+//!
+//! When recalling a local entry, the composer rehydrates text elements and image attachments.
+//! When recalling a persistent entry, only the text is restored.
+//!
 //! # Submission and Prompt Expansion
 //!
 //! On submit/queue paths, the composer:
