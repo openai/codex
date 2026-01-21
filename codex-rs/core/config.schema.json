@@ -117,6 +117,9 @@
         "remote_models": {
           "type": "boolean"
         },
+        "responses_websockets": {
+          "type": "boolean"
+        },
         "shell_snapshot": {
           "type": "boolean"
         },
@@ -602,6 +605,9 @@
               "type": "boolean"
             },
             "remote_models": {
+              "type": "boolean"
+            },
+            "responses_websockets": {
               "type": "boolean"
             },
             "shell_snapshot": {

@@ -113,8 +113,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         extra_headers: HeaderMap,
         turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
-        let ws_url = Url::parse(&self.provider.url_for_path("responses"))
-            .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
+        let ws_url = websocket_url_for_provider(&self.provider)?;
 
         let mut headers = self.provider.headers.clone();
         headers.extend(extra_headers);
@@ -128,6 +127,24 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
             server_reasoning_included,
         ))
     }
+}
+
+fn websocket_url_for_provider(provider: &Provider) -> Result<Url, ApiError> {
+    let mut url = Url::parse(&provider.url_for_path("responses"))
+        .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
+    let scheme = match url.scheme() {
+        "http" => "ws",
+        "https" => "wss",
+        "ws" | "wss" => return Ok(url),
+        other => {
+            return Err(ApiError::Stream(format!(
+                "unsupported websocket URL scheme: {other}"
+            )));
+        }
+    };
+    url.set_scheme(scheme)
+        .map_err(|_| ApiError::Stream("failed to set websocket URL scheme".to_string()))?;
+    Ok(url)
 }
 
 // TODO (pakrym): share with /auth
