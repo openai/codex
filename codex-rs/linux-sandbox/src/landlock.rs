@@ -76,7 +76,7 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
 }
 
 fn should_skip_landlock(err: &CodexErr) -> bool {
-    matches!(err, CodexErr::Sandbox(SandboxErr::LandlockRestrict)) || is_permission_denied(err)
+    matches!(err, CodexErr::Sandbox(SandboxErr::LandlockRestrict))
 }
 
 fn is_permission_denied(err: &CodexErr) -> bool {
@@ -127,10 +127,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn should_skip_landlock_on_permission_denied() {
+    fn should_skip_landlock_returns_false_for_permission_denied() {
         let err: CodexErr =
             std::io::Error::new(std::io::ErrorKind::PermissionDenied, "nope").into();
-        assert!(should_skip_landlock(&err));
+        assert!(!should_skip_landlock(&err));
     }
 
     #[test]

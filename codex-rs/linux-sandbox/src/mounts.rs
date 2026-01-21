@@ -36,8 +36,9 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
 
     // Root can unshare the mount namespace directly; non-root needs a user
     // namespace to gain capabilities for remounting.
+    let running_as_root = is_running_as_root();
     let mut used_userns = false;
-    if is_running_as_root() {
+    if running_as_root {
         match unshare_mount_namespace() {
             Ok(()) => {}
             Err(err) if is_permission_denied(&err) => {
@@ -48,8 +49,7 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
                     Ok(()) => {
                         if let Err(err) = write_user_namespace_maps(original_euid, original_egid) {
                             if is_permission_denied(&err) {
-                                log_namespace_fallback(&err);
-                                return Ok(());
+                                return Err(err);
                             }
                             return Err(err);
                         }
@@ -72,8 +72,7 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
             Ok(()) => {
                 if let Err(err) = write_user_namespace_maps(original_euid, original_egid) {
                     if is_permission_denied(&err) {
-                        log_namespace_fallback(&err);
-                        return Ok(());
+                        return Err(err);
                     }
                     return Err(err);
                 }
@@ -87,10 +86,11 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
             Err(err) => return Err(err),
         }
     }
+    let should_drop_caps = used_userns || running_as_root;
     if let Err(err) = make_mounts_private() {
         if is_permission_denied(&err) {
             log_namespace_fallback(&err);
-            if used_userns {
+            if should_drop_caps {
                 drop_caps()?;
             }
             return Ok(());
@@ -103,7 +103,7 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
         if let Err(err) = bind_mount_read_only(target.as_path()) {
             if is_permission_denied(&err) {
                 log_namespace_fallback(&err);
-                if used_userns {
+                if should_drop_caps {
                     drop_caps()?;
                 }
                 return Ok(());
@@ -114,7 +114,7 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
 
     // Drop ambient capabilities acquired from the user namespace so the
     // sandboxed command cannot remount or create new bind mounts.
-    if used_userns {
+    if should_drop_caps {
         drop_caps()?;
     }
 
@@ -583,12 +583,13 @@ mod tests {
             exclude_slash_tmp: true,
         };
 
-        let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
+        let err = apply_read_only_mounts(&sandbox_policy, tempdir.path())
+            .expect_err("expected permission denied error");
 
         FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
         FORCE_WRITE_USER_NAMESPACE_MAPS_PERMISSION_DENIED
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        assert!(result.is_ok());
+        assert!(is_permission_denied(&err));
     }
 
     #[test]
