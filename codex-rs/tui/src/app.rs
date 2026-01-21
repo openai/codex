@@ -29,12 +29,14 @@ use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
+use codex_core::CodexAuth;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
+use codex_core::models_manager::manager::ModelsManager;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
@@ -51,6 +53,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_otel::OtelManager;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -70,6 +73,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::select;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc::unbounded_channel;
@@ -326,6 +330,7 @@ async fn handle_model_migration_prompt_if_needed(
 
 pub(crate) struct App {
     pub(crate) server: Arc<ThreadManager>,
+    pub(crate) otel_manager: OtelManager,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -362,8 +367,7 @@ pub(crate) struct App {
     /// stopping a thread (e.g., before starting a new one).
     suppress_shutdown_complete: bool,
 
-    // One-shot suppression of the next world-writable scan after user confirmation.
-    skip_world_writable_scan_once: bool,
+    windows_sandbox: WindowsSandboxState,
 
     // TODO(jif) drop once new UX is here.
     // Track external agent approvals spawned via AgentControl.
@@ -371,6 +375,13 @@ pub(crate) struct App {
     external_approval_routes: HashMap<String, (ThreadId, String)>,
     /// Buffered Codex events while external approvals are pending.
     paused_codex_events: VecDeque<Event>,
+}
+
+#[derive(Default)]
+struct WindowsSandboxState {
+    setup_started_at: Option<Instant>,
+    // One-shot suppression of the next world-writable scan after user confirmation.
+    skip_world_writable_scan_once: bool,
 }
 
 impl App {
@@ -391,6 +402,7 @@ impl App {
             feedback: self.feedback.clone(),
             is_first_run: false,
             model: Some(self.chat_widget.current_model().to_string()),
+            otel_manager: self.otel_manager.clone(),
         }
     }
 
@@ -450,6 +462,21 @@ impl App {
             model = updated_model;
         }
 
+        let auth = auth_manager.auth().await;
+        let auth_ref = auth.as_ref();
+        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+        let otel_manager = OtelManager::new(
+            ThreadId::new(),
+            model.as_str(),
+            model_info.slug.as_str(),
+            auth_ref.and_then(CodexAuth::get_account_id),
+            auth_ref.and_then(CodexAuth::get_account_email),
+            auth_ref.map(|auth| auth.mode),
+            config.otel.log_user_prompt,
+            codex_core::terminal::user_agent(),
+            SessionSource::Cli,
+        );
+
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let mut chat_widget = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
@@ -469,6 +496,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     model: Some(model.clone()),
+                    otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
@@ -496,6 +524,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     model: config.model.clone(),
+                    otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
@@ -523,6 +552,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     model: config.model.clone(),
+                    otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
@@ -536,6 +566,7 @@ impl App {
 
         let mut app = Self {
             server: thread_manager.clone(),
+            otel_manager: otel_manager.clone(),
             app_event_tx,
             chat_widget,
             auth_manager: auth_manager.clone(),
@@ -553,7 +584,7 @@ impl App {
             feedback: feedback.clone(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
-            skip_world_writable_scan_once: false,
+            windows_sandbox: WindowsSandboxState::default(),
             external_approval_routes: HashMap::new(),
             paused_codex_events: VecDeque::new(),
         };
@@ -723,6 +754,7 @@ impl App {
                     feedback: self.feedback.clone(),
                     is_first_run: false,
                     model: Some(model),
+                    otel_manager: self.otel_manager.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 if let Some(summary) = summary {
@@ -1042,7 +1074,19 @@ impl App {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
             AppEvent::OpenWindowsSandboxFallbackPrompt { preset, reason } => {
+                self.otel_manager.counter(
+                    "codex.windows_sandbox.fallback_prompt_shown",
+                    1,
+                    &[],
+                );
                 self.chat_widget.clear_windows_sandbox_setup_status();
+                if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
+                    self.otel_manager.record_duration(
+                        "codex.windows_sandbox.elevated_setup_duration_ms",
+                        started_at.elapsed(),
+                        &[("result", "failure")],
+                    );
+                }
                 self.chat_widget
                     .open_windows_sandbox_fallback_prompt(preset, reason);
             }
@@ -1069,6 +1113,8 @@ impl App {
                     }
 
                     self.chat_widget.show_windows_sandbox_setup_status();
+                    self.windows_sandbox.setup_started_at = Some(Instant::now());
+                    let otel_manager = self.otel_manager.clone();
                     tokio::task::spawn_blocking(move || {
                         let result = codex_core::windows_sandbox::run_elevated_setup(
                             &policy,
@@ -1078,11 +1124,23 @@ impl App {
                             codex_home.as_path(),
                         );
                         let event = match result {
-                            Ok(()) => AppEvent::EnableWindowsSandboxForAgentMode {
-                                preset: preset.clone(),
-                                mode: WindowsSandboxEnableMode::Elevated,
-                            },
+                            Ok(()) => {
+                                otel_manager.counter(
+                                    "codex.windows_sandbox.elevated_setup_success",
+                                    1,
+                                    &[],
+                                );
+                                AppEvent::EnableWindowsSandboxForAgentMode {
+                                    preset: preset.clone(),
+                                    mode: WindowsSandboxEnableMode::Elevated,
+                                }
+                            }
                             Err(err) => {
+                                otel_manager.counter(
+                                    "codex.windows_sandbox.elevated_setup_failure",
+                                    1,
+                                    &[],
+                                );
                                 tracing::error!(
                                     error = %err,
                                     "failed to run elevated Windows sandbox setup"
@@ -1105,6 +1163,13 @@ impl App {
                 #[cfg(target_os = "windows")]
                 {
                     self.chat_widget.clear_windows_sandbox_setup_status();
+                    if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
+                        self.otel_manager.record_duration(
+                        "codex.windows_sandbox.elevated_setup_duration_ms",
+                        started_at.elapsed(),
+                        &[("result", "success")],
+                    );
+                    }
                     let profile = self.active_profile.as_deref();
                     let feature_key = Feature::WindowsSandbox.key();
                     let elevated_key = Feature::WindowsSandboxElevated.key();
@@ -1254,8 +1319,8 @@ impl App {
                 #[cfg(target_os = "windows")]
                 {
                     // One-shot suppression if the user just confirmed continue.
-                    if self.skip_world_writable_scan_once {
-                        self.skip_world_writable_scan_once = false;
+                    if self.windows_sandbox.skip_world_writable_scan_once {
+                        self.windows_sandbox.skip_world_writable_scan_once = false;
                         return Ok(AppRunControl::Continue);
                     }
 
@@ -1316,7 +1381,7 @@ impl App {
                 }
             }
             AppEvent::SkipNextWorldWritableScan => {
-                self.skip_world_writable_scan_once = true;
+                self.windows_sandbox.skip_world_writable_scan_once = true;
             }
             AppEvent::UpdateFullAccessWarningAcknowledged(ack) => {
                 self.chat_widget.set_full_access_warning_acknowledged(ack);
@@ -1738,11 +1803,14 @@ mod tests {
     use codex_core::CodexAuth;
     use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
+    use codex_core::models_manager::manager::ModelsManager;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
+    use codex_core::protocol::SessionSource;
+    use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -1762,9 +1830,12 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let otel_manager = test_otel_manager(&config, model.as_str());
 
         App {
             server,
+            otel_manager,
             app_event_tx,
             chat_widget,
             auth_manager,
@@ -1782,7 +1853,7 @@ mod tests {
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
-            skip_world_writable_scan_once: false,
+            windows_sandbox: WindowsSandboxState::default(),
             external_approval_routes: HashMap::new(),
             paused_codex_events: VecDeque::new(),
         }
@@ -1802,10 +1873,13 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let otel_manager = test_otel_manager(&config, model.as_str());
 
         (
             App {
                 server,
+                otel_manager,
                 app_event_tx,
                 chat_widget,
                 auth_manager,
@@ -1823,12 +1897,27 @@ mod tests {
                 feedback: codex_feedback::CodexFeedback::new(),
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
-                skip_world_writable_scan_once: false,
+                windows_sandbox: WindowsSandboxState::default(),
                 external_approval_routes: HashMap::new(),
                 paused_codex_events: VecDeque::new(),
             },
             rx,
             op_rx,
+        )
+    }
+
+    fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
+        let model_info = ModelsManager::construct_model_info_offline(model, config);
+        OtelManager::new(
+            ThreadId::new(),
+            model,
+            model_info.slug.as_str(),
+            None,
+            None,
+            None,
+            false,
+            "test".to_string(),
+            SessionSource::Cli,
         )
     }
 

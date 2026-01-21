@@ -1,5 +1,6 @@
 ---
 source: tui2/src/chatwidget/tests.rs
+assertion_line: 2370
 expression: popup
 ---
   Select Approval Mode
@@ -11,4 +12,3 @@ expression: popup
                           using.
 
   Press enter to confirm or esc to go back
-
