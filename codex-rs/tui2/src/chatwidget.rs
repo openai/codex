@@ -1609,9 +1609,7 @@ impl ChatWidget {
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
 
-        let model_for_header = model
-            
-            .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let model_for_header = model.unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
         let stored_collaboration_mode = if config.features.enabled(Feature::CollaborationModes) {
             collaboration_modes::default_mode(models_manager.as_ref()).unwrap_or_else(|| {
                 CollaborationMode::Custom(Settings {
