@@ -5,6 +5,7 @@ use crate::app_event::SecurityReviewAutoScopeSelection;
 use crate::app_event::SecurityReviewCommandState;
 use crate::app_event_sender::AppEventSender;
 use crate::diff_render::display_path_for;
+use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
 use crate::mermaid::fix_mermaid_blocks;
 use crate::security_prompts::*;
@@ -61,11 +62,14 @@ use serde_json::json;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
 use std::env;
 use std::fmt::Write;
 use std::fs::OpenOptions;
 use std::fs::{self};
 use std::future::Future;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::io::Read;
 use std::io::Write as IoWrite;
 use std::path::Path;
@@ -84,6 +88,7 @@ use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use tokio::fs as tokio_fs;
 use tokio::process::Command;
+use tokio::sync::Semaphore;
 use tokio::sync::oneshot;
 use tokio::task::spawn_blocking;
 use tokio::time::sleep;
@@ -101,20 +106,27 @@ const VALIDATION_PREFLIGHT_TIMEOUT_SECS: u64 = 30 * 60;
 const VALIDATION_CURL_TIMEOUT_SECS: u64 = 60;
 const VALIDATION_PLAYWRIGHT_TIMEOUT_SECS: u64 = 5 * 60;
 const VALIDATION_TESTING_CONTEXT_MAX_CHARS: usize = 12_000;
+const VALIDATION_TARGET_PREP_MAX_TURNS: usize = 3;
 
 const VALIDATION_TESTING_SECTION_HEADER: &str = "## Validation prerequisites";
-const VALIDATION_TESTING_SECTION_INTRO: &str = "This section is shared across findings; follow it before running per-bug validation scripts or Dockerfiles.";
+const VALIDATION_TESTING_SECTION_INTRO: &str = "This section is shared across findings; follow it before running per-bug validation scripts or Dockerfiles. Commands should only appear here after they have been executed successfully during validation target preparation.";
+const VALIDATION_TARGET_SECTION_HEADER: &str = "## Validation target";
+const VALIDATION_TARGET_SECTION_INTRO: &str =
+    "This section records the deployed target URL and any credentials used for web validation.";
+const WEB_VALIDATION_CREDS_FILE_NAME: &str = "web_validation_creds.json";
 
 //
 
 // Heuristic limits inspired by the AppSec review agent to keep prompts manageable.
 const DEFAULT_MAX_FILES: usize = usize::MAX;
 const DEFAULT_MAX_BYTES_PER_FILE: usize = 500_000; // ~488 KiB
-const DEFAULT_MAX_TOTAL_BYTES: usize = 7 * 1024 * 1024; // ~7 MiB
+const DEFAULT_MAX_TOTAL_BYTES: usize = 500 * 1024 * 1024; // ~500 MiB
 const MAX_PROMPT_BYTES: usize = 9_000_000; // ~8.6 MiB safety margin under API cap
 const MAX_CONCURRENT_FILE_ANALYSIS: usize = 32;
-const FILE_TRIAGE_CHUNK_SIZE: usize = 50;
-const FILE_TRIAGE_CONCURRENCY: usize = 8;
+const FILE_TRIAGE_PREVIEW_CHARS: usize = 200;
+const FILE_TRIAGE_CHUNK_SIZE: usize = 10;
+const FILE_TRIAGE_CONCURRENCY: usize = 32;
+const DIR_TRIAGE_LOG_LIMIT: usize = 30;
 const MAX_SEARCH_REQUESTS_PER_FILE: usize = 3;
 const MAX_SEARCH_OUTPUT_CHARS: usize = 4_000;
 const MAX_COMMAND_ERROR_RETRIES: usize = 10;
@@ -125,11 +137,20 @@ const MAX_FILE_SEARCH_RESULTS: usize = 40;
 const BUG_FINDING_PASSES: usize = 1;
 const BUG_POLISH_CONCURRENCY: usize = 8;
 const BUG_DEDUP_CONFIDENCE_THRESHOLD: f32 = 0.85;
+const BUG_LLM_DEDUP_CONCURRENCY: usize = 32;
+const BUG_LLM_DEDUP_LINE_BUCKET_SIZE: u32 = 25;
+const BUG_LLM_DEDUP_LOW_SEVERITY_MAX_FINDINGS: usize = 100;
+const BUG_LLM_DEDUP_REASON_LOG_LIMIT: usize = 12;
 const BUG_DEDUP_PROMPT_MAX_CHARS: usize = 120_000;
+const BUG_LLM_DEDUP_PASS1_CACHE_FILE: &str = "llm_dedupe_pass1_cache.json";
 const COMMAND_PREVIEW_MAX_LINES: usize = 2;
 const COMMAND_PREVIEW_MAX_GRAPHEMES: usize = 96;
 const MODEL_REASONING_LOG_MAX_GRAPHEMES: usize = 240;
 const BUG_SCOPE_PROMPT_MAX_GRAPHEMES: usize = 600;
+const BUG_REPOSITORY_SUMMARY_MAX_CHARS: usize = 20_000;
+const BUG_SPEC_CONTEXT_MAX_CHARS: usize = 40_000;
+const BUG_FILE_CONTEXT_FALLBACK_MAX_CHARS: usize = 60_000;
+const BUG_FILE_CONTEXT_RETRY_MAX_CHARS: usize = 20_000;
 const ANALYSIS_CONTEXT_MAX_CHARS: usize = 6_000;
 const AUTO_SCOPE_MODEL: &str = "gpt-5-codex";
 const FILE_TRIAGE_MODEL: &str = "gpt-5.2-codex";
@@ -141,7 +162,7 @@ const CLASSIFICATION_PROMPT_SPEC_LIMIT: usize = 16_000;
 // prompts moved to `security_prompts.rs`
 const BUG_RERANK_CHUNK_SIZE: usize = 1;
 const BUG_RERANK_MAX_CONCURRENCY: usize = 32;
-const BUG_RERANK_CONTEXT_MAX_CHARS: usize = 2000;
+const BUG_RERANK_CONTEXT_MAX_CHARS: usize = 6_000;
 const BUG_RERANK_MAX_TOOL_ROUNDS: usize = 4;
 const BUG_RERANK_MAX_COMMAND_ERRORS: usize = 5;
 const SPEC_COMBINE_MAX_TOOL_ROUNDS: usize = 6;
@@ -192,7 +213,7 @@ const AUTO_SCOPE_MARKER_FILES: [&str; 25] = [
 pub(crate) const SECURITY_REVIEW_FOLLOW_UP_MARKER: &str = "[codex-security-review-follow-up]";
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 
-static EXCLUDED_DIR_NAMES: [&str; 13] = [
+static EXCLUDED_DIR_NAMES: [&str; 20] = [
     ".git",
     ".svn",
     ".hg",
@@ -200,13 +221,38 @@ static EXCLUDED_DIR_NAMES: [&str; 13] = [
     "vendor",
     ".venv",
     "__pycache__",
+    "test",
+    "tests",
+    "__tests__",
     "dist",
     "build",
+    "buck-out",
+    "bazel-out",
+    "coverage",
+    ".pytest_cache",
     ".idea",
     ".vscode",
     ".cache",
     "target",
 ];
+
+fn path_has_excluded_dir_component(path: &Path) -> bool {
+    let mut comps = path.components().peekable();
+    while let Some(comp) = comps.next() {
+        if comps.peek().is_none() {
+            break;
+        }
+        if let std::path::Component::Normal(part) = comp
+            && let Some(name) = part.to_str()
+            && EXCLUDED_DIR_NAMES
+                .iter()
+                .any(|excluded| excluded.eq_ignore_ascii_case(name))
+        {
+            return true;
+        }
+    }
+    false
+}
 
 pub fn sanitize_repo_slug(repo_path: &Path) -> String {
     let raw = repo_path
@@ -359,7 +405,35 @@ fn write_checkpoint(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let bytes = serde_json::to_vec_pretty(checkpoint)?;
+    let mut value = serde_json::to_value(checkpoint).map_err(std::io::Error::other)?;
+    if let Value::Object(map) = &mut value
+        && let Some(plan_statuses) = map.get_mut("plan_statuses")
+        && let Value::Object(plan_map) = plan_statuses
+    {
+        let mut ordered: Map<String, Value> = Map::new();
+        let mut known: HashSet<String> = HashSet::new();
+
+        for step in plan_steps_for_mode(checkpoint.mode) {
+            let slug = plan_step_slug(step.kind).to_string();
+            known.insert(slug.clone());
+            if let Some(value) = plan_map.get(&slug) {
+                ordered.insert(slug, value.clone());
+            }
+        }
+
+        let mut extras: Vec<(String, Value)> = plan_map
+            .iter()
+            .filter(|(key, _)| !known.contains(key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        extras.sort_by(|a, b| a.0.cmp(&b.0));
+        for (key, value) in extras {
+            ordered.insert(key, value);
+        }
+
+        *plan_map = ordered;
+    }
+    let bytes = serde_json::to_vec_pretty(&value).map_err(std::io::Error::other)?;
     fs::write(path, bytes)
 }
 
@@ -369,10 +443,412 @@ pub struct RunningSecurityReviewCandidate {
     pub checkpoint: SecurityReviewCheckpoint,
 }
 
-pub fn latest_running_review_candidate(repo_path: &Path) -> Option<RunningSecurityReviewCandidate> {
+pub(crate) fn plan_progress_and_current_step(
+    statuses: &HashMap<String, StepStatus>,
+    mode: SecurityReviewMode,
+) -> (usize, usize, Option<String>) {
+    let steps = plan_steps_for_mode(mode);
+    let total = steps.len();
+    let mut completed = 0usize;
+    let mut current: Option<String> = None;
+
+    for step in &steps {
+        let slug = plan_step_slug(step.kind);
+        match statuses.get(slug) {
+            Some(StepStatus::Completed) => completed = completed.saturating_add(1),
+            Some(StepStatus::InProgress) => {
+                if current.is_none() {
+                    current = Some(step.title.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if current.is_none() {
+        current = steps
+            .iter()
+            .find(|step| {
+                let slug = plan_step_slug(step.kind);
+                !matches!(statuses.get(slug), Some(StepStatus::Completed))
+            })
+            .map(|step| step.title.clone());
+    }
+
+    (completed, total, current)
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SecurityReviewResumeProgress {
+    pub completed_steps: usize,
+    pub total_steps: usize,
+    pub percent: usize,
+    pub current_step: Option<String>,
+    pub detail: Option<String>,
+}
+
+pub(crate) fn resume_progress_snapshot(
+    checkpoint: &SecurityReviewCheckpoint,
+    output_root: &Path,
+) -> SecurityReviewResumeProgress {
+    let repo_root = checkpoint.repo_root.as_path();
+    let steps = plan_steps_for_mode(checkpoint.mode);
+    let total_steps = steps.len();
+
+    let mut completed_steps = 0usize;
+    let mut current_step: Option<String> = None;
+    let mut total_fraction: f64 = 0.0;
+    let mut detail_parts: Vec<String> = Vec::new();
+
+    let spec_progress = resume_spec_generation_progress(output_root, repo_root);
+    let bug_progress = resume_bug_analysis_progress(output_root);
+    let validation_prep_complete = validation_target_prep_complete(output_root, repo_root);
+
+    for step in &steps {
+        let slug = plan_step_slug(step.kind);
+        let mut status = checkpoint
+            .plan_statuses
+            .get(slug)
+            .cloned()
+            .unwrap_or(StepStatus::Pending);
+        if !matches!(status, StepStatus::Completed)
+            && step.kind == SecurityReviewPlanStep::PrepareValidationTargets
+            && validation_prep_complete
+        {
+            status = StepStatus::Completed;
+        }
+
+        match status {
+            StepStatus::Completed => {
+                completed_steps = completed_steps.saturating_add(1);
+                total_fraction += 1.0;
+            }
+            StepStatus::InProgress => {
+                if current_step.is_none() {
+                    current_step = Some(step.title.clone());
+                }
+
+                let progress_fraction = match step.kind {
+                    SecurityReviewPlanStep::GenerateSpecs => spec_progress
+                        .as_ref()
+                        .and_then(ResumeCountProgress::fraction)
+                        .inspect(|_| {
+                            if let Some(progress) = spec_progress.as_ref() {
+                                detail_parts.push(progress.label("spec dirs"));
+                            }
+                        }),
+                    SecurityReviewPlanStep::AnalyzeBugs => bug_progress
+                        .as_ref()
+                        .and_then(ResumeCountProgress::fraction)
+                        .inspect(|_| {
+                            if let Some(progress) = bug_progress.as_ref() {
+                                detail_parts.push(progress.label("files"));
+                            }
+                        }),
+                    _ => None,
+                };
+
+                if let Some(fraction) = progress_fraction {
+                    total_fraction += fraction.clamp(0.0, 1.0);
+                }
+            }
+            StepStatus::Pending => {}
+        }
+    }
+
+    if current_step.is_none() {
+        current_step = steps
+            .iter()
+            .find(|step| {
+                let slug = plan_step_slug(step.kind);
+                !matches!(
+                    checkpoint.plan_statuses.get(slug),
+                    Some(StepStatus::Completed)
+                )
+            })
+            .map(|step| step.title.clone());
+    }
+
+    let percent = if total_steps == 0 {
+        0
+    } else {
+        ((total_fraction / total_steps as f64) * 100.0)
+            .round()
+            .clamp(0.0, 100.0) as usize
+    };
+
+    let detail = detail_parts
+        .into_iter()
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    SecurityReviewResumeProgress {
+        completed_steps,
+        total_steps,
+        percent,
+        current_step,
+        detail: (!detail.is_empty()).then_some(detail),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResumeCountProgress {
+    done: usize,
+    total: usize,
+}
+
+impl ResumeCountProgress {
+    fn fraction(&self) -> Option<f64> {
+        if self.total == 0 {
+            return None;
+        }
+        Some(self.done.min(self.total) as f64 / self.total as f64)
+    }
+
+    fn label(&self, noun: &str) -> String {
+        format!("{noun}: {}/{}", self.done.min(self.total), self.total)
+    }
+}
+
+fn resume_spec_generation_progress(
+    output_root: &Path,
+    repo_root: &Path,
+) -> Option<ResumeCountProgress> {
+    let path = output_root
+        .join("context")
+        .join("spec_generation_progress.json");
+    let bytes = fs::read(path).ok()?;
+    let progress = serde_json::from_slice::<SpecGenerationProgress>(&bytes).ok()?;
+    if progress.version != 1 {
+        return None;
+    }
+    if progress.repo_root != repo_root.display().to_string() {
+        return None;
+    }
+    let total = progress.targets.len();
+    let done = progress.completed.len();
+    Some(ResumeCountProgress { done, total })
+}
+
+fn resume_bug_analysis_progress(output_root: &Path) -> Option<ResumeCountProgress> {
+    let context_dir = output_root.join("context");
+    let mut best_pass: Option<(i32, PathBuf)> = None;
+
+    if let Ok(entries) = fs::read_dir(&context_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Some(pass_str) = file_name
+                .strip_prefix("bug_analysis_pass_")
+                .and_then(|rest| rest.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            let Ok(pass) = pass_str.parse::<i32>() else {
+                continue;
+            };
+            let should_replace = best_pass.as_ref().is_none_or(|(best, _)| pass > *best);
+            if should_replace {
+                best_pass = Some((pass, path));
+            }
+        }
+    }
+
+    let path = best_pass.map(|(_, path)| path).or_else(|| {
+        let fallback = context_dir.join("bug_analysis_pass_1.json");
+        fallback.exists().then_some(fallback)
+    })?;
+
+    let bytes = fs::read(path).ok()?;
+    let progress = serde_json::from_slice::<BugAnalysisProgress>(&bytes).ok()?;
+    if progress.version != 1 {
+        return None;
+    }
+
+    let total = usize::try_from(progress.total_files.max(0)).unwrap_or(0);
+    let done = progress.files.len();
+    Some(ResumeCountProgress { done, total })
+}
+
+fn bug_analysis_progress_paths(output_root: &Path) -> Vec<(i32, PathBuf)> {
+    let context_dir = output_root.join("context");
+    let mut progress_paths: Vec<(i32, PathBuf)> = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(&context_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Some(pass_str) = file_name
+                .strip_prefix("bug_analysis_pass_")
+                .and_then(|rest| rest.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            let Ok(pass) = pass_str.parse::<i32>() else {
+                continue;
+            };
+            progress_paths.push((pass, path));
+        }
+    }
+
+    progress_paths.sort_by_key(|(pass, _)| *pass);
+    progress_paths
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct ValidationTargetPrepProgress {
+    version: i32,
+    repo_root: String,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    local_build_ok: bool,
+    #[serde(default)]
+    local_run_ok: bool,
+    #[serde(default)]
+    docker_build_ok: bool,
+    #[serde(default)]
+    docker_run_ok: bool,
+    #[serde(default)]
+    local_entrypoint: Option<String>,
+    #[serde(default)]
+    local_build_command: Option<String>,
+    #[serde(default)]
+    local_smoke_command: Option<String>,
+    #[serde(default)]
+    dockerfile_path: Option<String>,
+    #[serde(default)]
+    docker_image_tag: Option<String>,
+    #[serde(default)]
+    docker_build_command: Option<String>,
+    #[serde(default)]
+    docker_smoke_command: Option<String>,
+}
+
+struct BugAnalysisProgressLoadOutcome {
+    bug_summaries: Vec<BugSummary>,
+    bug_details: Vec<BugDetail>,
+    files_with_findings: Vec<FileSnippet>,
+    logs: Vec<String>,
+}
+
+async fn load_bug_summaries_from_bug_analysis_progress(
+    output_root: &Path,
+    repo_root: &Path,
+    selected_snippets: &[FileSnippet],
+) -> Result<Option<BugAnalysisProgressLoadOutcome>, SecurityReviewFailure> {
+    let paths = bug_analysis_progress_paths(output_root);
+    if paths.is_empty() {
+        return Ok(None);
+    }
+
+    let mut snippet_index_by_path: HashMap<PathBuf, usize> = HashMap::new();
+    for (index, snippet) in selected_snippets.iter().enumerate() {
+        snippet_index_by_path.insert(snippet.relative_path.clone(), index);
+    }
+
+    let mut bug_summaries: Vec<BugSummary> = Vec::new();
+    let mut bug_details: Vec<BugDetail> = Vec::new();
+    let mut files_with_findings: Vec<FileSnippet> = Vec::new();
+    let mut logs: Vec<String> = Vec::new();
+    let mut next_summary_id = 1usize;
+
+    for (pass, path) in paths {
+        let Some(progress) = read_bug_analysis_progress(&path).await? else {
+            continue;
+        };
+        if progress.version != 1 {
+            continue;
+        }
+        logs.push(format!(
+            "Reusing bug analysis pass {pass} from {} for dedupe/polish.",
+            display_path_for(&path, repo_root)
+        ));
+
+        let mut files = progress.files;
+        files.sort_by_key(|entry| entry.index);
+        for entry in files {
+            let Some(section) = entry.bug_section else {
+                continue;
+            };
+            if section.trim().is_empty() {
+                continue;
+            }
+
+            let snippet_index = snippet_index_by_path
+                .get(&PathBuf::from(entry.relative_path.as_str()))
+                .copied()
+                .or_else(|| usize::try_from(entry.index).ok())
+                .filter(|index| *index < selected_snippets.len());
+            let Some(snippet_index) = snippet_index else {
+                continue;
+            };
+
+            let snippet = &selected_snippets[snippet_index];
+            let file_path = snippet.relative_path.display().to_string();
+            let (mut summaries, mut details) = extract_bug_summaries(
+                &section,
+                &file_path,
+                snippet.relative_path.as_path(),
+                &mut next_summary_id,
+            );
+            bug_summaries.append(&mut summaries);
+            bug_details.append(&mut details);
+            files_with_findings.push(snippet.clone());
+        }
+    }
+
+    if bug_summaries.is_empty() {
+        return Ok(None);
+    }
+
+    files_with_findings.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    files_with_findings.dedup_by(|a, b| a.relative_path == b.relative_path);
+
+    Ok(Some(BugAnalysisProgressLoadOutcome {
+        bug_summaries,
+        bug_details,
+        files_with_findings,
+        logs,
+    }))
+}
+
+fn validation_target_prep_progress_path(output_root: &Path) -> PathBuf {
+    output_root
+        .join("context")
+        .join("validation_target_prep.json")
+}
+
+fn validation_target_prep_complete(output_root: &Path, repo_root: &Path) -> bool {
+    let path = validation_target_prep_progress_path(output_root);
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    };
+    let progress = match serde_json::from_slice::<ValidationTargetPrepProgress>(&bytes) {
+        Ok(progress) => progress,
+        Err(_) => return false,
+    };
+    progress.version == 3
+        && progress.repo_root == repo_root.display().to_string()
+        && progress.local_build_ok
+        && progress.local_run_ok
+}
+
+pub fn running_review_candidates(repo_path: &Path) -> Vec<RunningSecurityReviewCandidate> {
     let storage_root = security_review_storage_root(repo_path);
-    let entries = fs::read_dir(storage_root).ok()?;
-    let mut candidates: Vec<(String, PathBuf, SecurityReviewCheckpoint)> = Vec::new();
+    let entries = match fs::read_dir(storage_root) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut candidates: Vec<(OffsetDateTime, String, PathBuf, SecurityReviewCheckpoint)> =
+        Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
@@ -394,19 +870,21 @@ pub fn latest_running_review_candidate(repo_path: &Path) -> Option<RunningSecuri
                     .unwrap_or("")
                     .to_string()
             });
-        candidates.push((name, path, checkpoint));
+        candidates.push((checkpoint.started_at, name, path, checkpoint));
     }
 
-    if candidates.is_empty() {
-        return None;
-    }
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    candidates
+        .into_iter()
+        .map(|(_, _, path, checkpoint)| RunningSecurityReviewCandidate {
+            output_root: path,
+            checkpoint,
+        })
+        .collect()
+}
 
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
-    let (_, path, checkpoint) = candidates.into_iter().next()?;
-    Some(RunningSecurityReviewCandidate {
-        output_root: path,
-        checkpoint,
-    })
+pub fn latest_running_review_candidate(repo_path: &Path) -> Option<RunningSecurityReviewCandidate> {
+    running_review_candidates(repo_path).into_iter().next()
 }
 
 pub fn latest_completed_review_candidate(
@@ -502,10 +980,43 @@ pub struct SecurityReviewRequest {
     pub resume_checkpoint: Option<SecurityReviewCheckpoint>,
     // Optional Linear issue reference to sync status and create child tickets.
     pub linear_issue: Option<String>,
+    // Optional deployed target for web/API validation (enables curl/playwright tools).
+    pub validation_target_url: Option<String>,
+    // Optional credentials file for web validation (headers only; values redacted in output).
+    pub validation_creds_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
 pub struct SecurityReviewSetupResult {
+    pub logs: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SecurityReviewRerunTarget {
+    PrepareValidationTargets,
+}
+
+impl SecurityReviewRerunTarget {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            SecurityReviewRerunTarget::PrepareValidationTargets => "prepare_validation_targets",
+        }
+    }
+
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            SecurityReviewRerunTarget::PrepareValidationTargets => "Prepare validation targets",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SecurityReviewRerunResult {
+    pub target: SecurityReviewRerunTarget,
+    pub repo_root: PathBuf,
+    pub output_root: PathBuf,
+    pub testing_md_path: PathBuf,
+    pub success: bool,
     pub logs: Vec<String>,
 }
 
@@ -534,15 +1045,17 @@ pub struct SecurityReviewFailure {
     pub logs: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SecurityReviewCheckpointStatus {
+    #[default]
     Running,
     Complete,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SecurityReviewCheckpoint {
+    #[serde(default)]
     pub(crate) status: SecurityReviewCheckpointStatus,
     pub(crate) mode: SecurityReviewMode,
     pub(crate) include_paths: Vec<String>,
@@ -557,6 +1070,7 @@ pub struct SecurityReviewCheckpoint {
     #[serde(with = "time::serde::rfc3339")]
     pub(crate) started_at: OffsetDateTime,
     pub(crate) plan_statuses: HashMap<String, StepStatus>,
+    pub(crate) triaged_dirs: Option<Vec<String>>,
     pub(crate) selected_snippets: Option<Vec<FileSnippet>>,
     pub(crate) spec: Option<StoredSpecOutcome>,
     pub(crate) threat_model: Option<StoredThreatModelOutcome>,
@@ -679,15 +1193,18 @@ fn is_open_source_review(prompt: &Option<String>) -> bool {
     KEYWORDS.iter().any(|keyword| lower.contains(keyword))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum SecurityReviewPlanStep {
     GenerateSpecs,
     ThreatModel,
+    DirTriage,
+    FileTriage,
     AnalyzeBugs,
     PolishFindings,
-    AssembleReport,
+    PrepareValidationTargets,
     ValidateFindings,
     PostValidationRefine,
+    AssembleReport,
 }
 
 #[derive(Clone)]
@@ -723,6 +1240,14 @@ struct SecurityReviewPlanTracker {
     log_sink: Option<Arc<SecurityReviewLogSink>>,
     explanation: String,
     steps: Vec<SecurityReviewPlanItem>,
+    step_models: HashMap<SecurityReviewPlanStep, PlanStepModelInfo>,
+    snapshots_enabled: bool,
+}
+
+#[derive(Clone)]
+struct PlanStepModelInfo {
+    model: String,
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl SecurityReviewPlanTracker {
@@ -730,6 +1255,7 @@ impl SecurityReviewPlanTracker {
         mode: SecurityReviewMode,
         scope_paths: &[PathBuf],
         repo_root: &Path,
+        step_models: HashMap<SecurityReviewPlanStep, PlanStepModelInfo>,
         sender: Option<AppEventSender>,
         log_sink: Option<Arc<SecurityReviewLogSink>>,
     ) -> Self {
@@ -742,9 +1268,15 @@ impl SecurityReviewPlanTracker {
             log_sink,
             explanation,
             steps,
+            step_models,
+            snapshots_enabled: false,
         };
         tracker.emit_update();
         tracker
+    }
+
+    fn enable_snapshots(&mut self) {
+        self.snapshots_enabled = true;
     }
 
     fn complete_and_start_next(
@@ -758,18 +1290,42 @@ impl SecurityReviewPlanTracker {
         }
         if changed {
             self.emit_update();
+            if self.snapshots_enabled {
+                self.emit_plan_snapshot();
+            }
         }
     }
 
     fn start_step(&mut self, step: SecurityReviewPlanStep) {
         if self.set_status_if_present(step, StepStatus::InProgress) {
             self.emit_update();
+            if self.snapshots_enabled {
+                self.emit_plan_snapshot();
+            }
         }
     }
 
     fn mark_complete(&mut self, step: SecurityReviewPlanStep) {
         if self.set_status_if_present(step, StepStatus::Completed) {
             self.emit_update();
+            if self.snapshots_enabled {
+                self.emit_plan_snapshot();
+            }
+        }
+    }
+
+    fn reset_step(&mut self, step: SecurityReviewPlanStep) {
+        let Some(entry) = self.steps.iter_mut().find(|item| item.kind == step) else {
+            return;
+        };
+
+        entry.status = StepStatus::Pending;
+        entry.started_at = None;
+        entry.completed_at = None;
+
+        self.emit_update();
+        if self.snapshots_enabled {
+            self.emit_plan_snapshot();
         }
     }
 
@@ -794,23 +1350,35 @@ impl SecurityReviewPlanTracker {
     fn emit_update(&self) {
         let summary = self.build_log_summary();
         if let Some(sender) = self.sender.as_ref() {
-            let plan_items: Vec<PlanItemArg> = self
-                .steps
-                .iter()
-                .map(|step| PlanItemArg {
-                    step: build_step_title(step),
-                    status: step.status.clone(),
-                })
-                .collect();
-            sender.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_plan_update(UpdatePlanArgs {
-                    explanation: Some(self.explanation.clone()),
-                    plan: plan_items,
-                }),
-            )));
             sender.send(AppEvent::SecurityReviewLog(summary.clone()));
         }
         write_log_sink(&self.log_sink, summary.as_str());
+    }
+
+    fn emit_plan_snapshot(&self) {
+        let Some(sender) = self.sender.as_ref() else {
+            return;
+        };
+
+        let plan_items: Vec<PlanItemArg> = self
+            .steps
+            .iter()
+            .map(|step| {
+                let model_info = self.step_models.get(&step.kind);
+                PlanItemArg {
+                    step: build_step_title(step),
+                    status: step.status.clone(),
+                    model: model_info.map(|info| info.model.clone()),
+                    reasoning_effort: model_info.and_then(|info| info.reasoning_effort),
+                }
+            })
+            .collect();
+        sender.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::new_plan_update(UpdatePlanArgs {
+                explanation: Some(self.explanation.clone()),
+                plan: plan_items,
+            }),
+        )));
     }
 
     fn build_log_summary(&self) -> String {
@@ -857,6 +1425,15 @@ impl SecurityReviewPlanTracker {
 fn plan_steps_for_mode(mode: SecurityReviewMode) -> Vec<SecurityReviewPlanItem> {
     let mut steps = Vec::new();
 
+    steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::DirTriage,
+        "Triage directories",
+    ));
+    steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::FileTriage,
+        "Triage files",
+    ));
+
     if matches!(mode, SecurityReviewMode::Full) {
         steps.push(SecurityReviewPlanItem::new(
             SecurityReviewPlanStep::GenerateSpecs,
@@ -877,6 +1454,10 @@ fn plan_steps_for_mode(mode: SecurityReviewMode) -> Vec<SecurityReviewPlanItem> 
         "Polish, dedupe, and rerank findings",
     ));
     steps.push(SecurityReviewPlanItem::new(
+        SecurityReviewPlanStep::PrepareValidationTargets,
+        "Prepare runnable validation targets",
+    ));
+    steps.push(SecurityReviewPlanItem::new(
         SecurityReviewPlanStep::ValidateFindings,
         "Validate findings",
     ));
@@ -895,8 +1476,11 @@ fn plan_step_slug(step: SecurityReviewPlanStep) -> &'static str {
     match step {
         SecurityReviewPlanStep::GenerateSpecs => "generate_specs",
         SecurityReviewPlanStep::ThreatModel => "threat_model",
+        SecurityReviewPlanStep::DirTriage => "dir_triage",
+        SecurityReviewPlanStep::FileTriage => "file_triage",
         SecurityReviewPlanStep::AnalyzeBugs => "analyze_bugs",
         SecurityReviewPlanStep::PolishFindings => "polish_findings",
+        SecurityReviewPlanStep::PrepareValidationTargets => "prepare_validation_targets",
         SecurityReviewPlanStep::AssembleReport => "assemble_report",
         SecurityReviewPlanStep::ValidateFindings => "validate_findings",
         SecurityReviewPlanStep::PostValidationRefine => "post_validation_refine",
@@ -907,8 +1491,11 @@ fn plan_step_from_slug(slug: &str) -> Option<SecurityReviewPlanStep> {
     match slug {
         "generate_specs" => Some(SecurityReviewPlanStep::GenerateSpecs),
         "threat_model" => Some(SecurityReviewPlanStep::ThreatModel),
+        "dir_triage" => Some(SecurityReviewPlanStep::DirTriage),
+        "file_triage" => Some(SecurityReviewPlanStep::FileTriage),
         "analyze_bugs" => Some(SecurityReviewPlanStep::AnalyzeBugs),
         "polish_findings" => Some(SecurityReviewPlanStep::PolishFindings),
+        "prepare_validation_targets" => Some(SecurityReviewPlanStep::PrepareValidationTargets),
         "assemble_report" => Some(SecurityReviewPlanStep::AssembleReport),
         "validate_findings" => Some(SecurityReviewPlanStep::ValidateFindings),
         "post_validation_refine" => Some(SecurityReviewPlanStep::PostValidationRefine),
@@ -936,6 +1523,13 @@ pub(crate) struct FileSnippet {
     language: String,
     content: String,
     bytes: usize,
+}
+
+fn dedupe_file_snippets(snippets: &mut Vec<FileSnippet>) -> usize {
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let original = snippets.len();
+    snippets.retain(|snippet| seen.insert(snippet.relative_path.clone()));
+    original.saturating_sub(snippets.len())
 }
 
 struct FileCollectionResult {
@@ -974,6 +1568,10 @@ impl SecurityReviewLogSink {
         let mut sink = Self::new(path)?;
         sink.callback = Some(callback);
         Ok(sink)
+    }
+
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     fn write(&self, message: &str) {
@@ -1357,6 +1955,7 @@ struct FileBugResult {
     duration: Duration,
     logs: Vec<String>,
     bug_section: Option<String>,
+    error_message: Option<String>,
     snippet: Option<FileSnippet>,
     findings_count: usize,
 }
@@ -1741,7 +2340,11 @@ async fn run_grep_files(
             } else {
                 let mut text = lines.join("\n");
                 if text.len() > MAX_SEARCH_OUTPUT_CHARS {
-                    text.truncate(MAX_SEARCH_OUTPUT_CHARS);
+                    let mut boundary = MAX_SEARCH_OUTPUT_CHARS;
+                    while boundary > 0 && !text.is_char_boundary(boundary) {
+                        boundary -= 1;
+                    }
+                    text.truncate(boundary);
                     text.push_str("\n... (truncated)");
                 }
                 SearchResult::Matches(text)
@@ -1792,7 +2395,11 @@ async fn run_grep_files(
                         } else {
                             let mut text = lines.join("\n");
                             if text.len() > MAX_SEARCH_OUTPUT_CHARS {
-                                text.truncate(MAX_SEARCH_OUTPUT_CHARS);
+                                let mut boundary = MAX_SEARCH_OUTPUT_CHARS;
+                                while boundary > 0 && !text.is_char_boundary(boundary) {
+                                    boundary -= 1;
+                                }
+                                text.truncate(boundary);
                                 text.push_str("\n... (truncated)");
                             }
                             SearchResult::Matches(text)
@@ -2148,6 +2755,40 @@ impl BugVerificationTool {
     }
 }
 
+#[derive(Clone)]
+struct WebValidationConfig {
+    base_url: Url,
+    headers: Vec<(String, String)>,
+    redactions: Vec<String>,
+}
+
+impl std::fmt::Debug for WebValidationConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let header_names: Vec<&str> = self.headers.iter().map(|(k, _)| k.as_str()).collect();
+        f.debug_struct("WebValidationConfig")
+            .field("base_url", &self.base_url.as_str())
+            .field("headers", &header_names)
+            .finish()
+    }
+}
+
+impl WebValidationConfig {
+    fn origin(&self) -> String {
+        self.base_url.origin().ascii_serialization()
+    }
+
+    fn redact(&self, text: &str) -> String {
+        let mut scrubbed = text.to_string();
+        for secret in &self.redactions {
+            if secret.is_empty() {
+                continue;
+            }
+            scrubbed = scrubbed.replace(secret, "[REDACTED]");
+        }
+        scrubbed
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct BugVerificationRequest {
     pub id: BugIdentifier,
@@ -2166,6 +2807,7 @@ pub(crate) struct BugVerificationBatchRequest {
     pub repo_path: PathBuf,
     pub work_dir: PathBuf,
     pub requests: Vec<BugVerificationRequest>,
+    web_validation: Option<WebValidationConfig>,
 }
 
 #[derive(Clone, Debug)]
@@ -2359,66 +3001,79 @@ fn render_bug_sections(
             composed.push_str(&format!("- **Control summary:** {control_summary}\n"));
         }
         if !snapshot.bug.validation.repro_steps.is_empty() {
+            let steps: Vec<&str> = snapshot
+                .bug
+                .validation
+                .repro_steps
+                .iter()
+                .map(String::as_str)
+                .filter(|step| {
+                    let trimmed = step.trim_start();
+                    trimmed.starts_with("Run:") || trimmed.starts_with("$ ")
+                })
+                .collect();
+            let steps = if steps.is_empty() {
+                snapshot
+                    .bug
+                    .validation
+                    .repro_steps
+                    .iter()
+                    .map(String::as_str)
+                    .collect()
+            } else {
+                steps
+            };
             composed.push_str("- **Repro steps:**\n");
-            for (i, step) in snapshot.bug.validation.repro_steps.iter().enumerate() {
+            for (i, step) in steps.iter().enumerate() {
                 let n = i + 1;
                 let step = step.trim();
                 composed.push_str(&format!("  {n}. {step}\n"));
             }
         }
         if !snapshot.bug.validation.control_steps.is_empty() {
+            let steps: Vec<&str> = snapshot
+                .bug
+                .validation
+                .control_steps
+                .iter()
+                .map(String::as_str)
+                .filter(|step| {
+                    let trimmed = step.trim_start();
+                    trimmed.starts_with("Run:") || trimmed.starts_with("$ ")
+                })
+                .collect();
+            let steps = if steps.is_empty() {
+                snapshot
+                    .bug
+                    .validation
+                    .control_steps
+                    .iter()
+                    .map(String::as_str)
+                    .collect()
+            } else {
+                steps
+            };
             composed.push_str("- **Control steps:**\n");
-            for (i, step) in snapshot.bug.validation.control_steps.iter().enumerate() {
+            for (i, step) in steps.iter().enumerate() {
                 let n = i + 1;
                 let step = step.trim();
                 composed.push_str(&format!("  {n}. {step}\n"));
             }
         }
-        let mut artifacts: Vec<String> = Vec::new();
-        if let Some(path) = snapshot
+        let artifacts: Vec<String> = snapshot
             .bug
             .validation
-            .stdout_path
-            .as_ref()
-            .filter(|path| !path.is_empty())
-        {
-            artifacts.push(format!("stdout: `{path}`"));
-        }
-        if let Some(path) = snapshot
-            .bug
-            .validation
-            .stderr_path
-            .as_ref()
-            .filter(|path| !path.is_empty())
-        {
-            artifacts.push(format!("stderr: `{path}`"));
-        }
-        if let Some(path) = snapshot
-            .bug
-            .validation
-            .control_stdout_path
-            .as_ref()
-            .filter(|path| !path.is_empty())
-        {
-            artifacts.push(format!("control stdout: `{path}`"));
-        }
-        if let Some(path) = snapshot
-            .bug
-            .validation
-            .control_stderr_path
-            .as_ref()
-            .filter(|path| !path.is_empty())
-        {
-            artifacts.push(format!("control stderr: `{path}`"));
-        }
-        artifacts.extend(snapshot.bug.validation.artifacts.iter().filter_map(|a| {
-            let trimmed = a.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(format!("`{trimmed}`"))
-            }
-        }));
+            .artifacts
+            .iter()
+            .filter_map(|a| {
+                let trimmed = a.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(format!("`{trimmed}`"))
+                }
+            })
+            .collect();
         if !artifacts.is_empty() {
             composed.push_str(&format!("- **Artifacts:** {}\n", artifacts.join(", ")));
         }
@@ -2451,7 +3106,7 @@ fn render_bug_sections(
             validation_output.as_deref(),
             poc_artifact.as_deref(),
         ) {
-            composed.push_str("\n");
+            composed.push('\n');
             composed.push_str(exploit.trim());
             composed.push('\n');
         }
@@ -2673,6 +3328,7 @@ fn count_files_with_findings_from_snapshots(snapshots: &[BugSnapshot]) -> usize 
     files.len()
 }
 
+#[cfg(test)]
 fn dedupe_security_review_snapshot(snapshot: &mut SecurityReviewSnapshot) -> usize {
     let mut summaries: Vec<BugSummary> = Vec::with_capacity(snapshot.bugs.len());
     let mut details: Vec<BugDetail> = Vec::with_capacity(snapshot.bugs.len());
@@ -3405,6 +4061,12 @@ pub async fn run_security_review(
 ) -> Result<SecurityReviewResult, SecurityReviewFailure> {
     request.provider = provider_with_beta_features(&request.provider, &request.config);
 
+    request.validation_target_url = request
+        .validation_target_url
+        .take()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
     request.model = request.model.trim().to_string();
     if request.model.is_empty() {
         request.model = BUG_MODEL.to_string();
@@ -3430,6 +4092,14 @@ pub async fn run_security_review(
         request.writing_model = MARKDOWN_FIX_MODEL.to_string();
     }
 
+    let threat_model_model = request
+        .config
+        .security_review_models
+        .threat_model
+        .clone()
+        .filter(|model| !model.trim().is_empty())
+        .unwrap_or_else(|| THREAT_MODEL_MODEL.to_string());
+
     let global_reasoning_effort = request.config.model_reasoning_effort;
     let triage_reasoning_effort = request
         .config
@@ -3443,6 +4113,11 @@ pub async fn run_security_review(
         .spec
         .or(global_reasoning_effort)
         .or(Some(ReasoningEffort::High));
+    let threat_model_reasoning_effort = request
+        .config
+        .security_review_reasoning_efforts
+        .threat_model
+        .or(spec_reasoning_effort);
     let bug_reasoning_effort = request
         .config
         .security_review_reasoning_efforts
@@ -3479,6 +4154,24 @@ pub async fn run_security_review(
                         write_log_sink(&log_sink_for_task, message.as_str());
                         if log_sink_for_task.is_none() {
                             tracing::info!("{message}");
+                        }
+                    }
+                    AppEvent::InsertHistoryCell(cell) => {
+                        for line in cell
+                            .transcript_lines(u16::MAX)
+                            .into_iter()
+                            .map(|line| {
+                                line.spans
+                                    .iter()
+                                    .map(|span| span.content.as_ref())
+                                    .collect::<String>()
+                            })
+                            .filter(|line| !line.trim().is_empty())
+                        {
+                            write_log_sink(&log_sink_for_task, line.as_str());
+                            if log_sink_for_task.is_none() {
+                                tracing::info!("{line}");
+                            }
                         }
                     }
                     AppEvent::SecurityReviewCommandStatus {
@@ -3562,6 +4255,7 @@ pub async fn run_security_review(
         repo_root: repo_path.clone(),
         started_at: OffsetDateTime::now_utc(),
         plan_statuses: default_plan_statuses(mode),
+        triaged_dirs: None,
         selected_snippets: None,
         spec: None,
         threat_model: None,
@@ -4020,16 +4714,147 @@ pub async fn run_security_review(
         });
     }
 
+    let mut plan_step_models: HashMap<SecurityReviewPlanStep, PlanStepModelInfo> = HashMap::new();
+    if matches!(mode, SecurityReviewMode::Full) {
+        plan_step_models.insert(
+            SecurityReviewPlanStep::GenerateSpecs,
+            PlanStepModelInfo {
+                model: request.spec_model.clone(),
+                reasoning_effort: spec_reasoning_effort,
+            },
+        );
+        plan_step_models.insert(
+            SecurityReviewPlanStep::ThreatModel,
+            PlanStepModelInfo {
+                model: threat_model_model.clone(),
+                reasoning_effort: threat_model_reasoning_effort,
+            },
+        );
+    }
+    plan_step_models.insert(
+        SecurityReviewPlanStep::DirTriage,
+        PlanStepModelInfo {
+            model: request.triage_model.clone(),
+            reasoning_effort: triage_reasoning_effort,
+        },
+    );
+    plan_step_models.insert(
+        SecurityReviewPlanStep::FileTriage,
+        PlanStepModelInfo {
+            model: request.triage_model.clone(),
+            reasoning_effort: triage_reasoning_effort,
+        },
+    );
+    plan_step_models.insert(
+        SecurityReviewPlanStep::AnalyzeBugs,
+        PlanStepModelInfo {
+            model: request.model.clone(),
+            reasoning_effort: bug_reasoning_effort,
+        },
+    );
+    plan_step_models.insert(
+        SecurityReviewPlanStep::PolishFindings,
+        PlanStepModelInfo {
+            model: request.model.clone(),
+            reasoning_effort: bug_reasoning_effort,
+        },
+    );
+    plan_step_models.insert(
+        SecurityReviewPlanStep::PrepareValidationTargets,
+        PlanStepModelInfo {
+            model: request.validation_model.clone(),
+            reasoning_effort: validation_reasoning_effort,
+        },
+    );
+    plan_step_models.insert(
+        SecurityReviewPlanStep::ValidateFindings,
+        PlanStepModelInfo {
+            model: request.validation_model.clone(),
+            reasoning_effort: validation_reasoning_effort,
+        },
+    );
+    plan_step_models.insert(
+        SecurityReviewPlanStep::PostValidationRefine,
+        PlanStepModelInfo {
+            model: request.validation_model.clone(),
+            reasoning_effort: validation_reasoning_effort,
+        },
+    );
+    plan_step_models.insert(
+        SecurityReviewPlanStep::AssembleReport,
+        PlanStepModelInfo {
+            model: request.writing_model.clone(),
+            reasoning_effort: writing_reasoning_effort,
+        },
+    );
+
     let mut plan_tracker = SecurityReviewPlanTracker::new(
         mode,
         &include_paths,
         &repo_path,
+        plan_step_models,
         progress_sender.clone(),
         log_sink.clone(),
     );
     plan_tracker.restore_statuses(&checkpoint.plan_statuses);
+    if checkpoint.selected_snippets.is_some()
+        && !matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::FileTriage),
+            Some(StepStatus::Completed)
+        )
+    {
+        plan_tracker.mark_complete(SecurityReviewPlanStep::DirTriage);
+        plan_tracker.mark_complete(SecurityReviewPlanStep::FileTriage);
+    }
+    let validation_prep_complete =
+        validation_target_prep_complete(&request.output_root, &repo_path);
+    if validation_prep_complete {
+        push_progress_log(
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+            format!(
+                "Prepare runnable validation targets: existing prep marker found at {}; skipping.",
+                validation_target_prep_progress_path(&request.output_root).display()
+            ),
+        );
+        plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
+    } else if matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+        Some(StepStatus::Completed | StepStatus::InProgress)
+    ) {
+        push_progress_log(
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+            "Prepare runnable validation targets: checkpoint marked this step complete, but no valid prep marker was found; rerunning."
+                .to_string(),
+        );
+        plan_tracker.reset_step(SecurityReviewPlanStep::PrepareValidationTargets);
+    }
+    if !validation_prep_complete
+        && matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
+            Some(StepStatus::InProgress)
+        )
+    {
+        push_progress_log(
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+            "Validate findings: waiting for validation target preparation; resetting status to pending."
+                .to_string(),
+        );
+        plan_tracker.reset_step(SecurityReviewPlanStep::ValidateFindings);
+    }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
+    plan_tracker.emit_plan_snapshot();
+    plan_tracker.enable_snapshots();
+
+    let mut validation_target_prep_task: Option<
+        tokio::task::JoinHandle<ValidationTargetPrepOutcome>,
+    > = None;
 
     let mut selected_snippets = checkpoint.selected_snippets.clone();
     if selected_snippets.is_none() {
@@ -4090,16 +4915,33 @@ pub async fn run_security_review(
 
         let triage_model = request.triage_model.as_str();
 
-        // First prune at the directory level to keep triage manageable.
+        // First prune at the directory level to keep triage manageable (and to avoid build/test
+        // artifacts).
+        let dir_key_for = |path: &Path| -> PathBuf {
+            let Some(parent) = path.parent() else {
+                return PathBuf::from(".");
+            };
+            if parent == Path::new("") || parent == Path::new(".") {
+                return PathBuf::from(".");
+            }
+            let mut components = parent.components();
+            match components.next() {
+                Some(std::path::Component::Normal(part)) => PathBuf::from(part),
+                _ => PathBuf::from("."),
+            }
+        };
+
         let mut directories: HashMap<PathBuf, Vec<FileSnippet>> = HashMap::new();
+        let mut excluded_files = 0usize;
         for snippet in collection.snippets {
-            let parent = snippet
-                .relative_path
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from("."));
-            directories.entry(parent).or_default().push(snippet);
+            if path_has_excluded_dir_component(&snippet.relative_path) {
+                excluded_files = excluded_files.saturating_add(1);
+                continue;
+            }
+            let dir_key = dir_key_for(&snippet.relative_path);
+            directories.entry(dir_key).or_default().push(snippet);
         }
+
         let mut ranked_dirs: Vec<(PathBuf, Vec<FileSnippet>, usize)> = directories
             .into_iter()
             .map(|(dir, snippets)| {
@@ -4107,33 +4949,253 @@ pub async fn run_security_review(
                 (dir, snippets, bytes)
             })
             .collect();
-        ranked_dirs.sort_by(|a, b| b.2.cmp(&a.2));
+        ranked_dirs.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+
+        let mut refined_dirs: Vec<PathBuf> = Vec::new();
+        if matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::DirTriage),
+            Some(StepStatus::Completed)
+        ) && let Some(saved) = checkpoint.triaged_dirs.as_ref()
+        {
+            refined_dirs = saved
+                .iter()
+                .map(PathBuf::from)
+                .filter(|dir| !path_has_excluded_dir_component(dir))
+                .collect();
+            if !refined_dirs.is_empty() {
+                record(
+                    &mut logs,
+                    format!(
+                        "Using {} triaged directory(ies) from checkpoint resume.",
+                        refined_dirs.len()
+                    ),
+                );
+            }
+        }
+        if refined_dirs.is_empty()
+            && checkpoint.triaged_dirs.is_none()
+            && let Some(spec) = checkpoint.spec.as_ref()
+        {
+            let mut seeded_dirs: Vec<PathBuf> = spec
+                .locations
+                .iter()
+                .filter_map(|loc| {
+                    let trimmed = loc.trim();
+                    if trimmed.is_empty() {
+                        return None;
+                    }
+                    if trimmed == "." {
+                        return Some(PathBuf::from("."));
+                    }
+                    let mut path = PathBuf::from(trimmed);
+                    if path.is_absolute() {
+                        path = path.strip_prefix(&repo_path).ok()?.to_path_buf();
+                    }
+                    let mut components = path.components();
+                    match components.next() {
+                        Some(std::path::Component::Normal(part)) => Some(PathBuf::from(part)),
+                        _ => Some(PathBuf::from(".")),
+                    }
+                })
+                .filter(|dir| !path_has_excluded_dir_component(dir))
+                .collect();
+            seeded_dirs.sort();
+            seeded_dirs.dedup();
+            if !seeded_dirs.is_empty() {
+                let count = seeded_dirs.len();
+                refined_dirs = seeded_dirs;
+                record(
+                    &mut logs,
+                    format!("Seeding directory triage with {count} spec location(s)."),
+                );
+                checkpoint.triaged_dirs = Some(
+                    refined_dirs
+                        .iter()
+                        .map(|dir| dir.to_string_lossy().to_string())
+                        .collect(),
+                );
+                plan_tracker.mark_complete(SecurityReviewPlanStep::DirTriage);
+                checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+                persist_checkpoint(&mut checkpoint, &mut logs);
+            }
+        }
+
+        if refined_dirs.is_empty() {
+            if !matches!(
+                plan_tracker.status_for(SecurityReviewPlanStep::DirTriage),
+                Some(StepStatus::Completed | StepStatus::InProgress)
+            ) {
+                plan_tracker.start_step(SecurityReviewPlanStep::DirTriage);
+                checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+                persist_checkpoint(&mut checkpoint, &mut logs);
+            }
+            let dir_candidates: Vec<(PathBuf, String)> = ranked_dirs
+                .iter()
+                .map(|(dir, _, _)| {
+                    (
+                        dir.clone(),
+                        display_path_for(&repo_path.join(dir), &repo_path),
+                    )
+                })
+                .collect();
+
+            if dir_candidates.len() <= 1 {
+                refined_dirs = dir_candidates
+                    .iter()
+                    .map(|(path, _)| path.clone())
+                    .collect();
+            } else {
+                record(
+                    &mut logs,
+                    "Selecting high-signal directories for file triage...".to_string(),
+                );
+                match filter_spec_directories(
+                    &model_client,
+                    &request.provider,
+                    &request.auth,
+                    triage_model,
+                    triage_reasoning_effort,
+                    &repo_path,
+                    &dir_candidates,
+                    metrics.clone(),
+                )
+                .await
+                {
+                    Ok(selected) => {
+                        refined_dirs = selected.iter().map(|(path, _)| path.clone()).collect();
+                        if refined_dirs.len() < dir_candidates.len() {
+                            record(
+                                &mut logs,
+                                format!(
+                                    "Directory triage kept {}/{} directories for file triage.",
+                                    refined_dirs.len(),
+                                    dir_candidates.len()
+                                ),
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        for line in &err.logs {
+                            record(&mut logs, line.clone());
+                        }
+                        let total = dir_candidates.len();
+                        let kept = total.min(SPEC_DIR_FILTER_TARGET.max(1));
+                        record(
+                            &mut logs,
+                            format!(
+                                "Directory triage failed; using top {kept}/{total} directories by size. {}",
+                                err.message
+                            ),
+                        );
+                        refined_dirs = dir_candidates
+                            .iter()
+                            .take(kept)
+                            .map(|(path, _)| path.clone())
+                            .collect();
+                    }
+                }
+            }
+            if !refined_dirs.iter().any(|dir| dir == Path::new("."))
+                && dir_candidates.iter().any(|(dir, _)| dir == Path::new("."))
+            {
+                refined_dirs.push(PathBuf::from("."));
+            }
+            checkpoint.triaged_dirs = Some(
+                refined_dirs
+                    .iter()
+                    .map(|dir| dir.to_string_lossy().to_string())
+                    .collect(),
+            );
+            persist_checkpoint(&mut checkpoint, &mut logs);
+
+            plan_tracker.complete_and_start_next(
+                SecurityReviewPlanStep::DirTriage,
+                Some(SecurityReviewPlanStep::FileTriage),
+            );
+            checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+            persist_checkpoint(&mut checkpoint, &mut logs);
+        }
+
+        if matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::FileTriage),
+            Some(StepStatus::Completed)
+        ) {
+            record(
+                &mut logs,
+                "File triage marked complete in checkpoint, but no triaged files were stored; re-running file triage."
+                    .to_string(),
+            );
+            plan_tracker.start_step(SecurityReviewPlanStep::FileTriage);
+            checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+            persist_checkpoint(&mut checkpoint, &mut logs);
+        } else if !matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::FileTriage),
+            Some(StepStatus::Completed | StepStatus::InProgress)
+        ) {
+            plan_tracker.start_step(SecurityReviewPlanStep::FileTriage);
+            checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+            persist_checkpoint(&mut checkpoint, &mut logs);
+        }
+
+        let refined_set: HashSet<PathBuf> = refined_dirs.into_iter().collect();
         let mut pruned_snippets: Vec<FileSnippet> = Vec::new();
+        let mut refined_dir_count = 0usize;
+        let mut refined_bytes = 0usize;
+        let mut logged_dirs = 0usize;
         for (dir, snippets, bytes) in ranked_dirs {
+            if !refined_set.contains(&dir) {
+                continue;
+            }
+            refined_dir_count = refined_dir_count.saturating_add(1);
+            refined_bytes = refined_bytes.saturating_add(bytes);
+            if logged_dirs < DIR_TRIAGE_LOG_LIMIT {
+                record(
+                    &mut logs,
+                    format!(
+                        "Triaged directory {} ({} files, {}).",
+                        display_path_for(&repo_path.join(&dir), &repo_path),
+                        snippets.len(),
+                        human_readable_bytes(bytes),
+                    ),
+                );
+                logged_dirs = logged_dirs.saturating_add(1);
+            }
+            pruned_snippets.extend(snippets);
+        }
+
+        if excluded_files > 0 {
             record(
                 &mut logs,
                 format!(
-                    "Inspecting directory {} ({} files, {}).",
-                    display_path_for(&dir, &repo_path),
-                    snippets.len(),
-                    human_readable_bytes(bytes),
+                    "Directory triage excluded {excluded_files} file(s) from build/test artifacts."
                 ),
             );
-            pruned_snippets.extend(snippets);
         }
+        if refined_dir_count > logged_dirs {
+            record(
+                &mut logs,
+                format!(
+                    "…and {} more triaged director{}.",
+                    refined_dir_count.saturating_sub(logged_dirs),
+                    if refined_dir_count.saturating_sub(logged_dirs) == 1 {
+                        "y"
+                    } else {
+                        "ies"
+                    }
+                ),
+            );
+        }
+        if pruned_snippets.is_empty() {
+            return Err(SecurityReviewFailure {
+                message: "No candidate files remain after directory triage.".to_string(),
+                logs,
+            });
+        }
+        let file_count = pruned_snippets.len();
         record(
             &mut logs,
             format!(
-                "Running LLM file triage to prioritize analysis across {} files ({} directories) (model: {triage_model}, reasoning: {triage_reasoning_label}).",
-                pruned_snippets.len(),
-                pruned_snippets
-                    .iter()
-                    .filter_map(|s| s.relative_path.parent())
-                    .collect::<HashSet<_>>()
-                    .len(),
-                triage_reasoning_label = reasoning_effort_label(
-                    normalize_reasoning_effort_for_model(triage_model, triage_reasoning_effort,)
-                )
+                "Running LLM file triage (path + first {FILE_TRIAGE_PREVIEW_CHARS} chars); analyzing {file_count} files across {refined_dir_count} directories.",
             ),
         );
         let triage = match triage_files_for_bug_analysis(
@@ -4167,33 +5229,37 @@ pub async fn run_security_review(
         }
 
         selected_snippets = Some(triage.included);
+        if let Some(snippets) = selected_snippets.as_mut() {
+            let removed = dedupe_file_snippets(snippets);
+            if removed > 0 {
+                record(
+                    &mut logs,
+                    format!("Removed {removed} duplicate file(s) from triaged selection."),
+                );
+            }
+        }
         checkpoint.selected_snippets = selected_snippets.clone();
         persist_checkpoint(&mut checkpoint, &mut logs);
 
-        // Merge triaged file paths into the displayed scope paths for downstream prompts.
-        if let Some(snippets) = selected_snippets.as_ref() {
-            let mut combined: Vec<String> = scope_display_paths.clone();
-            for snippet in snippets {
-                let abs = repo_path.join(&snippet.relative_path);
-                combined.push(display_path_for(&abs, &repo_path));
-            }
-            combined.sort();
-            combined.dedup();
-            if combined != scope_display_paths {
-                scope_display_paths = combined;
-                checkpoint.scope_display_paths = scope_display_paths.clone();
-                persist_checkpoint(&mut checkpoint, &mut logs);
-                if let Err(err) = write_scope_file(
-                    &request.output_root,
-                    &repo_path,
-                    &scope_display_paths,
-                    linear_issue.as_deref(),
-                ) {
-                    record(&mut logs, format!("Failed to update scope file: {err}"));
-                }
-            }
-        }
+        plan_tracker.complete_and_start_next(
+            SecurityReviewPlanStep::FileTriage,
+            Some(SecurityReviewPlanStep::AnalyzeBugs),
+        );
+        checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+        persist_checkpoint(&mut checkpoint, &mut logs);
     } else {
+        let removed = selected_snippets
+            .as_mut()
+            .map(dedupe_file_snippets)
+            .unwrap_or(0);
+        if removed > 0 {
+            record(
+                &mut logs,
+                format!("Removed {removed} duplicate file(s) from checkpoint selection."),
+            );
+            checkpoint.selected_snippets = selected_snippets.clone();
+            persist_checkpoint(&mut checkpoint, &mut logs);
+        }
         let count = selected_snippets
             .as_ref()
             .map(std::vec::Vec::len)
@@ -4285,6 +5351,73 @@ pub async fn run_security_review(
             });
         }
     }
+    if !matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+        Some(StepStatus::Completed | StepStatus::InProgress)
+    ) {
+        plan_tracker.start_step(SecurityReviewPlanStep::PrepareValidationTargets);
+        if let Some(linear_issue) = linear_issue.as_ref() {
+            let prompt = build_linear_progress_prompt(
+                linear_issue,
+                &checkpoint.model,
+                "Prepare runnable validation targets",
+                &plan_tracker.snapshot_statuses(),
+                &checkpoint,
+                &request.output_root,
+            );
+            let config = request.config.clone();
+            let provider = request.provider.clone();
+            let auth_manager = request.auth_manager.clone();
+            let repo_for_task = repo_path.clone();
+            let progress_for_task = progress_sender.clone();
+            let log_sink_for_task = log_sink.clone();
+            let metrics_for_task = metrics.clone();
+            tokio::spawn(async move {
+                let _ = run_linear_status_agent(
+                    &config,
+                    &provider,
+                    auth_manager,
+                    &repo_for_task,
+                    progress_for_task,
+                    log_sink_for_task,
+                    prompt,
+                    metrics_for_task,
+                )
+                .await;
+            });
+        }
+    }
+    if !matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+        Some(StepStatus::Completed)
+    ) && validation_target_prep_task.is_none()
+    {
+        let config = request.config.clone();
+        let provider = request.provider.clone();
+        let auth_manager = request.auth_manager.clone();
+        let model = request.validation_model.clone();
+        let reasoning_effort = validation_reasoning_effort;
+        let repo_for_task = repo_path.clone();
+        let output_root_for_task = request.output_root.clone();
+        let progress_for_task = progress_sender.clone();
+        let log_sink_for_task = log_sink.clone();
+        let metrics_for_task = metrics.clone();
+        validation_target_prep_task = Some(tokio::spawn(async move {
+            prepare_validation_targets(
+                &config,
+                &provider,
+                auth_manager,
+                model.as_str(),
+                reasoning_effort,
+                &repo_for_task,
+                &output_root_for_task,
+                progress_for_task,
+                log_sink_for_task,
+                metrics_for_task,
+            )
+            .await
+        }));
+    }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
     let total_bytes = selected_snippets.iter().map(|s| s.bytes).sum::<usize>();
@@ -4303,9 +5436,8 @@ pub async fn run_security_review(
         .as_ref()
         .map(|prompt| prompt.trim().to_string())
         .filter(|prompt| !prompt.is_empty());
-    let mut spec_targets: Vec<PathBuf> = if !include_paths.is_empty() {
-        include_paths.clone()
-    } else {
+
+    let spec_targets_from_files = || -> Vec<PathBuf> {
         let mut unique_dirs: HashSet<PathBuf> = HashSet::new();
         for snippet in &selected_snippets {
             let absolute = repo_path.join(&snippet.relative_path);
@@ -4319,72 +5451,47 @@ pub async fn run_security_review(
         }
     };
 
-    spec_targets.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
-    if matches!(mode, SecurityReviewMode::Full) {
-        let mut directory_candidates: Vec<(PathBuf, String)> = spec_targets
-            .iter()
-            .map(|path| {
-                let label = display_path_for(path, &repo_path);
-                (path.clone(), label)
-            })
-            .collect();
-        directory_candidates.sort_by(|a, b| a.1.cmp(&b.1));
-
-        match filter_spec_directories(
-            &model_client,
-            &request.provider,
-            &request.auth,
-            request.spec_model.as_str(),
-            spec_reasoning_effort,
-            &repo_path,
-            &directory_candidates,
-            metrics.clone(),
-        )
-        .await
-        {
-            Ok(filtered) => {
-                let (preferred_dirs, dropped) = prune_low_signal_spec_dirs(&filtered);
-                for label in &dropped {
-                    record(
-                        &mut logs,
-                        format!(
-                            "Skipping specification for {label} (low-signal helper/migration dir)."
-                        ),
-                    );
-                }
-                let selected_dirs = if preferred_dirs.is_empty() {
-                    filtered
-                } else {
-                    preferred_dirs
-                };
-                let filtered_paths: Vec<PathBuf> =
-                    selected_dirs.iter().map(|(path, _)| path.clone()).collect();
-                if filtered_paths.len() < spec_targets.len() {
-                    record(
-                        &mut logs,
-                        format!(
-                            "Spec directory triage kept {}/{} directories for specification.",
-                            filtered_paths.len(),
-                            spec_targets.len()
-                        ),
-                    );
-                }
-                spec_targets = filtered_paths;
+    let mut spec_targets: Vec<PathBuf> = if !include_paths.is_empty() {
+        include_paths.clone()
+    } else if let Some(triaged_dirs) = checkpoint.triaged_dirs.as_ref()
+        && !triaged_dirs.is_empty()
+    {
+        let mut targets: Vec<PathBuf> = Vec::new();
+        for dir in triaged_dirs {
+            let path = PathBuf::from(dir);
+            if path_has_excluded_dir_component(&path) {
+                continue;
             }
-            Err(err) => {
-                for line in &err.logs {
-                    record(&mut logs, line.clone());
-                }
-                record(
-                    &mut logs,
-                    format!(
-                        "Spec directory triage failed; using all directories. {}",
-                        err.message
-                    ),
-                );
+            let abs = if path.is_absolute() {
+                path
+            } else {
+                repo_path.join(&path)
+            };
+            if abs.exists() {
+                targets.push(abs);
             }
         }
-    }
+        targets.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+        targets.dedup();
+        if targets.is_empty() {
+            spec_targets_from_files()
+        } else {
+            record(
+                &mut logs,
+                format!(
+                    "Reusing {}/{} triaged director{} for specification generation.",
+                    targets.len(),
+                    triaged_dirs.len(),
+                    if targets.len() == 1 { "y" } else { "ies" }
+                ),
+            );
+            targets
+        }
+    } else {
+        spec_targets_from_files()
+    };
+
+    spec_targets.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
 
     let mut spec_generation: Option<SpecGenerationOutcome> = checkpoint
         .spec
@@ -4429,6 +5536,7 @@ pub async fn run_security_review(
         let repository_summary = repository_summary.clone();
         let spec_model = request.spec_model.clone();
         let writing_model = request.writing_model.clone();
+        let threat_model_model = threat_model_model.clone();
         Some(tokio::spawn(async move {
             let spec_generation = match generate_specs(
                 &model_client,
@@ -4458,8 +5566,8 @@ pub async fn run_security_review(
                     &model_client,
                     &provider,
                     &auth,
-                    THREAT_MODEL_MODEL,
-                    spec_reasoning_effort,
+                    threat_model_model.as_str(),
+                    threat_model_reasoning_effort,
                     writing_model.as_str(),
                     writing_reasoning_effort,
                     &repository_summary,
@@ -4523,7 +5631,12 @@ pub async fn run_security_review(
     let mut findings_summary: String = String::new();
 
     let mut skip_bug_analysis = false;
+    let reuse_bug_snapshot = matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::PolishFindings),
+        Some(StepStatus::Completed)
+    );
     if resuming
+        && reuse_bug_snapshot
         && let Some(path) = checkpoint.bug_snapshot_path.as_ref()
         && path.exists()
     {
@@ -4538,29 +5651,40 @@ pub async fn run_security_review(
                         ),
                     );
 
-                    let mut removed = dedupe_security_review_snapshot(&mut loaded);
+                    let mut removed = 0usize;
+                    let mut filtered_low = 0usize;
                     if loaded.bugs.len() > 1 {
-                        let dedupe_model = if request.triage_model.trim().is_empty() {
-                            FILE_TRIAGE_MODEL
+                        let dedupe_model = if request.spec_model.trim().is_empty() {
+                            SPEC_GENERATION_MODEL
                         } else {
-                            request.triage_model.as_str()
+                            request.spec_model.as_str()
                         };
                         let (summaries, details) = snapshot_summaries_and_details(&loaded);
+                        let before_dedupe_count = summaries.len();
                         let llm_outcome = llm_dedupe_bug_summaries(
                             &model_client,
                             &request.provider,
                             &request.auth,
                             dedupe_model,
-                            bug_reasoning_effort,
+                            spec_reasoning_effort,
                             summaries,
                             details,
+                            path.parent().map(Path::to_path_buf),
                             progress_sender.clone(),
+                            log_sink.clone(),
                             metrics.clone(),
                         )
                         .await;
                         for line in llm_outcome.logs {
                             record(&mut logs, line);
                         }
+                        record(
+                            &mut logs,
+                            format!(
+                                "LLM dedupe findings: {before_dedupe_count} -> {}.",
+                                llm_outcome.summaries.len()
+                            ),
+                        );
                         if llm_outcome.removed > 0 {
                             let llm_removed = llm_outcome.removed;
                             record(
@@ -4570,6 +5694,12 @@ pub async fn run_security_review(
                                     if llm_removed == 1 { "" } else { "s" }
                                 ),
                             );
+                            removed = removed.saturating_add(llm_removed);
+                        }
+                        if llm_outcome.filtered_low > 0 {
+                            filtered_low = filtered_low.saturating_add(llm_outcome.filtered_low);
+                        }
+                        if llm_outcome.removed > 0 || llm_outcome.filtered_low > 0 {
                             let mut summaries = llm_outcome.summaries;
                             let mut details = llm_outcome.details;
                             rank_bug_summaries_for_reporting(&mut summaries);
@@ -4580,7 +5710,6 @@ pub async fn run_security_review(
                                 loaded.bugs.len(),
                                 count_files_with_findings_from_snapshots(&loaded.bugs),
                             );
-                            removed = removed.saturating_add(llm_removed);
                         }
                     }
                     if removed > 0 {
@@ -4591,22 +5720,33 @@ pub async fn run_security_review(
                                 if removed == 1 { "" } else { "s" }
                             ),
                         );
-                        if let Ok(updated) = serde_json::to_vec_pretty(&loaded)
-                            && let Err(err) = tokio_fs::write(path, updated).await
-                        {
-                            record(
-                                &mut logs,
-                                format!(
-                                    "Failed to persist deduplicated snapshot {}: {err}",
-                                    path.display()
-                                ),
-                            );
-                        }
+                    }
+                    if filtered_low > 0 {
+                        record(
+                            &mut logs,
+                            format!(
+                                "Dropped {filtered_low} low severity finding{} while resuming from snapshot.",
+                                if filtered_low == 1 { "" } else { "s" }
+                            ),
+                        );
+                    }
+                    if (removed > 0 || filtered_low > 0)
+                        && let Ok(updated) = serde_json::to_vec_pretty(&loaded)
+                        && let Err(err) = tokio_fs::write(path, updated).await
+                    {
+                        record(
+                            &mut logs,
+                            format!(
+                                "Failed to persist updated snapshot {}: {err}",
+                                path.display()
+                            ),
+                        );
                     }
 
                     plan_tracker.mark_complete(SecurityReviewPlanStep::AnalyzeBugs);
                     plan_tracker.mark_complete(SecurityReviewPlanStep::PolishFindings);
                     for step in [
+                        SecurityReviewPlanStep::PrepareValidationTargets,
                         SecurityReviewPlanStep::ValidateFindings,
                         SecurityReviewPlanStep::PostValidationRefine,
                         SecurityReviewPlanStep::AssembleReport,
@@ -4658,19 +5798,17 @@ pub async fn run_security_review(
     }
 
     if !skip_bug_analysis {
+        if !matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::AnalyzeBugs),
+            Some(StepStatus::Completed | StepStatus::InProgress)
+        ) {
+            plan_tracker.start_step(SecurityReviewPlanStep::AnalyzeBugs);
+            checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+            persist_checkpoint(&mut checkpoint, &mut logs);
+        }
+
         // Run bug analysis in N full passes across all selected files.
         let total_passes = BUG_FINDING_PASSES.max(1);
-        record(
-            &mut logs,
-            format!(
-                "Running bug analysis in {total_passes} pass(es) (model: {model}, reasoning: {bug_reasoning_label}).",
-                model = request.model.as_str(),
-                bug_reasoning_label = reasoning_effort_label(normalize_reasoning_effort_for_model(
-                    request.model.as_str(),
-                    bug_reasoning_effort,
-                ))
-            ),
-        );
 
         let mut aggregated_logs: Vec<String> = Vec::new();
         let mut all_summaries: Vec<BugSummary> = Vec::new();
@@ -4678,79 +5816,127 @@ pub async fn run_security_review(
         use std::collections::HashMap as StdHashMap;
         let mut files_map: StdHashMap<PathBuf, FileSnippet> = StdHashMap::new();
 
-        for pass in 1..=total_passes {
-            record(
-                &mut logs,
-                format!(
-                    "Starting bug analysis pass {}/{} over {} files.",
-                    pass,
-                    total_passes,
-                    selected_snippets.len()
-                ),
-            );
-
-            let pass_outcome = match analyze_files_individually(
-                &model_client,
-                &request.provider,
-                &request.auth,
-                &request.model,
-                bug_reasoning_effort,
-                &request.config,
-                request.auth_manager.clone(),
-                &repository_summary,
-                spec_for_bug_analysis,
-                bug_scope_prompt.as_deref(),
+        let mut loaded_from_progress = false;
+        if resuming
+            && matches!(
+                plan_tracker.status_for(SecurityReviewPlanStep::AnalyzeBugs),
+                Some(StepStatus::Completed)
+            )
+        {
+            match load_bug_summaries_from_bug_analysis_progress(
                 &request.output_root,
-                pass,
                 &request.repo_path,
                 &selected_snippets,
-                git_link_info.clone(),
-                progress_sender.clone(),
-                log_sink.clone(),
-                metrics.clone(),
             )
             .await
             {
-                Ok(outcome) => outcome,
+                Ok(Some(outcome)) => {
+                    loaded_from_progress = true;
+                    all_summaries = outcome.bug_summaries;
+                    all_details = outcome.bug_details;
+                    for line in outcome.logs {
+                        record(&mut logs, line.clone());
+                        aggregated_logs.push(line);
+                    }
+                    for snippet in outcome.files_with_findings {
+                        files_map
+                            .entry(snippet.relative_path.clone())
+                            .or_insert(snippet);
+                    }
+                }
+                Ok(None) => {}
                 Err(err) => {
                     record(&mut logs, err.message.clone());
-                    let mut combined_logs = logs.clone();
-                    combined_logs.extend(err.logs);
-                    return Err(SecurityReviewFailure {
-                        message: err.message,
-                        logs: combined_logs,
-                    });
+                    aggregated_logs.extend(err.logs);
                 }
-            };
-
-            for line in &pass_outcome.logs {
-                record(&mut logs, line.clone());
             }
-            aggregated_logs.extend(pass_outcome.logs.clone());
+        }
 
-            // Offset IDs from this pass to keep them unique when aggregating.
-            let id_offset = all_summaries.iter().map(|s| s.id).max().unwrap_or(0);
-            let mut pass_summaries = pass_outcome.bug_summaries;
-            let mut pass_details = pass_outcome.bug_details;
-            for s in pass_summaries.iter_mut() {
-                s.id = s.id.saturating_add(id_offset);
-            }
-            for d in pass_details.iter_mut() {
-                d.summary_id = d.summary_id.saturating_add(id_offset);
-            }
-            all_summaries.extend(pass_summaries);
-            all_details.extend(pass_details);
-
-            for snippet in pass_outcome.files_with_findings {
-                files_map
-                    .entry(snippet.relative_path.clone())
-                    .or_insert(snippet);
-            }
-
+        if !loaded_from_progress {
             record(
                 &mut logs,
-                format!("Completed bug analysis pass {pass}/{total_passes}."),
+                format!(
+                    "Running bug analysis in {total_passes} pass(es) (model: {model}, reasoning: {bug_reasoning_label}).",
+                    model = request.model.as_str(),
+                    bug_reasoning_label =
+                        reasoning_effort_label(normalize_reasoning_effort_for_model(
+                            request.model.as_str(),
+                            bug_reasoning_effort
+                        ))
+                ),
             );
+
+            for pass in 1..=total_passes {
+                record(
+                    &mut logs,
+                    format!(
+                        "Starting bug analysis pass {}/{} over {} files.",
+                        pass,
+                        total_passes,
+                        selected_snippets.len()
+                    ),
+                );
+
+                let mut pass_outcome = match analyze_files_individually(
+                    &model_client,
+                    &request.provider,
+                    &request.auth,
+                    &request.model,
+                    bug_reasoning_effort,
+                    &request.config,
+                    request.auth_manager.clone(),
+                    &repository_summary,
+                    spec_for_bug_analysis,
+                    bug_scope_prompt.as_deref(),
+                    &request.output_root,
+                    pass,
+                    &request.repo_path,
+                    &selected_snippets,
+                    git_link_info.clone(),
+                    progress_sender.clone(),
+                    log_sink.clone(),
+                    metrics.clone(),
+                )
+                .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(err) => {
+                        record(&mut logs, err.message.clone());
+                        let mut combined_logs = logs.clone();
+                        combined_logs.extend(err.logs);
+                        return Err(SecurityReviewFailure {
+                            message: err.message,
+                            logs: combined_logs,
+                        });
+                    }
+                };
+
+                aggregated_logs.extend(std::mem::take(&mut pass_outcome.logs));
+
+                // Offset IDs from this pass to keep them unique when aggregating.
+                let id_offset = all_summaries.iter().map(|s| s.id).max().unwrap_or(0);
+                let mut pass_summaries = pass_outcome.bug_summaries;
+                let mut pass_details = pass_outcome.bug_details;
+                for s in pass_summaries.iter_mut() {
+                    s.id = s.id.saturating_add(id_offset);
+                }
+                for d in pass_details.iter_mut() {
+                    d.summary_id = d.summary_id.saturating_add(id_offset);
+                }
+                all_summaries.extend(pass_summaries);
+                all_details.extend(pass_details);
+
+                for snippet in pass_outcome.files_with_findings {
+                    files_map
+                        .entry(snippet.relative_path.clone())
+                        .or_insert(snippet);
+                }
+
+                record(
+                    &mut logs,
+                    format!("Completed bug analysis pass {pass}/{total_passes}."),
+                );
+            }
         }
 
         plan_tracker.complete_and_start_next(
@@ -4952,36 +6138,24 @@ pub async fn run_security_review(
             aggregated_logs.push(msg);
         }
 
-        if !all_summaries.is_empty() {
-            let (deduped_summaries, deduped_details, removed) =
-                dedupe_bug_summaries(all_summaries, all_details);
-            all_summaries = deduped_summaries;
-            all_details = deduped_details;
-            if removed > 0 {
-                let msg = format!(
-                    "Deduplicated {removed} duplicated finding{} by grouping titles/tags.",
-                    if removed == 1 { "" } else { "s" }
-                );
-                record(&mut logs, msg.clone());
-                aggregated_logs.push(msg);
-            }
-        }
-
         if all_summaries.len() > 1 {
-            let dedupe_model = if request.triage_model.trim().is_empty() {
-                FILE_TRIAGE_MODEL
+            let before_dedupe_count = all_summaries.len();
+            let dedupe_model = if request.spec_model.trim().is_empty() {
+                SPEC_GENERATION_MODEL
             } else {
-                request.triage_model.as_str()
+                request.spec_model.as_str()
             };
             let llm_outcome = llm_dedupe_bug_summaries(
                 &model_client,
                 &request.provider,
                 &request.auth,
                 dedupe_model,
-                bug_reasoning_effort,
+                spec_reasoning_effort,
                 all_summaries,
                 all_details,
+                Some(request.output_root.join("context")),
                 progress_sender.clone(),
+                log_sink.clone(),
                 metrics.clone(),
             )
             .await;
@@ -4993,11 +6167,26 @@ pub async fn run_security_review(
                 record(&mut logs, line.clone());
                 aggregated_logs.push(line);
             }
+            let dedupe_count_line = format!(
+                "LLM dedupe findings: {before_dedupe_count} -> {}.",
+                all_summaries.len()
+            );
+            record(&mut logs, dedupe_count_line.clone());
+            aggregated_logs.push(dedupe_count_line);
             if llm_outcome.removed > 0 {
                 let removed = llm_outcome.removed;
                 let msg = format!(
                     "Deduplicated {removed} additional finding{} via LLM clustering.",
                     if removed == 1 { "" } else { "s" }
+                );
+                record(&mut logs, msg.clone());
+                aggregated_logs.push(msg);
+            }
+            if llm_outcome.filtered_low > 0 {
+                let filtered_low = llm_outcome.filtered_low;
+                let msg = format!(
+                    "Dropped {filtered_low} low severity finding{} during LLM dedupe.",
+                    if filtered_low == 1 { "" } else { "s" }
                 );
                 record(&mut logs, msg.clone());
                 aggregated_logs.push(msg);
@@ -5016,13 +6205,13 @@ pub async fn run_security_review(
                 &request.repo_path,
                 &repository_summary,
                 spec_for_rerank,
+                progress_sender.clone(),
+                log_sink.clone(),
                 metrics.clone(),
             )
             .await;
-            aggregated_logs.extend(risk_logs.clone());
-            for line in risk_logs {
-                record(&mut logs, line);
-            }
+            logs.extend(risk_logs.clone());
+            aggregated_logs.extend(risk_logs);
         }
 
         // Normalize severities again after rerank and update markdown + details.
@@ -5175,17 +6364,30 @@ pub async fn run_security_review(
             format!("Bug analysis summary: {}", findings_summary.as_str()),
         );
         record(&mut logs, "Bug analysis complete.".to_string());
-        plan_tracker.complete_and_start_next(
-            SecurityReviewPlanStep::PolishFindings,
-            Some(SecurityReviewPlanStep::ValidateFindings),
-        );
+        let next_step = if matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+            Some(StepStatus::Completed)
+        ) {
+            SecurityReviewPlanStep::ValidateFindings
+        } else {
+            SecurityReviewPlanStep::PrepareValidationTargets
+        };
+        plan_tracker
+            .complete_and_start_next(SecurityReviewPlanStep::PolishFindings, Some(next_step));
         checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
         persist_checkpoint(&mut checkpoint, &mut logs);
         if let Some(linear_issue) = linear_issue.as_ref() {
+            let step_title = match next_step {
+                SecurityReviewPlanStep::PrepareValidationTargets => {
+                    "Prepare runnable validation targets"
+                }
+                SecurityReviewPlanStep::ValidateFindings => "Validate findings",
+                _ => "Security review update",
+            };
             let prompt = build_linear_progress_prompt(
                 linear_issue,
                 &checkpoint.model,
-                "Validate findings",
+                step_title,
                 &checkpoint.plan_statuses,
                 &checkpoint,
                 &request.output_root,
@@ -5264,17 +6466,6 @@ pub async fn run_security_review(
         }
     };
 
-    if is_open_source {
-        let _ = run_trufflehog_scan(
-            &repo_path,
-            &request.output_root,
-            progress_sender.clone(),
-            log_sink.clone(),
-            &mut logs,
-        )
-        .await;
-    }
-
     // Intentionally avoid logging the output path pre-write to keep logs concise.
     let (git_commit, git_branch, git_commit_timestamp) = match git_revision.as_ref() {
         Some((commit, branch, ts)) => (Some(commit.clone()), branch.clone(), *ts),
@@ -5338,7 +6529,117 @@ pub async fn run_security_review(
         }
     };
 
-    let validation_targets = build_validation_findings_context(&snapshot);
+    if is_open_source {
+        let _ = run_trufflehog_scan(
+            &repo_path,
+            &request.output_root,
+            progress_sender.clone(),
+            log_sink.clone(),
+            &mut logs,
+        )
+        .await;
+    }
+
+    let mut validation_target_additions: Vec<String> = Vec::new();
+    let mut validation_target_prep_succeeded = false;
+    if let Some(task) = validation_target_prep_task.take() {
+        match task.await {
+            Ok(outcome) => {
+                logs.extend(outcome.logs);
+                validation_target_additions = outcome.testing_md_additions;
+                validation_target_prep_succeeded = outcome.success;
+            }
+            Err(join_err) => {
+                record(
+                    &mut logs,
+                    format!("Validation target preparation task failed: {join_err}"),
+                );
+            }
+        }
+    }
+
+    let specs_root = request.output_root.join("specs");
+    let testing_path = specs_root.join("TESTING.md");
+    if !validation_target_additions.is_empty() {
+        apply_validation_testing_md_additions(
+            &testing_path,
+            &repo_path,
+            &validation_target_additions,
+            &progress_sender,
+            &mut logs,
+        )
+        .await;
+    }
+
+    let validate_was_started = matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
+        Some(StepStatus::Completed | StepStatus::InProgress)
+    );
+    if !validate_was_started {
+        if !matches!(
+            plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+            Some(StepStatus::Completed)
+        ) && !validation_target_prep_succeeded
+        {
+            push_progress_log(
+                &progress_sender,
+                &log_sink,
+                &mut logs,
+                "Prepare runnable validation targets did not produce runnable targets; continuing to validation (may record UnableToValidate statuses)."
+                    .to_string(),
+            );
+        }
+
+        plan_tracker.complete_and_start_next(
+            SecurityReviewPlanStep::PrepareValidationTargets,
+            Some(SecurityReviewPlanStep::ValidateFindings),
+        );
+    } else if !matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+        Some(StepStatus::Completed)
+    ) {
+        plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
+    }
+    checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
+    persist_checkpoint(&mut checkpoint, &mut logs);
+
+    if !validate_was_started && let Some(linear_issue) = linear_issue.as_ref() {
+        let prompt = build_linear_progress_prompt(
+            linear_issue,
+            &checkpoint.model,
+            "Validate findings",
+            &checkpoint.plan_statuses,
+            &checkpoint,
+            &request.output_root,
+        );
+        let config = request.config.clone();
+        let provider = request.provider.clone();
+        let auth_manager = request.auth_manager.clone();
+        let repo_for_task = repo_path.clone();
+        let progress_for_task = progress_sender.clone();
+        let log_sink_for_task = log_sink.clone();
+        let metrics_for_task = metrics.clone();
+        tokio::spawn(async move {
+            let _ = run_linear_status_agent(
+                &config,
+                &provider,
+                auth_manager,
+                &repo_for_task,
+                progress_for_task,
+                log_sink_for_task,
+                prompt,
+                metrics_for_task,
+            )
+            .await;
+        });
+    }
+
+    let include_web_browser = request
+        .validation_target_url
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty());
+    let validation_targets = build_validation_findings_context(&snapshot, include_web_browser);
 
     if validation_targets.ids.is_empty() {
         record(
@@ -5371,6 +6672,8 @@ pub async fn run_security_review(
             request.auth_manager.clone(),
             progress_sender.clone(),
             metrics.clone(),
+            request.validation_target_url.clone(),
+            request.validation_creds_path.clone(),
         )
         .await
         {
@@ -5554,6 +6857,11 @@ pub async fn run_security_review(
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     checkpoint.status = SecurityReviewCheckpointStatus::Complete;
     persist_checkpoint(&mut checkpoint, &mut logs);
+    let resume_state_display = display_path_for(
+        resume_state_path(&request.output_root).as_path(),
+        &repo_path,
+    );
+    record(&mut logs, format!("Resume state: {resume_state_display}"));
 
     let elapsed = overall_start.elapsed();
     let elapsed_display = fmt_elapsed_compact(elapsed.as_secs());
@@ -5730,35 +7038,27 @@ pub async fn run_security_review(
     })
 }
 
-fn render_checklist_markdown(statuses: &HashMap<String, StepStatus>) -> String {
+fn render_checklist_markdown(
+    mode: SecurityReviewMode,
+    statuses: &HashMap<String, StepStatus>,
+) -> String {
     let mut lines: Vec<String> = Vec::new();
-    let order = [
-        ("generate_specs", "Generate system specifications"),
-        ("threat_model", "Draft threat model"),
-        ("analyze_bugs", "Analyze code for bugs"),
-        ("polish_findings", "Polish, dedupe, and rerank findings"),
-        ("validate_findings", "Validate findings"),
-        ("post_validation_refine", "Post-validation PoC refinement"),
-        ("assemble_report", "Assemble report and artifacts"),
-    ];
-    for (slug, title) in order {
+    for step in plan_steps_for_mode(mode) {
+        let slug = plan_step_slug(step.kind);
+        let title = step.title;
         let status = statuses.get(slug);
-        let mark = match status {
-            Some(StepStatus::Completed) => "[x]",
-            Some(StepStatus::InProgress) => "[~]",
-            _ => "[ ]",
+        let line = match status {
+            Some(StepStatus::Completed) => format!("- [x] ~~{title}~~"),
+            Some(StepStatus::InProgress) => format!("- [ ] ▶ **{title}** (current)"),
+            _ => format!("- [ ] {title}"),
         };
-        lines.push(format!("- {mark} {title}"));
+        lines.push(line);
     }
     lines.join("\n")
 }
 
-const LINEAR_SCOPE_CONTEXT_SYSTEM_PROMPT: &str = "Gather the full Linear issue context for a security review without modifying the ticket. Use Linear MCP tools only. Do not plan or reason before acting. Your FIRST action must be a Linear MCP call to fetch the issue by key; your SECOND action must fetch all comments/activity for that same issue. If attachments exist, fetch/describe them. Respond with plaintext only (no code fences). Retry failed Linear calls once, otherwise surface the failure succinctly.";
-
 fn build_linear_scope_context_prompt(issue_ref: &str) -> String {
-    format!(
-        "Collect Linear issue context for `{issue_ref}` to inform auto-scoping.\n\nStrict tool order:\n1) Call Linear MCP to fetch this exact issue immediately (no planning).\n2) Call Linear MCP to fetch ALL comments/activity for the same issue.\n3) If attachments exist, fetch/describe them via Linear MCP.\n\nRequirements:\n- Read the full issue description and attachments.\n- Read ALL activity entries and comments, including authors and timestamps.\n- Capture the current issue status/state and assignee.\n- Do not edit the issue.\n\nOutput (plaintext):\n- One-line summary of the issue intent.\n- Current status/state and assignee.\n- Activity timeline (newest first) with key events.\n- Comments section listing each comment with author, timestamp, and body. Do not skip comments.\n- Attachments (if any) with brief notes."
-    )
+    linear_scope_context_prompt(issue_ref)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5909,7 +7209,7 @@ fn build_linear_init_prompt(
     } else {
         scope_display_paths.join(", ")
     };
-    let checklist = render_checklist_markdown(statuses);
+    let checklist = render_checklist_markdown(mode, statuses);
     let scope_file_text = scope_file_path
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "(not generated)".to_string());
@@ -5923,17 +7223,19 @@ fn build_linear_init_prompt(
             .join(", ")
     };
     let workspace_marker = encode_workspace_hint(repo_root).unwrap_or_default();
-    format!(
-        "You are a workflow assistant that manages a security review using the configured MCP servers (Linear, Notion, Google Workspace, Secbot).\n\nTask: Using the Linear MCP server, open the issue `{issue}` directly (call `get_issue` first; avoid team or project enumeration unless the key fails).\n\nRules:\n- No long planning steps; fetch the issue immediately with `get_issue`, then proceed.\n- Do not post Linear comments until the full security review is finished; keep all interim updates in the description’s “Security Agent ({model}) - Review Status” block.\n- Prepend a header `# Security Agent ({model}) - Review Status` when you add the status section; do not add any extra automation tagline.\n- Preserve existing status content, key insights, and doc summaries—append or merge updates instead of overwriting.\n- Do not paste full findings or reproduction details into the description; use concise bullets and reference attachments/artifacts instead.\n\nSteps:\n1) Classify the issue. If this is NOT a security_review request, prepend a short note in the status block that automation only runs for security review tickets, then stop.\n2) If it IS a security_review: gather all context from the issue description, attachments, and comments. Open every linked doc (including links inside comments) with the appropriate MCP (Notion or Google Workspace) and read them fully; use Google Workspace MCP to open Google Docs links found in comments. Use Secbot MCP to search for prior contexts, tickets, policies, and recommendations relevant to this issue; reason from the issue context, select only relevant hits, and explain why each matters instead of dumping raw results.\n3) From the collected context, check for missing essentials (e.g., code locations/links, critical docs/flows, required policies). If critical items are missing (e.g., no code links), pause the review and capture the requests in the “Follow-ups / Missing Inputs” subsection of the status block; do not continue until inputs arrive. If most information is present, continue.\n4) Update the Linear issue description by PREPENDING a section titled “Security Agent ({model}) - Review Status” (remove any existing section with that heading first) with:\n   - A header line: `# Security Agent ({model}) - Review Status`\n   - Key points summary (3–7 concise bullets highlighting security-relevant conclusions and recommended next steps; integrate insights from docs and Secbot here when they materially change risk, but avoid restating raw observations).\n   - Scope summary: a short description of what was reviewed (for example, key services, directories, or APIs) rather than a full path dump. Do NOT inline every path or add a long `scope: ...` line; instead, ensure the \"Scope paths\" artifact ({scope_file}) is uploaded and reference it once in this bullet.\n   - Design / architecture docs: only include genuine design, architecture, requirements, threat-model, or runbook documents. Summarize each in 1–2 lines with inline hyperlinks and highlight why it matters for security. Skip generic README/env/source files that merely restate code.\n   - Related Secbot / precedent tickets: only when Secbot MCP surfaces clearly related policies or tickets grounded in the same repo, service, or code paths (or explicitly requested in the issue). Summarize why each is relevant and include the assignee and last-updated date. If no strong matches exist, omit this subsection entirely rather than forcing weak content.\n   - A checklist mirroring the AppSec pipeline steps.\n   - A “Design/Implementation follow-ups” subsection listing concrete security requirements that must be validated during build (derive from the issue/docs when present—e.g., user content isolation via a separate domain, role- or resource-based access control checks). When details are missing, phrase items as questions for the product/eng team so they can answer before implementation.\n   - A “Follow-ups / Missing Inputs” subsection listing any missing docs, flows, or code locations that block analysis; phrase items as actionable questions for the ticket owner.\n   - Artifacts: reference uploaded attachments only (no local filesystem paths, no gists). For scope details and triage outputs, reference the uploaded scope file or \"Scope paths\" artifact ({scope_file}) instead of pasting lists of directories or files.\n\nChecklist:\n{checklist}\n\nRepository: {repo}\nMode: {mode}\nScope: {scope}\nIncluded paths: {include_text}\nArtifacts directory (local): {art_dir}\nScope file (upload): {scope_file}\nWorkspace marker (embed this exact marker on its own line inside the status block so Codex can resume with the same local workspace later): {workspace_marker}\n\nLocal workspace convention:\n- Keep all repositories under `~/code`.\n- If a required repository is missing under `~/code`, use GitHub CLI to clone a shallow copy (depth=1). Example:\n  `gh repo clone owner/repo ~/code/repo -- --depth=1`\n\nNotes:\n- Preserve the existing description content below the new status section.\n- Do not remove any existing details; prepend the status section.\n- Keep local filesystem paths out of Linear updates; reference uploaded attachments (no gists or external pastes).\n- When resuming, download any relevant attachments locally into the artifacts directory before continuing.",
-        issue = issue_ref,
-        model = model_name,
-        repo = repo_root.display(),
-        mode = mode.as_str(),
-        scope = scope,
-        include_text = include_text,
-        art_dir = output_root.display(),
-        scope_file = scope_file_text,
-        workspace_marker = workspace_marker,
+    let repo = repo_root.display().to_string();
+    let art_dir = output_root.display().to_string();
+    linear_init_prompt(
+        issue_ref,
+        model_name,
+        repo.as_str(),
+        mode.as_str(),
+        checklist.as_str(),
+        scope.as_str(),
+        include_text.as_str(),
+        art_dir.as_str(),
+        scope_file_text.as_str(),
+        workspace_marker.as_str(),
     )
 }
 
@@ -5945,7 +7247,7 @@ fn build_linear_progress_prompt(
     checkpoint: &SecurityReviewCheckpoint,
     output_root: &Path,
 ) -> String {
-    let checklist = render_checklist_markdown(statuses);
+    let checklist = render_checklist_markdown(checkpoint.mode, statuses);
     let mut artifacts: Vec<String> = Vec::new();
     if let Some(path) = checkpoint.classification_table_path.as_ref() {
         artifacts.push(format!("classification_table: {}", path.display()));
@@ -5984,16 +7286,16 @@ fn build_linear_progress_prompt(
             root = output_root.display(),
         )
     };
-    format!(
-        "Use the Linear MCP to update issue `{issue}` progress.\n\nRules:\n- Open the issue directly by key `{issue}` (call `get_issue` first; avoid team/resource enumeration unless lookup fails).\n- No Linear comments until all security review steps are complete; keep updates in the description’s “Security Agent ({model}) - Review Status” block.\n- Prepend a header `# Security Agent ({model}) - Review Status` when you add the status section; do not add any extra automation tagline. Preserve existing status content, key insights, and doc summaries—append/merge instead of overwriting.\n- Do not paste full findings; reference uploaded artifacts instead.\n- Keep artifact references limited to uploaded attachments; do not expose local filesystem paths or create gists. Upload files directly from the local artifacts directory ({art_root}).\n- Before updating, read any newly linked docs in the description or comments via Notion/Google Workspace MCP (use Google Workspace MCP for Google Docs) and summarize; include inline hyperlinks to the docs in your summary.\n- Check Secbot MCP for any new relevant policies/recommendations; reason from the issue context, explain why results matter, and when Secbot surfaces similar or relevant tickets, capture assignee and date in the summary.\n- Upload/attach the scope file if not already present ({scope_file}) so that readers can inspect the full “Scope paths” artifact; do NOT paste long `scope: ...` lines or raw path dumps into the description.\n\nActions:\n- Update the checklist status for the step: {step}.\n- Maintain a single “Scope summary” bullet in the status block that briefly describes what is in scope and points to the uploaded \"Scope paths\" artifact instead of listing every path.\n- Add or update a “Design/Implementation follow-ups” subsection with concrete items to check during build (derive from the issue/docs—e.g., user content isolation via a separate domain, role- or resource-based access control checks). When details are missing, phrase the items as questions for the product/eng team.\n- If new artifacts exist, upload/attach them from the local artifacts directory (no gists or external shares) and reference them in the status block without including local paths.\n- Capture any new gaps (docs, flows, code links) in the “Follow-ups / Missing Inputs” subsection instead of posting comments.\n- If critical inputs (e.g., code links) are still missing, pause and keep them in “Follow-ups / Missing Inputs” until they are provided.\n\nChecklist now:\n{checklist}{artifacts_section}\n\nScope file (upload): {scope_file}\nScope paths: {scope_paths}",
-        issue = issue_ref,
-        model = model_name,
-        step = step_title,
-        checklist = checklist,
-        artifacts_section = artifacts_section,
-        scope_file = scope_file_text,
-        scope_paths = scope_paths_text,
-        art_root = output_root.display(),
+    let artifacts_root = output_root.display().to_string();
+    linear_progress_prompt(
+        issue_ref,
+        model_name,
+        step_title,
+        checklist.as_str(),
+        scope_file_text,
+        scope_paths_text.as_str(),
+        artifacts_root.as_str(),
+        artifacts_section.as_str(),
     )
 }
 
@@ -6007,7 +7309,7 @@ fn build_linear_finalize_prompt(
     revision_summary: &str,
     trufflehog_path: Option<&Path>,
 ) -> String {
-    let checklist = render_checklist_markdown(statuses);
+    let checklist = render_checklist_markdown(checkpoint.mode, statuses);
     let scope_paths_text = if checkpoint.scope_display_paths.is_empty() {
         "entire repository".to_string()
     } else {
@@ -6028,32 +7330,24 @@ fn build_linear_finalize_prompt(
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "(not run)".to_string());
 
-    format!(
-        "Finalize Linear sync for `{issue}`.\n\nRules:\n- Open the issue directly by key `{issue}` (call `get_issue` first; avoid team/resource enumeration unless lookup fails).\n- Keep the description’s “Security Agent ({model}) - Review Status” block intact with the header `# Security Agent ({model}) - Review Status`; remove any prior instance of this section before writing the new one; do not add any extra automation tagline. Preserve earlier summaries and doc context—append final updates instead of overwriting.\n- Do not paste full findings; reference artifacts and child tickets instead.\n- Keep artifact references limited to uploaded attachments; do not expose local filesystem paths or create gists. Upload from the local artifacts directory ({root}) first, then reference.\n- Ensure the triaged scope file is attached and clearly labeled as the \"Scope paths\" artifact ({scope_file}); do **not** inline long `scope: ...` lines or raw path dumps into the description.\n- Before writing the final comment, use Linear MCP to list child/sub-issues and related issues for `{issue}`; treat tickets created for this review as the ground truth for findings.\n\nFinal status block:\n- Update the “Security Agent ({model}) - Review Status” section in the description so it reflects the final checklist below and the final scope summary while keeping previous insights and doc summaries.\n- Keep the scope section short (1–2 lines) and refer to the attached \"Scope paths\" artifact rather than listing every path.\n- Maintain a “Design/Implementation follow-ups” subsection with concrete build-time checks based on the issue/docs (e.g., user content isolation via a separate domain, role- or resource-based access control). When context is missing, phrase the items as questions for the product/eng team so future runs can confirm them.\n- Fold key insights from design docs, Secbot, and prior comments into the key points and follow-ups instead of listing irrelevant docs.\n\nFinal comment (single comment only):\n- Post exactly one final comment on the issue, prefixed with `Security Agent ({model}) - automated security review` so humans can recognize automation.\n- Structure the comment into three plain-language sections (no angle-bracket tags):\n  - Conclusion — a short paragraph summarizing whether the security analysis is complete and whether any HIGH or MEDIUM risk findings remain. If there are no HIGH or MEDIUM findings, state clearly that no blocking issues were found and that the surface appears ready from an AppSec perspective (subject to other launch gates), and that the review can likely be closed.\n  - Findings — a bullet list focusing on HIGH-severity findings only. For each HIGH finding, name the issue, mention its risk briefly, and link to its child ticket key. Summarize MEDIUM/LOW findings only as counts or short notes without listing each one.\n  - Runtime summary — a single line summarizing the runtime metrics for this review using: {runtime}. Include the analyzed revision line `{revision}` when it is available.\n- Do not include the full HTML report inline in the comment; instead, link to the uploaded markdown/HTML reports and the scope file.\n\nArtifacts to rely on:\n- report_markdown: {md}\n- report_html: {html}\n- scope_file (\"Scope paths\" artifact): {scope_file}\n- analyzed_scope_label: {scope_paths}\n- trufflehog_json (open-source reviews only, if present): {trufflehog}\n- artifacts_root (local, for uploads only): {root}\n\nChecklist:\n{checklist}",
-        issue = issue_ref,
-        model = model_name,
-        checklist = checklist,
-        scope_paths = scope_paths_text,
-        scope_file = scope_file_text,
-        html = html_path,
-        md = md_path,
-        root = output_root.display(),
-        runtime = runtime_summary,
-        revision = revision_summary,
-        trufflehog = trufflehog_text,
+    let artifacts_root = output_root.display().to_string();
+    linear_finalize_prompt(
+        issue_ref,
+        model_name,
+        checklist.as_str(),
+        scope_paths_text.as_str(),
+        scope_file_text,
+        md_path.as_str(),
+        html_path.as_str(),
+        trufflehog_text.as_str(),
+        artifacts_root.as_str(),
+        runtime_summary,
+        revision_summary,
     )
 }
 
 fn build_linear_create_tickets_prompt(issue_ref: &str, bugs_markdown: &str) -> String {
-    let bugs_preview = bugs_markdown.trim();
-    let bugs_block = if bugs_preview.is_empty() {
-        "No structured findings were produced; do not create any child tickets.".to_string()
-    } else {
-        format!("Source findings markdown (full content):\n```markdown\n{bugs_preview}\n```")
-    };
-    format!(
-        "Create Linear child tickets for validated security findings and link them to the review ticket `{issue_ref}`.\n\n{bugs_block}\n\nInstructions:\n- Work only from the findings markdown above plus the main review ticket context; do NOT invent findings.\n- For each HIGH-severity finding, first search for existing sub-issues or clearly related tickets (matching severity + component/file + summary) using Linear MCP. If a closely matching ticket already exists, link that ticket to `{issue_ref}` and **do not** create a duplicate.\n- Only create new tickets for findings that have no similar existing ticket.\n- When creating a new ticket, keep it unassigned and in the initial TODO/backlog state; do **not** auto-assign owners or move tickets to triaged/in-progress/done.\n- Parse the bugs markdown to create concise titles that include severity and the most important component/file.\n- Include reproduction/verification details and recommendations in each ticket body.\n- If the finding includes blame information or a suggested owner (for example, a `Suggested owner:` line derived from git blame), copy that line into the ticket body but do **not** set an assignee.\n- Add links back to the review ticket `{issue_ref}` so engineers can reach the full report and artifacts.\n- Do **not** post comments on the review ticket; this step is only for creating/linking child tickets. The final summary comment is handled separately.\n- Keep everything within the Linear MCP; do not use external network calls.",
-    )
+    linear_create_tickets_prompt(issue_ref, bugs_markdown)
 }
 
 fn build_linear_related_docs_prompt(
@@ -6071,13 +7365,13 @@ fn build_linear_related_docs_prompt(
         .scope_file_path
         .as_deref()
         .unwrap_or("(not generated)");
-    format!(
-        "Unblock analysis by gathering related docs and updating the Linear status block for `{issue}`.\n\nSteps:\n- Use Linear MCP to open the issue immediately.\n- Collect all doc links (description + comments), then read them via Notion/Google Workspace MCP; include inline hyperlinks.\n- Use Secbot MCP to find prior contexts/policies related to this issue; reason from the issue context, select only relevant hits, and explain why each matters.\n- Summarize briefly in the description’s “Security Agent ({model}) - Review Status” block under a \"Related Docs / Secbot Results\" section; keep bullets concise.\n- Do not post comments; update only the status block. Keep artifact references to uploaded attachments only (local artifacts root: {art_root}).\n\nReminders:\n- Scope paths: {scope_paths}\n- Scope file: {scope_file}\n- Keep local filesystem paths out of Linear; link uploaded files or remote docs only.",
-        issue = issue_ref,
-        model = model_name,
-        scope_paths = scope_paths_text,
-        scope_file = scope_file_text,
-        art_root = output_root.display(),
+    let artifacts_root = output_root.display().to_string();
+    linear_related_docs_prompt(
+        issue_ref,
+        model_name,
+        scope_paths_text.as_str(),
+        scope_file_text,
+        artifacts_root.as_str(),
     )
 }
 
@@ -6096,10 +7390,7 @@ async fn run_linear_status_agent(
     let mut lin_config = config.clone();
     lin_config.model = Some("gpt-5.1".to_string());
     lin_config.model_provider = provider.clone();
-    lin_config.base_instructions = Some(
-        "Use Linear, Notion, and Google Workspace via MCP tools. Prefer MCP tools for reading/updating issues and documents. When an issue key is provided, open it directly with Linear MCP `get_issue` before any searches; avoid enumerating teams/projects/resources unless direct lookup fails. Keep repositories under ~/code; if a repository is missing under ~/code, use GitHub CLI to clone a shallow copy (depth=1), e.g., `gh repo clone owner/repo ~/code/repo -- --depth=1`."
-            .to_string(),
-    );
+    lin_config.base_instructions = Some(LINEAR_STATUS_AGENT_BASE_INSTRUCTIONS.to_string());
     lin_config.user_instructions = None;
     lin_config.developer_instructions = None;
     lin_config.compact_prompt = None;
@@ -6267,6 +7558,17 @@ fn push_progress_log(
     logs.push(message);
 }
 
+fn emit_progress_log(
+    progress_sender: &Option<AppEventSender>,
+    log_sink: &Option<Arc<SecurityReviewLogSink>>,
+    message: String,
+) {
+    if let Some(tx) = progress_sender.as_ref() {
+        tx.send(AppEvent::SecurityReviewLog(message.clone()));
+    }
+    write_log_sink(log_sink, message.as_str());
+}
+
 fn append_log(
     log_sink: &Option<Arc<SecurityReviewLogSink>>,
     logs: &mut Vec<String>,
@@ -6325,6 +7627,58 @@ fn log_model_reasoning(
     }
 }
 
+fn log_dedupe_decision_reasons(
+    decisions: &[BugDedupeDecision],
+    log_prefix: &str,
+    progress_sender: &Option<AppEventSender>,
+    log_sink: &Option<Arc<SecurityReviewLogSink>>,
+    logs: &mut Vec<String>,
+) {
+    let mut total_merges = 0usize;
+    let mut logged = 0usize;
+    for decision in decisions {
+        if decision.canonical_id == decision.id {
+            continue;
+        }
+        total_merges = total_merges.saturating_add(1);
+        let Some(reason) = decision
+            .reason
+            .as_ref()
+            .map(|reason| reason.trim())
+            .filter(|reason| !reason.is_empty())
+        else {
+            continue;
+        };
+        if logged >= BUG_LLM_DEDUP_REASON_LOG_LIMIT {
+            continue;
+        }
+        let truncated = truncate_text(reason, MODEL_REASONING_LOG_MAX_GRAPHEMES);
+        let id = decision.id;
+        let canonical_id = decision.canonical_id;
+        let message = format!("{log_prefix} decision: {id} -> {canonical_id} ({truncated})");
+        push_progress_log(progress_sender, log_sink, logs, message);
+        logged = logged.saturating_add(1);
+    }
+    if total_merges > 0 && logged == 0 {
+        push_progress_log(
+            progress_sender,
+            log_sink,
+            logs,
+            format!("{log_prefix} decision reasons unavailable for {total_merges} merge(s)."),
+        );
+        return;
+    }
+    let remaining = total_merges.saturating_sub(logged);
+    if remaining > 0 {
+        push_progress_log(
+            progress_sender,
+            log_sink,
+            logs,
+            format!("{log_prefix} decision reasons omitted for {remaining} merge(s)."),
+        );
+    }
+}
+
 fn collect_snippets_blocking(
     repo_path: PathBuf,
     include_paths: Vec<PathBuf>,
@@ -6343,24 +7697,85 @@ fn collect_snippets_blocking(
     let mut logs = Vec::new();
 
     let targets = if include_paths.is_empty() {
-        vec![repo_path]
+        vec![repo_path.clone()]
     } else {
         include_paths
     };
 
-    for target in targets {
-        if state.limit_reached() {
-            break;
+    let mut used_git_ls_files = false;
+    if let Ok(git_root_output) = StdCommand::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(&repo_path)
+        .output()
+        && git_root_output.status.success()
+        && let Ok(git_root_stdout) = String::from_utf8(git_root_output.stdout)
+        && let Ok(output) = StdCommand::new("git")
+            .args(["ls-files", "-z"])
+            .current_dir(&repo_path)
+            .output()
+        && output.status.success()
+    {
+        let git_root = PathBuf::from(git_root_stdout.trim());
+        used_git_ls_files = true;
+        state.emit_progress_message(
+            "Collecting tracked files (git ls-files) to skip untracked files and avoid local build/test artifacts..."
+                .to_string(),
+        );
+        let mut tracked_files: Vec<PathBuf> = output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|chunk| !chunk.is_empty())
+            .map(|chunk| PathBuf::from(String::from_utf8_lossy(chunk).to_string()))
+            .collect();
+        tracked_files.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+
+        let in_scope =
+            |path: &Path| -> bool { targets.iter().any(|target| path.starts_with(target)) };
+
+        for rel in tracked_files {
+            if state.limit_reached() {
+                break;
+            }
+            let abs = git_root.join(&rel);
+            if !in_scope(&abs) {
+                continue;
+            }
+            if path_has_excluded_dir_component(&rel) {
+                continue;
+            }
+            let metadata = match fs::symlink_metadata(&abs) {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                continue;
+            }
+            if let Err(err) = state.visit_file(&abs, metadata.len() as usize) {
+                logs.push(err.clone());
+                return Err(SecurityReviewFailure { message: err, logs });
+            }
         }
-        state.emit_progress_message(format!("Scanning {}...", target.display()));
-        if let Err(err) = state.visit_path(&target) {
-            logs.push(err.clone());
-            return Err(SecurityReviewFailure { message: err, logs });
+    }
+
+    if !used_git_ls_files {
+        for target in targets {
+            if state.limit_reached() {
+                break;
+            }
+            state.emit_progress_message(format!("Scanning {}...", target.display()));
+            if let Err(err) = state.visit_path(&target) {
+                logs.push(err.clone());
+                return Err(SecurityReviewFailure { message: err, logs });
+            }
         }
     }
 
     if state.snippets.is_empty() {
-        logs.push("No eligible files found during collection.".to_string());
+        if used_git_ls_files {
+            logs.push("No eligible tracked files found during collection.".to_string());
+        } else {
+            logs.push("No eligible files found during collection.".to_string());
+        }
         return Err(SecurityReviewFailure {
             message: "No eligible files found during collection.".to_string(),
             logs,
@@ -6405,11 +7820,6 @@ async fn triage_files_for_bug_analysis(
 ) -> Result<FileTriageResult, SecurityReviewFailure> {
     let total = snippets.len();
     let mut logs: Vec<String> = Vec::new();
-    let triage_model = if triage_model.trim().is_empty() {
-        FILE_TRIAGE_MODEL
-    } else {
-        triage_model
-    };
 
     if total == 0 {
         return Ok(FileTriageResult {
@@ -6418,175 +7828,146 @@ async fn triage_files_for_bug_analysis(
         });
     }
 
-    let start_message = format!("Running LLM triage over {total} file(s) to prioritize analysis.");
-    push_progress_log(
-        &progress_sender,
-        &log_sink,
-        &mut logs,
-        start_message.clone(),
-    );
-
     let scope_prompt = scope_prompt
         .map(|prompt| prompt.trim().to_string())
         .filter(|prompt| !prompt.is_empty())
-        .map(Arc::<str>::from);
-    if let Some(prompt) = scope_prompt.as_deref() {
-        let summarized = truncate_text(prompt, MODEL_REASONING_LOG_MAX_GRAPHEMES);
+        .map(Arc::from);
+
+    let mut descriptors: Vec<FileTriageDescriptor> = Vec::with_capacity(total);
+    for (idx, snippet) in snippets.iter().enumerate() {
+        let id = idx.saturating_add(1);
+        let path = snippet.relative_path.to_string_lossy().to_string();
+        let preview: String = snippet
+            .content
+            .chars()
+            .take(FILE_TRIAGE_PREVIEW_CHARS)
+            .collect();
+        let listing_json = json!({
+            "id": id,
+            "path": path.as_str(),
+            "preview": preview,
+        })
+        .to_string();
+        descriptors.push(FileTriageDescriptor {
+            id,
+            path,
+            listing_json,
+        });
+    }
+
+    let chunk_size = FILE_TRIAGE_CHUNK_SIZE.max(1);
+    let mut chunk_requests: Vec<FileTriageChunkRequest> = Vec::new();
+    for (chunk_idx, chunk) in descriptors.chunks(chunk_size).enumerate() {
+        let start_idx = chunk_idx.saturating_mul(chunk_size);
+        let end_idx = start_idx.saturating_add(chunk.len().saturating_sub(1));
+        chunk_requests.push(FileTriageChunkRequest {
+            start_idx,
+            end_idx,
+            descriptors: chunk.to_vec(),
+        });
+    }
+
+    let total_chunks = chunk_requests.len();
+    let max_concurrency = FILE_TRIAGE_CONCURRENCY.max(1).min(total_chunks.max(1));
+
+    let chunk_results = futures::stream::iter(chunk_requests.into_iter().map(|request| {
+        let provider = provider.clone();
+        let auth = auth.clone();
+        let triage_model = triage_model.to_string();
+        let scope_prompt = scope_prompt.clone();
+        let progress_sender = progress_sender.clone();
+        let log_sink = log_sink.clone();
+        let metrics = metrics.clone();
+        let fallback_ids: Vec<usize> = request.descriptors.iter().map(|d| d.id).collect();
+        let range_start = request.start_idx.saturating_add(1);
+        let range_end = request.end_idx.saturating_add(1);
+
+        async move {
+            (
+                fallback_ids,
+                range_start,
+                range_end,
+                triage_chunk(
+                    client,
+                    provider,
+                    auth,
+                    triage_model,
+                    reasoning_effort,
+                    scope_prompt,
+                    request,
+                    progress_sender,
+                    log_sink,
+                    total,
+                    metrics,
+                )
+                .await,
+            )
+        }
+    }))
+    .buffer_unordered(max_concurrency);
+    futures::pin_mut!(chunk_results);
+
+    let mut include_ids: HashSet<usize> = HashSet::new();
+    let mut processed_files = 0usize;
+
+    while let Some((fallback_ids, range_start, range_end, result)) = chunk_results.next().await {
+        match result {
+            Ok(mut chunk) => {
+                logs.append(&mut chunk.logs);
+                processed_files = processed_files.saturating_add(chunk.processed);
+                include_ids.extend(chunk.include_ids);
+            }
+            Err(mut failure) => {
+                logs.append(&mut failure.logs);
+                let fallback_count = fallback_ids.len();
+                let fallback_message = format!(
+                    "File triage failed for files {range_start}-{range_end} ({fallback_count} file(s)); including all by default."
+                );
+                push_progress_log(&progress_sender, &log_sink, &mut logs, fallback_message);
+                processed_files = processed_files.saturating_add(fallback_count);
+                include_ids.extend(fallback_ids);
+            }
+        }
+
+        if let Some(tx) = progress_sender.as_ref() {
+            let percent = if total == 0 {
+                0
+            } else {
+                (processed_files.min(total) * 100) / total
+            };
+            tx.send(AppEvent::SecurityReviewLog(format!(
+                "File triage progress: {}/{} - {percent}%.",
+                processed_files.min(total),
+                total
+            )));
+        }
+    }
+
+    if include_ids.is_empty() {
         push_progress_log(
             &progress_sender,
             &log_sink,
             &mut logs,
-            format!("Guiding file triage with user prompt: {summarized}"),
+            "File triage excluded every file; including all by default.".to_string(),
         );
+        include_ids.extend(1..=total);
     }
 
-    let chunk_requests: Vec<FileTriageChunkRequest> = snippets
-        .iter()
+    let included: Vec<FileSnippet> = snippets
+        .into_iter()
         .enumerate()
-        .collect::<Vec<_>>()
-        .chunks(FILE_TRIAGE_CHUNK_SIZE)
-        .map(|chunk| {
-            let start_idx = chunk.first().map(|(idx, _)| *idx).unwrap_or(0);
-            let end_idx = chunk.last().map(|(idx, _)| *idx).unwrap_or(start_idx);
-            let descriptors = chunk
-                .iter()
-                .map(|(idx, snippet)| {
-                    let preview = snippet
-                        .content
-                        .chars()
-                        .filter(|c| *c == '\n' || *c == '\r' || *c == '\t' || !c.is_control())
-                        .take(400)
-                        .collect::<String>();
-                    let descriptor = json!({
-                        "id": idx,
-                        "path": snippet.relative_path.display().to_string(),
-                        "language": snippet.language,
-                        "bytes": snippet.bytes,
-                        "preview": preview,
-                    });
-                    FileTriageDescriptor {
-                        id: *idx,
-                        path: snippet.relative_path.display().to_string(),
-                        listing_json: descriptor.to_string(),
-                    }
-                })
-                .collect();
-            FileTriageChunkRequest {
-                start_idx,
-                end_idx,
-                descriptors,
-            }
+        .filter_map(|(idx, snippet)| {
+            let id = idx.saturating_add(1);
+            include_ids.contains(&id).then_some(snippet)
         })
         .collect();
 
-    let mut include_ids: HashSet<usize> = HashSet::new();
-    let mut aggregated_logs: Vec<String> = Vec::new();
-    let mut processed_files: usize = 0;
-
-    let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
-    let mut remaining = chunk_requests.into_iter();
-    let total_chunks = total.div_ceil(FILE_TRIAGE_CHUNK_SIZE.max(1));
-    let concurrency = FILE_TRIAGE_CONCURRENCY.min(total_chunks.max(1));
-
-    // Emit a brief, on-screen preview of the parallel task and sample tool calls.
-    if let Some(tx) = progress_sender.as_ref() {
-        tx.send(AppEvent::SecurityReviewLog(format!(
-            "  └ Launching parallel file triage ({concurrency} workers)"
-        )));
-    }
-
-    for _ in 0..concurrency {
-        if let Some(request) = remaining.next() {
-            in_flight.push(triage_chunk(
-                client,
-                provider.clone(),
-                auth.clone(),
-                triage_model.to_string(),
-                reasoning_effort,
-                scope_prompt.clone(),
-                request,
-                progress_sender.clone(),
-                log_sink.clone(),
-                total,
-                metrics.clone(),
-            ));
-        }
-    }
-
-    while let Some(result) = in_flight.next().await {
-        match result {
-            Ok(chunk_result) => {
-                aggregated_logs.extend(chunk_result.logs);
-                include_ids.extend(chunk_result.include_ids);
-                processed_files = processed_files.saturating_add(chunk_result.processed);
-                if let Some(tx) = progress_sender.as_ref() {
-                    let percent = if total == 0 {
-                        0
-                    } else {
-                        (processed_files * 100) / total
-                    };
-                    tx.send(AppEvent::SecurityReviewLog(format!(
-                        "File triage progress: {}/{} - {percent}%.",
-                        processed_files.min(total),
-                        total
-                    )));
-                }
-                if let Some(next_request) = remaining.next() {
-                    in_flight.push(triage_chunk(
-                        client,
-                        provider.clone(),
-                        auth.clone(),
-                        triage_model.to_string(),
-                        reasoning_effort,
-                        scope_prompt.clone(),
-                        next_request,
-                        progress_sender.clone(),
-                        log_sink.clone(),
-                        total,
-                        metrics.clone(),
-                    ));
-                }
-            }
-            Err(mut failure) => {
-                logs.append(&mut failure.logs);
-                return Err(SecurityReviewFailure {
-                    message: failure.message,
-                    logs,
-                });
-            }
-        }
-    }
-
-    logs.extend(aggregated_logs);
-
-    if include_ids.is_empty() {
-        append_log(
-            &log_sink,
-            &mut logs,
-            "LLM triage excluded all files.".to_string(),
-        );
-        return Ok(FileTriageResult {
-            included: Vec::new(),
-            logs,
-        });
-    }
-
-    let mut included = Vec::with_capacity(include_ids.len());
-    for (idx, snippet) in snippets.into_iter().enumerate() {
-        if include_ids.contains(&idx) {
-            included.push(snippet);
-        }
-    }
-
-    append_log(
+    let kept = included.len();
+    push_progress_log(
+        &progress_sender,
         &log_sink,
         &mut logs,
-        format!(
-            "File triage selected {} of {} files (excluded {}).",
-            included.len(),
-            total,
-            total.saturating_sub(included.len())
-        ),
+        format!("File triage kept {kept}/{total} file(s)."),
     );
 
     Ok(FileTriageResult { included, logs })
@@ -6625,10 +8006,7 @@ async fn triage_chunk(
         .iter()
         .map(|desc| desc.listing_json.as_str())
         .collect::<Vec<_>>()
-        .join(
-            "
-",
-        );
+        .join("\n");
 
     // Show the file range being triaged; overall % is reported by the parent loop.
     let detail = format!(
@@ -7088,36 +8466,68 @@ async fn generate_specs(
         directory_candidates.clone()
     };
 
+    let allow_llm_directory_filter = include_paths.is_empty();
+    let mut used_llm_filter = false;
     let mut filtered_dirs = if spec_progress_state.targets.is_empty() {
-        match filter_spec_directories(
-            client,
-            provider,
-            auth,
-            spec_model,
-            spec_reasoning_effort,
-            repo_root,
-            &heuristically_filtered,
-            metrics.clone(),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(err) => {
-                if let Some(tx) = progress_sender.as_ref() {
-                    for line in &err.logs {
-                        tx.send(AppEvent::SecurityReviewLog(line.clone()));
+        if !allow_llm_directory_filter {
+            let kept = heuristically_filtered.len();
+            let total = directory_candidates.len();
+            let message = format!(
+                "Skipping spec directory filter: using {kept}/{total} preselected director{}.",
+                if kept == 1 { "y" } else { "ies" }
+            );
+            if let Some(tx) = progress_sender.as_ref() {
+                tx.send(AppEvent::SecurityReviewLog(message.clone()));
+            }
+            logs.push(message);
+            heuristically_filtered
+        } else if heuristically_filtered.len() <= SPEC_DIR_FILTER_TARGET {
+            let kept = heuristically_filtered.len();
+            let total = directory_candidates.len();
+            let message = format!(
+                "Skipping spec directory filter: {kept}/{total} candidates already <= {SPEC_DIR_FILTER_TARGET}."
+            );
+            if let Some(tx) = progress_sender.as_ref() {
+                tx.send(AppEvent::SecurityReviewLog(message.clone()));
+            }
+            logs.push(message);
+            heuristically_filtered
+        } else {
+            match filter_spec_directories(
+                client,
+                provider,
+                auth,
+                spec_model,
+                spec_reasoning_effort,
+                repo_root,
+                &heuristically_filtered,
+                metrics.clone(),
+            )
+            .await
+            {
+                Ok(result) => {
+                    used_llm_filter = true;
+                    result
+                }
+                Err(err) => {
+                    if let Some(tx) = progress_sender.as_ref() {
+                        for line in &err.logs {
+                            tx.send(AppEvent::SecurityReviewLog(line.clone()));
+                        }
                     }
+                    logs.extend(err.logs);
+                    let kept = heuristically_filtered.len();
+                    let total = directory_candidates.len();
+                    let message = format!(
+                        "Directory filter failed; using {kept}/{total} heuristic-filtered directories. {}",
+                        err.message
+                    );
+                    if let Some(tx) = progress_sender.as_ref() {
+                        tx.send(AppEvent::SecurityReviewLog(message.clone()));
+                    }
+                    logs.push(message);
+                    heuristically_filtered
                 }
-                logs.extend(err.logs);
-                let message = format!(
-                    "Directory filter failed; using all directories. {}",
-                    err.message
-                );
-                if let Some(tx) = progress_sender.as_ref() {
-                    tx.send(AppEvent::SecurityReviewLog(message.clone()));
-                }
-                logs.push(message);
-                directory_candidates.clone()
             }
         }
     } else {
@@ -7154,7 +8564,11 @@ async fn generate_specs(
         let kept = spec_targets.len();
         let total = directory_candidates.len();
         let message = if spec_progress_state.targets.is_empty() {
-            format!("Spec directory filter kept {kept}/{total} directories using {spec_model}.")
+            if used_llm_filter {
+                format!("Spec directory filter kept {kept}/{total} directories using {spec_model}.")
+            } else {
+                format!("Selected {kept}/{total} directories for specification generation.")
+            }
         } else {
             format!("Resuming specification generation for {kept} directory(s).")
         };
@@ -7405,14 +8819,6 @@ async fn generate_specs(
             logs.push(msg);
         }
     }
-
-    write_testing_instructions(
-        repo_root,
-        &specs_root,
-        progress_sender.clone(),
-        log_sink.clone(),
-    )
-    .await;
 
     Ok(Some(SpecGenerationOutcome {
         combined_markdown,
@@ -8324,6 +9730,7 @@ mod bug_analysis_progress_tests {
             findings_count: 1,
             duration_ms: 123,
             bug_section: Some("### [1] Example\n\nDetails".to_string()),
+            error_message: None,
         });
 
         let runtime = tokio::runtime::Runtime::new().expect("runtime");
@@ -8924,7 +10331,7 @@ mod validation_target_selection_tests {
             ],
         };
 
-        let targets = build_validation_findings_context(&snapshot);
+        let targets = build_validation_findings_context(&snapshot, false);
         assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(2)]);
     }
 
@@ -8943,8 +10350,174 @@ mod validation_target_selection_tests {
             )],
         };
 
-        let targets = build_validation_findings_context(&snapshot);
+        let targets = build_validation_findings_context(&snapshot, false);
         assert_eq!(targets.ids, Vec::<BugIdentifier>::new());
+    }
+
+    #[test]
+    fn includes_web_browser_findings_when_enabled() {
+        let snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: String::new(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![
+                make_bug_snapshot(
+                    1,
+                    1,
+                    "Browser-only finding",
+                    "High",
+                    vec!["web_browser".to_string()],
+                ),
+                make_bug_snapshot(2, 2, "API finding", "High", vec!["network_api".to_string()]),
+            ],
+        };
+
+        let targets = build_validation_findings_context(&snapshot, true);
+        assert_eq!(
+            targets.ids,
+            vec![BugIdentifier::RiskRank(1), BugIdentifier::RiskRank(2)]
+        );
+    }
+
+    #[test]
+    fn includes_crash_poc_release_and_excludes_crash_poc_func() {
+        let snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: String::new(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![
+                make_bug_snapshot(
+                    1,
+                    1,
+                    "Standalone crash in a function",
+                    "High",
+                    vec!["crash_poc_func".to_string()],
+                ),
+                make_bug_snapshot(
+                    2,
+                    2,
+                    "Crash reachable from shipped entrypoint",
+                    "High",
+                    vec!["crash_poc_release".to_string()],
+                ),
+            ],
+        };
+
+        let targets = build_validation_findings_context(&snapshot, true);
+        assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(2)]);
+    }
+
+    #[test]
+    fn treats_crash_poc_release_bin_as_crash_poc_release() {
+        let bug = SecurityReviewBug {
+            summary_id: 1,
+            risk_rank: Some(1),
+            risk_score: Some(0.0),
+            title: "Crash".to_string(),
+            severity: "High".to_string(),
+            impact: "x".to_string(),
+            likelihood: "x".to_string(),
+            recommendation: "x".to_string(),
+            file: "x.rs#L1-L2".to_string(),
+            blame: None,
+            risk_reason: None,
+            verification_types: vec!["crash_poc_release_bin".to_string()],
+            vulnerability_tag: None,
+            validation: BugValidationState::default(),
+            assignee_github: None,
+        };
+
+        assert_eq!(crash_poc_category(&bug), Some("crash_poc_release"));
+    }
+
+    #[test]
+    fn includes_rce_bin_findings_even_without_vuln_tag() {
+        let snapshot = SecurityReviewSnapshot {
+            generated_at: OffsetDateTime::now_utc(),
+            findings_summary: String::new(),
+            report_sections_prefix: Vec::new(),
+            bugs: vec![BugSnapshot {
+                bug: SecurityReviewBug {
+                    summary_id: 1,
+                    risk_rank: Some(1),
+                    risk_score: Some(0.0),
+                    title: "RCE via config".to_string(),
+                    severity: "High".to_string(),
+                    impact: "x".to_string(),
+                    likelihood: "x".to_string(),
+                    recommendation: "x".to_string(),
+                    file: "x.rs#L1-L2".to_string(),
+                    blame: None,
+                    risk_reason: None,
+                    verification_types: vec!["rce_bin".to_string()],
+                    vulnerability_tag: None,
+                    validation: BugValidationState::default(),
+                    assignee_github: None,
+                },
+                original_markdown: "# RCE\n\nDetails.\n".to_string(),
+            }],
+        };
+
+        let targets = build_validation_findings_context(&snapshot, true);
+        assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(1)]);
+    }
+}
+
+#[cfg(test)]
+mod web_validation_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn normalizes_base_url_and_strips_path_query() {
+        let base =
+            normalize_web_validation_base_url("https://example.com/foo/bar?x=1#frag").expect("ok");
+        assert_eq!(base.as_str(), "https://example.com/");
+    }
+
+    #[test]
+    fn rejects_target_url_with_userinfo() {
+        let err = normalize_web_validation_base_url("https://user:pass@example.com/")
+            .expect_err("should reject");
+        assert!(err.contains("userinfo"));
+    }
+
+    #[test]
+    fn resolves_relative_targets_and_rejects_other_origins() {
+        let base = normalize_web_validation_base_url("https://example.com/app").expect("ok");
+        let joined = resolve_web_validation_target(&base, Some("/api/v1/users")).expect("ok join");
+        assert_eq!(joined.as_str(), "https://example.com/api/v1/users");
+
+        let err = resolve_web_validation_target(&base, Some("https://evil.com/")).expect_err("bad");
+        assert!(err.contains("non-target origin"));
+    }
+
+    #[test]
+    fn parses_creds_from_json_headers_object() {
+        let headers =
+            parse_web_validation_creds(r#"{"headers":{"Authorization":"Bearer abcdefgh"}} "#);
+        assert_eq!(
+            headers,
+            vec![("Authorization".to_string(), "Bearer abcdefgh".to_string())]
+        );
+    }
+
+    #[test]
+    fn parses_creds_from_header_lines() {
+        let headers = parse_web_validation_creds(
+            r#"
+# comment
+Authorization: Bearer abcdefgh
+X_FOO: bar
+"#,
+        );
+        assert_eq!(
+            headers,
+            vec![
+                ("Authorization".to_string(), "Bearer abcdefgh".to_string()),
+                ("X_FOO".to_string(), "bar".to_string())
+            ]
+        );
     }
 }
 
@@ -8999,8 +10572,10 @@ done
 
     #[test]
     fn exploit_scenario_includes_poc_or_trigger_excerpt() {
-        let mut validation = BugValidationState::default();
-        validation.status = BugValidationStatus::Passed;
+        let validation = BugValidationState {
+            status: BugValidationStatus::Passed,
+            ..BugValidationState::default()
+        };
         let bug = SecurityReviewBug {
             summary_id: 1,
             risk_rank: Some(1),
@@ -9013,7 +10588,7 @@ done
             file: "x.rs#L1-L2".to_string(),
             blame: None,
             risk_reason: None,
-            verification_types: vec!["crash_poc_release_bin".to_string()],
+            verification_types: vec!["crash_poc_release".to_string()],
             vulnerability_tag: None,
             validation,
             assignee_github: None,
@@ -10060,7 +11635,7 @@ async fn compact_analysis_context(
     );
 
     let prompt = format!(
-        "Condense the following specification and threat model into a concise context for finding security bugs. Keep architecture, data flows, authn/z, controls, data sensitivity, and notable threats. Aim for at most {ANALYSIS_CONTEXT_MAX_CHARS} characters. Return short paragraphs or bullets; no tables or headings longer than a few words.\n\n{combined}"
+        "Condense the following specification and threat model into a concise context for finding security bugs. Keep architecture, data flows, authn/z, controls, data sensitivity, and notable threats. Aim for at most {ANALYSIS_CONTEXT_MAX_CHARS} characters. Return short paragraphs or bullets; no tables; do not include lists of file paths.\n\n{combined}"
     );
 
     let response = call_model(
@@ -10125,111 +11700,448 @@ fn guess_testing_defaults(repo_root: &Path) -> (bool, bool, bool, bool, bool, u1
     )
 }
 
-fn build_testing_instructions(repo_root: &Path) -> String {
-    let (
-        has_cargo,
-        has_package_json,
-        has_dockerfile,
-        has_compose,
-        has_playwright,
-        default_port,
-        repo_label,
-    ) = guess_testing_defaults(repo_root);
-
-    let mut sections: Vec<String> = Vec::new();
-
-    let mut quickstart: Vec<String> = Vec::new();
-    if has_cargo {
-        quickstart.push("- cargo build --locked".to_string());
-        quickstart.push("- cargo run --release".to_string());
-    }
-    if has_package_json {
-        quickstart.push("- npm install".to_string());
-        quickstart.push(format!(
-            "- npm run build && npm run dev -- --port {default_port}"
-        ));
-    }
-    if quickstart.is_empty() {
-        quickstart.push(
-            "- Identify the primary service entrypoint, install deps, and start it with the appropriate runner (npm/cargo/docker)."
-                .to_string(),
-        );
-    }
-    sections.push(format!("## Quickstart\n{}\n", quickstart.join("\n")));
-
-    if has_cargo {
-        sections.push(
-            "## Native build\n- cargo build --locked\n- Artifacts: `target/debug` (or `target/release` after `cargo build --release`).\n- Run: `cargo run --release`\n"
-                .to_string(),
-        );
-    }
-
-    if has_package_json {
-        sections.push(format!(
-            "## Web/Node\n- npm install\n- npm run build\n- npm run dev -- --port {default_port}\n- Verify: `curl -i http://localhost:{default_port}` (adjust if your app uses a different port).\n"
-        ));
-    }
-
-    if has_dockerfile || has_compose {
-        let tag = format!("{repo_label}-local");
-        let compose_cmd = if has_compose {
-            "docker compose up --build".to_string()
-        } else {
-            "docker run -p <host_port>:<container_port> <image>".to_string()
-        };
-        sections.push(format!(
-            "## Docker\n- docker build -t {tag} .\n- {compose_cmd}\n- Verify: `curl -i http://localhost:{default_port}` (update to the container's exposed port).\n"
-        ));
-    }
-
-    if has_playwright {
-        sections.push(
-            "## Headless checks\n- npm install (if not already)\n- npx playwright install\n- npx playwright test\n"
-                .to_string(),
-        );
-    } else {
-        sections.push(
-            "## Headless checks\n- If the project has a UI, install Playwright and add a smoke test harness (e.g., `npx playwright install` then `npx playwright test`).\n"
-                .to_string(),
-        );
-    }
-
-    sections.push(format!(
-        "## Manual verification\n- Once the service is running (default port: {default_port}; override with `PORT` env if applicable), confirm a 200/OK from a health or root endpoint:\n  - `curl -I http://localhost:{default_port}`\n- For authenticated flows, add seed users in test config or fixtures before hitting secured endpoints.\n"
-    ));
-
-    format!("# Local build and smoke test\n\n{}\n", sections.join("\n"))
+struct ValidationTargetPrepOutcome {
+    logs: Vec<String>,
+    testing_md_additions: Vec<String>,
+    success: bool,
 }
 
-async fn write_testing_instructions(
+fn prep_exec_succeeded(
+    exec_commands: &[ValidationPrepExecCommand],
+    expected: Option<&str>,
+) -> bool {
+    let Some(expected) = expected.map(str::trim).filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    exec_commands
+        .iter()
+        .filter(|cmd| cmd.exit_code == 0)
+        .any(|cmd| cmd.command.contains(expected))
+}
+
+async fn prepare_validation_targets(
+    config: &Config,
+    provider: &ModelProviderInfo,
+    auth_manager: Arc<AuthManager>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
     repo_root: &Path,
-    specs_root: &Path,
+    output_root: &Path,
     progress_sender: Option<AppEventSender>,
     log_sink: Option<Arc<SecurityReviewLogSink>>,
-) {
+    metrics: Arc<ReviewMetrics>,
+) -> ValidationTargetPrepOutcome {
+    let mut logs: Vec<String> = Vec::new();
+    let mut additions: Vec<String> = Vec::new();
+
+    let (has_cargo, has_package_json, _, _, _, _, _) = guess_testing_defaults(repo_root);
+    let has_go = repo_root.join("go.mod").exists();
+
+    let compose_candidates = [
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yml",
+        "compose.yaml",
+    ];
+    let compose_paths: Vec<PathBuf> = compose_candidates
+        .iter()
+        .map(|name| repo_root.join(name))
+        .filter(|path| path.exists())
+        .collect();
+    let has_dockerfile = repo_root.join("Dockerfile").exists();
+
+    let specs_root = output_root.join("specs");
     let testing_path = specs_root.join("TESTING.md");
-    let contents = build_testing_instructions(repo_root);
-    let log_message = format!(
-        "Writing testing instructions to {}.",
-        display_path_for(&testing_path, repo_root)
-    );
-    push_progress_log(&progress_sender, &log_sink, &mut Vec::new(), log_message);
-    if let Some(parent) = testing_path.parent() {
-        let _ = tokio_fs::create_dir_all(parent).await;
-    }
-    if let Err(err) = tokio_fs::write(&testing_path, contents.as_bytes()).await {
-        let warn = format!(
-            "Failed to write testing instructions to {}: {err}",
-            testing_path.display()
-        );
-        push_progress_log(&progress_sender, &log_sink, &mut Vec::new(), warn);
+    let testing_md = tokio_fs::read_to_string(&testing_path)
+        .await
+        .unwrap_or_default();
+    let testing_md_context = trim_prompt_context(&testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
+
+    let compose_files = if compose_paths.is_empty() {
+        "none".to_string()
     } else {
-        let message = format!(
-            "Testing instructions saved to {} (includes build/run, Docker, and headless checks).",
-            display_path_for(&testing_path, repo_root)
-        );
-        push_progress_log(&progress_sender, &log_sink, &mut Vec::new(), message);
+        compose_paths
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|name| name.to_str()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    let prompt = VALIDATION_TARGET_PREP_PROMPT_TEMPLATE
+        .replace("{repo_root}", &repo_root.display().to_string())
+        .replace("{output_root}", &output_root.display().to_string())
+        .replace("{testing_md}", &testing_md_context)
+        .replace("{has_cargo}", &has_cargo.to_string())
+        .replace("{has_go}", &has_go.to_string())
+        .replace("{has_package_json}", &has_package_json.to_string())
+        .replace("{has_dockerfile}", &has_dockerfile.to_string())
+        .replace("{compose_files}", &compose_files);
+
+    let mut progress = ValidationTargetPrepProgress {
+        version: 3,
+        repo_root: repo_root.display().to_string(),
+        summary: None,
+        local_build_ok: false,
+        local_run_ok: false,
+        docker_build_ok: false,
+        docker_run_ok: false,
+        local_entrypoint: None,
+        local_build_command: None,
+        local_smoke_command: None,
+        dockerfile_path: None,
+        docker_image_tag: None,
+        docker_build_command: None,
+        docker_smoke_command: None,
+    };
+
+    let mut success = false;
+    match run_validation_target_prep_agent(
+        config,
+        provider,
+        auth_manager,
+        repo_root,
+        prompt,
+        progress_sender.clone(),
+        log_sink.clone(),
+        metrics.clone(),
+        model,
+        reasoning_effort,
+    )
+    .await
+    {
+        Ok(output) => {
+            logs.extend(output.logs);
+            match parse_validation_target_prep_output(output.text.as_str()) {
+                Some(parsed) => {
+                    if let Some(summary) = parsed
+                        .summary
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        progress.summary = Some(summary.to_string());
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            format!("Validation target prep: {summary}"),
+                        );
+                    }
+                    if let Some(addition) = parsed
+                        .testing_md_additions
+                        .as_deref()
+                        .map(str::trim_end)
+                        .filter(|s| !s.trim().is_empty())
+                    {
+                        additions.push(addition.to_string());
+                    }
+
+                    progress.local_entrypoint = parsed
+                        .local_entrypoint
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    progress.local_build_command = parsed
+                        .local_build_command
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    progress.local_smoke_command = parsed
+                        .local_smoke_command
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    progress.dockerfile_path = parsed
+                        .dockerfile_path
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    progress.docker_image_tag = parsed
+                        .docker_image_tag
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    progress.docker_build_command = parsed
+                        .docker_build_command
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                    progress.docker_smoke_command = parsed
+                        .docker_smoke_command
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+
+                    progress.local_build_ok = parsed.local_build_ok
+                        && prep_exec_succeeded(
+                            &output.exec_commands,
+                            progress.local_build_command.as_deref(),
+                        );
+                    progress.local_run_ok = parsed.local_run_ok
+                        && prep_exec_succeeded(
+                            &output.exec_commands,
+                            progress.local_smoke_command.as_deref(),
+                        );
+                    progress.docker_build_ok = parsed.docker_build_ok
+                        && prep_exec_succeeded(
+                            &output.exec_commands,
+                            progress.docker_build_command.as_deref(),
+                        );
+                    progress.docker_run_ok = parsed.docker_run_ok
+                        && prep_exec_succeeded(
+                            &output.exec_commands,
+                            progress.docker_smoke_command.as_deref(),
+                        );
+
+                    if parsed.local_build_ok && !progress.local_build_ok {
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            "Validation target prep: local_build_ok was true, but no successful local_build_command was observed; treating local build as not ready."
+                                .to_string(),
+                        );
+                    }
+                    if parsed.local_run_ok && !progress.local_run_ok {
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            "Validation target prep: local_run_ok was true, but no successful local_smoke_command was observed; treating local run as not ready."
+                                .to_string(),
+                        );
+                    }
+                    if parsed.docker_build_ok && !progress.docker_build_ok {
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            "Validation target prep: docker_build_ok was true, but no successful docker_build_command was observed; treating docker build as not ready."
+                                .to_string(),
+                        );
+                    }
+                    if parsed.docker_run_ok && !progress.docker_run_ok {
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            "Validation target prep: docker_run_ok was true, but no successful docker_smoke_command was observed; treating docker run as not ready."
+                                .to_string(),
+                        );
+                    }
+
+                    success = progress.local_build_ok && progress.local_run_ok;
+                }
+                None => {
+                    push_progress_log(
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                        "Validation target prep agent returned unparseable output; falling back to generic guidance."
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        Err(err) => {
+            logs.extend(err.logs);
+            push_progress_log(
+                &progress_sender,
+                &log_sink,
+                &mut logs,
+                format!("Validation target prep agent failed: {}", err.message),
+            );
+        }
     }
+
+    push_progress_log(
+        &progress_sender,
+        &log_sink,
+        &mut logs,
+        format!(
+            "Validation target prep status: local_build_ok={}, local_run_ok={}, docker_build_ok={}, docker_run_ok={}",
+            progress.local_build_ok,
+            progress.local_run_ok,
+            progress.docker_build_ok,
+            progress.docker_run_ok
+        ),
+    );
+
+    persist_validation_target_prep_progress(
+        output_root,
+        &progress,
+        &progress_sender,
+        &log_sink,
+        &mut logs,
+    )
+    .await;
+
+    ValidationTargetPrepOutcome {
+        logs,
+        testing_md_additions: additions,
+        success,
+    }
+}
+
+pub(crate) async fn rerun_prepare_validation_targets(
+    config: &Config,
+    provider: &ModelProviderInfo,
+    auth_manager: Arc<AuthManager>,
+    repo_root: &Path,
+    output_root: &Path,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
+) -> SecurityReviewRerunResult {
+    let provider = provider_with_beta_features(provider, config);
+
+    let mut model = config
+        .security_review_models
+        .validation
+        .clone()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if model.is_empty() {
+        model = DEFAULT_VALIDATION_MODEL.to_string();
+    }
+
+    let reasoning_effort = config
+        .security_review_reasoning_efforts
+        .validation
+        .or(config.model_reasoning_effort)
+        .or(Some(ReasoningEffort::XHigh));
+
+    let metrics = Arc::new(ReviewMetrics::default());
+    let outcome = prepare_validation_targets(
+        config,
+        &provider,
+        auth_manager,
+        model.as_str(),
+        reasoning_effort,
+        repo_root,
+        output_root,
+        progress_sender.clone(),
+        log_sink,
+        metrics,
+    )
+    .await;
+
+    let specs_root = output_root.join("specs");
+    let testing_path = specs_root.join("TESTING.md");
+
+    let mut logs = outcome.logs;
+    if !outcome.testing_md_additions.is_empty() {
+        apply_validation_testing_md_additions(
+            &testing_path,
+            repo_root,
+            &outcome.testing_md_additions,
+            &progress_sender,
+            &mut logs,
+        )
+        .await;
+    }
+
+    SecurityReviewRerunResult {
+        target: SecurityReviewRerunTarget::PrepareValidationTargets,
+        repo_root: repo_root.to_path_buf(),
+        output_root: output_root.to_path_buf(),
+        testing_md_path: testing_path,
+        success: outcome.success,
+        logs,
+    }
+}
+
+async fn persist_validation_target_prep_progress(
+    output_root: &Path,
+    progress: &ValidationTargetPrepProgress,
+    progress_sender: &Option<AppEventSender>,
+    log_sink: &Option<Arc<SecurityReviewLogSink>>,
+    logs: &mut Vec<String>,
+) {
+    let progress_path = validation_target_prep_progress_path(output_root);
+    let bytes = match serde_json::to_vec_pretty(&progress) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            push_progress_log(
+                progress_sender,
+                log_sink,
+                logs,
+                format!(
+                    "Validation target prep: failed to serialize progress file {}: {err}",
+                    progress_path.display()
+                ),
+            );
+            return;
+        }
+    };
+
+    if let Some(parent) = progress_path.parent()
+        && let Err(err) = tokio_fs::create_dir_all(parent).await
+    {
+        push_progress_log(
+            progress_sender,
+            log_sink,
+            logs,
+            format!(
+                "Validation target prep: failed to create progress directory {}: {err}",
+                parent.display()
+            ),
+        );
+        return;
+    }
+
+    let file_name = progress_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("validation_target_prep.json");
+    let tmp_path = progress_path.with_file_name(format!("{file_name}.tmp"));
+    let _ = tokio_fs::remove_file(&tmp_path).await;
+
+    if let Err(err) = tokio_fs::write(&tmp_path, bytes).await {
+        push_progress_log(
+            progress_sender,
+            log_sink,
+            logs,
+            format!(
+                "Validation target prep: failed to write progress file {}: {err}",
+                tmp_path.display()
+            ),
+        );
+        return;
+    }
+
+    if let Err(err) = tokio_fs::rename(&tmp_path, &progress_path).await {
+        let _ = tokio_fs::remove_file(&progress_path).await;
+        if let Err(second_err) = tokio_fs::rename(&tmp_path, &progress_path).await {
+            push_progress_log(
+                progress_sender,
+                log_sink,
+                logs,
+                format!(
+                    "Validation target prep: failed to replace progress file {}: {err}; retry failed: {second_err}",
+                    progress_path.display()
+                ),
+            );
+            return;
+        }
+    }
+
+    push_progress_log(
+        progress_sender,
+        log_sink,
+        logs,
+        format!(
+            "Validation target prep: wrote progress marker at {}.",
+            progress_path.display()
+        ),
+    );
 }
 
 fn validation_testing_md_dedupe_key(line: &str) -> Option<String> {
@@ -10364,6 +12276,50 @@ fn merge_validation_testing_md(existing: &str, additions: &[String]) -> Option<S
     Some(out)
 }
 
+fn merge_validation_target_md(existing: &str, lines: &[String]) -> Option<String> {
+    let mut section_lines: Vec<String> = lines
+        .iter()
+        .map(|line| line.trim_end())
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_string)
+        .collect();
+    if section_lines.is_empty() {
+        return None;
+    }
+
+    section_lines.insert(0, String::new());
+    section_lines.insert(0, VALIDATION_TARGET_SECTION_INTRO.to_string());
+    section_lines.insert(0, VALIDATION_TARGET_SECTION_HEADER.to_string());
+
+    let mut file_lines: Vec<String> = existing.lines().map(str::to_string).collect();
+    let header_index = file_lines
+        .iter()
+        .position(|line| line.trim() == VALIDATION_TARGET_SECTION_HEADER);
+
+    match header_index {
+        None => {
+            if !file_lines.is_empty() && !file_lines.last().is_some_and(|l| l.trim().is_empty()) {
+                file_lines.push(String::new());
+            }
+            file_lines.extend(section_lines);
+        }
+        Some(_) => return None,
+    }
+
+    let mut out = file_lines.join("\n");
+    out.push('\n');
+
+    let mut existing_normalized = existing.to_string();
+    if !existing_normalized.ends_with('\n') {
+        existing_normalized.push('\n');
+    }
+    if out == existing_normalized {
+        None
+    } else {
+        Some(out)
+    }
+}
+
 async fn apply_validation_testing_md_additions(
     testing_path: &Path,
     repo_root: &Path,
@@ -10371,12 +12327,10 @@ async fn apply_validation_testing_md_additions(
     progress_sender: &Option<AppEventSender>,
     logs: &mut Vec<String>,
 ) {
-    let merged = tokio_fs::read_to_string(testing_path)
+    let existing = tokio_fs::read_to_string(testing_path)
         .await
-        .ok()
-        .and_then(|existing| merge_validation_testing_md(&existing, additions));
-
-    let Some(contents) = merged else {
+        .unwrap_or_default();
+    let Some(contents) = merge_validation_testing_md(&existing, additions) else {
         return;
     };
 
@@ -10408,6 +12362,96 @@ async fn apply_validation_testing_md_additions(
             );
         }
     }
+}
+
+async fn apply_validation_target_md_section(
+    testing_path: &Path,
+    repo_root: &Path,
+    lines: &[String],
+    progress_sender: &Option<AppEventSender>,
+    logs: &mut Vec<String>,
+) {
+    let existing = tokio_fs::read_to_string(testing_path)
+        .await
+        .unwrap_or_default();
+    let Some(contents) = merge_validation_target_md(&existing, lines) else {
+        return;
+    };
+
+    if let Some(parent) = testing_path.parent() {
+        let _ = tokio_fs::create_dir_all(parent).await;
+    }
+
+    match tokio_fs::write(testing_path, contents.as_bytes()).await {
+        Ok(_) => {
+            push_progress_log(
+                progress_sender,
+                &None,
+                logs,
+                format!(
+                    "Updated validation target notes at {}.",
+                    display_path_for(testing_path, repo_root)
+                ),
+            );
+        }
+        Err(err) => {
+            push_progress_log(
+                progress_sender,
+                &None,
+                logs,
+                format!(
+                    "Failed to update validation target notes at {}: {err}",
+                    display_path_for(testing_path, repo_root)
+                ),
+            );
+        }
+    }
+}
+
+fn build_web_validation_target_section_lines(
+    repo_root: &Path,
+    base_url: &Url,
+    provided_creds_path: Option<&Path>,
+    provided_headers: &[(String, String)],
+    generated_creds_path: &Path,
+    generated_headers: &[(String, String)],
+) -> Vec<String> {
+    let provided_header_names = if provided_headers.is_empty() {
+        "(none)".to_string()
+    } else {
+        provided_headers
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let generated_header_names = if generated_headers.is_empty() {
+        "(none)".to_string()
+    } else {
+        generated_headers
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("- target_url: {}", base_url.as_str()));
+    match provided_creds_path {
+        Some(path) => lines.push(format!(
+            "- provided_creds_file: {}",
+            display_path_for(path, repo_root)
+        )),
+        None => lines.push("- provided_creds_file: (none provided)".to_string()),
+    }
+    lines.push(format!("- provided_headers: {provided_header_names}"));
+    lines.push(format!(
+        "- generated_creds_file: {}",
+        display_path_for(generated_creds_path, repo_root)
+    ));
+    lines.push(format!("- generated_headers: {generated_header_names}"));
+    lines.push("- notes: do not commit credential files or tokens to source control".to_string());
+    lines
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -11106,6 +13150,8 @@ struct BugAnalysisProgressFile {
     findings_count: i32,
     duration_ms: i32,
     bug_section: Option<String>,
+    #[serde(default)]
+    error_message: Option<String>,
 }
 
 impl BugAnalysisProgress {
@@ -11301,6 +13347,7 @@ async fn analyze_files_individually(
     let mut sections: Vec<(usize, String)> = Vec::new();
     let mut snippets_with_findings: Vec<(usize, FileSnippet)> = Vec::new();
     let mut findings_count = 0usize;
+    let mut failed_files: Vec<(String, String)> = Vec::new();
     let mut per_file_durations: Vec<(String, Duration, usize)> = Vec::new();
     let mut bug_details: Vec<BugDetail> = Vec::new();
     let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
@@ -11345,6 +13392,9 @@ async fn analyze_files_individually(
         if let Some(section) = entry.bug_section.as_ref() {
             sections.push((index, section.clone()));
             snippets_with_findings.push((index, snippets[index].clone()));
+        }
+        if let Some(message) = entry.error_message.as_ref() {
+            failed_files.push((entry.path_display.clone(), message.clone()));
         }
 
         let duration = Duration::from_millis(entry.duration_ms.max(0) as u64);
@@ -11399,90 +13449,108 @@ async fn analyze_files_individually(
         }
     }
 
-    while let Some(result) = in_flight.next().await {
-        match result {
-            Ok(file_result) => {
-                let FileBugResult {
-                    index,
-                    path_display,
-                    duration,
-                    logs,
-                    bug_section,
-                    snippet,
-                    findings_count: file_findings_count,
-                } = file_result;
+    while let Some(file_result) = in_flight.next().await {
+        let FileBugResult {
+            index,
+            path_display,
+            duration,
+            logs,
+            bug_section,
+            error_message,
+            snippet,
+            findings_count: file_findings_count,
+        } = file_result;
 
-                aggregated_logs.extend(logs);
-                findings_count = findings_count.saturating_add(file_findings_count);
-                if let Some(section) = bug_section.as_ref() {
-                    sections.push((index, section.clone()));
-                }
-                if let Some(snippet) = snippet {
-                    snippets_with_findings.push((index, snippet));
-                }
-                per_file_durations.push((path_display.clone(), duration, file_findings_count));
-                completed_files = completed_files.saturating_add(1);
-
-                let duration_ms_u128 = duration.as_millis().min(i32::MAX as u128);
-                let progress_file = BugAnalysisProgressFile {
-                    index: index.try_into().unwrap_or(i32::MAX),
-                    path_display: path_display.clone(),
-                    relative_path: snippets[index].relative_path.display().to_string(),
-                    findings_count: file_findings_count.try_into().unwrap_or(i32::MAX),
-                    duration_ms: duration_ms_u128.try_into().unwrap_or(i32::MAX),
-                    bug_section,
-                };
-                progress.upsert_file(progress_file);
-                write_bug_analysis_progress(&progress_path, &progress).await?;
-
-                if let Some(tx) = progress_sender.as_ref() {
-                    let percent = if total_files == 0 {
-                        0
-                    } else {
-                        (completed_files * 100) / total_files
-                    };
-                    tx.send(AppEvent::SecurityReviewLog(format!(
-                        "Bug analysis progress: {}/{} - {percent}%.",
-                        completed_files.min(total_files),
-                        total_files
-                    )));
-                }
-                if let Some((index, snippet)) = remaining.next() {
-                    in_flight.push(analyze_single_file(
-                        client,
-                        provider,
-                        auth,
-                        model,
-                        reasoning_effort,
-                        config,
-                        auth_manager.clone(),
-                        repository_summary,
-                        spec_markdown,
-                        scope_prompt,
-                        repo_root,
-                        snippet.clone(),
-                        index,
-                        snippets.len(),
-                        progress_sender.clone(),
-                        log_sink.clone(),
-                        metrics.clone(),
-                    ));
-                }
-            }
-            Err(failure) => {
-                if let Some(tx) = progress_sender.as_ref() {
-                    for line in &failure.logs {
-                        tx.send(AppEvent::SecurityReviewLog(line.clone()));
-                    }
-                }
-                let mut combined_logs = aggregated_logs;
-                combined_logs.extend(failure.logs);
-                return Err(SecurityReviewFailure {
-                    message: failure.message,
-                    logs: combined_logs,
-                });
-            }
+        aggregated_logs.extend(logs);
+        findings_count = findings_count.saturating_add(file_findings_count);
+        if let Some(message) = error_message.as_ref() {
+            failed_files.push((path_display.clone(), message.clone()));
         }
+        if let Some(section) = bug_section.as_ref() {
+            sections.push((index, section.clone()));
+        }
+        if let Some(snippet) = snippet {
+            snippets_with_findings.push((index, snippet));
+        }
+        per_file_durations.push((path_display.clone(), duration, file_findings_count));
+        completed_files = completed_files.saturating_add(1);
+
+        let duration_ms_u128 = duration.as_millis().min(i32::MAX as u128);
+        let progress_file = BugAnalysisProgressFile {
+            index: index.try_into().unwrap_or(i32::MAX),
+            path_display: path_display.clone(),
+            relative_path: snippets[index].relative_path.display().to_string(),
+            findings_count: file_findings_count.try_into().unwrap_or(i32::MAX),
+            duration_ms: duration_ms_u128.try_into().unwrap_or(i32::MAX),
+            bug_section,
+            error_message,
+        };
+        progress.upsert_file(progress_file);
+        write_bug_analysis_progress(&progress_path, &progress).await?;
+
+        if let Some(tx) = progress_sender.as_ref() {
+            let percent = if total_files == 0 {
+                0
+            } else {
+                (completed_files * 100) / total_files
+            };
+            tx.send(AppEvent::SecurityReviewLog(format!(
+                "Bug analysis progress: {}/{} - {percent}%.",
+                completed_files.min(total_files),
+                total_files
+            )));
+        }
+        if let Some((index, snippet)) = remaining.next() {
+            in_flight.push(analyze_single_file(
+                client,
+                provider,
+                auth,
+                model,
+                reasoning_effort,
+                config,
+                auth_manager.clone(),
+                repository_summary,
+                spec_markdown,
+                scope_prompt,
+                repo_root,
+                snippet.clone(),
+                index,
+                snippets.len(),
+                progress_sender.clone(),
+                log_sink.clone(),
+                metrics.clone(),
+            ));
+        }
+    }
+
+    let successful_files = completed_files.saturating_sub(failed_files.len());
+    aggregated_logs.push(format!(
+        "Bug analysis summary: {total_files} file(s) total; {successful_files} succeeded; {} failed.",
+        failed_files.len()
+    ));
+    if !failed_files.is_empty() {
+        let failures = failed_files.len();
+        aggregated_logs.push(format!(
+            "Bug agent failures: {failures} file(s) encountered errors and were skipped."
+        ));
+        let sample = failed_files
+            .iter()
+            .take(10)
+            .map(|(path, message)| format!("{path}: {}", truncate_text(message, 240)))
+            .collect::<Vec<_>>()
+            .join("; ");
+        aggregated_logs.push(format!("Bug agent failure samples (up to 10): {sample}"));
+
+        if let Some(path) = log_sink.as_ref().and_then(|sink| sink.path()) {
+            aggregated_logs.push(format!(
+                "Security review log written to {}.",
+                path.display()
+            ));
+        }
+        aggregated_logs.push(format!(
+            "Bug analysis progress saved to {}.",
+            display_path_for(&progress_path, repo_root)
+        ));
     }
 
     if sections.is_empty() {
@@ -11633,20 +13701,6 @@ async fn analyze_files_individually(
             .push("No high, medium, or low severity findings remain after filtering.".to_string());
     }
 
-    // Deduplicate/group similar findings (e.g., duplicate issues across files)
-    if !bug_summaries.is_empty() {
-        let (deduped_summaries, deduped_details, removed) =
-            dedupe_bug_summaries(bug_summaries, bug_details);
-        bug_summaries = deduped_summaries;
-        bug_details = deduped_details;
-        if removed > 0 {
-            aggregated_logs.push(format!(
-                "Deduplicated {removed} duplicated finding{} by grouping titles/tags.",
-                if removed == 1 { "" } else { "s" }
-            ));
-        }
-    }
-
     // Now run risk rerank on the deduplicated set
     if !bug_summaries.is_empty() {
         let risk_logs = rerank_bugs_by_risk(
@@ -11659,6 +13713,8 @@ async fn analyze_files_individually(
             repo_root,
             repository_summary,
             spec_markdown,
+            progress_sender.clone(),
+            log_sink.clone(),
             metrics.clone(),
         )
         .await;
@@ -11781,7 +13837,7 @@ async fn analyze_single_file(
     progress_sender: Option<AppEventSender>,
     log_sink: Option<Arc<SecurityReviewLogSink>>,
     metrics: Arc<ReviewMetrics>,
-) -> Result<FileBugResult, SecurityReviewFailure> {
+) -> FileBugResult {
     let started_at = Instant::now();
     let mut logs = Vec::new();
     let path_display = snippet.relative_path.display().to_string();
@@ -11790,7 +13846,12 @@ async fn analyze_single_file(
     let start_message = format!("Analyzing file {prefix}: {path_display} ({file_size}).");
     push_progress_log(&progress_sender, &log_sink, &mut logs, start_message);
 
-    let base_context = build_single_file_context(&snippet);
+    let max_chars = bug_file_context_max_chars_for_model(model, config);
+    let (base_context, context_logs) =
+        build_single_file_context_for_bug_prompt(&snippet, max_chars);
+    for line in context_logs {
+        push_progress_log(&progress_sender, &log_sink, &mut logs, line);
+    }
     let prompt_data = build_bugs_user_prompt(
         repository_summary,
         spec_markdown,
@@ -11804,12 +13865,12 @@ async fn analyze_single_file(
     let outcome = match run_bug_agent(
         config,
         provider,
-        auth_manager,
+        auth_manager.clone(),
         repo_root,
         prompt_data.prompt.clone(),
         progress_sender.clone(),
         log_sink.clone(),
-        metrics,
+        metrics.clone(),
         model,
         reasoning_effort,
     )
@@ -11818,12 +13879,90 @@ async fn analyze_single_file(
         Ok(outcome) => outcome,
         Err(agent_failure) => {
             logs.extend(agent_failure.logs);
-            let message = format!(
+            let failure_message = format!(
                 "Bug agent loop failed for {path_display}: {}",
                 agent_failure.message
             );
-            push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
-            return Err(SecurityReviewFailure { message, logs });
+
+            let lower = agent_failure.message.to_ascii_lowercase();
+            let is_context_window_error =
+                lower.contains("context window") || lower.contains("ran out of room");
+            if is_context_window_error {
+                let retry_notice = format!(
+                    "Bug agent hit context window limits for {path_display}; retrying with a compacted prompt."
+                );
+                push_progress_log(&progress_sender, &log_sink, &mut logs, retry_notice);
+
+                let compact_repo_summary = format!(
+                    "Included file:\n- {} ({file_size})\n",
+                    snippet.relative_path.display()
+                );
+                let (retry_context, retry_logs) = build_single_file_context_for_bug_retry(&snippet);
+                for line in retry_logs {
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, line);
+                }
+                let retry_prompt_data = build_bugs_user_prompt(
+                    compact_repo_summary.as_str(),
+                    None,
+                    &retry_context,
+                    scope_prompt,
+                );
+                for line in &retry_prompt_data.logs {
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, line.clone());
+                }
+
+                match run_bug_agent(
+                    config,
+                    provider,
+                    auth_manager,
+                    repo_root,
+                    retry_prompt_data.prompt,
+                    progress_sender.clone(),
+                    log_sink.clone(),
+                    metrics,
+                    model,
+                    reasoning_effort,
+                )
+                .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(retry_failure) => {
+                        logs.extend(retry_failure.logs);
+                        let message = format!(
+                            "Bug agent loop failed for {path_display} after compaction retry: {}",
+                            retry_failure.message
+                        );
+                        push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                        return FileBugResult {
+                            index,
+                            path_display,
+                            duration: started_at.elapsed(),
+                            logs,
+                            bug_section: None,
+                            error_message: Some(message),
+                            snippet: None,
+                            findings_count: 0,
+                        };
+                    }
+                }
+            } else {
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    failure_message.clone(),
+                );
+                return FileBugResult {
+                    index,
+                    path_display,
+                    duration: started_at.elapsed(),
+                    logs,
+                    bug_section: None,
+                    error_message: Some(failure_message),
+                    snippet: None,
+                    findings_count: 0,
+                };
+            }
         }
     };
 
@@ -11833,31 +13972,31 @@ async fn analyze_single_file(
         let warn = format!(
             "Bug agent returned an empty response for {path_display}; treating as no findings."
         );
-        push_progress_log(&progress_sender, &log_sink, &mut logs, warn.clone());
-        logs.push(warn);
-        return Ok(FileBugResult {
+        push_progress_log(&progress_sender, &log_sink, &mut logs, warn);
+        return FileBugResult {
             index,
             path_display,
             duration: started_at.elapsed(),
             logs,
             bug_section: None,
+            error_message: None,
             snippet: None,
             findings_count: 0,
-        });
+        };
     }
     if trimmed.eq_ignore_ascii_case("no bugs found") {
         let message = format!("No bugs found in {path_display}.");
-        push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
-        logs.push(message);
-        return Ok(FileBugResult {
+        push_progress_log(&progress_sender, &log_sink, &mut logs, message);
+        return FileBugResult {
             index,
             path_display,
             duration: started_at.elapsed(),
             logs,
             bug_section: None,
+            error_message: None,
             snippet: None,
             findings_count: 0,
-        });
+        };
     }
 
     let file_findings = trimmed
@@ -11870,17 +14009,17 @@ async fn analyze_single_file(
         let plural = if file_findings == 1 { "" } else { "s" };
         format!("Recorded {file_findings} finding{plural} for {path_display}.")
     };
-    push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
-    logs.push(message);
-    Ok(FileBugResult {
+    push_progress_log(&progress_sender, &log_sink, &mut logs, message);
+    FileBugResult {
         index,
         path_display,
         duration: started_at.elapsed(),
         logs,
         bug_section: Some(outcome.section),
+        error_message: None,
         snippet: Some(snippet),
         findings_count: file_findings,
-    })
+    }
 }
 
 async fn run_content_search(
@@ -12129,6 +14268,7 @@ fn extract_bug_summaries(
     (summaries, details)
 }
 
+#[cfg(test)]
 fn normalize_title_key(title: &str) -> String {
     let mut s = title.trim().to_ascii_lowercase();
     if let Some((head, _)) = s.rsplit_once(" in ") {
@@ -12363,6 +14503,7 @@ fn normalize_vuln_tag_token(token: &str) -> Option<String> {
     Some(canonical.to_string())
 }
 
+#[cfg(test)]
 fn vuln_tag_tokens_for_dedupe(tag: &str) -> HashSet<String> {
     let mut tokens: HashSet<String> = tag
         .split(|ch: char| !ch.is_ascii_alphanumeric())
@@ -12379,6 +14520,7 @@ fn vuln_tag_tokens_for_dedupe(tag: &str) -> HashSet<String> {
     tokens
 }
 
+#[cfg(test)]
 fn is_generic_dedupe_token(token: &str) -> bool {
     matches!(
         token,
@@ -12432,7 +14574,7 @@ fn rewrite_bug_markdown_location(markdown: &str, new_location: &str) -> Option<S
     Some(lines.join("\n"))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct BugDedupeDecision {
     id: usize,
     canonical_id: usize,
@@ -12442,11 +14584,500 @@ struct BugDedupeDecision {
     reason: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct LlmDedupePass1Cache {
+    listing_hash: u64,
+    listing_len: usize,
+    decisions: Vec<BugDedupeDecision>,
+}
+
 struct BugLlmDedupeOutcome {
     summaries: Vec<BugSummary>,
     details: Vec<BugDetail>,
     removed: usize,
+    filtered_low: usize,
     logs: Vec<String>,
+}
+
+fn llm_dedupe_extract_section_text(markdown: &str, section: &str) -> Option<String> {
+    let mut in_section = false;
+    let mut section_indent = 0usize;
+    let header = format!("- **{section}:**");
+    let mut out: Vec<String> = Vec::new();
+
+    for line in markdown.lines() {
+        let trimmed_start = line.trim_start();
+        if !in_section {
+            if trimmed_start.starts_with(header.as_str()) {
+                in_section = true;
+                section_indent = leading_whitespace_len(line);
+                let after = trimmed_start[header.len()..].trim_start();
+                if !after.is_empty() {
+                    out.push(after.to_string());
+                }
+            }
+            continue;
+        }
+
+        let indent = leading_whitespace_len(line);
+        if indent <= section_indent
+            && trimmed_start.starts_with("- **")
+            && !trimmed_start.starts_with(header.as_str())
+        {
+            break;
+        }
+
+        if !trimmed_start.is_empty() {
+            out.push(trimmed_start.to_string());
+        }
+    }
+
+    let joined = out.join("\n").trim().to_string();
+    if joined.is_empty() {
+        None
+    } else {
+        Some(joined)
+    }
+}
+
+fn llm_dedupe_sink_locations(summary: &BugSummary) -> Vec<String> {
+    let mut locations = extract_bug_sink_locations(summary.markdown.as_str());
+    if !locations.is_empty() {
+        return locations;
+    }
+
+    locations = extract_bug_section_locations(summary.markdown.as_str(), "File & Lines");
+    if locations.is_empty() {
+        locations = extract_file_locations_for_dedupe(summary.file.as_str());
+    }
+    locations
+}
+
+fn llm_dedupe_file_locations(summary: &BugSummary) -> Vec<String> {
+    let mut locations = extract_bug_section_locations(summary.markdown.as_str(), "File & Lines");
+    if locations.is_empty() {
+        locations = extract_file_locations_for_dedupe(summary.file.as_str());
+    }
+    locations
+}
+
+fn llm_dedupe_description_text(summary: &BugSummary) -> String {
+    llm_dedupe_extract_section_text(summary.markdown.as_str(), "Description")
+        .unwrap_or_else(|| summary.markdown.clone())
+}
+
+fn llm_dedupe_impact_text(summary: &BugSummary) -> String {
+    if !summary.impact.trim().is_empty() {
+        return summary.impact.clone();
+    }
+
+    llm_dedupe_extract_section_text(summary.markdown.as_str(), "Impact").unwrap_or_default()
+}
+
+fn llm_dedupe_root_cause_text(summary: &BugSummary) -> Option<String> {
+    summary
+        .vulnerability_tag
+        .clone()
+        .or_else(|| extract_vulnerability_tag_from_bug_markdown(summary.markdown.as_str()))
+}
+
+struct LlmDedupePromptChoice {
+    listing: String,
+    prompt: String,
+    limits_log: String,
+    fits: bool,
+}
+
+fn bug_dedupe_prompt_max_chars_for_model(model: &str) -> usize {
+    let model = model_id_for_context_window(model);
+    let Some(context_window) = infer_default_context_window_tokens(model) else {
+        return BUG_DEDUP_PROMPT_MAX_CHARS;
+    };
+    if context_window < 200_000 {
+        return BUG_DEDUP_PROMPT_MAX_CHARS;
+    }
+
+    // Reserve headroom for model output and other context.
+    const DEDUPE_TOKEN_SHARE_NUM: i64 = 1;
+    const DEDUPE_TOKEN_SHARE_DEN: i64 = 5; // 20%
+    const CHARS_PER_TOKEN_ESTIMATE: i64 = 3;
+
+    let budget_tokens = context_window
+        .saturating_mul(DEDUPE_TOKEN_SHARE_NUM)
+        .saturating_div(DEDUPE_TOKEN_SHARE_DEN)
+        .max(1);
+    let budget_chars = budget_tokens.saturating_mul(CHARS_PER_TOKEN_ESTIMATE);
+    let min_chars = BUG_DEDUP_PROMPT_MAX_CHARS as i64;
+    let max_chars = MAX_PROMPT_BYTES as i64;
+
+    budget_chars.clamp(min_chars, max_chars) as usize
+}
+
+fn llm_dedupe_build_pass1_listing(
+    ordered: &[&BugSummary],
+    max_title: usize,
+    max_files: usize,
+) -> String {
+    let max_files = max_files.max(1);
+    ordered
+        .iter()
+        .map(|summary| {
+            let title = truncate_text(&summary.title, max_title);
+            let severity = truncate_text(summary.severity.as_str(), 32);
+            let mut sinks = llm_dedupe_sink_locations(summary);
+            if sinks.len() > max_files {
+                let overflow = sinks.len().saturating_sub(max_files);
+                sinks.truncate(max_files);
+                sinks.push(format!("...(+{overflow})"));
+            }
+            let sink_locations = sinks.join(", ");
+
+            json!({
+                "id": summary.id,
+                "title": title,
+                "severity": severity,
+                "sink_locations": sink_locations,
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn llm_dedupe_build_pass2_listing(
+    ordered: &[&BugSummary],
+    max_description: usize,
+    max_impact: usize,
+    max_root_cause: usize,
+) -> String {
+    ordered
+        .iter()
+        .map(|summary| {
+            let description_source = llm_dedupe_description_text(summary);
+            let description = truncate_text(description_source.as_str(), max_description);
+            let impact_source = llm_dedupe_impact_text(summary);
+            let impact = truncate_text(impact_source.as_str(), max_impact);
+            let root_cause_source = llm_dedupe_root_cause_text(summary).unwrap_or_default();
+            let root_cause = truncate_text(root_cause_source.as_str(), max_root_cause);
+
+            json!({
+                "id": summary.id,
+                "description": description,
+                "impact": impact,
+                "root_cause": root_cause,
+            })
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn llm_dedupe_prompt_pass1(
+    ordered: &[&BugSummary],
+    max_prompt_chars: usize,
+) -> LlmDedupePromptChoice {
+    let mut fallback_listing = String::new();
+    let mut fallback_prompt = String::new();
+    let mut fallback_limits = (0_usize, 0_usize);
+    for (max_title, max_files) in [(160_usize, 12_usize), (120, 10), (100, 8), (80, 6), (60, 4)] {
+        let listing = llm_dedupe_build_pass1_listing(ordered, max_title, max_files);
+        let prompt = BUG_DEDUP_PROMPT_TEMPLATE_PASS1.replace("{findings}", listing.as_str());
+        if prompt.len() <= max_prompt_chars {
+            return LlmDedupePromptChoice {
+                listing,
+                prompt,
+                limits_log: format!("limits: title {max_title} chars; sinks {max_files}."),
+                fits: true,
+            };
+        }
+        fallback_listing = listing;
+        fallback_prompt = prompt;
+        fallback_limits = (max_title, max_files);
+    }
+
+    let (max_title, max_files) = fallback_limits;
+    LlmDedupePromptChoice {
+        listing: fallback_listing,
+        prompt: fallback_prompt,
+        limits_log: format!("limits: title {max_title} chars; sinks {max_files}."),
+        fits: false,
+    }
+}
+
+fn llm_dedupe_prompt_pass2(
+    ordered: &[&BugSummary],
+    max_prompt_chars: usize,
+) -> LlmDedupePromptChoice {
+    let mut fallback_listing = String::new();
+    let mut fallback_prompt = String::new();
+    let mut fallback_limits = (0_usize, 0_usize, 0_usize);
+    for (max_description, max_impact, max_root_cause) in [
+        (420_usize, 240_usize, 80_usize),
+        (280, 200, 80),
+        (200, 160, 60),
+        (160, 120, 60),
+        (120, 80, 60),
+        (80, 60, 40),
+    ] {
+        let listing =
+            llm_dedupe_build_pass2_listing(ordered, max_description, max_impact, max_root_cause);
+        let prompt = BUG_DEDUP_PROMPT_TEMPLATE_PASS2.replace("{findings}", listing.as_str());
+        if prompt.len() <= max_prompt_chars {
+            return LlmDedupePromptChoice {
+                listing,
+                prompt,
+                limits_log: format!(
+                    "limits: description {max_description} chars; impact {max_impact} chars; root_cause {max_root_cause} chars."
+                ),
+                fits: true,
+            };
+        }
+        fallback_listing = listing;
+        fallback_prompt = prompt;
+        fallback_limits = (max_description, max_impact, max_root_cause);
+    }
+
+    let (max_description, max_impact, max_root_cause) = fallback_limits;
+    LlmDedupePromptChoice {
+        listing: fallback_listing,
+        prompt: fallback_prompt,
+        limits_log: format!(
+            "limits: description {max_description} chars; impact {max_impact} chars; root_cause {max_root_cause} chars."
+        ),
+        fits: false,
+    }
+}
+
+fn llm_dedupe_parse_decisions(text: &str) -> Vec<BugDedupeDecision> {
+    let mut decisions: Vec<BugDedupeDecision> = Vec::new();
+    for raw_line in text.lines() {
+        let trimmed = raw_line.trim().trim_matches('`');
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(entry) = serde_json::from_str::<BugDedupeDecision>(trimmed) {
+            decisions.push(entry);
+        }
+    }
+    decisions
+}
+
+fn llm_dedupe_debug_prefix(label: &str) -> String {
+    let session_id = security_review_session_id();
+    format!("llm_dedupe_{session_id}_{label}")
+}
+
+fn llm_dedupe_listing_hash(listing: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    listing.hash(&mut hasher);
+    hasher.finish()
+}
+
+async fn llm_dedupe_read_pass1_cache(
+    debug_dir: Option<&Path>,
+    listing: &str,
+    logs: &mut Vec<String>,
+) -> Option<Vec<BugDedupeDecision>> {
+    let dir = debug_dir?;
+
+    let path = dir.join(BUG_LLM_DEDUP_PASS1_CACHE_FILE);
+    let bytes = match tokio_fs::read(&path).await {
+        Ok(bytes) => bytes,
+        Err(_) => return None,
+    };
+    let cache: LlmDedupePass1Cache = match serde_json::from_slice(&bytes) {
+        Ok(cache) => cache,
+        Err(err) => {
+            logs.push(format!(
+                "LLM dedupe pass1 cache parse failed at {}: {err}",
+                path.display()
+            ));
+            return None;
+        }
+    };
+
+    let listing_hash = llm_dedupe_listing_hash(listing);
+    if cache.listing_hash != listing_hash || cache.listing_len != listing.len() {
+        logs.push(format!(
+            "LLM dedupe pass1 cache mismatch at {}; ignoring.",
+            path.display()
+        ));
+        return None;
+    }
+    if cache.decisions.is_empty() {
+        return None;
+    }
+
+    logs.push(format!(
+        "LLM dedupe pass1 reused cached decisions from {}.",
+        path.display()
+    ));
+    Some(cache.decisions)
+}
+
+async fn llm_dedupe_write_pass1_cache(
+    debug_dir: Option<&Path>,
+    listing: &str,
+    decisions: &[BugDedupeDecision],
+    logs: &mut Vec<String>,
+) {
+    if decisions.is_empty() {
+        return;
+    }
+    let Some(dir) = debug_dir else {
+        return;
+    };
+
+    if let Err(err) = tokio_fs::create_dir_all(dir).await {
+        logs.push(format!(
+            "LLM dedupe pass1 cache: failed to create {}: {err}",
+            dir.display()
+        ));
+        return;
+    }
+
+    let cache = LlmDedupePass1Cache {
+        listing_hash: llm_dedupe_listing_hash(listing),
+        listing_len: listing.len(),
+        decisions: decisions.to_vec(),
+    };
+    let bytes = match serde_json::to_vec_pretty(&cache) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            logs.push(format!(
+                "LLM dedupe pass1 cache: failed to serialize: {err}"
+            ));
+            return;
+        }
+    };
+    let path = dir.join(BUG_LLM_DEDUP_PASS1_CACHE_FILE);
+    if let Err(err) = tokio_fs::write(&path, bytes).await {
+        logs.push(format!(
+            "LLM dedupe pass1 cache: failed to write {}: {err}",
+            path.display()
+        ));
+    }
+}
+
+async fn llm_dedupe_write_debug_prompt(
+    debug_dir: Option<&Path>,
+    prefix: &str,
+    listing: &str,
+    prompt: &str,
+    logs: &mut Vec<String>,
+) {
+    let Some(dir) = debug_dir else {
+        return;
+    };
+
+    if let Err(err) = tokio_fs::create_dir_all(dir).await {
+        logs.push(format!(
+            "LLM dedupe debug: failed to create {}: {err}",
+            dir.display()
+        ));
+        return;
+    }
+
+    let listing_path = dir.join(format!("{prefix}_findings.jsonl"));
+    if let Err(err) = tokio_fs::write(&listing_path, listing).await {
+        logs.push(format!(
+            "LLM dedupe debug: failed to write {}: {err}",
+            listing_path.display()
+        ));
+    }
+
+    let prompt_path = dir.join(format!("{prefix}_prompt.txt"));
+    if let Err(err) = tokio_fs::write(&prompt_path, prompt).await {
+        logs.push(format!(
+            "LLM dedupe debug: failed to write {}: {err}",
+            prompt_path.display()
+        ));
+    }
+}
+
+async fn llm_dedupe_write_debug_response(
+    debug_dir: Option<&Path>,
+    prefix: &str,
+    response_text: &str,
+    logs: &mut Vec<String>,
+) {
+    let Some(dir) = debug_dir else {
+        return;
+    };
+
+    let path = dir.join(format!("{prefix}_response.txt"));
+    if let Err(err) = tokio_fs::write(&path, response_text).await {
+        logs.push(format!(
+            "LLM dedupe debug: failed to write {}: {err}",
+            path.display()
+        ));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn llm_dedupe_execute_prompt(
+    client: &CodexHttpClient,
+    provider: &ModelProviderInfo,
+    auth: &Option<CodexAuth>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+    prompt: &str,
+    debug_dir: Option<&Path>,
+    debug_prefix: &str,
+    log_prefix: &str,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
+    metrics: Arc<ReviewMetrics>,
+) -> (Vec<BugDedupeDecision>, Vec<String>) {
+    let mut logs: Vec<String> = Vec::new();
+    let response = call_model(
+        client,
+        provider,
+        auth,
+        model,
+        reasoning_effort,
+        BUG_DEDUP_SYSTEM_PROMPT,
+        prompt,
+        metrics,
+        0.0,
+    )
+    .await;
+
+    let response_output = match response {
+        Ok(output) => output,
+        Err(err) => {
+            logs.push(format!("{log_prefix} model request failed: {err}"));
+            return (Vec::new(), logs);
+        }
+    };
+
+    let decisions = llm_dedupe_parse_decisions(response_output.text.as_str());
+    llm_dedupe_write_debug_response(
+        debug_dir,
+        debug_prefix,
+        response_output.text.as_str(),
+        &mut logs,
+    )
+    .await;
+
+    if let Some(reasoning) = response_output.reasoning.as_ref() {
+        log_model_reasoning(reasoning, &progress_sender, &log_sink, &mut logs);
+    } else {
+        log_dedupe_decision_reasons(
+            &decisions,
+            log_prefix,
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+        );
+    }
+    if decisions.is_empty() {
+        logs.push(format!(
+            "{log_prefix} returned no parseable JSON Lines; skipping."
+        ));
+    }
+
+    (decisions, logs)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -12456,10 +15087,83 @@ async fn llm_dedupe_bug_summaries(
     auth: &Option<CodexAuth>,
     model: &str,
     reasoning_effort: Option<ReasoningEffort>,
-    mut summaries: Vec<BugSummary>,
+    summaries: Vec<BugSummary>,
     details: Vec<BugDetail>,
+    debug_dir: Option<PathBuf>,
     progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
     metrics: Arc<ReviewMetrics>,
+) -> BugLlmDedupeOutcome {
+    let total_findings = summaries.len();
+    if total_findings < 2 {
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            filtered_low: 0,
+            logs: Vec::new(),
+        };
+    }
+
+    let low_severity_findings = summaries
+        .iter()
+        .filter(|summary| severity_rank(&summary.severity) == 2)
+        .count();
+    let use_non_low_count = total_findings > BUG_LLM_DEDUP_LOW_SEVERITY_MAX_FINDINGS;
+    let non_low_findings = total_findings.saturating_sub(low_severity_findings);
+    let detail_message = if use_non_low_count {
+        format!("{non_low_findings} finding(s)")
+    } else {
+        format!("{total_findings} finding(s)")
+    };
+
+    let progress_sender_for_heartbeat = progress_sender.clone();
+    let progress_sender_for_dedupe = progress_sender.clone();
+    let log_sink_for_dedupe = log_sink.clone();
+    let outcome = await_with_heartbeat(
+        progress_sender_for_heartbeat,
+        "running LLM dedupe",
+        Some(detail_message.as_str()),
+        async move {
+            Ok::<BugLlmDedupeOutcome, std::convert::Infallible>(
+                llm_dedupe_bug_summaries_single_bucket(
+                    client,
+                    provider,
+                    auth,
+                    model,
+                    reasoning_effort,
+                    summaries,
+                    details,
+                    metrics,
+                    debug_dir,
+                    progress_sender_for_dedupe,
+                    log_sink_for_dedupe,
+                )
+                .await,
+            )
+        },
+    )
+    .await;
+
+    match outcome {
+        Ok(outcome) => outcome,
+        Err(err) => match err {},
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn llm_dedupe_bug_summaries_single_bucket(
+    client: &CodexHttpClient,
+    provider: &ModelProviderInfo,
+    auth: &Option<CodexAuth>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+    mut summaries: Vec<BugSummary>,
+    mut details: Vec<BugDetail>,
+    metrics: Arc<ReviewMetrics>,
+    debug_dir: Option<PathBuf>,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
 ) -> BugLlmDedupeOutcome {
     let mut logs: Vec<String> = Vec::new();
 
@@ -12468,105 +15172,7 @@ async fn llm_dedupe_bug_summaries(
             summaries,
             details,
             removed: 0,
-            logs,
-        };
-    }
-
-    let mut ordered: Vec<&BugSummary> = summaries.iter().collect();
-    ordered.sort_by_key(|summary| summary.id);
-
-    let listing = ordered
-        .into_iter()
-        .map(|summary| {
-            let mut files = extract_file_locations_for_dedupe(&summary.file);
-            if files.len() > 6 {
-                let overflow = files.len().saturating_sub(6);
-                files.truncate(6);
-                files.push(format!("...(+{overflow})"));
-            }
-
-            json!({
-                "id": summary.id,
-                "title": truncate_text(&summary.title, 160),
-                "severity": summary.severity,
-                "vulnerability_tag": summary.vulnerability_tag,
-                "files": files,
-                "recommendation": truncate_text(&summary.recommendation, 200),
-            })
-            .to_string()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let prompt = BUG_DEDUP_PROMPT_TEMPLATE.replace("{findings}", listing.as_str());
-    if prompt.len() > BUG_DEDUP_PROMPT_MAX_CHARS {
-        logs.push(format!(
-            "Skipping LLM dedupe: prompt too large ({} chars).",
-            prompt.len()
-        ));
-        return BugLlmDedupeOutcome {
-            summaries,
-            details,
-            removed: 0,
-            logs,
-        };
-    }
-
-    let response = await_with_heartbeat(
-        progress_sender,
-        "running LLM dedupe",
-        Some(&format!("{} finding(s)", summaries.len())),
-        call_model(
-            client,
-            provider,
-            auth,
-            model,
-            reasoning_effort,
-            BUG_DEDUP_SYSTEM_PROMPT,
-            &prompt,
-            metrics.clone(),
-            0.0,
-        ),
-    )
-    .await;
-
-    let response_output = match response {
-        Ok(output) => output,
-        Err(err) => {
-            logs.push(format!("LLM dedupe model request failed: {err}"));
-            return BugLlmDedupeOutcome {
-                summaries,
-                details,
-                removed: 0,
-                logs,
-            };
-        }
-    };
-
-    if let Some(reasoning) = response_output.reasoning.as_ref() {
-        let none_sender: Option<AppEventSender> = None;
-        let none_sink: Option<Arc<SecurityReviewLogSink>> = None;
-        log_model_reasoning(reasoning, &none_sender, &none_sink, &mut logs);
-    }
-
-    let mut decisions: Vec<BugDedupeDecision> = Vec::new();
-    for raw_line in response_output.text.lines() {
-        let trimmed = raw_line.trim().trim_matches('`');
-        if trimmed.is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<BugDedupeDecision>(trimmed) {
-            Ok(entry) => decisions.push(entry),
-            Err(_) => continue,
-        }
-    }
-
-    if decisions.is_empty() {
-        logs.push("LLM dedupe returned no parseable JSON Lines; skipping.".to_string());
-        return BugLlmDedupeOutcome {
-            summaries,
-            details,
-            removed: 0,
+            filtered_low: 0,
             logs,
         };
     }
@@ -12618,6 +15224,350 @@ async fn llm_dedupe_bug_summaries(
         }
     }
 
+    let mut filtered_low = 0usize;
+    if summaries.len() > BUG_LLM_DEDUP_LOW_SEVERITY_MAX_FINDINGS {
+        let mut filtered_ids: HashSet<usize> = HashSet::new();
+        summaries.retain(|summary| {
+            let is_low = severity_rank(&summary.severity) == 2;
+            if is_low {
+                filtered_ids.insert(summary.id);
+            }
+            !is_low
+        });
+        let dropped = filtered_ids.len();
+        if dropped > 0 {
+            filtered_low = filtered_low.saturating_add(dropped);
+            details.retain(|detail| !filtered_ids.contains(&detail.summary_id));
+            logs.push(format!(
+                "Dropped {dropped} low severity finding(s) because total findings exceeded {BUG_LLM_DEDUP_LOW_SEVERITY_MAX_FINDINGS}."
+            ));
+        }
+        if summaries.len() < 2 {
+            return BugLlmDedupeOutcome {
+                summaries,
+                details,
+                removed: 0,
+                filtered_low,
+                logs,
+            };
+        }
+    }
+
+    emit_progress_log(
+        &progress_sender,
+        &log_sink,
+        format!(
+            "LLM dedupe pass1 requesting model decision for {} finding(s).",
+            summaries.len()
+        ),
+    );
+
+    let max_prompt_chars = bug_dedupe_prompt_max_chars_for_model(model);
+    let mut ordered: Vec<&BugSummary> = summaries.iter().collect();
+    ordered.sort_by_key(|summary| summary.id);
+    let mut pass1_choice = llm_dedupe_prompt_pass1(&ordered, max_prompt_chars);
+    if !pass1_choice.fits {
+        let mut filtered_ids: HashSet<usize> = HashSet::new();
+        summaries.retain(|summary| {
+            let is_low = severity_rank(&summary.severity) == 2;
+            if is_low {
+                filtered_ids.insert(summary.id);
+            }
+            !is_low
+        });
+        let dropped = filtered_ids.len();
+        if dropped > 0 {
+            filtered_low = filtered_low.saturating_add(dropped);
+            details.retain(|detail| !filtered_ids.contains(&detail.summary_id));
+            logs.push(format!(
+                "Dropped {dropped} low severity finding(s) to fit LLM dedupe prompt within {max_prompt_chars} chars."
+            ));
+            if summaries.len() < 2 {
+                return BugLlmDedupeOutcome {
+                    summaries,
+                    details,
+                    removed: 0,
+                    filtered_low,
+                    logs,
+                };
+            }
+            ordered = summaries.iter().collect();
+            ordered.sort_by_key(|summary| summary.id);
+            pass1_choice = llm_dedupe_prompt_pass1(&ordered, max_prompt_chars);
+        }
+    }
+
+    let pass1_prefix = llm_dedupe_debug_prefix("pass1");
+    if !pass1_choice.fits {
+        logs.push(format!(
+            "Skipping LLM dedupe pass1: prompt too large ({} chars > {max_prompt_chars}).",
+            pass1_choice.prompt.len()
+        ));
+        llm_dedupe_write_debug_prompt(
+            debug_dir.as_deref(),
+            pass1_prefix.as_str(),
+            pass1_choice.listing.as_str(),
+            pass1_choice.prompt.as_str(),
+            &mut logs,
+        )
+        .await;
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            filtered_low,
+            logs,
+        };
+    }
+
+    logs.push(format!("LLM dedupe pass1 {}.", pass1_choice.limits_log));
+    llm_dedupe_write_debug_prompt(
+        debug_dir.as_deref(),
+        pass1_prefix.as_str(),
+        pass1_choice.listing.as_str(),
+        pass1_choice.prompt.as_str(),
+        &mut logs,
+    )
+    .await;
+
+    let cached_decisions = llm_dedupe_read_pass1_cache(
+        debug_dir.as_deref(),
+        pass1_choice.listing.as_str(),
+        &mut logs,
+    )
+    .await;
+    let used_cache = cached_decisions.is_some();
+    let (pass1_decisions, mut pass1_logs) = if let Some(decisions) = cached_decisions {
+        (decisions, Vec::new())
+    } else {
+        llm_dedupe_execute_prompt(
+            client,
+            provider,
+            auth,
+            model,
+            reasoning_effort,
+            pass1_choice.prompt.as_str(),
+            debug_dir.as_deref(),
+            pass1_prefix.as_str(),
+            "LLM dedupe pass1",
+            progress_sender.clone(),
+            log_sink.clone(),
+            metrics.clone(),
+        )
+        .await
+    };
+    logs.append(&mut pass1_logs);
+    if !used_cache {
+        llm_dedupe_write_pass1_cache(
+            debug_dir.as_deref(),
+            pass1_choice.listing.as_str(),
+            &pass1_decisions,
+            &mut logs,
+        )
+        .await;
+    }
+
+    if pass1_decisions.is_empty() {
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            filtered_low,
+            logs,
+        };
+    }
+
+    let id_to_index: HashMap<usize, usize> = summaries
+        .iter()
+        .enumerate()
+        .map(|(idx, summary)| (summary.id, idx))
+        .collect();
+
+    let mut pass1_uf = UnionFind::new(summaries.len());
+    let mut pass1_proposed = 0usize;
+    let mut pass1_accepted = 0usize;
+    for decision in pass1_decisions {
+        if decision.id == decision.canonical_id {
+            continue;
+        }
+        pass1_proposed += 1;
+        let Some(&a) = id_to_index.get(&decision.id) else {
+            continue;
+        };
+        let Some(&b) = id_to_index.get(&decision.canonical_id) else {
+            continue;
+        };
+        pass1_uf.union(a, b);
+        pass1_accepted += 1;
+    }
+
+    let mut pass1_groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (idx, summary) in summaries.iter().enumerate() {
+        let root = pass1_uf.find(idx);
+        pass1_groups.entry(root).or_default().push(summary.id);
+    }
+
+    let mut candidate_groups: Vec<Vec<usize>> = pass1_groups
+        .values()
+        .filter(|group| group.len() > 1)
+        .cloned()
+        .collect();
+    for group in &mut candidate_groups {
+        group.sort_unstable();
+    }
+    candidate_groups.sort_by_key(|group| group.first().copied().unwrap_or(usize::MAX));
+
+    if candidate_groups.is_empty() {
+        logs.push(format!(
+            "LLM dedupe pass1 proposed {pass1_proposed} merge(s); accepted {pass1_accepted}; no candidate groups formed."
+        ));
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            filtered_low,
+            logs,
+        };
+    }
+
+    logs.push(format!(
+        "LLM dedupe pass1 proposed {pass1_proposed} merge(s); accepted {pass1_accepted}; {} candidate group(s).",
+        candidate_groups.len()
+    ));
+
+    struct Pass2Outcome {
+        decisions: Vec<BugDedupeDecision>,
+        logs: Vec<String>,
+    }
+
+    let decisions: Vec<BugDedupeDecision> = {
+        let id_to_summary: HashMap<usize, &BugSummary> = summaries
+            .iter()
+            .map(|summary| (summary.id, summary))
+            .collect();
+        let semaphore = Arc::new(Semaphore::new(BUG_LLM_DEDUP_CONCURRENCY));
+        let mut pass2_tasks: FuturesUnordered<_> = FuturesUnordered::new();
+        let mut pass2_task_count = 0usize;
+        for (group_index, group_ids) in candidate_groups.into_iter().enumerate() {
+            let mut group_summaries: Vec<&BugSummary> = group_ids
+                .iter()
+                .filter_map(|id| id_to_summary.get(id).copied())
+                .collect();
+            if group_summaries.len() < 2 {
+                continue;
+            }
+            group_summaries.sort_by_key(|summary| summary.id);
+
+            let client = client.clone();
+            let provider = provider.clone();
+            let auth = auth.clone();
+            let model = model.to_string();
+            let metrics = metrics.clone();
+            let debug_dir = debug_dir.clone();
+            let semaphore = semaphore.clone();
+            let group_label = format!("pass2_group_{}", group_index + 1);
+            let log_prefix = format!("LLM dedupe pass2 group {}", group_index + 1);
+            let progress_sender = progress_sender.clone();
+            let log_sink = log_sink.clone();
+
+            pass2_tasks.push(async move {
+                let _permit = semaphore.acquire_owned().await.ok();
+                let choice = llm_dedupe_prompt_pass2(&group_summaries, max_prompt_chars);
+                let debug_prefix = llm_dedupe_debug_prefix(&group_label);
+                let mut logs: Vec<String> = Vec::new();
+
+                if !choice.fits {
+                    logs.push(format!(
+                        "{log_prefix} skipped: prompt too large ({} chars > {max_prompt_chars}).",
+                        choice.prompt.len()
+                    ));
+                    llm_dedupe_write_debug_prompt(
+                        debug_dir.as_deref(),
+                        debug_prefix.as_str(),
+                        choice.listing.as_str(),
+                        choice.prompt.as_str(),
+                        &mut logs,
+                    )
+                    .await;
+                    return Pass2Outcome {
+                        decisions: Vec::new(),
+                        logs,
+                    };
+                }
+
+                logs.push(format!("{log_prefix} {}.", choice.limits_log));
+                llm_dedupe_write_debug_prompt(
+                    debug_dir.as_deref(),
+                    debug_prefix.as_str(),
+                    choice.listing.as_str(),
+                    choice.prompt.as_str(),
+                    &mut logs,
+                )
+                .await;
+
+                let (decisions, mut call_logs) = llm_dedupe_execute_prompt(
+                    &client,
+                    &provider,
+                    &auth,
+                    model.as_str(),
+                    reasoning_effort,
+                    choice.prompt.as_str(),
+                    debug_dir.as_deref(),
+                    debug_prefix.as_str(),
+                    log_prefix.as_str(),
+                    progress_sender,
+                    log_sink,
+                    metrics,
+                )
+                .await;
+                logs.append(&mut call_logs);
+                Pass2Outcome { decisions, logs }
+            });
+            pass2_task_count += 1;
+        }
+
+        let mut decisions: Vec<BugDedupeDecision> = Vec::new();
+        let total_groups = pass2_task_count;
+        if total_groups > 0 {
+            emit_progress_log(
+                &progress_sender,
+                &log_sink,
+                format!(
+                    "LLM dedupe pass2 starting for {total_groups} group(s) with concurrency {BUG_LLM_DEDUP_CONCURRENCY}.",
+                ),
+            );
+        }
+        let mut completed_groups = 0usize;
+        while let Some(outcome) = pass2_tasks.next().await {
+            logs.extend(outcome.logs);
+            decisions.extend(outcome.decisions);
+            completed_groups = completed_groups.saturating_add(1);
+            if total_groups > 0
+                && (completed_groups == total_groups || completed_groups.is_multiple_of(5))
+            {
+                emit_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    format!(
+                        "LLM dedupe pass2 progress: {completed_groups}/{total_groups} group(s) complete.",
+                    ),
+                );
+            }
+        }
+        decisions
+    };
+
+    if decisions.is_empty() {
+        logs.push("LLM dedupe pass2 produced no merge decisions; skipping.".to_string());
+        return BugLlmDedupeOutcome {
+            summaries,
+            details,
+            removed: 0,
+            filtered_low,
+            logs,
+        };
+    }
+
     let id_to_index: HashMap<usize, usize> = summaries
         .iter()
         .enumerate()
@@ -12632,10 +15582,6 @@ async fn llm_dedupe_bug_summaries(
             continue;
         }
         proposed_merges += 1;
-        let confidence = decision.confidence.unwrap_or(0.0);
-        if confidence < BUG_DEDUP_CONFIDENCE_THRESHOLD {
-            continue;
-        }
         let Some(&a) = id_to_index.get(&decision.id) else {
             continue;
         };
@@ -12674,9 +15620,7 @@ async fn llm_dedupe_bug_summaries(
             entry.rep_index = idx;
         }
 
-        for loc in
-            preferred_bug_locations_for_reporting(summary.markdown.as_str(), summary.file.as_str())
-        {
+        for loc in llm_dedupe_file_locations(summary) {
             if !entry.file_set.iter().any(|existing| existing == &loc) {
                 entry.file_set.push(loc);
             }
@@ -12686,18 +15630,19 @@ async fn llm_dedupe_bug_summaries(
 
     if root_to_group.len() == summaries.len() {
         logs.push(format!(
-            "LLM dedupe proposed {proposed_merges} merge(s); accepted {accepted_merges}; no groups formed."
+            "LLM dedupe pass2 proposed {proposed_merges} merge(s); accepted {accepted_merges}; no groups formed."
         ));
         return BugLlmDedupeOutcome {
             summaries,
             details,
             removed: 0,
+            filtered_low,
             logs,
         };
     }
 
     logs.push(format!(
-        "LLM dedupe proposed {proposed_merges} merge(s); accepted {accepted_merges}."
+        "LLM dedupe pass2 proposed {proposed_merges} merge(s); accepted {accepted_merges}."
     ));
 
     let mut detail_by_id: HashMap<usize, String> = HashMap::new();
@@ -12711,12 +15656,33 @@ async fn llm_dedupe_bug_summaries(
         .enumerate()
         .map(|(idx, summary)| (summary.id, idx))
         .collect();
+
+    #[derive(Serialize)]
+    struct LlmDedupeClusterDebug {
+        canonical_id: usize,
+        member_ids: Vec<usize>,
+        highest_severity: String,
+        unique_instances: Vec<String>,
+    }
+
+    let mut clusters_debug: Vec<LlmDedupeClusterDebug> = Vec::new();
     for agg in root_to_group.values() {
         let rep_id = summaries[agg.rep_index].id;
-        let location_joined = if agg.file_set.is_empty() {
+        let location_joined_full = if agg.file_set.is_empty() {
             summaries[agg.rep_index].file.clone()
         } else {
             agg.file_set.join(", ")
+        };
+        let location_joined_display = if agg.file_set.is_empty() {
+            location_joined_full.clone()
+        } else {
+            let max_locations = 12usize;
+            let mut display_parts: Vec<String> =
+                agg.file_set.iter().take(max_locations).cloned().collect();
+            if agg.file_set.len() > max_locations {
+                display_parts.push(format!("...(+{})", agg.file_set.len() - max_locations));
+            }
+            display_parts.join(", ")
         };
 
         let mut types: Vec<String> = Vec::new();
@@ -12743,14 +15709,42 @@ async fn llm_dedupe_bug_summaries(
         }
 
         let rep_mut = &mut summaries[agg.rep_index];
-        rep_mut.file = location_joined.clone();
-        rep_mut.severity = best_severity;
+        rep_mut.file = location_joined_full.clone();
+        rep_mut.severity = best_severity.clone();
         rep_mut.verification_types = types;
-        if let Some(updated) = rewrite_bug_markdown_location(&rep_mut.markdown, &location_joined) {
+        if let Some(updated) =
+            rewrite_bug_markdown_location(&rep_mut.markdown, location_joined_display.as_str())
+        {
             rep_mut.markdown = updated.clone();
             detail_by_id.insert(rep_id, updated);
         }
+
+        clusters_debug.push(LlmDedupeClusterDebug {
+            canonical_id: rep_id,
+            member_ids: agg.members.clone(),
+            highest_severity: best_severity,
+            unique_instances: agg.file_set.clone(),
+        });
         keep_ids.insert(rep_id);
+    }
+
+    if let Some(dir) = debug_dir.as_ref() {
+        let session_id = security_review_session_id();
+        let prefix = format!("llm_dedupe_{session_id}");
+        let path = dir.join(format!("{prefix}_clusters.json"));
+        match serde_json::to_string_pretty(&clusters_debug) {
+            Ok(json) => {
+                if let Err(err) = tokio_fs::write(&path, json).await {
+                    logs.push(format!(
+                        "LLM dedupe debug: failed to write {}: {err}",
+                        path.display()
+                    ));
+                }
+            }
+            Err(err) => logs.push(format!(
+                "LLM dedupe debug: failed to serialize clusters: {err}"
+            )),
+        }
     }
 
     summaries.retain(|summary| keep_ids.contains(&summary.id));
@@ -12770,10 +15764,12 @@ async fn llm_dedupe_bug_summaries(
         summaries,
         details: new_details,
         removed,
+        filtered_low,
         logs,
     }
 }
 
+#[cfg(test)]
 fn dedupe_bug_summaries(
     mut summaries: Vec<BugSummary>,
     details: Vec<BugDetail>,
@@ -13591,6 +16587,8 @@ async fn run_risk_rerank_chunk(
     metrics: Arc<ReviewMetrics>,
     repo_root: PathBuf,
     ids: Vec<usize>,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
 ) -> Result<RiskRerankChunkSuccess, RiskRerankChunkFailure> {
     let mut conversation: Vec<String> = Vec::new();
     let mut seen_search_requests: HashSet<String> = HashSet::new();
@@ -13608,9 +16606,14 @@ async fn run_risk_rerank_chunk(
 
     loop {
         if tool_rounds > BUG_RERANK_MAX_TOOL_ROUNDS {
-            logs.push(format!(
-                "Risk rerank chunk for bug id(s) {id_list} exceeded {BUG_RERANK_MAX_TOOL_ROUNDS} tool rounds."
-            ));
+            push_progress_log(
+                &progress_sender,
+                &log_sink,
+                &mut logs,
+                format!(
+                    "Risk rerank chunk for bug id(s) {id_list} exceeded {BUG_RERANK_MAX_TOOL_ROUNDS} tool rounds."
+                ),
+            );
             return Err(RiskRerankChunkFailure {
                 ids,
                 error: format!("Risk rerank exceeded {BUG_RERANK_MAX_TOOL_ROUNDS} tool rounds"),
@@ -13639,7 +16642,12 @@ async fn run_risk_rerank_chunk(
         {
             Ok(output) => output,
             Err(err) => {
-                logs.push(format!("Risk rerank model request failed: {err}"));
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    format!("Risk rerank model request failed: {err}"),
+                );
                 return Err(RiskRerankChunkFailure {
                     ids,
                     error: err,
@@ -13655,7 +16663,12 @@ async fn run_risk_rerank_chunk(
                 .filter(|line| !line.is_empty())
             {
                 let truncated = truncate_text(line, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-                logs.push(format!("Risk rerank reasoning: {truncated}"));
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    format!("Risk rerank reasoning: {truncated}"),
+                );
             }
         }
 
@@ -13676,10 +16689,15 @@ async fn run_risk_rerank_chunk(
             let cmd_label = request.command.label();
             let key = request.dedupe_key();
             if !seen_read_requests.insert(key) {
-                logs.push(format!(
-                    "Risk rerank {cmd_label} `{}` skipped (already provided).",
-                    request.path.display(),
-                ));
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    format!(
+                        "Risk rerank {cmd_label} `{}` skipped (already provided).",
+                        request.path.display(),
+                    ),
+                );
                 conversation.push(format!(
                     "Tool {cmd_label} `{}` already provided earlier.",
                     request.path.display()
@@ -13700,10 +16718,6 @@ async fn run_risk_rerank_chunk(
             .await
             {
                 Ok(output) => {
-                    logs.push(format!(
-                        "Risk rerank {cmd_label} `{}` returned content.",
-                        request.path.display(),
-                    ));
                     conversation.push(format!(
                         "Tool {cmd_label} `{}`:\n{}",
                         request.path.display(),
@@ -13711,19 +16725,29 @@ async fn run_risk_rerank_chunk(
                     ));
                 }
                 Err(err) => {
-                    logs.push(format!(
-                        "Risk rerank {cmd_label} `{}` failed: {err}",
-                        request.path.display(),
-                    ));
+                    push_progress_log(
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                        format!(
+                            "Risk rerank {cmd_label} `{}` failed: {err}",
+                            request.path.display(),
+                        ),
+                    );
                     conversation.push(format!(
                         "Tool {cmd_label} `{}` error: {err}",
                         request.path.display()
                     ));
                     command_error_count += 1;
                     if command_error_count >= BUG_RERANK_MAX_COMMAND_ERRORS {
-                        logs.push(format!(
-                            "Risk rerank aborted after {BUG_RERANK_MAX_COMMAND_ERRORS} tool errors."
-                        ));
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            format!(
+                                "Risk rerank aborted after {BUG_RERANK_MAX_COMMAND_ERRORS} tool errors."
+                            ),
+                        );
                         return Err(RiskRerankChunkFailure {
                             ids,
                             error: format!(
@@ -13745,10 +16769,15 @@ async fn run_risk_rerank_chunk(
                 match &request {
                     ToolRequest::Content { term, mode, .. } => {
                         let display_term = summarize_search_term(term, 80);
-                        logs.push(format!(
-                            "Risk rerank search `{display_term}` ({}) skipped (already provided).",
-                            mode.as_str()
-                        ));
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            format!(
+                                "Risk rerank search `{display_term}` ({}) skipped (already provided).",
+                                mode.as_str()
+                            ),
+                        );
                         conversation.push(format!(
                             "Tool SEARCH `{display_term}` ({}) already provided earlier.",
                             mode.as_str()
@@ -13768,9 +16797,12 @@ async fn run_risk_rerank_chunk(
                             shown["limit"] =
                                 serde_json::Value::Number(serde_json::Number::from(limit as u64));
                         }
-                        logs.push(format!(
-                            "Risk rerank GREP_FILES {shown} skipped (already provided)."
-                        ));
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            format!("Risk rerank GREP_FILES {shown} skipped (already provided)."),
+                        );
                         conversation
                             .push(format!("Tool GREP_FILES {shown} already provided earlier."));
                     }
@@ -13784,20 +16816,30 @@ async fn run_risk_rerank_chunk(
                 && !reason.trim().is_empty()
             {
                 let truncated = truncate_text(reason, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-                logs.push(format!(
-                    "Risk rerank tool rationale ({}): {truncated}",
-                    request.kind_label()
-                ));
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    format!(
+                        "Risk rerank tool rationale ({}): {truncated}",
+                        request.kind_label()
+                    ),
+                );
             }
 
             match request {
                 ToolRequest::Content { term, mode, .. } => {
                     executed_command = true;
                     let display_term = summarize_search_term(&term, 80);
-                    logs.push(format!(
-                        "Risk rerank {mode} content search for `{display_term}` — path {repo_display}",
-                        mode = mode.as_str()
-                    ));
+                    push_progress_log(
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                        format!(
+                            "Risk rerank {mode} content search for `{display_term}` — path {repo_display}",
+                            mode = mode.as_str()
+                        ),
+                    );
                     match run_content_search(&repo_root, &term, mode, &metrics).await {
                         SearchResult::Matches(output) => {
                             conversation.push(format!(
@@ -13809,26 +16851,41 @@ async fn run_risk_rerank_chunk(
                             let message = format!(
                                 "No content matches found for `{display_term}` — path {repo_display}"
                             );
-                            logs.push(message.clone());
+                            push_progress_log(
+                                &progress_sender,
+                                &log_sink,
+                                &mut logs,
+                                message.clone(),
+                            );
                             conversation.push(format!(
                                 "Tool SEARCH `{display_term}` ({}) results:\n{message}",
                                 mode.as_str()
                             ));
                         }
                         SearchResult::Error(err) => {
-                            logs.push(format!(
-                                "Risk rerank search `{display_term}` ({}) failed: {err} — path {repo_display}",
-                                mode.as_str()
-                            ));
+                            push_progress_log(
+                                &progress_sender,
+                                &log_sink,
+                                &mut logs,
+                                format!(
+                                    "Risk rerank search `{display_term}` ({}) failed: {err} — path {repo_display}",
+                                    mode.as_str()
+                                ),
+                            );
                             conversation.push(format!(
                                 "Tool SEARCH `{display_term}` ({}) error: {err}",
                                 mode.as_str()
                             ));
                             command_error_count += 1;
                             if command_error_count >= BUG_RERANK_MAX_COMMAND_ERRORS {
-                                logs.push(format!(
-                                    "Risk rerank aborted after {BUG_RERANK_MAX_COMMAND_ERRORS} tool errors."
-                                ));
+                                push_progress_log(
+                                    &progress_sender,
+                                    &log_sink,
+                                    &mut logs,
+                                    format!(
+                                        "Risk rerank aborted after {BUG_RERANK_MAX_COMMAND_ERRORS} tool errors."
+                                    ),
+                                );
                                 return Err(RiskRerankChunkFailure {
                                     ids,
                                     error: format!(
@@ -13855,28 +16912,44 @@ async fn run_risk_rerank_chunk(
                         shown["limit"] =
                             serde_json::Value::Number(serde_json::Number::from(limit as u64));
                     }
-                    logs.push(format!(
-                        "Risk rerank GREP_FILES {shown} — path {repo_display}"
-                    ));
+                    push_progress_log(
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                        format!("Risk rerank GREP_FILES {shown} — path {repo_display}"),
+                    );
                     match run_grep_files(&repo_root, &args, &metrics).await {
                         SearchResult::Matches(output) => {
                             conversation.push(format!("Tool GREP_FILES {shown}:\n{output}"));
                         }
                         SearchResult::NoMatches => {
                             let message = "No matches found.".to_string();
-                            logs.push(format!(
-                                "Risk rerank GREP_FILES {shown} returned no matches."
-                            ));
+                            push_progress_log(
+                                &progress_sender,
+                                &log_sink,
+                                &mut logs,
+                                format!("Risk rerank GREP_FILES {shown} returned no matches."),
+                            );
                             conversation.push(format!("Tool GREP_FILES {shown}:\n{message}"));
                         }
                         SearchResult::Error(err) => {
-                            logs.push(format!("Risk rerank GREP_FILES {shown} failed: {err}"));
+                            push_progress_log(
+                                &progress_sender,
+                                &log_sink,
+                                &mut logs,
+                                format!("Risk rerank GREP_FILES {shown} failed: {err}"),
+                            );
                             conversation.push(format!("Tool GREP_FILES {shown} error: {err}"));
                             command_error_count += 1;
                             if command_error_count >= BUG_RERANK_MAX_COMMAND_ERRORS {
-                                logs.push(format!(
-                                    "Risk rerank aborted after {BUG_RERANK_MAX_COMMAND_ERRORS} tool errors."
-                                ));
+                                push_progress_log(
+                                    &progress_sender,
+                                    &log_sink,
+                                    &mut logs,
+                                    format!(
+                                        "Risk rerank aborted after {BUG_RERANK_MAX_COMMAND_ERRORS} tool errors."
+                                    ),
+                                );
                                 return Err(RiskRerankChunkFailure {
                                     ids,
                                     error: format!(
@@ -13916,16 +16989,16 @@ async fn rerank_bugs_by_risk(
     reasoning_effort: Option<ReasoningEffort>,
     summaries: &mut [BugSummary],
     repo_root: &Path,
-    repository_summary: &str,
+    _repository_summary: &str,
     spec_context: Option<&str>,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
     metrics: Arc<ReviewMetrics>,
 ) -> Vec<String> {
     if summaries.is_empty() {
         return Vec::new();
     }
 
-    let repo_summary_snippet =
-        trim_prompt_context(repository_summary, BUG_RERANK_CONTEXT_MAX_CHARS);
     let spec_excerpt_snippet = spec_context
         .map(|text| trim_prompt_context(text, BUG_RERANK_CONTEXT_MAX_CHARS))
         .filter(|s| !s.is_empty())
@@ -13954,7 +17027,6 @@ async fn rerank_bugs_by_risk(
             .join("\n");
         let ids: Vec<usize> = chunk.iter().map(|summary| summary.id).collect();
         let prompt = BUG_RERANK_PROMPT_TEMPLATE
-            .replace("{repository_summary}", &repo_summary_snippet)
             .replace("{spec_excerpt}", &spec_excerpt_snippet)
             .replace("{findings}", &findings_payload);
         prompt_chunks.push((ids, prompt));
@@ -13963,37 +17035,89 @@ async fn rerank_bugs_by_risk(
     let total_chunks = prompt_chunks.len();
     let max_concurrency = BUG_RERANK_MAX_CONCURRENCY.max(1).min(total_chunks.max(1));
 
-    let chunk_results = futures::stream::iter(prompt_chunks.into_iter().map(|(ids, prompt)| {
-        let provider = provider.clone();
-        let auth_clone = auth.clone();
-        let model_owned = model.to_string();
-        let metrics_clone = metrics.clone();
-        let repo_root = repo_root.to_path_buf();
-
-        async move {
-            run_risk_rerank_chunk(
-                client,
-                &provider,
-                &auth_clone,
-                model_owned.as_str(),
-                reasoning_effort,
-                BUG_RERANK_SYSTEM_PROMPT,
-                prompt,
-                metrics_clone,
-                repo_root,
-                ids,
-            )
-            .await
-        }
-    }))
-    .buffer_unordered(max_concurrency)
-    .collect::<Vec<_>>()
-    .await;
-
     let mut logs: Vec<String> = Vec::new();
     let mut decisions: HashMap<usize, RiskDecision> = HashMap::new();
+    if total_chunks > 0 {
+        let rerank_reasoning_label = reasoning_effort_label(normalize_reasoning_effort_for_model(
+            model,
+            reasoning_effort,
+        ));
+        push_progress_log(
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+            format!("Running risk rerank (model: {model}, reasoning: {rerank_reasoning_label})."),
+        );
+        push_progress_log(
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+            format!(
+                "Risk rerank starting for {} finding(s) with concurrency {max_concurrency}.",
+                summaries.len()
+            ),
+        );
+        emit_progress_log(
+            &progress_sender,
+            &log_sink,
+            format!("  └ Launching parallel risk rerank ({max_concurrency} workers)"),
+        );
+    }
 
-    for result in chunk_results {
+    let total_findings = summaries.len();
+    let mut chunk_results =
+        futures::stream::iter(prompt_chunks.into_iter().map(|(ids, prompt)| {
+            let provider = provider.clone();
+            let auth_clone = auth.clone();
+            let model_owned = model.to_string();
+            let metrics_clone = metrics.clone();
+            let repo_root = repo_root.to_path_buf();
+            let progress_sender = progress_sender.clone();
+            let log_sink = log_sink.clone();
+            let chunk_size = ids.len();
+
+            async move {
+                (
+                    chunk_size,
+                    run_risk_rerank_chunk(
+                        client,
+                        &provider,
+                        &auth_clone,
+                        model_owned.as_str(),
+                        reasoning_effort,
+                        BUG_RERANK_SYSTEM_PROMPT,
+                        prompt,
+                        metrics_clone,
+                        repo_root,
+                        ids,
+                        progress_sender,
+                        log_sink,
+                    )
+                    .await,
+                )
+            }
+        }))
+        .buffer_unordered(max_concurrency);
+
+    let mut completed_findings = 0usize;
+    while let Some((chunk_size, result)) = chunk_results.next().await {
+        completed_findings = completed_findings.saturating_add(chunk_size);
+        if total_chunks > 0
+            && (completed_findings >= total_findings || completed_findings.is_multiple_of(5))
+        {
+            let clamped_completed = completed_findings.min(total_findings);
+            let percent = if total_findings == 0 {
+                0
+            } else {
+                (clamped_completed * 100) / total_findings
+            };
+            emit_progress_log(
+                &progress_sender,
+                &log_sink,
+                format!("Risk rerank progress: {clamped_completed}/{total_findings} - {percent}%.",),
+            );
+        }
+
         match result {
             Ok(mut success) => {
                 logs.append(&mut success.logs);
@@ -14049,10 +17173,15 @@ async fn rerank_bugs_by_risk(
                     .map(std::string::ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(", ");
-                logs.push(format!(
-                    "Risk rerank chunk failed for bug id(s) {id_list}: {error}",
-                    error = failure.error
-                ));
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    format!(
+                        "Risk rerank chunk failed for bug id(s) {id_list}: {error}",
+                        error = failure.error
+                    ),
+                );
             }
         }
     }
@@ -14078,9 +17207,13 @@ async fn rerank_bugs_by_risk(
             let impact = update.impact.label();
             let likelihood = update.likelihood.label();
             let product = update.product;
-            logs.push(format!(
-                "Severity matrix: bug #{id} updated from {previous} to {computed} (impact {impact} * likelihood {likelihood} = {product})."
-            ));
+            append_log(
+                &log_sink,
+                &mut logs,
+                format!(
+                    "Severity matrix: bug #{id} updated from {previous} to {computed} (impact {impact} * likelihood {likelihood} = {product})."
+                ),
+            );
         }
     }
 
@@ -14103,7 +17236,7 @@ async fn rerank_bugs_by_risk(
                 "Risk rerank: bug #{id} retained original severity {severity} (no model decision)"
             )
         };
-        logs.push(log_entry);
+        append_log(&log_sink, &mut logs, log_entry);
     }
 
     logs
@@ -14530,7 +17663,11 @@ fn parse_search_term(input: &str) -> (SearchMode, &str) {
 fn summarize_search_term(term: &str, limit: usize) -> String {
     let mut summary = term.replace('\n', "\\n");
     if summary.len() > limit {
-        summary.truncate(limit);
+        let mut boundary = limit;
+        while boundary > 0 && !summary.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        summary.truncate(boundary);
         summary.push_str("...");
     }
     summary
@@ -14732,6 +17869,7 @@ struct CollectionState {
     repo_path: PathBuf,
     snippets: Vec<FileSnippet>,
     seen_dirs: HashSet<PathBuf>,
+    seen_files: HashSet<PathBuf>,
     max_files: usize,
     max_bytes_per_file: usize,
     max_total_bytes: usize,
@@ -14755,6 +17893,7 @@ impl CollectionState {
             repo_path,
             snippets: Vec::new(),
             seen_dirs: HashSet::new(),
+            seen_files: HashSet::new(),
             max_files,
             max_bytes_per_file,
             max_total_bytes,
@@ -14850,6 +17989,14 @@ impl CollectionState {
             return Ok(());
         }
 
+        let relative_path = path
+            .strip_prefix(&self.repo_path)
+            .unwrap_or(path)
+            .to_path_buf();
+        if !self.seen_files.insert(relative_path.clone()) {
+            return Ok(());
+        }
+
         let mut file =
             fs::File::open(path).map_err(|e| format!("Failed to open {}: {e}", path.display()))?;
         let mut buffer = Vec::new();
@@ -14876,11 +18023,6 @@ impl CollectionState {
             ));
             return Ok(());
         }
-
-        let relative_path = path
-            .strip_prefix(&self.repo_path)
-            .unwrap_or(path)
-            .to_path_buf();
 
         self.snippets.push(FileSnippet {
             relative_path,
@@ -14969,14 +18111,8 @@ fn determine_language(path: &Path) -> Option<&'static str> {
         })
 }
 
-fn build_repository_summary(snippets: &[FileSnippet]) -> String {
+fn build_repository_summary(_snippets: &[FileSnippet]) -> String {
     let mut lines = Vec::new();
-    lines.push("Included files:".to_string());
-    for snippet in snippets {
-        let size = human_readable_bytes(snippet.bytes);
-        lines.push(format!("- {} ({size})", snippet.relative_path.display()));
-    }
-    lines.push(String::new());
     let platform = format!(
         "{} {} ({})",
         std::env::consts::OS,
@@ -14996,6 +18132,147 @@ fn build_single_file_context(snippet: &FileSnippet) -> String {
         snippet.relative_path.display(),
         snippet.language,
         snippet.content
+    )
+}
+
+fn looks_like_base_model_id(model: &str) -> bool {
+    let trimmed = model.trim();
+    trimmed.starts_with("gpt-")
+        || trimmed.starts_with("codex-")
+        || trimmed.starts_with("exp-")
+        || trimmed.starts_with("o3")
+        || trimmed.starts_with("o4")
+}
+
+fn model_id_for_context_window(model: &str) -> &str {
+    let trimmed = model.trim();
+    let trimmed = trimmed
+        .rsplit_once('/')
+        .map(|(_, model)| model)
+        .unwrap_or(trimmed)
+        .trim();
+
+    let Some((left, right)) = trimmed.split_once(':') else {
+        return trimmed;
+    };
+
+    let left = left.trim();
+    let right = right.trim();
+    let left_is_model = looks_like_base_model_id(left);
+    let right_is_model = looks_like_base_model_id(right);
+
+    match (left_is_model, right_is_model) {
+        (false, true) => right,
+        (true, false) => left,
+        _ => trimmed,
+    }
+}
+
+fn bug_file_context_max_chars_for_model(model: &str, config: &Config) -> usize {
+    let model = model_id_for_context_window(model);
+
+    // Prefer per-model inference over config-wide overrides, since security review runs multiple
+    // models (triage/spec/bug/validation). `Config::model_context_window` may reflect a different
+    // model than the one used for bug analysis.
+    let context_window = infer_default_context_window_tokens(model).or(config.model_context_window);
+
+    let Some(context_window) = context_window else {
+        return BUG_FILE_CONTEXT_FALLBACK_MAX_CHARS;
+    };
+
+    // Reserve headroom for repo/spec context, tool output, and model output.
+    // Use a conservative char/token ratio to reduce context window errors.
+    const FILE_TOKEN_SHARE_NUM: i64 = 3;
+    const FILE_TOKEN_SHARE_DEN: i64 = 10; // 30%
+    const CHARS_PER_TOKEN_ESTIMATE: i64 = 3;
+
+    let budget_tokens = context_window
+        .saturating_mul(FILE_TOKEN_SHARE_NUM)
+        .saturating_div(FILE_TOKEN_SHARE_DEN)
+        .max(1);
+    let budget_chars = budget_tokens.saturating_mul(CHARS_PER_TOKEN_ESTIMATE);
+    let min_chars = BUG_FILE_CONTEXT_RETRY_MAX_CHARS as i64;
+    let max_chars = DEFAULT_MAX_BYTES_PER_FILE as i64;
+
+    budget_chars.clamp(min_chars, max_chars) as usize
+}
+
+fn infer_default_context_window_tokens(model: &str) -> Option<i64> {
+    if model.starts_with("codex-mini-latest")
+        || model.starts_with("o3")
+        || model.starts_with("o4-mini")
+    {
+        Some(200_000)
+    } else if model.starts_with("gpt-5") || model.starts_with("codex-") || model.starts_with("exp-")
+    {
+        Some(272_000)
+    } else if model.starts_with("gpt-4.1") {
+        Some(1_047_576)
+    } else if model.starts_with("gpt-oss") {
+        Some(96_000)
+    } else if model.starts_with("gpt-4o") {
+        Some(128_000)
+    } else if model.starts_with("gpt-3.5") {
+        Some(16_385)
+    } else {
+        None
+    }
+}
+
+fn build_single_file_context_for_bug_prompt(
+    snippet: &FileSnippet,
+    max_chars: usize,
+) -> (String, Vec<String>) {
+    if snippet.content.chars().nth(max_chars).is_none() {
+        return (build_single_file_context(snippet), Vec::new());
+    }
+
+    let mut logs = Vec::new();
+    let head_chars = max_chars / 2;
+    let tail_chars = max_chars.saturating_sub(head_chars);
+    let head: String = snippet.content.chars().take(head_chars).collect();
+    let tail_rev: String = snippet.content.chars().rev().take(tail_chars).collect();
+    let tail: String = tail_rev.chars().rev().collect();
+
+    logs.push(format!(
+        "Truncated {path} content to {limit} chars for bug analysis.",
+        path = snippet.relative_path.display(),
+        limit = max_chars
+    ));
+
+    (
+        format!(
+            "### {}\n```{}\n{}\n\n... [truncated] ...\n\n{}\n```\n",
+            snippet.relative_path.display(),
+            snippet.language,
+            head,
+            tail
+        ),
+        logs,
+    )
+}
+
+fn build_single_file_context_for_bug_retry(snippet: &FileSnippet) -> (String, Vec<String>) {
+    if snippet.content.len() <= BUG_FILE_CONTEXT_RETRY_MAX_CHARS {
+        return (build_single_file_context(snippet), Vec::new());
+    }
+
+    let mut logs = Vec::new();
+    logs.push(format!(
+        "Retrying {path} with truncated content ({limit} chars).",
+        path = snippet.relative_path.display(),
+        limit = BUG_FILE_CONTEXT_RETRY_MAX_CHARS
+    ));
+
+    let prefix = truncate_text(snippet.content.as_str(), BUG_FILE_CONTEXT_RETRY_MAX_CHARS);
+    (
+        format!(
+            "### {}\n```{}\n{}\n\n... [truncated] ...\n```\n",
+            snippet.relative_path.display(),
+            snippet.language,
+            prefix
+        ),
+        logs,
     )
 }
 
@@ -15148,7 +18425,14 @@ fn build_bugs_user_prompt(
             Some(format!("- User scope prompt: {scope_summary}\n- After reading the file, if it does not meaningfully relate to that scope, skip it and move on (respond with `no bugs found` for this file).\n"))
         })
         .unwrap_or_default();
-    let repository_section = format!("# Repository context\n{repository_summary}\n");
+    let repo_context = repository_summary.trim();
+    let repo_context_truncated = truncate_text(repo_context, BUG_REPOSITORY_SUMMARY_MAX_CHARS);
+    if repo_context_truncated.len() < repo_context.len() {
+        logs.push(format!(
+            "Repository context truncated to {BUG_REPOSITORY_SUMMARY_MAX_CHARS} chars for bug analysis."
+        ));
+    }
+    let repository_section = format!("# Repository context\n{repo_context_truncated}\n");
     let code_and_task = BUGS_USER_CODE_AND_TASK
         .replace("{code_context}", code_context)
         .replace("{scope_reminder}", scope_reminder.as_str());
@@ -15161,13 +18445,19 @@ fn build_bugs_user_prompt(
     if let Some(raw_spec) = spec_markdown {
         let trimmed_spec = raw_spec.trim();
         if !trimmed_spec.is_empty() {
+            let spec_context = truncate_text(trimmed_spec, BUG_SPEC_CONTEXT_MAX_CHARS);
+            if spec_context.len() < trimmed_spec.len() {
+                logs.push(format!(
+                    "Specification context truncated to {BUG_SPEC_CONTEXT_MAX_CHARS} chars for bug analysis."
+                ));
+            }
             let available_for_spec = MAX_PROMPT_BYTES.saturating_sub(base_len);
             const SPEC_HEADER: &str = "\n# Specification context\n";
             if available_for_spec > SPEC_HEADER.len() {
                 let max_spec_bytes = available_for_spec - SPEC_HEADER.len();
                 let mut spec_section = String::from(SPEC_HEADER);
-                if trimmed_spec.len() <= max_spec_bytes {
-                    spec_section.push_str(trimmed_spec);
+                if spec_context.len() <= max_spec_bytes {
+                    spec_section.push_str(spec_context.as_str());
                     spec_section.push('\n');
                     prompt.push_str(spec_section.as_str());
                 } else {
@@ -15181,7 +18471,7 @@ fn build_bugs_user_prompt(
                     } else {
                         let available_for_content = max_spec_bytes - SPEC_TRUNCATION_NOTE.len();
                         let truncated =
-                            truncate_to_char_boundary(trimmed_spec, available_for_content);
+                            truncate_to_char_boundary(spec_context.as_str(), available_for_content);
                         spec_section.push_str(truncated);
                         spec_section.push_str(SPEC_TRUNCATION_NOTE);
                         spec_section.push('\n');
@@ -15498,6 +18788,144 @@ fn summarize_process_output(success: bool, stdout: &str, stderr: &str) -> String
     }
 }
 
+fn normalize_web_validation_base_url(raw: &str) -> Result<Url, String> {
+    let url = Url::parse(raw).map_err(|err| format!("Invalid target URL: {err}"))?;
+    match url.scheme() {
+        "http" | "https" => {}
+        other => return Err(format!("Unsupported target URL scheme `{other}`")),
+    }
+    if url.host_str().is_none() {
+        return Err("Target URL must include a host".to_string());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("Target URL must not include embedded credentials (userinfo)".to_string());
+    }
+
+    let mut base = url;
+    base.set_path("/");
+    base.set_query(None);
+    base.set_fragment(None);
+    Ok(base)
+}
+
+fn resolve_web_validation_target(base_url: &Url, raw_target: Option<&str>) -> Result<Url, String> {
+    let raw_target = raw_target.unwrap_or("").trim();
+    if raw_target.is_empty() {
+        return Ok(base_url.clone());
+    }
+
+    let candidate = if raw_target.starts_with("http://") || raw_target.starts_with("https://") {
+        Url::parse(raw_target).map_err(|err| format!("Invalid target URL: {err}"))?
+    } else {
+        base_url
+            .join(raw_target)
+            .map_err(|err| format!("Invalid target URL path: {err}"))?
+    };
+
+    if !candidate.username().is_empty() || candidate.password().is_some() {
+        return Err("Target URL must not include embedded credentials (userinfo)".to_string());
+    }
+
+    if candidate.origin().ascii_serialization() != base_url.origin().ascii_serialization() {
+        return Err(format!(
+            "Refusing to validate against non-target origin: {}",
+            candidate.origin().ascii_serialization()
+        ));
+    }
+
+    Ok(candidate)
+}
+
+fn parse_web_validation_creds(contents: &str) -> Vec<(String, String)> {
+    fn is_valid_header_name(name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() {
+            return false;
+        }
+        name.chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    }
+
+    fn sanitize_header_value(value: &str) -> Option<String> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        if trimmed.contains('\n') || trimmed.contains('\r') {
+            return None;
+        }
+        Some(trimmed.to_string())
+    }
+
+    let mut headers: Vec<(String, String)> = Vec::new();
+    let trimmed = contents.trim();
+    if trimmed.is_empty() {
+        return headers;
+    }
+
+    let json = serde_json::from_str::<Value>(trimmed).ok();
+    if let Some(value) = json {
+        let header_object = match value {
+            Value::Object(map) => map
+                .get("headers")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or(map),
+            other => other.as_object().cloned().unwrap_or_default(),
+        };
+        if !header_object.is_empty() {
+            for (key, value) in header_object {
+                if !is_valid_header_name(&key) {
+                    continue;
+                }
+                let Some(raw) = value.as_str() else {
+                    continue;
+                };
+                if let Some(val) = sanitize_header_value(raw) {
+                    headers.push((key.trim().to_string(), val));
+                }
+            }
+            return headers;
+        }
+    }
+
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !is_valid_header_name(name) {
+            continue;
+        }
+        if let Some(val) = sanitize_header_value(value) {
+            headers.push((name.trim().to_string(), val));
+        }
+    }
+
+    headers
+}
+
+fn redactions_for_headers(headers: &[(String, String)]) -> Vec<String> {
+    let mut redactions: Vec<String> = Vec::new();
+    for (_name, value) in headers {
+        let value = value.trim();
+        if value.len() >= 8 {
+            redactions.push(value.to_string());
+        }
+        if let Some(token) = value.strip_prefix("Bearer ").map(str::trim)
+            && token.len() >= 8
+        {
+            redactions.push(token.to_string());
+        }
+    }
+    redactions.sort();
+    redactions.dedup();
+    redactions
+}
+
 fn base_url_for_control(target: &str) -> Option<String> {
     let url = Url::parse(target).ok()?;
     let mut control = url;
@@ -15524,6 +18952,53 @@ fn contains_asan_signature(text: &str) -> bool {
         || lower.contains("heap-buffer-overflow")
         || lower.contains("stack-buffer-overflow")
         || lower.contains("use-after-free")
+}
+
+fn extract_asan_trace_excerpt(text: &str) -> Option<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return None;
+    }
+
+    let start = lines
+        .iter()
+        .position(|line| {
+            let lower = line.to_ascii_lowercase();
+            lower.contains("error: addresssanitizer") || lower.contains("error: leaksanitizer")
+        })
+        .or_else(|| lines.iter().position(|line| contains_asan_signature(line)));
+    let start = start?;
+
+    let mut out: Vec<String> = Vec::new();
+    let mut captured = 0usize;
+    for line in lines.iter().skip(start) {
+        if captured >= 200 {
+            break;
+        }
+
+        let lower = line.to_ascii_lowercase();
+        if lower.contains("shadow bytes around") || lower.contains("shadow byte legend") {
+            break;
+        }
+
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        out.push(trimmed.to_string());
+        captured += 1;
+
+        if lower.contains("aborting") {
+            break;
+        }
+    }
+
+    if out.is_empty() {
+        None
+    } else {
+        Some(out.join("\n"))
+    }
 }
 
 fn resolve_validation_display_path(
@@ -15579,7 +19054,7 @@ fn read_report_output_prefix(path: &Path) -> Option<String> {
         return None;
     }
     if truncated {
-        text.push_str("\n\n… (truncated; see artifacts for full output)");
+        text.push_str("\n\n… (truncated)");
     }
     Some(text)
 }
@@ -15609,6 +19084,13 @@ fn build_validation_output_block(
         .as_deref()
         .map(str::trim)
         .filter(|summary| !summary.is_empty());
+
+    let snippet = validation
+        .output_snippet
+        .as_deref()
+        .map(str::trim)
+        .filter(|snippet| !snippet.is_empty())
+        .map(str::to_string);
 
     let stderr = read_validation_artifact_for_report(
         validation.stderr_path.as_ref(),
@@ -15645,31 +19127,38 @@ fn build_validation_output_block(
         sections.push(format!("Explanation: {summary}"));
     }
 
-    match (stderr.as_ref(), stdout.as_ref()) {
-        (Some(stderr), Some(stdout)) => {
-            sections.push(format!("== STDERR ==\n{stderr}\n\n== STDOUT ==\n{stdout}"));
-        }
-        _ => {
-            let output = if expects_asan {
-                stderr.as_ref().or(stdout.as_ref())
-            } else if matches!(validation.status, BugValidationStatus::Passed) {
-                stdout.as_ref().or(stderr.as_ref())
+    if expects_asan {
+        let output = snippet
+            .as_deref()
+            .or(stderr.as_deref())
+            .or(stdout.as_deref());
+        if let Some(output) = output {
+            if let Some(trace) = extract_asan_trace_excerpt(output) {
+                sections.push(trace);
             } else {
-                stderr.as_ref().or(stdout.as_ref())
-            };
-            if let Some(output) = output {
                 sections.push(output.to_string());
+            }
+        }
+    } else {
+        match (stderr.as_ref(), stdout.as_ref()) {
+            (Some(stderr), Some(stdout)) => {
+                sections.push(format!("== STDERR ==\n{stderr}\n\n== STDOUT ==\n{stdout}"));
+            }
+            _ => {
+                let output = if matches!(validation.status, BugValidationStatus::Passed) {
+                    stdout.as_ref().or(stderr.as_ref())
+                } else {
+                    stderr.as_ref().or(stdout.as_ref())
+                };
+                if let Some(output) = output {
+                    sections.push(output.to_string());
+                }
             }
         }
     }
 
     if sections.is_empty() {
-        if let Some(snippet) = validation
-            .output_snippet
-            .as_deref()
-            .map(str::trim)
-            .filter(|snippet| !snippet.is_empty())
-        {
+        if let Some(snippet) = snippet.as_deref() {
             sections.push(snippet.to_string());
         } else if matches!(validation.status, BugValidationStatus::UnableToValidate)
             && let Some(summary) = summary
@@ -15965,20 +19454,20 @@ fn classify_python_validation_status(
     stdout: &str,
     stderr: &str,
 ) -> BugValidationStatus {
+    let observed_asan =
+        expect_asan && (contains_asan_signature(stdout) || contains_asan_signature(stderr));
+    if observed_asan {
+        return BugValidationStatus::Passed;
+    }
+
     let unable =
         matches!(exit_code, Some(2)) || (!success && looks_like_build_failure(stdout, stderr));
     if unable {
         return BugValidationStatus::UnableToValidate;
     }
 
-    let observed_asan =
-        expect_asan && (contains_asan_signature(stdout) || contains_asan_signature(stderr));
     if expect_asan {
-        if observed_asan {
-            BugValidationStatus::Passed
-        } else {
-            BugValidationStatus::Failed
-        }
+        BugValidationStatus::Failed
     } else if success {
         BugValidationStatus::Passed
     } else {
@@ -16062,6 +19551,7 @@ async fn execute_bug_command(
     plan: BugCommandPlan,
     repo_path: PathBuf,
     work_dir: PathBuf,
+    web_validation: Option<WebValidationConfig>,
 ) -> BugCommandResult {
     let mut logs: Vec<String> = Vec::new();
     let label = if let Some(rank) = plan.risk_rank {
@@ -16104,7 +19594,7 @@ async fn execute_bug_command(
     match plan.request.tool {
         BugVerificationTool::Curl => {
             let timeout = Duration::from_secs(VALIDATION_CURL_TIMEOUT_SECS);
-            let Some(target) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
+            let Some(target_raw) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing target URL".to_string());
                 logs.push(format!("{label}: no target URL provided for curl"));
@@ -16115,27 +19605,65 @@ async fn execute_bug_command(
                     logs,
                 };
             };
-            if !is_local_target_url(&target) {
-                validation.status = BugValidationStatus::UnableToValidate;
-                validation.summary = Some(format!(
-                    "Refusing to validate against non-local target: {target}"
-                ));
-                logs.push(format!(
-                    "{label}: refusing to validate against non-local target {target}"
-                ));
-                validation.run_at = Some(OffsetDateTime::now_utc());
-                return BugCommandResult {
-                    index: plan.index,
-                    validation,
-                    logs,
-                };
-            }
+            let target = match web_validation.as_ref() {
+                Some(web_validation) => match resolve_web_validation_target(
+                    &web_validation.base_url,
+                    Some(target_raw.as_str()),
+                ) {
+                    Ok(url) => url.as_str().to_string(),
+                    Err(err) => {
+                        validation.status = BugValidationStatus::UnableToValidate;
+                        validation.summary = Some(format!(
+                            "Refusing to validate against non-target URL: {err}"
+                        ));
+                        logs.push(format!(
+                            "{label}: refusing to validate against non-target url {target_raw}: {err}"
+                        ));
+                        validation.run_at = Some(OffsetDateTime::now_utc());
+                        return BugCommandResult {
+                            index: plan.index,
+                            validation,
+                            logs,
+                        };
+                    }
+                },
+                None => {
+                    if !is_local_target_url(&target_raw) {
+                        validation.status = BugValidationStatus::UnableToValidate;
+                        validation.summary = Some(format!(
+                            "Refusing to validate against non-local target: {target_raw}"
+                        ));
+                        logs.push(format!(
+                            "{label}: refusing to validate against non-local target {target_raw}"
+                        ));
+                        validation.run_at = Some(OffsetDateTime::now_utc());
+                        return BugCommandResult {
+                            index: plan.index,
+                            validation,
+                            logs,
+                        };
+                    }
+                    target_raw
+                }
+            };
+            validation.target = Some(target.clone());
 
             let control_target = base_url_for_control(&target);
             validation.control_target = control_target.clone();
             if let Some(control_target) = control_target.as_ref() {
+                let header_steps = web_validation
+                    .as_ref()
+                    .filter(|web_validation| !web_validation.headers.is_empty())
+                    .map(|web_validation| {
+                        web_validation
+                            .headers
+                            .iter()
+                            .map(|(name, _)| format!(" --header '{name}: [REDACTED]'"))
+                            .collect::<String>()
+                    })
+                    .unwrap_or_default();
                 validation.control_steps.push(format!(
-                    "Run: `curl --silent --show-error --location --max-time 15 {control_target}`"
+                    "Run: `curl --silent --show-error --location --max-time 15{header_steps} {control_target}`"
                 ));
                 let mut control_cmd = Command::new("curl");
                 control_cmd
@@ -16144,13 +19672,31 @@ async fn execute_bug_command(
                     .arg("--location")
                     .arg("--max-time")
                     .arg("15")
+                    .args(
+                        web_validation
+                            .as_ref()
+                            .map(|web_validation| {
+                                web_validation
+                                    .headers
+                                    .iter()
+                                    .flat_map(|(name, value)| {
+                                        ["--header".to_string(), format!("{name}: {value}")]
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default(),
+                    )
                     .arg(control_target)
                     .current_dir(&repo_path);
 
                 match command_output_with_timeout(control_cmd, timeout).await {
                     Ok(CommandOutputOutcome::Completed(output)) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                        let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        if let Some(web_validation) = web_validation.as_ref() {
+                            stdout = web_validation.redact(&stdout);
+                            stderr = web_validation.redact(&stderr);
+                        }
                         let success = output.status.success();
                         validation.control_summary =
                             Some(summarize_process_output(success, &stdout, &stderr));
@@ -16197,8 +19743,19 @@ async fn execute_bug_command(
                 }
             }
 
+            let header_steps = web_validation
+                .as_ref()
+                .filter(|web_validation| !web_validation.headers.is_empty())
+                .map(|web_validation| {
+                    web_validation
+                        .headers
+                        .iter()
+                        .map(|(name, _)| format!(" --header '{name}: [REDACTED]'"))
+                        .collect::<String>()
+                })
+                .unwrap_or_default();
             validation.repro_steps.push(format!(
-                "Run: `curl --silent --show-error --location --max-time 15 {target}`"
+                "Run: `curl --silent --show-error --location --max-time 15{header_steps} {target}`"
             ));
 
             let mut command = Command::new("curl");
@@ -16208,14 +19765,32 @@ async fn execute_bug_command(
                 .arg("--location")
                 .arg("--max-time")
                 .arg("15")
+                .args(
+                    web_validation
+                        .as_ref()
+                        .map(|web_validation| {
+                            web_validation
+                                .headers
+                                .iter()
+                                .flat_map(|(name, value)| {
+                                    ["--header".to_string(), format!("{name}: {value}")]
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default(),
+                )
                 .arg(&target)
                 .current_dir(&repo_path);
 
             match command_output_with_timeout(command, timeout).await {
                 Ok(CommandOutputOutcome::Completed(output)) => {
                     let duration = start.elapsed();
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    if let Some(web_validation) = web_validation.as_ref() {
+                        stdout = web_validation.redact(&stdout);
+                        stderr = web_validation.redact(&stderr);
+                    }
                     let success = output.status.success();
                     validation.status = if success {
                         BugValidationStatus::Passed
@@ -16350,6 +19925,27 @@ async fn execute_bug_command(
             if let Some(target) = plan.request.target.as_ref().filter(|t| !t.is_empty()) {
                 command.arg(target);
             }
+            if let Some(web_validation) = web_validation.as_ref() {
+                command.env("CODEX_WEB_TARGET_URL", web_validation.base_url.as_str());
+                command.env("CODEX_WEB_TARGET_ORIGIN", web_validation.origin());
+                let headers: HashMap<String, String> =
+                    web_validation.headers.iter().cloned().collect();
+                if let Ok(headers_json) = serde_json::to_string(&headers) {
+                    command.env("CODEX_WEB_HEADERS_JSON", headers_json);
+                }
+                if let Some(output_root) = work_dir.parent() {
+                    command.env(
+                        "CODEX_WEB_CREDS_OUT_PATH",
+                        output_root
+                            .join("specs")
+                            .join(WEB_VALIDATION_CREDS_FILE_NAME),
+                    );
+                    command.env(
+                        "CODEX_WEB_TESTING_MD_PATH",
+                        output_root.join("specs").join("TESTING.md"),
+                    );
+                }
+            }
             command.current_dir(&repo_path);
 
             let mut cmd = format!("python {}", display_path_for(script_path, &repo_path));
@@ -16363,20 +19959,27 @@ async fn execute_bug_command(
             match command_output_with_timeout(command, timeout).await {
                 Ok(CommandOutputOutcome::Completed(output)) => {
                     let duration = start.elapsed();
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    let stdout_raw = String::from_utf8_lossy(&output.stdout).to_string();
+                    let stderr_raw = String::from_utf8_lossy(&output.stderr).to_string();
                     let success = output.status.success();
                     let duration_label = fmt_elapsed_compact(duration.as_secs());
                     let exit_code = output.status.code();
                     let observed_asan = plan.expect_asan
-                        && (contains_asan_signature(&stdout) || contains_asan_signature(&stderr));
+                        && (contains_asan_signature(&stdout_raw)
+                            || contains_asan_signature(&stderr_raw));
                     validation.status = classify_python_validation_status(
                         plan.expect_asan,
                         exit_code,
                         success,
-                        &stdout,
-                        &stderr,
+                        &stdout_raw,
+                        &stderr_raw,
                     );
+                    let mut stdout = stdout_raw;
+                    let mut stderr = stderr_raw;
+                    if let Some(web_validation) = web_validation.as_ref() {
+                        stdout = web_validation.redact(&stdout);
+                        stderr = web_validation.redact(&stderr);
+                    }
 
                     if matches!(validation.status, BugValidationStatus::UnableToValidate) {
                         let summary_line = summarize_process_output(false, &stdout, &stderr);
@@ -16392,7 +19995,11 @@ async fn execute_bug_command(
                             ));
                         }
                     } else {
-                        let summary_line = summarize_process_output(success, &stdout, &stderr);
+                        let summary_line = summarize_process_output(
+                            matches!(validation.status, BugValidationStatus::Passed),
+                            &stdout,
+                            &stderr,
+                        );
                         validation.summary = Some(format!("{summary_line} · {duration_label}"));
                     }
 
@@ -16404,15 +20011,21 @@ async fn execute_bug_command(
                         } else {
                             &stderr
                         }
-                    } else if success {
+                    } else if matches!(validation.status, BugValidationStatus::Passed) {
                         &stdout
                     } else {
                         &stderr
                     };
                     let trimmed_snippet = snippet_source.trim();
                     if !trimmed_snippet.is_empty() {
+                        let snippet = if plan.expect_asan {
+                            extract_asan_trace_excerpt(trimmed_snippet)
+                                .unwrap_or_else(|| trimmed_snippet.to_string())
+                        } else {
+                            trimmed_snippet.to_string()
+                        };
                         validation.output_snippet =
-                            Some(truncate_text(trimmed_snippet, VALIDATION_OUTPUT_GRAPHEMES));
+                            Some(truncate_text(&snippet, VALIDATION_OUTPUT_GRAPHEMES));
                     }
                     let (stdout_path, stderr_path) = write_validation_output_files(
                         &bug_work_dir,
@@ -16461,7 +20074,7 @@ async fn execute_bug_command(
         }
         BugVerificationTool::Playwright => {
             let timeout = Duration::from_secs(VALIDATION_PLAYWRIGHT_TIMEOUT_SECS);
-            let Some(target) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
+            let Some(target_raw) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing target URL".to_string());
                 logs.push(format!("{label}: no target URL provided for playwright"));
@@ -16472,46 +20085,164 @@ async fn execute_bug_command(
                     logs,
                 };
             };
-            if !is_local_target_url(&target) {
-                validation.status = BugValidationStatus::UnableToValidate;
-                validation.summary = Some(format!(
-                    "Refusing to validate against non-local target: {target}"
-                ));
-                logs.push(format!(
-                    "{label}: refusing to validate against non-local target {target}"
-                ));
-                validation.run_at = Some(OffsetDateTime::now_utc());
-                return BugCommandResult {
-                    index: plan.index,
-                    validation,
-                    logs,
-                };
-            }
+            let target = match web_validation.as_ref() {
+                Some(web_validation) => match resolve_web_validation_target(
+                    &web_validation.base_url,
+                    Some(target_raw.as_str()),
+                ) {
+                    Ok(url) => url.as_str().to_string(),
+                    Err(err) => {
+                        validation.status = BugValidationStatus::UnableToValidate;
+                        validation.summary = Some(format!(
+                            "Refusing to validate against non-target URL: {err}"
+                        ));
+                        logs.push(format!(
+                            "{label}: refusing to validate against non-target url {target_raw}: {err}"
+                        ));
+                        validation.run_at = Some(OffsetDateTime::now_utc());
+                        return BugCommandResult {
+                            index: plan.index,
+                            validation,
+                            logs,
+                        };
+                    }
+                },
+                None => {
+                    if !is_local_target_url(&target_raw) {
+                        validation.status = BugValidationStatus::UnableToValidate;
+                        validation.summary = Some(format!(
+                            "Refusing to validate against non-local target: {target_raw}"
+                        ));
+                        logs.push(format!(
+                            "{label}: refusing to validate against non-local target {target_raw}"
+                        ));
+                        validation.run_at = Some(OffsetDateTime::now_utc());
+                        return BugCommandResult {
+                            index: plan.index,
+                            validation,
+                            logs,
+                        };
+                    }
+                    target_raw
+                }
+            };
+            validation.target = Some(target.clone());
             let _ = tokio_fs::create_dir_all(&bug_work_dir).await;
             let screenshot_path = bug_work_dir.join(format!("{file_stem}.png"));
+            let script_path = bug_work_dir.join("playwright_screenshot.js");
+            const PLAYWRIGHT_SCREENSHOT_SCRIPT: &str = r#"
+const { chromium } = require("playwright");
+
+function originOf(urlString) {
+  try {
+    return new URL(urlString).origin;
+  } catch {
+    return null;
+  }
+}
+
+(async () => {
+  const target = process.argv[2];
+  const screenshotPath = process.argv[3];
+
+  if (!target || !screenshotPath) {
+    console.error("usage: playwright_screenshot.js <target_url> <screenshot_path>");
+    process.exit(2);
+  }
+
+  const allowedOrigin = process.env.CODEX_WEB_ALLOWED_ORIGIN || "";
+  const headersJson = process.env.CODEX_WEB_HEADERS_JSON || "{}";
+  let extraHeaders = {};
+  try {
+    extraHeaders = JSON.parse(headersJson) || {};
+  } catch {
+    extraHeaders = {};
+  }
+
+  if (allowedOrigin && originOf(target) !== allowedOrigin) {
+    console.error(`Refusing to navigate to non-target origin: ${originOf(target)}`);
+    process.exit(2);
+  }
+
+  const browser = await chromium.launch();
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  await page.route("**/*", async (route) => {
+    const request = route.request();
+    const requestOrigin = originOf(request.url());
+    if (allowedOrigin && requestOrigin === allowedOrigin) {
+      const merged = { ...request.headers(), ...extraHeaders };
+      await route.continue({ headers: merged });
+    } else {
+      await route.continue();
+    }
+  });
+
+  await page.goto(target, { waitUntil: "networkidle", timeout: 15000 });
+
+  if (allowedOrigin) {
+    const finalOrigin = originOf(page.url());
+    if (finalOrigin !== allowedOrigin) {
+      throw new Error(`Refusing to follow redirect to non-target origin: ${finalOrigin}`);
+    }
+  }
+
+  await page.screenshot({ path: screenshotPath, fullPage: true });
+  console.log(`Saved screenshot to ${screenshotPath}`);
+  await browser.close();
+})().catch((err) => {
+  console.error(String(err && err.stack ? err.stack : err));
+  process.exit(1);
+});
+"#;
+            let _ = tokio_fs::write(&script_path, PLAYWRIGHT_SCREENSHOT_SCRIPT).await;
+            let display_script = display_path_for(&script_path, &repo_path);
+            if !validation.artifacts.iter().any(|a| a == &display_script) {
+                validation.artifacts.push(display_script.clone());
+            }
+
+            let headers_json = web_validation.as_ref().map(|web_validation| {
+                let headers: HashMap<String, String> =
+                    web_validation.headers.iter().cloned().collect();
+                serde_json::to_string(&headers).unwrap_or_else(|_| "{}".to_string())
+            });
+            let allowed_origin = web_validation.as_ref().map(WebValidationConfig::origin);
 
             let control_target = base_url_for_control(&target);
             validation.control_target = control_target.clone();
             if let Some(control_target) = control_target.as_ref() {
                 let control_screenshot_path = bug_work_dir.join(format!("{file_stem}_control.png"));
                 validation.control_steps.push(format!(
-                    "Run: `npx --yes playwright screenshot {control_target} {}`",
+                    "Run: `npx --yes -p playwright node {display_script} {control_target} {}`",
                     display_path_for(&control_screenshot_path, &repo_path)
                 ));
 
                 let mut control_cmd = Command::new("npx");
                 control_cmd
                     .arg("--yes")
+                    .arg("-p")
                     .arg("playwright")
-                    .arg("screenshot")
+                    .arg("node")
+                    .arg(&script_path)
                     .arg(control_target)
                     .arg(&control_screenshot_path)
                     .current_dir(&repo_path);
+                if let Some(origin) = allowed_origin.as_ref() {
+                    control_cmd.env("CODEX_WEB_ALLOWED_ORIGIN", origin);
+                }
+                if let Some(json) = headers_json.as_ref() {
+                    control_cmd.env("CODEX_WEB_HEADERS_JSON", json);
+                }
 
                 match command_output_with_timeout(control_cmd, timeout).await {
                     Ok(CommandOutputOutcome::Completed(output)) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                        let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        if let Some(web_validation) = web_validation.as_ref() {
+                            stdout = web_validation.redact(&stdout);
+                            stderr = web_validation.redact(&stderr);
+                        }
                         let success = output.status.success();
                         if success {
                             validation.control_summary = Some(format!(
@@ -16569,24 +20300,36 @@ async fn execute_bug_command(
             }
 
             validation.repro_steps.push(format!(
-                "Run: `npx --yes playwright screenshot {target} {}`",
+                "Run: `npx --yes -p playwright node {display_script} {target} {}`",
                 display_path_for(&screenshot_path, &repo_path)
             ));
 
             let mut command = Command::new("npx");
             command
                 .arg("--yes")
+                .arg("-p")
                 .arg("playwright")
-                .arg("screenshot")
+                .arg("node")
+                .arg(&script_path)
                 .arg(&target)
                 .arg(&screenshot_path)
                 .current_dir(&repo_path);
+            if let Some(origin) = allowed_origin.as_ref() {
+                command.env("CODEX_WEB_ALLOWED_ORIGIN", origin);
+            }
+            if let Some(json) = headers_json.as_ref() {
+                command.env("CODEX_WEB_HEADERS_JSON", json);
+            }
 
             match command_output_with_timeout(command, timeout).await {
                 Ok(CommandOutputOutcome::Completed(output)) => {
                     let duration = start.elapsed();
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    if let Some(web_validation) = web_validation.as_ref() {
+                        stdout = web_validation.redact(&stdout);
+                        stderr = web_validation.redact(&stderr);
+                    }
                     let success = output.status.success();
                     validation.status = if success {
                         BugValidationStatus::Passed
@@ -16720,10 +20463,12 @@ pub(crate) async fn verify_bugs(
         let _ = tokio_fs::create_dir_all(&batch.work_dir).await;
 
         let mut command_results: Vec<BugCommandResult> = Vec::new();
+        let web_validation = batch.web_validation.clone();
         let mut futures = futures::stream::iter(plans.into_iter().map(|plan| {
             let repo_path = batch.repo_path.clone();
             let work_dir = batch.work_dir.clone();
-            async move { execute_bug_command(plan, repo_path, work_dir).await }
+            let web_validation = web_validation.clone();
+            async move { execute_bug_command(plan, repo_path, work_dir, web_validation).await }
         }))
         .buffer_unordered(VALIDATION_EXEC_CONCURRENCY)
         .collect::<Vec<_>>()
@@ -16898,6 +20643,34 @@ fn is_crypto_validation_vuln_tag(tag: &str) -> bool {
         || tag.ends_with("-x509")
 }
 
+fn is_ssrf_validation_vuln_tag(tag: &str) -> bool {
+    let tag = tag.trim().to_ascii_lowercase();
+    if tag.is_empty() {
+        return false;
+    }
+
+    matches!(
+        tag.as_str(),
+        "ssrf" | "server-side-request-forgery" | "server_side_request_forgery"
+    ) || tag.starts_with("ssrf-")
+        || tag.contains("-ssrf-")
+        || tag.ends_with("-ssrf")
+}
+
+fn is_rce_validation_vuln_tag(tag: &str) -> bool {
+    let tag = tag.trim().to_ascii_lowercase();
+    if tag.is_empty() {
+        return false;
+    }
+
+    matches!(
+        tag.as_str(),
+        "rce" | "remote-code-execution" | "remote_code_execution" | "rce-bin" | "rce_bin"
+    ) || tag.starts_with("rce-")
+        || tag.contains("-rce-")
+        || tag.ends_with("-rce")
+}
+
 fn is_priority_validation_vuln_tag(tag: &str) -> bool {
     let tag = tag.trim().to_ascii_lowercase();
     if tag.is_empty() {
@@ -16912,8 +20685,14 @@ fn is_priority_validation_vuln_tag(tag: &str) -> bool {
             | "missing-authz-check"
             | "sql-injection"
             | "xxe"
+            | "ssrf"
+            | "rce"
+            | "rce-bin"
+            | "rce_bin"
     ) || tag.starts_with("path-traversal")
         || is_crypto_validation_vuln_tag(tag.as_str())
+        || is_ssrf_validation_vuln_tag(tag.as_str())
+        || is_rce_validation_vuln_tag(tag.as_str())
 }
 
 fn has_verification_type(bug: &SecurityReviewBug, needle: &str) -> bool {
@@ -16923,8 +20702,10 @@ fn has_verification_type(bug: &SecurityReviewBug, needle: &str) -> bool {
 }
 
 fn crash_poc_category(bug: &SecurityReviewBug) -> Option<&'static str> {
-    if has_verification_type(bug, "crash_poc_release_bin") {
-        Some("crash_poc_release_bin")
+    if has_verification_type(bug, "crash_poc_release")
+        || has_verification_type(bug, "crash_poc_release_bin")
+    {
+        Some("crash_poc_release")
     } else if has_verification_type(bug, "crash_poc_func") {
         Some("crash_poc_func")
     } else {
@@ -16932,11 +20713,37 @@ fn crash_poc_category(bug: &SecurityReviewBug) -> Option<&'static str> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ValidationPromptKind {
+    Crash,
+    RceBin,
+    Ssrf,
+    Crypto,
+    Generic,
+}
+
+fn validation_prompt_kind(bug: &SecurityReviewBug, vuln_tag: &str) -> ValidationPromptKind {
+    if crash_poc_category(bug).is_some() {
+        return ValidationPromptKind::Crash;
+    }
+    if has_verification_type(bug, "rce_bin") || is_rce_validation_vuln_tag(vuln_tag) {
+        return ValidationPromptKind::RceBin;
+    }
+    if has_verification_type(bug, "ssrf") || is_ssrf_validation_vuln_tag(vuln_tag) {
+        return ValidationPromptKind::Ssrf;
+    }
+    if has_verification_type(bug, "crypto") || is_crypto_validation_vuln_tag(vuln_tag) {
+        return ValidationPromptKind::Crypto;
+    }
+    ValidationPromptKind::Generic
+}
+
 #[derive(Clone, Debug)]
 struct ValidationFinding {
     id: BugIdentifier,
     label: String,
     context: String,
+    prompt_kind: ValidationPromptKind,
 }
 
 struct ValidationFindingsContext {
@@ -16946,12 +20753,13 @@ struct ValidationFindingsContext {
 
 fn build_validation_findings_context(
     snapshot: &SecurityReviewSnapshot,
+    include_web_browser: bool,
 ) -> ValidationFindingsContext {
     let mut required: Vec<&BugSnapshot> = snapshot
         .bugs
         .iter()
         .filter(|b| {
-            if has_verification_type(&b.bug, "web_browser") {
+            if !include_web_browser && has_verification_type(&b.bug, "web_browser") {
                 return false;
             }
             let sev = b.bug.severity.to_ascii_lowercase();
@@ -16959,9 +20767,15 @@ fn build_validation_findings_context(
             if !is_high {
                 return false;
             }
+            if has_verification_type(&b.bug, "rce_bin")
+                || has_verification_type(&b.bug, "ssrf")
+                || has_verification_type(&b.bug, "crypto")
+            {
+                return true;
+            }
             match crash_poc_category(&b.bug) {
                 Some("crash_poc_func") => return false,
-                Some("crash_poc_release_bin") => return true,
+                Some("crash_poc_release") => return true,
                 _ => {}
             }
             let tag = b.bug.vulnerability_tag.clone().or_else(|| {
@@ -16989,7 +20803,7 @@ fn build_validation_findings_context(
         .filter(|b| {
             is_high_risk(&b.bug)
                 && crash_poc_category(&b.bug) != Some("crash_poc_func")
-                && !has_verification_type(&b.bug, "web_browser")
+                && (include_web_browser || !has_verification_type(&b.bug, "web_browser"))
         })
         .collect();
     high_risk.sort_by_key(|b| b.bug.risk_rank.unwrap_or(usize::MAX));
@@ -17028,6 +20842,7 @@ fn build_validation_findings_context(
                 extract_vulnerability_tag_from_bug_markdown(item.original_markdown.as_str())
             })
             .unwrap_or_default();
+        let prompt_kind = validation_prompt_kind(&item.bug, vuln_tag.as_str());
         let crash_poc_category_line = crash_poc_category(&item.bug)
             .map(|category| format!("\n  crash_poc_category: {category}"))
             .unwrap_or_default();
@@ -17054,6 +20869,7 @@ fn build_validation_findings_context(
             id: identifier,
             label,
             context,
+            prompt_kind,
         });
     }
 
@@ -17093,9 +20909,316 @@ fn parse_validation_plan_item(raw: &str) -> Option<ValidationPlanItem> {
     None
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ValidationTargetPrepModelOutput {
+    outcome: Option<String>,
+    summary: Option<String>,
+    #[serde(default)]
+    local_build_ok: bool,
+    #[serde(default)]
+    local_run_ok: bool,
+    #[serde(default)]
+    docker_build_ok: bool,
+    #[serde(default)]
+    docker_run_ok: bool,
+    #[serde(default)]
+    local_build_command: Option<String>,
+    #[serde(default)]
+    local_smoke_command: Option<String>,
+    #[serde(default)]
+    local_entrypoint: Option<String>,
+    #[serde(default)]
+    dockerfile_path: Option<String>,
+    #[serde(default)]
+    docker_image_tag: Option<String>,
+    #[serde(default)]
+    docker_build_command: Option<String>,
+    #[serde(default)]
+    docker_smoke_command: Option<String>,
+    #[serde(default)]
+    testing_md_additions: Option<String>,
+}
+
+fn parse_validation_target_prep_output(raw: &str) -> Option<ValidationTargetPrepModelOutput> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(item) = serde_json::from_str::<ValidationTargetPrepModelOutput>(trimmed) {
+        return Some(item);
+    }
+
+    for snippet in extract_json_objects(trimmed) {
+        if let Ok(item) = serde_json::from_str::<ValidationTargetPrepModelOutput>(&snippet) {
+            return Some(item);
+        }
+    }
+
+    None
+}
+
 struct ValidationPlanAgentOutput {
     text: String,
     logs: Vec<String>,
+}
+
+struct ValidationTargetPrepAgentOutput {
+    text: String,
+    logs: Vec<String>,
+    exec_commands: Vec<ValidationPrepExecCommand>,
+}
+
+struct ValidationPrepExecCommand {
+    command: String,
+    exit_code: i32,
+    duration_secs: u64,
+}
+
+struct ValidationTargetPrepFailure {
+    message: String,
+    logs: Vec<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_validation_target_prep_agent(
+    config: &Config,
+    provider: &ModelProviderInfo,
+    auth_manager: Arc<AuthManager>,
+    repo_root: &Path,
+    prompt: String,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
+    metrics: Arc<ReviewMetrics>,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+) -> Result<ValidationTargetPrepAgentOutput, ValidationTargetPrepFailure> {
+    let mut logs: Vec<String> = Vec::new();
+    push_progress_log(
+        &progress_sender,
+        &log_sink,
+        &mut logs,
+        "Preparing runnable validation targets...".to_string(),
+    );
+
+    let mut prep_config = config.clone();
+    prep_config.model = Some(model.to_string());
+    prep_config.model_reasoning_effort =
+        normalize_reasoning_effort_for_model(model, reasoning_effort);
+    prep_config.model_provider = provider.clone();
+    prep_config.base_instructions = Some(VALIDATION_TARGET_PREP_SYSTEM_PROMPT.to_string());
+    prep_config.user_instructions = None;
+    prep_config.developer_instructions = None;
+    prep_config.compact_prompt = None;
+    prep_config.cwd = repo_root.to_path_buf();
+
+    let manager = ConversationManager::new(
+        auth_manager,
+        SessionSource::SubAgent(SubAgentSource::Other(
+            "security_review_validation_prep".to_string(),
+        )),
+    );
+
+    let conversation = match manager.new_conversation(prep_config).await {
+        Ok(new_conversation) => new_conversation.conversation,
+        Err(err) => {
+            let message = format!("Failed to start validation prep agent: {err}");
+            push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+            return Err(ValidationTargetPrepFailure { message, logs });
+        }
+    };
+
+    let mut exec_commands: Vec<ValidationPrepExecCommand> = Vec::new();
+    let mut next_prompt = prompt;
+    let mut final_text: Option<String> = None;
+    let mut last_tool_log: Option<String> = None;
+
+    for turn in 0..VALIDATION_TARGET_PREP_MAX_TURNS {
+        if turn > 0 {
+            push_progress_log(
+                &progress_sender,
+                &log_sink,
+                &mut logs,
+                format!(
+                    "Validation prep: retrying (attempt {}/{})",
+                    turn + 1,
+                    VALIDATION_TARGET_PREP_MAX_TURNS
+                ),
+            );
+        }
+
+        if let Err(err) = conversation
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: next_prompt.clone(),
+                }],
+            })
+            .await
+        {
+            let message = format!("Failed to submit validation prep prompt: {err}");
+            push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+            return Err(ValidationTargetPrepFailure { message, logs });
+        }
+
+        let exec_len_before_turn = exec_commands.len();
+        let mut last_agent_message: Option<String> = None;
+
+        loop {
+            let event = match conversation.next_event().await {
+                Ok(event) => event,
+                Err(err) => {
+                    let message = format!("Validation prep agent terminated unexpectedly: {err}");
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                    return Err(ValidationTargetPrepFailure { message, logs });
+                }
+            };
+
+            record_tool_call_from_event(metrics.as_ref(), &event.msg);
+
+            match event.msg {
+                EventMsg::TaskComplete(done) => {
+                    if let Some(msg) = done.last_agent_message {
+                        last_agent_message = Some(msg);
+                    }
+                    break;
+                }
+                EventMsg::AgentMessage(msg) => last_agent_message = Some(msg.message.clone()),
+                EventMsg::AgentReasoning(reason) => {
+                    log_model_reasoning(&reason.text, &progress_sender, &log_sink, &mut logs);
+                }
+                EventMsg::McpToolCallBegin(begin) => {
+                    let tool = begin.invocation.tool.clone();
+                    let message = format!("Validation prep: tool → {tool}");
+                    if last_tool_log.as_deref() != Some(message.as_str()) {
+                        push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                        last_tool_log = Some(message);
+                    }
+                }
+                EventMsg::ExecCommandBegin(begin) => {
+                    let command = strip_bash_lc_and_escape(&begin.command);
+                    push_progress_log(
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                        format!("Validation prep: run `{command}`"),
+                    );
+                }
+                EventMsg::ExecCommandEnd(done) => {
+                    let command = strip_bash_lc_and_escape(&done.command);
+                    exec_commands.push(ValidationPrepExecCommand {
+                        command: command.clone(),
+                        exit_code: done.exit_code,
+                        duration_secs: done.duration.as_secs(),
+                    });
+
+                    let duration = fmt_elapsed_compact(done.duration.as_secs());
+                    if done.exit_code == 0 {
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            format!("Validation prep: ok ({duration}) · `{command}`"),
+                        );
+                        continue;
+                    }
+
+                    let summary = summarize_process_output(false, &done.stdout, &done.stderr);
+                    push_progress_log(
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                        format!(
+                            "Validation prep: `{command}` exited {} ({duration}) · {summary}",
+                            done.exit_code
+                        ),
+                    );
+                }
+                EventMsg::Warning(warn) => {
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, warn.message);
+                }
+                EventMsg::Error(err) => {
+                    let message = format!("Validation prep agent error: {}", err.message);
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                    return Err(ValidationTargetPrepFailure { message, logs });
+                }
+                EventMsg::TurnAborted(aborted) => {
+                    let message = format!("Validation prep agent aborted: {:?}", aborted.reason);
+                    push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+                    return Err(ValidationTargetPrepFailure { message, logs });
+                }
+                EventMsg::TokenCount(count) => {
+                    if let Some(info) = count.info {
+                        metrics.record_model_call();
+                        metrics.record_usage(&info.last_token_usage);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let Some(text) = last_agent_message
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+        else {
+            final_text = None;
+            next_prompt = "Your previous message was empty. Respond ONLY with a single JSON object per the required schema (no markdown/prose).".to_string();
+            continue;
+        };
+
+        final_text = Some(text.clone());
+        let parsed = parse_validation_target_prep_output(&text);
+        let exec_count_this_turn = exec_commands.len().saturating_sub(exec_len_before_turn);
+
+        let Some(parsed) = parsed else {
+            next_prompt = "Your previous message was not parseable JSON. Respond ONLY with a single JSON object per the required schema (no markdown/prose).".to_string();
+            continue;
+        };
+
+        let local_ready = parsed.local_build_ok && parsed.local_run_ok;
+        let docker_ready = parsed.docker_build_ok && parsed.docker_run_ok;
+        let docker_attempted = exec_commands.iter().any(|cmd| {
+            cmd.command
+                .lines()
+                .any(|line| line.trim_start().starts_with("docker "))
+        });
+
+        if local_ready
+            && (docker_ready || docker_attempted || turn + 1 == VALIDATION_TARGET_PREP_MAX_TURNS)
+        {
+            break;
+        }
+
+        if exec_count_this_turn == 0 {
+            next_prompt = "You finished without running any commands. This is an execution step: run commands to build and smoke-test a local target and attempt a Docker build+run (or conclusively identify an unfixable blocker), then respond with ONLY the required JSON object.".to_string();
+            continue;
+        }
+
+        if local_ready && !docker_attempted {
+            next_prompt = "Local validation target is ready. Now attempt the Docker-based build+run path (Dockerfile under the output directory). If Docker is unavailable/blocked, report outcome=partial and set docker_* flags accordingly. Respond with ONLY the required JSON object.".to_string();
+            continue;
+        }
+
+        next_prompt = "Not done yet. Keep iterating on build/runtime errors until you can (1) successfully build+run the local target and (2) successfully build+run the Docker target (or conclude Docker is unavailable/blocked and report outcome=partial). Then respond with ONLY the required JSON object.".to_string();
+    }
+
+    let text = match final_text {
+        Some(text) => text,
+        None => {
+            let message = "Validation prep agent produced an empty response.".to_string();
+            push_progress_log(&progress_sender, &log_sink, &mut logs, message.clone());
+            return Err(ValidationTargetPrepFailure { message, logs });
+        }
+    };
+
+    let _ = conversation.submit(Op::Shutdown).await;
+
+    Ok(ValidationTargetPrepAgentOutput {
+        text,
+        logs,
+        exec_commands,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -17129,11 +21252,6 @@ async fn run_validation_plan_agent(
     validation_config.developer_instructions = None;
     validation_config.compact_prompt = None;
     validation_config.cwd = repo_root.to_path_buf();
-    validation_config
-        .features
-        .disable(Feature::ApplyPatchFreeform)
-        .disable(Feature::ViewImageTool);
-    validation_config.mcp_servers.clear();
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -17306,11 +21424,6 @@ async fn run_validation_refine_agent(
     refine_config.developer_instructions = None;
     refine_config.compact_prompt = None;
     refine_config.cwd = repo_root.to_path_buf();
-    refine_config
-        .features
-        .disable(Feature::ApplyPatchFreeform)
-        .disable(Feature::ViewImageTool);
-    refine_config.mcp_servers.clear();
 
     let manager = ConversationManager::new(
         auth_manager,
@@ -17486,6 +21599,204 @@ async fn write_validation_snapshot_and_reports(
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+struct ValidationBuildFailure {
+    command: String,
+    summary: String,
+    stdout_path: String,
+    stderr_path: String,
+    output_snippet: Option<String>,
+}
+
+async fn run_validation_build_preflight(
+    repo_root: &Path,
+    work_dir: &Path,
+    progress_sender: &Option<AppEventSender>,
+    logs: &mut Vec<String>,
+) -> Option<ValidationBuildFailure> {
+    fn has_build_script(package_json: &Value) -> bool {
+        package_json
+            .get("scripts")
+            .and_then(Value::as_object)
+            .and_then(|scripts| scripts.get("build"))
+            .and_then(Value::as_str)
+            .is_some_and(|script| !script.trim().is_empty())
+    }
+
+    fn file_stem_for_command(program: &str, args: &[String]) -> String {
+        let mut stem = format!("preflight_{program}");
+        for arg in args.iter().take(3) {
+            stem.push('_');
+            stem.push_str(arg);
+        }
+        stem.chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+            .collect()
+    }
+
+    let has_cargo = repo_root.join("Cargo.toml").exists();
+    let has_go = repo_root.join("go.mod").exists();
+    let has_package_json = repo_root.join("package.json").exists();
+
+    let mut attempts: Vec<Vec<(String, Vec<String>)>> = Vec::new();
+    if has_cargo {
+        attempts.push(vec![(
+            "cargo".to_string(),
+            vec!["build".to_string(), "--locked".to_string()],
+        )]);
+        attempts.push(vec![("cargo".to_string(), vec!["build".to_string()])]);
+    } else if has_go {
+        attempts.push(vec![(
+            "go".to_string(),
+            vec!["build".to_string(), "./...".to_string()],
+        )]);
+    } else if has_package_json {
+        let package_json = tokio_fs::read_to_string(repo_root.join("package.json"))
+            .await
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+        if package_json.as_ref().is_some_and(has_build_script) {
+            let install_cmd = if repo_root.join("package-lock.json").exists() {
+                vec!["ci".to_string()]
+            } else {
+                vec!["install".to_string()]
+            };
+            attempts.push(vec![
+                ("npm".to_string(), install_cmd),
+                (
+                    "npm".to_string(),
+                    vec!["run".to_string(), "build".to_string()],
+                ),
+            ]);
+        }
+    }
+
+    if attempts.is_empty() {
+        return None;
+    }
+
+    push_progress_log(
+        progress_sender,
+        &None,
+        logs,
+        "Validation preflight: compiling the target...".to_string(),
+    );
+
+    let mut last_failure: Option<ValidationBuildFailure> = None;
+    for attempt in attempts {
+        let mut attempt_failure: Option<ValidationBuildFailure> = None;
+        for (program, args) in &attempt {
+            let mut command = Command::new(program);
+            command.args(args).current_dir(repo_root);
+            let command_label = format!(
+                "{} {}",
+                program,
+                args.iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+            push_progress_log(
+                progress_sender,
+                &None,
+                logs,
+                format!("Run: `{command_label}`"),
+            );
+
+            let start = Instant::now();
+            let timeout = Duration::from_secs(VALIDATION_PREFLIGHT_TIMEOUT_SECS);
+            match command_output_with_timeout(command, timeout).await {
+                Ok(CommandOutputOutcome::Completed(output)) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                    if !output.status.success() {
+                        let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
+                        let summary_line = summarize_process_output(false, &stdout, &stderr);
+                        let summary = format!("{summary_line} · {duration_label}");
+                        let snippet = if stderr.trim().is_empty() {
+                            stdout.trim()
+                        } else {
+                            stderr.trim()
+                        };
+                        let output_snippet = if snippet.is_empty() {
+                            None
+                        } else {
+                            Some(truncate_text(snippet, VALIDATION_OUTPUT_GRAPHEMES))
+                        };
+                        let file_stem = file_stem_for_command(program, args);
+                        let (stdout_path, stderr_path) = write_validation_output_files(
+                            work_dir, repo_root, &file_stem, "build", &stdout, &stderr,
+                        )
+                        .await;
+                        attempt_failure = Some(ValidationBuildFailure {
+                            command: command_label,
+                            summary,
+                            stdout_path,
+                            stderr_path,
+                            output_snippet,
+                        });
+                        break;
+                    }
+                }
+                Ok(CommandOutputOutcome::TimedOut) => {
+                    let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
+                    let message = format!(
+                        "Timed out after {duration_label} while running `{command_label}`."
+                    );
+                    let file_stem = file_stem_for_command(program, args);
+                    let (stdout_path, stderr_path) = write_validation_output_files(
+                        work_dir,
+                        repo_root,
+                        &file_stem,
+                        "build",
+                        "",
+                        message.as_str(),
+                    )
+                    .await;
+                    attempt_failure = Some(ValidationBuildFailure {
+                        command: command_label,
+                        summary: message,
+                        stdout_path,
+                        stderr_path,
+                        output_snippet: None,
+                    });
+                    break;
+                }
+                Err(err) => {
+                    let message = format!("Failed to run `{command_label}`: {err}");
+                    let file_stem = file_stem_for_command(program, args);
+                    let (stdout_path, stderr_path) = write_validation_output_files(
+                        work_dir, repo_root, &file_stem, "build", "", &message,
+                    )
+                    .await;
+                    attempt_failure = Some(ValidationBuildFailure {
+                        command: command_label,
+                        summary: message,
+                        stdout_path,
+                        stderr_path,
+                        output_snippet: None,
+                    });
+                    break;
+                }
+            }
+        }
+
+        if attempt_failure.is_none() {
+            push_progress_log(
+                progress_sender,
+                &None,
+                logs,
+                "Validation preflight succeeded.".to_string(),
+            );
+            return None;
+        }
+
+        last_failure = attempt_failure;
+    }
+
+    last_failure
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_asan_validation(
     repo_path: PathBuf,
@@ -17500,6 +21811,8 @@ async fn run_asan_validation(
     auth_manager: Arc<AuthManager>,
     progress_sender: Option<AppEventSender>,
     metrics: Arc<ReviewMetrics>,
+    web_target_url: Option<String>,
+    web_creds_path: Option<PathBuf>,
 ) -> Result<(), BugVerificationFailure> {
     let mut logs: Vec<String> = Vec::new();
 
@@ -17556,17 +21869,107 @@ async fn run_asan_validation(
     let mut testing_md = tokio_fs::read_to_string(&testing_path)
         .await
         .unwrap_or_default();
-    if testing_md.trim().is_empty() {
-        write_testing_instructions(&repo_path, &specs_root, progress_sender.clone(), None).await;
+
+    let generated_creds_path = specs_root.join(WEB_VALIDATION_CREDS_FILE_NAME);
+    let web_validation = {
+        let target_raw = web_target_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        match target_raw {
+            Some(raw) => match normalize_web_validation_base_url(raw) {
+                Ok(base_url) => {
+                    let headers = if let Some(path) = web_creds_path.as_ref() {
+                        match tokio_fs::read_to_string(path).await {
+                            Ok(contents) => parse_web_validation_creds(&contents),
+                            Err(err) => {
+                                push_progress_log(
+                                    &progress_sender,
+                                    &None,
+                                    &mut logs,
+                                    format!(
+                                        "Failed to read creds file {}: {err}. Continuing without creds.",
+                                        path.display()
+                                    ),
+                                );
+                                Vec::new()
+                            }
+                        }
+                    } else {
+                        Vec::new()
+                    };
+                    Some(WebValidationConfig {
+                        base_url,
+                        redactions: redactions_for_headers(&headers),
+                        headers,
+                    })
+                }
+                Err(err) => {
+                    push_progress_log(
+                        &progress_sender,
+                        &None,
+                        &mut logs,
+                        format!("Web validation disabled: {err}."),
+                    );
+                    None
+                }
+            },
+            None => None,
+        }
+    };
+
+    if let Some(web_validation) = web_validation.as_ref() {
+        let generated_headers = match tokio_fs::read_to_string(&generated_creds_path).await {
+            Ok(contents) => parse_web_validation_creds(&contents),
+            Err(_) => Vec::new(),
+        };
+        let target_section_lines = build_web_validation_target_section_lines(
+            &repo_path,
+            &web_validation.base_url,
+            web_creds_path.as_deref(),
+            &web_validation.headers,
+            &generated_creds_path,
+            &generated_headers,
+        );
+
+        apply_validation_target_md_section(
+            &testing_path,
+            &repo_path,
+            &target_section_lines,
+            &progress_sender,
+            &mut logs,
+        )
+        .await;
+
         testing_md = tokio_fs::read_to_string(&testing_path)
             .await
             .unwrap_or_default();
     }
+
     let mut testing_md_context =
         trim_prompt_context(&testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
 
+    let web_validation_context = if let Some(web_validation) = web_validation.as_ref() {
+        let header_names = if web_validation.headers.is_empty() {
+            "(none)".to_string()
+        } else {
+            web_validation
+                .headers
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        format!(
+            "- enabled: true\n- target_url: {}\n- headers: {header_names}\n- notes: only request this origin; header values are available but must not be printed",
+            web_validation.base_url.as_str()
+        )
+    } else {
+        "- enabled: false (no target URL provided)".to_string()
+    };
+
     // Build prompt
-    let findings = build_validation_findings_context(&snapshot);
+    let findings = build_validation_findings_context(&snapshot, web_validation.is_some());
     let finding_map: HashMap<BugIdentifier, ValidationFinding> = findings
         .findings
         .iter()
@@ -17613,11 +22016,26 @@ async fn run_asan_validation(
         let model = model.clone();
         let repo_root = repo_path.clone();
         let testing_md_context = testing_md_context.clone();
+        let web_validation_context = web_validation_context.clone();
         async move {
-            let ValidationFinding { id, label, context } = finding;
+            let ValidationFinding {
+                id,
+                label,
+                context,
+                prompt_kind,
+            } = finding;
+            let validation_focus = match prompt_kind {
+                ValidationPromptKind::Crash => VALIDATION_FOCUS_CRASH,
+                ValidationPromptKind::RceBin => VALIDATION_FOCUS_RCE_BIN,
+                ValidationPromptKind::Ssrf => VALIDATION_FOCUS_SSRF,
+                ValidationPromptKind::Crypto => VALIDATION_FOCUS_CRYPTO,
+                ValidationPromptKind::Generic => VALIDATION_FOCUS_GENERIC,
+            };
             let prompt = VALIDATION_PLAN_PROMPT_TEMPLATE
+                .replace("{validation_focus}", validation_focus)
                 .replace("{findings}", &context)
-                .replace("{testing_md}", &testing_md_context);
+                .replace("{testing_md}", &testing_md_context)
+                .replace("{web_validation}", &web_validation_context);
             let result = run_validation_plan_agent(
                 config,
                 &provider,
@@ -17638,7 +22056,7 @@ async fn run_asan_validation(
     .collect::<Vec<_>>()
     .await;
 
-    let mut testing_md_additions: Vec<String> = Vec::new();
+    let mut testing_md_additions: HashMap<BugIdentifier, String> = HashMap::new();
     for (id, label, result) in planning_results {
         let Some(index) = find_bug_index(&snapshot, id) else {
             continue;
@@ -17666,7 +22084,7 @@ async fn run_asan_validation(
                     .map(str::trim_end)
                     .filter(|s| !s.trim().is_empty())
                 {
-                    testing_md_additions.push(additions.to_string());
+                    testing_md_additions.insert(id, additions.to_string());
                 }
                 let Some(tool_raw) = parsed
                     .tool
@@ -17735,18 +22153,53 @@ async fn run_asan_validation(
                             script_inline: Some(script.to_string()),
                         });
                     }
-                    "curl" | "playwright" => {
-                        if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
-                            mark_unable(
-                                entry,
-                                tool_raw,
-                                format!(
-                                    "Validation planning requested `{tool_raw}`, but web/API validation is disabled in this mode; no validation was run."
-                                ),
-                                &mut logs,
-                            );
+                    "curl" | "playwright" => match web_validation.as_ref() {
+                        None => {
+                            if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
+                                mark_unable(
+                                    entry,
+                                    tool_raw,
+                                    format!(
+                                        "Validation planning requested `{tool_raw}`, but web validation is disabled (no --target-url provided); no validation was run."
+                                    ),
+                                    &mut logs,
+                                );
+                            }
                         }
-                    }
+                        Some(web_validation) => {
+                            let target = match resolve_web_validation_target(
+                                &web_validation.base_url,
+                                parsed.target.as_deref(),
+                            ) {
+                                Ok(url) => url.as_str().to_string(),
+                                Err(err) => {
+                                    if matches!(
+                                        entry.bug.validation.status,
+                                        BugValidationStatus::Pending
+                                    ) {
+                                        mark_unable(
+                                            entry,
+                                            tool_raw,
+                                            format!("Invalid web validation target: {err}"),
+                                            &mut logs,
+                                        );
+                                    }
+                                    continue;
+                                }
+                            };
+                            let tool = match tool_raw.to_ascii_lowercase().as_str() {
+                                "curl" => BugVerificationTool::Curl,
+                                _ => BugVerificationTool::Playwright,
+                            };
+                            requests.push(BugVerificationRequest {
+                                id,
+                                tool,
+                                target: Some(target),
+                                script_path: None,
+                                script_inline: None,
+                            });
+                        }
+                    },
                     other => {
                         if matches!(entry.bug.validation.status, BugValidationStatus::Pending) {
                             mark_unable(
@@ -17798,20 +22251,6 @@ async fn run_asan_validation(
         }
     }
 
-    apply_validation_testing_md_additions(
-        &testing_path,
-        &repo_path,
-        &testing_md_additions,
-        &progress_sender,
-        &mut logs,
-    )
-    .await;
-    let updated_testing_md = tokio_fs::read_to_string(&testing_path)
-        .await
-        .unwrap_or_default();
-    testing_md_context =
-        trim_prompt_context(&updated_testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
-
     let planned_snapshot = snapshot.clone();
     let requested_ids: Vec<BugIdentifier> = requests.iter().map(|req| req.id).collect();
 
@@ -17820,222 +22259,24 @@ async fn run_asan_validation(
         bugs_path,
         report_path,
         report_html_path,
-        repo_path,
+        repo_path: repo_path.clone(),
         work_dir,
         requests,
+        web_validation: web_validation.clone(),
     };
 
     let mut verification_failed: Option<String> = None;
     if batch.requests.is_empty() {
         logs.push("No validation checks to execute.".to_string());
     } else {
-        #[derive(Clone, Debug)]
-        struct ValidationBuildFailure {
-            command: String,
-            summary: String,
-            stdout_path: String,
-            stderr_path: String,
-            output_snippet: Option<String>,
-        }
-
-        async fn run_validation_build_preflight(
-            repo_root: &Path,
-            work_dir: &Path,
-            progress_sender: &Option<AppEventSender>,
-            logs: &mut Vec<String>,
-        ) -> Option<ValidationBuildFailure> {
-            fn has_build_script(package_json: &Value) -> bool {
-                package_json
-                    .get("scripts")
-                    .and_then(Value::as_object)
-                    .and_then(|scripts| scripts.get("build"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|s| !s.trim().is_empty())
-            }
-
-            fn file_stem_for_command(program: &str, args: &[String]) -> String {
-                let mut stem = format!("preflight_{program}");
-                for arg in args.iter().take(3) {
-                    stem.push('_');
-                    stem.push_str(arg);
-                }
-                stem.chars()
-                    .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-                    .collect()
-            }
-
-            let has_cargo = repo_root.join("Cargo.toml").exists();
-            let has_go = repo_root.join("go.mod").exists();
-            let has_package_json = repo_root.join("package.json").exists();
-
-            let mut attempts: Vec<Vec<(String, Vec<String>)>> = Vec::new();
-            if has_cargo {
-                attempts.push(vec![(
-                    "cargo".to_string(),
-                    vec!["build".to_string(), "--locked".to_string()],
-                )]);
-                attempts.push(vec![("cargo".to_string(), vec!["build".to_string()])]);
-            } else if has_go {
-                attempts.push(vec![(
-                    "go".to_string(),
-                    vec!["build".to_string(), "./...".to_string()],
-                )]);
-            } else if has_package_json {
-                let package_json = tokio_fs::read_to_string(repo_root.join("package.json"))
-                    .await
-                    .ok()
-                    .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
-                if package_json.as_ref().is_some_and(has_build_script) {
-                    let install_cmd = if repo_root.join("package-lock.json").exists() {
-                        vec!["ci".to_string()]
-                    } else {
-                        vec!["install".to_string()]
-                    };
-                    attempts.push(vec![
-                        ("npm".to_string(), install_cmd),
-                        (
-                            "npm".to_string(),
-                            vec!["run".to_string(), "build".to_string()],
-                        ),
-                    ]);
-                }
-            }
-
-            if attempts.is_empty() {
-                return None;
-            }
-
-            push_progress_log(
-                progress_sender,
-                &None,
-                logs,
-                "Validation preflight: compiling the target...".to_string(),
-            );
-
-            let mut last_failure: Option<ValidationBuildFailure> = None;
-            for attempt in attempts {
-                let mut attempt_failure: Option<ValidationBuildFailure> = None;
-                for (program, args) in &attempt {
-                    let mut command = Command::new(program);
-                    command.args(args).current_dir(repo_root);
-                    let command_label = format!(
-                        "{} {}",
-                        program,
-                        args.iter()
-                            .map(String::as_str)
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    );
-                    push_progress_log(
-                        progress_sender,
-                        &None,
-                        logs,
-                        format!("Run: `{command_label}`"),
-                    );
-
-                    let start = Instant::now();
-                    let timeout = Duration::from_secs(VALIDATION_PREFLIGHT_TIMEOUT_SECS);
-                    match command_output_with_timeout(command, timeout).await {
-                        Ok(CommandOutputOutcome::Completed(output)) => {
-                            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                            let success = output.status.success();
-                            if !success {
-                                let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
-                                let summary_line =
-                                    summarize_process_output(false, &stdout, &stderr);
-                                let summary = format!("{summary_line} · {duration_label}");
-                                let snippet = if stderr.trim().is_empty() {
-                                    stdout.trim()
-                                } else {
-                                    stderr.trim()
-                                };
-                                let output_snippet = if snippet.is_empty() {
-                                    None
-                                } else {
-                                    Some(truncate_text(snippet, VALIDATION_OUTPUT_GRAPHEMES))
-                                };
-                                let file_stem = file_stem_for_command(program, args);
-                                let (stdout_path, stderr_path) = write_validation_output_files(
-                                    work_dir, repo_root, &file_stem, "build", &stdout, &stderr,
-                                )
-                                .await;
-                                attempt_failure = Some(ValidationBuildFailure {
-                                    command: command_label,
-                                    summary,
-                                    stdout_path,
-                                    stderr_path,
-                                    output_snippet,
-                                });
-                                break;
-                            }
-                        }
-                        Ok(CommandOutputOutcome::TimedOut) => {
-                            let duration_label = fmt_elapsed_compact(start.elapsed().as_secs());
-                            let message = format!(
-                                "Timed out after {duration_label} while running `{command_label}`."
-                            );
-                            let file_stem = file_stem_for_command(program, args);
-                            let (stdout_path, stderr_path) = write_validation_output_files(
-                                work_dir,
-                                repo_root,
-                                &file_stem,
-                                "build",
-                                "",
-                                message.as_str(),
-                            )
-                            .await;
-                            attempt_failure = Some(ValidationBuildFailure {
-                                command: command_label,
-                                summary: message,
-                                stdout_path,
-                                stderr_path,
-                                output_snippet: None,
-                            });
-                            break;
-                        }
-                        Err(err) => {
-                            let message = format!("Failed to run `{command_label}`: {err}");
-                            let file_stem = file_stem_for_command(program, args);
-                            let (stdout_path, stderr_path) = write_validation_output_files(
-                                work_dir, repo_root, &file_stem, "build", "", &message,
-                            )
-                            .await;
-                            attempt_failure = Some(ValidationBuildFailure {
-                                command: command_label,
-                                summary: message,
-                                stdout_path,
-                                stderr_path,
-                                output_snippet: None,
-                            });
-                            break;
-                        }
-                    }
-                }
-
-                if attempt_failure.is_none() {
-                    push_progress_log(
-                        progress_sender,
-                        &None,
-                        logs,
-                        "Validation preflight succeeded.".to_string(),
-                    );
-                    return None;
-                }
-
-                last_failure = attempt_failure;
-            }
-
-            last_failure
-        }
-
-        if let Some(build_failure) = run_validation_build_preflight(
-            batch.repo_path.as_path(),
-            &batch.work_dir,
-            &progress_sender,
-            &mut logs,
-        )
-        .await
+        if batch.web_validation.is_none()
+            && let Some(build_failure) = run_validation_build_preflight(
+                batch.repo_path.as_path(),
+                &batch.work_dir,
+                &progress_sender,
+                &mut logs,
+            )
+            .await
         {
             let note = format!(
                 "Validation preflight failed; recording UnableToValidate statuses: {}",
@@ -18114,6 +22355,45 @@ async fn run_asan_validation(
         .and_then(|bytes| serde_json::from_slice(bytes).ok())
         .unwrap_or_else(|| planned_snapshot.clone());
 
+    if verification_failed.is_none() {
+        let mut applied_testing_md_additions: Vec<String> = Vec::new();
+        for request in &batch.requests {
+            if !matches!(request.tool, BugVerificationTool::Python) {
+                continue;
+            }
+            let Some(index) = find_bug_index(&snapshot, request.id) else {
+                continue;
+            };
+            let status = snapshot.bugs[index].bug.validation.status;
+            if !matches!(
+                status,
+                BugValidationStatus::Passed | BugValidationStatus::Failed
+            ) {
+                continue;
+            }
+            let Some(additions) = testing_md_additions.get(&request.id) else {
+                continue;
+            };
+            applied_testing_md_additions.push(additions.to_string());
+        }
+
+        if !applied_testing_md_additions.is_empty() {
+            apply_validation_testing_md_additions(
+                &testing_path,
+                &repo_path,
+                &applied_testing_md_additions,
+                &progress_sender,
+                &mut logs,
+            )
+            .await;
+            let updated_testing_md = tokio_fs::read_to_string(&testing_path)
+                .await
+                .unwrap_or_default();
+            testing_md_context =
+                trim_prompt_context(&updated_testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
+        }
+    }
+
     for id in &findings.ids {
         let Some(planned_index) = find_bug_index(&planned_snapshot, *id) else {
             continue;
@@ -18162,6 +22442,35 @@ async fn run_asan_validation(
             )));
         }
         return Ok(());
+    }
+
+    if let Some(web_validation) = web_validation.as_ref() {
+        let generated_headers = match tokio_fs::read_to_string(&generated_creds_path).await {
+            Ok(contents) => parse_web_validation_creds(&contents),
+            Err(_) => Vec::new(),
+        };
+        let target_section_lines = build_web_validation_target_section_lines(
+            &repo_path,
+            &web_validation.base_url,
+            web_creds_path.as_deref(),
+            &web_validation.headers,
+            &generated_creds_path,
+            &generated_headers,
+        );
+        apply_validation_target_md_section(
+            &testing_path,
+            &repo_path,
+            &target_section_lines,
+            &progress_sender,
+            &mut logs,
+        )
+        .await;
+
+        let updated_testing_md = tokio_fs::read_to_string(&testing_path)
+            .await
+            .unwrap_or_default();
+        testing_md_context =
+            trim_prompt_context(&updated_testing_md, VALIDATION_TESTING_CONTEXT_MAX_CHARS);
     }
 
     let build_validation_state_prompt = |state: &BugValidationState| -> String {
@@ -18235,6 +22544,9 @@ async fn run_asan_validation(
             let index = find_bug_index(&snapshot, id)?;
             let entry = snapshot.bugs.get(index)?;
             if entry.bug.validation.tool.as_deref() != Some("python") {
+                return None;
+            }
+            if entry.bug.validation.status != BugValidationStatus::Passed {
                 return None;
             }
             let finding = finding_map.get(&id)?;
@@ -18688,7 +23000,7 @@ fn normalize_reasoning_effort_for_model(
     model: &str,
     requested: Option<ReasoningEffort>,
 ) -> Option<ReasoningEffort> {
-    if !model.starts_with("gpt-5-codex") {
+    if !model.starts_with("gpt-5") || !model.contains("codex") {
         return requested;
     }
 
@@ -19075,39 +23387,50 @@ fn parse_responses_stream_output(
     let mut fallback: Option<serde_json::Value> = None;
     let mut failed_error: Option<String> = None;
     let mut last_parse_error: Option<String> = None;
+    let mut saw_output_delta = false;
 
     let mut data_buffer = String::new();
+    let mut event_name: Option<String> = None;
 
     for raw_line in body.lines() {
         let line = raw_line.trim_end_matches('\r');
 
-        if let Some(rest) = line.strip_prefix("data:") {
+        if let Some(rest) = line.strip_prefix("event:") {
+            event_name = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("data:") {
             if !data_buffer.is_empty() {
                 data_buffer.push('\n');
             }
             data_buffer.push_str(rest.trim_start());
-        } else if line.trim().is_empty() && !data_buffer.is_empty() {
-            handle_responses_event(
-                &data_buffer,
-                &mut combined,
-                &mut reasoning,
-                &mut fallback,
-                &mut failed_error,
-                &mut last_parse_error,
-                metrics,
-            );
-            data_buffer.clear();
+        } else if line.trim().is_empty() {
+            if !data_buffer.is_empty() {
+                handle_responses_event(
+                    &data_buffer,
+                    event_name.as_deref(),
+                    &mut combined,
+                    &mut reasoning,
+                    &mut fallback,
+                    &mut failed_error,
+                    &mut last_parse_error,
+                    &mut saw_output_delta,
+                    metrics,
+                );
+                data_buffer.clear();
+            }
+            event_name = None;
         }
     }
 
     if !data_buffer.is_empty() {
         handle_responses_event(
             &data_buffer,
+            event_name.as_deref(),
             &mut combined,
             &mut reasoning,
             &mut fallback,
             &mut failed_error,
             &mut last_parse_error,
+            &mut saw_output_delta,
             metrics,
         );
     }
@@ -19136,13 +23459,96 @@ fn parse_responses_stream_output(
 
 fn handle_responses_event(
     data: &str,
+    event_name: Option<&str>,
     combined: &mut String,
     reasoning: &mut String,
     fallback: &mut Option<serde_json::Value>,
     failed_error: &mut Option<String>,
     last_parse_error: &mut Option<String>,
+    saw_output_delta: &mut bool,
     metrics: &ReviewMetrics,
 ) {
+    fn append_text(target: &mut String, text: &str) {
+        if !text.is_empty() {
+            target.push_str(text);
+        }
+    }
+
+    fn extract_text_from_output_item(item: &serde_json::Value) -> Option<String> {
+        match item.get("type").and_then(|t| t.as_str()) {
+            Some("output_text") | Some("text") => item
+                .get("text")
+                .and_then(|t| t.as_str())
+                .filter(|t| !t.is_empty())
+                .map(ToString::to_string),
+            Some("message") => {
+                let Some(content) = item.get("content").and_then(|c| c.as_array()) else {
+                    return None;
+                };
+                let mut combined = String::new();
+                for block in content {
+                    match block.get("type").and_then(|t| t.as_str()) {
+                        Some("text") | Some("output_text") => {
+                            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                combined.push_str(text);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if combined.is_empty() {
+                    None
+                } else {
+                    Some(combined)
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn append_chat_completions_delta(event: &serde_json::Value, combined: &mut String) -> bool {
+        let Some(choices) = event.get("choices").and_then(|v| v.as_array()) else {
+            return false;
+        };
+        let mut appended = false;
+        for choice in choices {
+            if let Some(delta) = choice.get("delta") {
+                if let Some(content) = delta
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .filter(|c| !c.is_empty())
+                {
+                    combined.push_str(content);
+                    appended = true;
+                } else if let Some(text) = delta
+                    .get("text")
+                    .and_then(|c| c.as_str())
+                    .filter(|c| !c.is_empty())
+                {
+                    combined.push_str(text);
+                    appended = true;
+                }
+            }
+            if let Some(content) = choice
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(|c| c.as_str())
+                .filter(|c| !c.is_empty())
+            {
+                combined.push_str(content);
+                appended = true;
+            } else if let Some(text) = choice
+                .get("text")
+                .and_then(|t| t.as_str())
+                .filter(|t| !t.is_empty())
+            {
+                combined.push_str(text);
+                appended = true;
+            }
+        }
+        appended
+    }
+
     let trimmed = data.trim();
     if trimmed.is_empty() || trimmed == "[DONE]" {
         return;
@@ -19150,14 +23556,61 @@ fn handle_responses_event(
 
     match serde_json::from_str::<serde_json::Value>(trimmed) {
         Ok(event) => {
-            let Some(kind) = event.get("type").and_then(|v| v.as_str()) else {
+            let Some(kind) = event.get("type").and_then(|v| v.as_str()).or(event_name) else {
+                if append_chat_completions_delta(&event, combined) {
+                    *saw_output_delta = true;
+                    return;
+                }
+                if failed_error.is_none()
+                    && let Some(message) = event
+                        .get("error")
+                        .and_then(|err| err.get("message"))
+                        .and_then(|m| m.as_str())
+                {
+                    *failed_error = Some(message.to_string());
+                }
                 return;
             };
 
             match kind {
                 "response.output_text.delta" => {
                     if let Some(delta) = event.get("delta").and_then(|v| v.as_str()) {
-                        combined.push_str(delta);
+                        append_text(combined, delta);
+                        *saw_output_delta = true;
+                    } else if let Some(delta_obj) = event.get("delta").and_then(|v| v.as_object()) {
+                        if let Some(text) = delta_obj.get("text").and_then(|v| v.as_str()) {
+                            append_text(combined, text);
+                            *saw_output_delta = true;
+                        } else if let Some(content) =
+                            delta_obj.get("content").and_then(|v| v.as_array())
+                        {
+                            for block in content {
+                                if let Some(text) = block.get("text").and_then(|v| v.as_str()) {
+                                    append_text(combined, text);
+                                    *saw_output_delta = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                "response.output_text.done" => {
+                    if !*saw_output_delta
+                        && let Some(text) = event
+                            .get("text")
+                            .and_then(|v| v.as_str())
+                            .or_else(|| event.get("delta").and_then(|v| v.as_str()))
+                        && text.trim().len() >= combined.trim().len()
+                    {
+                        combined.clear();
+                        combined.push_str(text);
+                    }
+                }
+                "response.output_item.added" | "response.output_item.done" => {
+                    if !*saw_output_delta
+                        && let Some(item) = event.get("item")
+                        && let Some(text) = extract_text_from_output_item(item)
+                    {
+                        combined.push_str(&text);
                     }
                 }
                 "response.reasoning_text.delta" | "response.reasoning_summary_text.delta" => {
@@ -19266,10 +23719,57 @@ fn handle_responses_event(
             }
         }
         Err(err) => {
+            if let Some(kind) = event_name {
+                match kind {
+                    "response.output_text.delta" => {
+                        append_text(combined, trimmed);
+                        *saw_output_delta = true;
+                        return;
+                    }
+                    "response.reasoning_text.delta" | "response.reasoning_summary_text.delta" => {
+                        append_text(reasoning, trimmed);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
             if last_parse_error.is_none() {
                 *last_parse_error = Some(format!("failed to parse SSE event: {err}"));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod responses_stream_parse_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn parses_chat_completions_style_sse() {
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let metrics = ReviewMetrics::default();
+        let output = parse_responses_stream_output(body, &metrics).expect("parsed output");
+        assert_eq!(output.text, "Hello world");
+    }
+
+    #[test]
+    fn parses_sse_event_name_without_type_field() {
+        let body = concat!(
+            "event: response.output_text.delta\n",
+            "data: {\"delta\":\"1\"}\n\n",
+            "event: response.output_text.delta\n",
+            "data: {\"delta\":\"2\"}\n\n",
+            "event: response.completed\n",
+            "data: {\"response\":{\"output\":[{\"type\":\"output_text\",\"text\":\"12\"}]}}\n\n",
+        );
+        let metrics = ReviewMetrics::default();
+        let output = parse_responses_stream_output(body, &metrics).expect("parsed output");
+        assert_eq!(output.text, "12");
     }
 }
 

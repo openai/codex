@@ -459,6 +459,13 @@ impl TranscriptOverlay {
 
     pub(crate) fn insert_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         let follow_bottom = self.view.is_scrolled_to_bottom();
+        if cell.as_any().is::<crate::history_cell::PlanUpdateCell>() {
+            self.cells.retain(|existing| {
+                !existing
+                    .as_any()
+                    .is::<crate::history_cell::PlanUpdateCell>()
+            });
+        }
         self.cells.push(cell);
         self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
         if follow_bottom {

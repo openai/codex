@@ -134,9 +134,12 @@ use crate::security_review::SecurityReviewLogSink;
 use crate::security_review::SecurityReviewMetadata;
 use crate::security_review::SecurityReviewMode;
 use crate::security_review::SecurityReviewRequest;
+use crate::security_review::SecurityReviewRerunResult;
+use crate::security_review::SecurityReviewRerunTarget;
 use crate::security_review::SecurityReviewResult;
 use crate::security_review::build_follow_up_user_prompt;
 use crate::security_review::read_security_review_metadata;
+use crate::security_review::rerun_prepare_validation_targets;
 use crate::security_review::run_security_review;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
@@ -160,7 +163,6 @@ use codex_common::approval_presets::builtin_approval_presets;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
-use codex_core::config::log_dir;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
@@ -396,6 +398,7 @@ pub(crate) struct ChatWidget {
     needs_final_message_separator: bool,
 
     security_review_task: Option<JoinHandle<()>>,
+    security_review_rerun_task: Option<JoinHandle<()>>,
     security_review_context: Option<SecurityReviewContext>,
     security_review_artifacts: Option<SecurityReviewArtifactsState>,
     security_review_follow_up: Option<SecurityReviewFollowUpState>,
@@ -505,6 +508,48 @@ fn build_percent_prefix(percent: u8) -> String {
     format!("{pct}% {bar} ")
 }
 
+fn tail_security_review_log_messages(
+    path: &Path,
+    max_bytes: usize,
+    max_lines: usize,
+) -> Vec<String> {
+    let bytes = fs::read(path).ok();
+    let Some(bytes) = bytes else {
+        return Vec::new();
+    };
+    let bytes = if bytes.len() > max_bytes {
+        &bytes[bytes.len().saturating_sub(max_bytes)..]
+    } else {
+        bytes.as_slice()
+    };
+    let text = String::from_utf8_lossy(bytes);
+    let mut lines: Vec<&str> = text.lines().collect();
+    if lines.len() > max_lines {
+        lines = lines[lines.len().saturating_sub(max_lines)..].to_vec();
+    }
+    lines
+        .into_iter()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            let message = trimmed
+                .split_once(' ')
+                .map(|(_, rest)| rest)
+                .unwrap_or(trimmed)
+                .trim();
+            (!message.is_empty()).then(|| message.to_string())
+        })
+        .collect()
+}
+
+fn security_review_overall_progress_percent(output_root: &Path) -> Option<u8> {
+    let checkpoint = crate::security_review::load_checkpoint(output_root)?;
+    let snapshot = crate::security_review::resume_progress_snapshot(&checkpoint, output_root);
+    u8::try_from(snapshot.percent.min(100)).ok()
+}
+
 fn humanize_age(duration: time::Duration) -> Option<String> {
     let secs = duration.whole_seconds();
     if secs < 0 {
@@ -528,6 +573,14 @@ fn humanize_age(duration: time::Duration) -> Option<String> {
 fn parse_timestamp_from_folder(folder: &str) -> Option<OffsetDateTime> {
     let fmt = format_description!("[year][month][day]-[hour][minute][second]");
     OffsetDateTime::parse(folder, &fmt).ok()
+}
+
+fn format_review_datetime(dt: OffsetDateTime) -> String {
+    let fmt = format_description!("[year]-[month]-[day] [hour]:[minute]:[second]");
+    let utc = dt.to_offset(time::UtcOffset::UTC);
+    utc.format(&fmt)
+        .map(|value| format!("{value}Z"))
+        .unwrap_or_else(|_| utc.to_string())
 }
 
 #[derive(Clone)]
@@ -688,7 +741,7 @@ impl ChatWidget {
             let scope_summary = Self::scope_summary_label(&candidate.metadata.scope_paths);
             let age = candidate.age_label.clone();
             items.push(SelectionItem {
-                name: format!("Resume {}", candidate.folder_name),
+                name: format!("View {}", candidate.folder_name),
                 description: Some(format!(
                     "Mode: {} • Scope: {} • Age: {}",
                     candidate.metadata.mode.as_str(),
@@ -709,7 +762,7 @@ impl ChatWidget {
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Existing security review(s) found".to_string()),
-            subtitle: Some("Pick a completed review to resume or start fresh".to_string()),
+            subtitle: Some("Pick a completed review to view or start fresh".to_string()),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -721,20 +774,12 @@ impl ChatWidget {
         mode: SecurityReviewMode,
         include_paths: Vec<String>,
         scope_prompt: Option<String>,
-        candidate: RunningSecurityReviewCandidate,
+        candidates: Vec<RunningSecurityReviewCandidate>,
         completed: Vec<SecurityReviewResumeCandidate>,
     ) {
+        const MAX_RUNNING_REVIEWS_IN_MENU: usize = 5;
+
         let repo_path = self.config.cwd.clone();
-        let display_path = display_path_for(&candidate.output_root, &repo_path);
-        let scope_summary = Self::scope_summary_label(&candidate.checkpoint.scope_display_paths);
-        let step_summary = candidate
-            .checkpoint
-            .plan_statuses
-            .iter()
-            .find(|(_, status)| matches!(status, StepStatus::InProgress))
-            .map(|(slug, _)| slug.clone())
-            .or_else(|| candidate.checkpoint.last_log.clone())
-            .unwrap_or_else(|| "pending".to_string());
 
         let include_paths_for_retry = include_paths;
         let scope_prompt_for_retry = scope_prompt;
@@ -756,29 +801,56 @@ impl ChatWidget {
             ..Default::default()
         });
 
-        let resume_candidate = candidate;
-        items.push(SelectionItem {
-            name: "Resume in-progress security review".to_string(),
-            description: Some(format!(
-                "Mode: {} • Scope: {} • Step: {}",
-                resume_candidate.checkpoint.mode.as_str(),
-                scope_summary,
-                step_summary
-            )),
-            actions: vec![Box::new(move |tx: &AppEventSender| {
-                tx.send(AppEvent::StartSecurityReview {
-                    mode: resume_candidate.checkpoint.mode,
-                    include_paths: Vec::new(),
-                    scope_prompt: None,
-                    linear_issue: None,
-                    force_new: false,
-                    resume_from: Some(resume_candidate.output_root.clone()),
-                });
-            })],
-            dismiss_on_select: true,
-            search_value: Some(display_path.clone()),
-            ..Default::default()
-        });
+        let mut candidates = candidates;
+        candidates.sort_by(|a, b| b.checkpoint.started_at.cmp(&a.checkpoint.started_at));
+        let total_running = candidates.len();
+        let shown_running = total_running.min(MAX_RUNNING_REVIEWS_IN_MENU);
+        for candidate in candidates.into_iter().take(MAX_RUNNING_REVIEWS_IN_MENU) {
+            let display_path = display_path_for(&candidate.output_root, &repo_path);
+            let folder_name = candidate
+                .output_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("security review")
+                .to_string();
+            let scope_summary =
+                Self::scope_summary_label(&candidate.checkpoint.scope_display_paths);
+            let progress = crate::security_review::resume_progress_snapshot(
+                &candidate.checkpoint,
+                &candidate.output_root,
+            );
+            let current_step = progress
+                .current_step
+                .unwrap_or_else(|| "pending".to_string());
+            let progress_detail = progress
+                .detail
+                .as_ref()
+                .map(|detail| format!(" • {detail}"))
+                .unwrap_or_default();
+            let started_at = format_review_datetime(candidate.checkpoint.started_at);
+            let mode_label = candidate.checkpoint.mode.as_str();
+
+            items.push(SelectionItem {
+                name: format!("Resume in-progress {folder_name}"),
+                description: Some(format!(
+                    "{started_at} • Mode: {mode_label} • Scope: {scope_summary} • Progress: {}% ({}/{}) • Current: {current_step}{progress_detail}",
+                    progress.percent, progress.completed_steps, progress.total_steps,
+                )),
+                actions: vec![Box::new(move |tx: &AppEventSender| {
+                    tx.send(AppEvent::StartSecurityReview {
+                        mode: candidate.checkpoint.mode,
+                        include_paths: Vec::new(),
+                        scope_prompt: None,
+                        linear_issue: None,
+                        force_new: false,
+                        resume_from: Some(candidate.output_root.clone()),
+                    });
+                })],
+                dismiss_on_select: true,
+                search_value: Some(display_path),
+                ..Default::default()
+            });
+        }
 
         for candidate in completed {
             let scope_summary = Self::scope_summary_label(&candidate.metadata.scope_paths);
@@ -786,7 +858,7 @@ impl ChatWidget {
             let display_path = display_path_for(&candidate.output_root, &repo_path);
             let mode_label = candidate.metadata.mode.as_str();
             items.push(SelectionItem {
-                name: format!("Resume {}", candidate.folder_name),
+                name: format!("View {}", candidate.folder_name),
                 description: Some(format!(
                     "Mode: {mode_label} • Scope: {scope_summary} • Age: {age}"
                 )),
@@ -803,8 +875,10 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("In-progress security review found".to_string()),
-            subtitle: Some(format!("Latest output at {display_path}")),
+            title: Some("In-progress security review(s) found".to_string()),
+            subtitle: Some(format!(
+                "Showing {shown_running} of {total_running} in-progress review(s)"
+            )),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             ..Default::default()
@@ -2132,6 +2206,7 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             security_review_task: None,
+            security_review_rerun_task: None,
             security_review_context: None,
             security_review_artifacts: None,
             security_review_follow_up: None,
@@ -2228,6 +2303,7 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             security_review_task: None,
+            security_review_rerun_task: None,
             security_review_context: None,
             security_review_artifacts: None,
             security_review_follow_up: None,
@@ -2404,6 +2480,12 @@ impl ChatWidget {
             }
             SlashCommand::SecReview => {
                 self.open_security_review_popup();
+            }
+            SlashCommand::Rerun => {
+                self.add_info_message(
+                    "Usage: /rerun <target>".to_string(),
+                    Some("Available targets:\n- prepare-validation-targets".to_string()),
+                );
             }
             SlashCommand::Model => {
                 self.open_model_popup();
@@ -2617,6 +2699,36 @@ impl ChatWidget {
             self.submit_op(Op::RunUserShellCommand {
                 command: cmd.to_string(),
             });
+            return;
+        }
+
+        // Special-case: "/rerun <target>" reruns a security review step locally.
+        if let Some(rest) = text.strip_prefix("/rerun")
+            && (rest.is_empty() || rest.starts_with(|ch: char| ch.is_whitespace()))
+        {
+            let args = rest.trim();
+            if args.is_empty() {
+                self.add_info_message(
+                    "Usage: /rerun <target>".to_string(),
+                    Some("Available targets:\n- prepare-validation-targets".to_string()),
+                );
+                return;
+            }
+
+            if !image_paths.is_empty() {
+                self.add_error_message("'/rerun' does not support image attachments.".to_string());
+                return;
+            }
+
+            let target_raw = args.split_whitespace().next().unwrap_or_default();
+            let Some(target) = Self::parse_security_review_rerun_target(target_raw) else {
+                self.add_error_message(format!(
+                    "Unknown rerun target '{target_raw}'. Available targets: prepare-validation-targets"
+                ));
+                return;
+            };
+
+            self.start_security_review_rerun(target);
             return;
         }
 
@@ -3994,6 +4106,147 @@ impl ChatWidget {
         ))
     }
 
+    fn parse_security_review_rerun_target(raw: &str) -> Option<SecurityReviewRerunTarget> {
+        let normalized = raw
+            .trim()
+            .trim_matches(|ch| matches!(ch, '"' | '\''))
+            .to_ascii_lowercase()
+            .replace('_', "-");
+        match normalized.as_str() {
+            "prepare-validation-targets" | "prepare-validation-target" => {
+                Some(SecurityReviewRerunTarget::PrepareValidationTargets)
+            }
+            _ => None,
+        }
+    }
+
+    fn security_review_output_root_for_follow_up_path(follow_up_path: &Path) -> Option<PathBuf> {
+        let parent = follow_up_path.parent()?;
+        let parent_name = parent
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if parent_name.eq_ignore_ascii_case("context") {
+            parent.parent().map(PathBuf::from)
+        } else {
+            Some(parent.to_path_buf())
+        }
+    }
+
+    fn start_security_review_rerun(&mut self, target: SecurityReviewRerunTarget) {
+        if self.bottom_pane.is_task_running() || self.security_review_context.is_some() {
+            self.add_error_message(
+                "A task is already running. Wait for it to finish before rerunning.".to_string(),
+            );
+            return;
+        }
+
+        let Some((mode, scope_paths, repo_root, follow_up_path)) =
+            self.security_review_follow_up.as_ref().map(|state| {
+                (
+                    state.mode,
+                    state.scope_paths.clone(),
+                    state.repo_root.clone(),
+                    state.follow_up_path.clone(),
+                )
+            })
+        else {
+            self.add_error_message(
+                "'/rerun' is only available in security review follow-up mode (run /secreview first)."
+                    .to_string(),
+            );
+            return;
+        };
+
+        let Some(output_root) =
+            Self::security_review_output_root_for_follow_up_path(&follow_up_path)
+        else {
+            self.add_error_message(format!(
+                "Failed to infer security review output root from {}.",
+                follow_up_path.display()
+            ));
+            return;
+        };
+
+        if !output_root.exists() {
+            self.add_error_message(format!(
+                "Security review output root {} does not exist.",
+                output_root.display()
+            ));
+            return;
+        }
+
+        self.bottom_pane.set_task_running(true);
+        self.bottom_pane
+            .update_status_header(format!("Security review rerun — {}", target.title()));
+
+        let mut model_for_display = self
+            .config
+            .security_review_models
+            .validation
+            .clone()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if model_for_display.is_empty() {
+            model_for_display = "gpt-5.2".to_string();
+        }
+
+        self.security_review_context = Some(SecurityReviewContext {
+            mode,
+            include_paths: scope_paths,
+            output_root: output_root.clone(),
+            repo_path: repo_root.clone(),
+            model: model_for_display,
+            provider_name: self.config.model_provider.name.clone(),
+            started_at: Instant::now(),
+            last_log: None,
+            thinking_lines: Vec::new(),
+            log_lines: Vec::new(),
+            progress_percent: Some(0),
+        });
+
+        self.add_info_message(
+            format!(
+                ">> Rerun started: {} ({}) <<",
+                target.title(),
+                display_path_for(&output_root, &repo_root)
+            ),
+            None,
+        );
+
+        let log_sink = SecurityReviewLogSink::new(&output_root.join("sec-review.log"))
+            .map(Arc::new)
+            .ok();
+
+        let config = self.config.clone();
+        let provider = self.config.model_provider.clone();
+        let auth_manager = self.auth_manager.clone();
+        let repo_for_task = repo_root;
+        let output_root_for_task = output_root;
+        let tx = self.app_event_tx.clone();
+        let progress_sender = Some(tx.clone());
+
+        let handle = tokio::spawn(async move {
+            let result = match target {
+                SecurityReviewRerunTarget::PrepareValidationTargets => {
+                    rerun_prepare_validation_targets(
+                        &config,
+                        &provider,
+                        auth_manager,
+                        &repo_for_task,
+                        &output_root_for_task,
+                        progress_sender,
+                        log_sink,
+                    )
+                    .await
+                }
+            };
+            tx.send(AppEvent::SecurityReviewRerunComplete { result });
+        });
+        self.security_review_rerun_task = Some(handle);
+    }
+
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
         self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
@@ -4040,6 +4293,15 @@ impl ChatWidget {
     }
 
     fn cancel_security_review(&mut self) -> bool {
+        if let Some(handle) = self.security_review_rerun_task.take() {
+            handle.abort();
+            self.bottom_pane.set_task_running(false);
+            self.bottom_pane
+                .update_status_header(String::from("Working"));
+            self.security_review_context = None;
+            self.add_info_message("Security review rerun cancelled.".to_string(), None);
+            return true;
+        }
         if let Some(handle) = self.security_review_task.take() {
             handle.abort();
             self.bottom_pane.set_task_running(false);
@@ -4282,21 +4544,20 @@ impl ChatWidget {
             return;
         }
 
-        if resume_from.is_none()
-            && !force_new
-            && let Some(candidate) =
-                crate::security_review::latest_running_review_candidate(&repo_path)
-        {
-            let storage_root = crate::security_review_storage_root(&repo_path);
-            let completed = completed_security_review_candidates(&storage_root);
-            self.prompt_running_security_review_resume(
-                mode,
-                include_paths,
-                scope_prompt,
-                candidate,
-                completed,
-            );
-            return;
+        if resume_from.is_none() && !force_new {
+            let running = crate::security_review::running_review_candidates(&repo_path);
+            if !running.is_empty() {
+                let storage_root = crate::security_review_storage_root(&repo_path);
+                let completed = completed_security_review_candidates(&storage_root);
+                self.prompt_running_security_review_resume(
+                    mode,
+                    include_paths,
+                    scope_prompt,
+                    running,
+                    completed,
+                );
+                return;
+            }
         }
 
         let storage_root = crate::security_review_storage_root(&repo_path);
@@ -4404,34 +4665,6 @@ impl ChatWidget {
             }
         }
 
-        let log_sink = log_dir(&self.config).ok().and_then(|dir| {
-            if fs::create_dir_all(&dir).is_err() {
-                return None;
-            }
-            let path = dir.join("sec-review.log");
-            SecurityReviewLogSink::new(&path).map(Arc::new).ok()
-        });
-
-        if let Some(cp) = resume_checkpoint.as_ref()
-            && cp.status == SecurityReviewCheckpointStatus::Complete
-        {
-            match crate::security_review::resume_completed_review_from_checkpoint(
-                cp.clone(),
-                Some(self.app_event_tx.clone()),
-                log_sink,
-            ) {
-                Ok(result) => {
-                    self.on_security_review_complete(result);
-                }
-                Err(error) => {
-                    self.on_security_review_failed(error);
-                }
-            }
-            return;
-        }
-
-        let skip_auto_scope_confirmation = resume_from.is_some() || linear_issue.is_some();
-
         let context_paths = if let Some(cp) = resume_checkpoint.as_ref() {
             if cp.scope_display_paths.is_empty() {
                 Vec::new()
@@ -4457,6 +4690,30 @@ impl ChatWidget {
                 }
             }
         };
+
+        let log_sink = SecurityReviewLogSink::new(&output_root.join("sec-review.log"))
+            .map(Arc::new)
+            .ok();
+
+        if let Some(cp) = resume_checkpoint.as_ref()
+            && cp.status == SecurityReviewCheckpointStatus::Complete
+        {
+            match crate::security_review::resume_completed_review_from_checkpoint(
+                cp.clone(),
+                Some(self.app_event_tx.clone()),
+                log_sink,
+            ) {
+                Ok(result) => {
+                    self.on_security_review_complete(result);
+                }
+                Err(error) => {
+                    self.on_security_review_failed(error);
+                }
+            }
+            return;
+        }
+
+        let skip_auto_scope_confirmation = resume_from.is_some() || linear_issue.is_some();
 
         self.bottom_pane.set_task_running(true);
         self.bottom_pane
@@ -4520,6 +4777,23 @@ impl ChatWidget {
             progress_percent: Some(0),
         });
 
+        if resume_from.is_some() {
+            let log_path = output_root.join("sec-review.log");
+            let messages = tail_security_review_log_messages(&log_path, 256 * 1024, 30);
+            if messages.is_empty() {
+                if let Some(last_log) = resume_checkpoint
+                    .as_ref()
+                    .and_then(|cp| cp.last_log.clone())
+                {
+                    self.on_security_review_log(last_log);
+                }
+            } else {
+                for message in messages {
+                    self.on_security_review_log(message);
+                }
+            }
+        }
+
         // Enable auto-scope when a scope prompt is provided (options 3 and 4).
         // We annotate the prompt for both Full and Bugs modes.
         let annotated_scope_prompt = if let Some(cp) = resume_checkpoint.as_ref() {
@@ -4578,6 +4852,8 @@ impl ChatWidget {
             auto_scope_prompt: annotated_scope_prompt,
             resume_checkpoint,
             linear_issue,
+            validation_target_url: None,
+            validation_creds_path: None,
         };
 
         let tx = self.app_event_tx.clone();
@@ -4783,20 +5059,19 @@ impl ChatWidget {
                 return;
             }
             let previous_percent = ctx.progress_percent;
-            // Extract trailing percent in the form " - NN%" and move it to the front.
-            // Enhance with a small 10-slot progress bar.
             let mut percent_prefix = String::new();
             let mut core = message.as_str();
-            let progress_changed;
-            if let Some((percent, trimmed_core)) = parse_progress_suffix(message.as_str()) {
-                ctx.progress_percent = Some(percent);
+            let step_percent =
+                parse_progress_suffix(message.as_str()).map(|(percent, trimmed_core)| {
+                    core = trimmed_core;
+                    percent
+                });
+            let overall_percent = security_review_overall_progress_percent(&ctx.output_root);
+            ctx.progress_percent = overall_percent.or(step_percent);
+            if let Some(percent) = ctx.progress_percent {
                 percent_prefix = build_percent_prefix(percent);
-                core = trimmed_core;
-                progress_changed = previous_percent != Some(percent);
-            } else {
-                ctx.progress_percent = None;
-                progress_changed = previous_percent.is_some();
             }
+            let progress_changed = previous_percent != ctx.progress_percent;
 
             let mut added_to_log = false;
             if !message.starts_with("Model reasoning:") {
@@ -4928,6 +5203,79 @@ impl ChatWidget {
             self.add_error_message(line);
         }
         self.add_error_message(error.message);
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_security_review_rerun_complete(&mut self, result: SecurityReviewRerunResult) {
+        self.bottom_pane.set_task_running(false);
+        self.bottom_pane
+            .update_status_header(String::from("Working"));
+        self.security_review_rerun_task = None;
+        self.security_review_context = None;
+
+        let repo_root = result.repo_root.clone();
+        let output_root_display = display_path_for(&result.output_root, &repo_root);
+        let testing_display = display_path_for(&result.testing_md_path, &repo_root);
+        let log_display = display_path_for(&result.output_root.join("sec-review.log"), &repo_root);
+
+        let mut summary_lines: Vec<Line<'static>> = Vec::new();
+        summary_lines.push(vec!["Rerun complete".bold()].into());
+        summary_lines.push(
+            vec![
+                "  • ".into(),
+                format!("Target: {}", result.target.as_str()).into(),
+            ]
+            .into(),
+        );
+        summary_lines.push(
+            vec![
+                "  • ".into(),
+                format!(
+                    "Outcome: {}",
+                    if result.success {
+                        "success"
+                    } else {
+                        "incomplete (no runnable targets)"
+                    }
+                )
+                .into(),
+            ]
+            .into(),
+        );
+        summary_lines.push(
+            vec![
+                "  • ".into(),
+                format!("Testing instructions: {testing_display}").into(),
+            ]
+            .into(),
+        );
+        summary_lines.push(
+            vec![
+                "  • ".into(),
+                format!("Artifacts: {output_root_display}").into(),
+            ]
+            .into(),
+        );
+        summary_lines.push(vec!["  • ".into(), format!("Log file: {log_display}").into()].into());
+        summary_lines.push(
+            vec![
+                "  • ".into(),
+                format!("Log entries: {}", result.logs.len()).dim(),
+            ]
+            .into(),
+        );
+        self.add_to_history(PlainHistoryCell::new(summary_lines));
+
+        if !result.logs.is_empty() {
+            let mut log_lines: Vec<Line<'static>> = Vec::new();
+            log_lines.push(vec!["Logs".bold()].into());
+            for entry in &result.logs {
+                let prefix = security_review_log_prefix(entry);
+                log_lines.push(vec![prefix.dim(), entry.clone().into()].into());
+            }
+            self.add_to_history(PlainHistoryCell::new(log_lines));
+        }
+
         self.request_redraw();
     }
 

@@ -410,6 +410,7 @@ async fn make_chatwidget_manual(
         pre_review_token_info: None,
         needs_final_message_separator: false,
         security_review_task: None,
+        security_review_rerun_task: None,
         security_review_context: None,
         security_review_artifacts: None,
         security_review_follow_up: None,
@@ -3200,14 +3201,20 @@ async fn plan_update_renders_history_cell() {
             PlanItemArg {
                 step: "Explore codebase".into(),
                 status: StepStatus::Completed,
+                model: None,
+                reasoning_effort: None,
             },
             PlanItemArg {
                 step: "Implement feature".into(),
                 status: StepStatus::InProgress,
+                model: None,
+                reasoning_effort: None,
             },
             PlanItemArg {
                 step: "Write tests".into(),
                 status: StepStatus::Pending,
+                model: None,
+                reasoning_effort: None,
             },
         ],
     };

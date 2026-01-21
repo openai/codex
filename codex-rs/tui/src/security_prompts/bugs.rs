@@ -76,11 +76,16 @@ For each vulnerability, emit a markdown block:
     - **PoC:** Provide two variants when possible:
       - Provide reproduction steps or test input against the exposed interface (HTTP request, CLI invocation, message body, etc.) using a realistic path (how users/clients would commonly reach this code). Base the scenario on how this code is commonly used in the real world (typical inputs, typical deployment). For networked validations, prefer a local Docker or locally built target (e.g., `http://localhost:<port>/...`) rather than production/staging. When details are missing, add concise questions for product/engineering to confirm requirements instead of fabricating a contrived setup.
       - Include how to run the validation for this finding (high-level steps/commands) and call out any required user inputs or locally generated artifacts (for example: test accounts, captured outputs, screenshots, or scripts) that the validation relies on.
-      - If the `Verification Type` includes `crash_poc_release_bin` or `crash_poc_func`, include the AddressSanitizer trace excerpt that demonstrates the memory corruption (or, if validation was not run yet, specify the expected ASan signature and what part of the stderr output to capture during validation).
+      - If the `Verification Type` includes `crash_poc_release` or `crash_poc_func`, include the AddressSanitizer trace excerpt that demonstrates the memory corruption (or, if validation was not run yet, specify the expected ASan signature and what part of the stderr output to capture during validation).
 - **Recommendation:** Actionable remediation guidance.
-- **Verification Type:** JSON array subset of ["network_api", "crash_poc_release_bin", "crash_poc_func", "web_browser"].
-  - Use `crash_poc_release_bin` when the crash is reachable via a standard shipped target/entrypoint (existing binary/service surface).
-  - Use `crash_poc_func` when the crash is in an internal function and is not clearly reachable via standard shipped targets without a synthetic harness.
+- **Verification Type:** JSON array subset of ["network_api", "web_browser", "crash_poc_release", "crash_poc_func", "rce_bin", "ssrf", "crypto"].
+  - Use `network_api` for findings validated via a network request (HTTP/JSON-RPC/etc.).
+  - Use `web_browser` when validation requires a browser (e.g., clickjacking, DOM XSS).
+  - Use `crash_poc_release` when the crash is reachable via a standard shipped entrypoint (release binary/service OR a public SDK/API entrypoint that consumers call in real usage).
+  - Use `crash_poc_func` when the crash is in a function (could be public) that is standalone (not used in shipped release targets/SDK settings), or not called as part of a release target without adding a synthetic harness.
+  - Use `rce_bin` when code execution is reachable via a standard shipped target/entrypoint (existing binary/service surface).
+  - Use `ssrf` when a server-side component can be made to fetch an attacker-chosen URL/host.
+  - Use `crypto` for crypto/protocol/auth logic issues that need deterministic validation (no ASan required).
 - TAXONOMY: {"vuln_class": "...", "cwe_ids": [...], "owasp_categories": [...], "vuln_tag": "..."}
 
 Severity rules (deterministic risk matrix):

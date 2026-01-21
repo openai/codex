@@ -300,7 +300,11 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &mut App) {
     let mut status_line = app.status.replace('\n', " ");
     if status_line.len() > 2000 {
         // hard cap to avoid TUI noise
-        status_line.truncate(2000);
+        let mut boundary = 2000;
+        while boundary > 0 && !status_line.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        status_line.truncate(boundary);
         status_line.push('…');
     }
     // Clear the status row to avoid trailing characters when the message shrinks.

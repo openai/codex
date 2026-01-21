@@ -1493,10 +1493,14 @@ mod tests {
                 PlanItemArg {
                     step: "first".to_string(),
                     status: StepStatus::Pending,
+                    model: None,
+                    reasoning_effort: None,
                 },
                 PlanItemArg {
                     step: "second".to_string(),
                     status: StepStatus::Completed,
+                    model: None,
+                    reasoning_effort: None,
                 },
             ],
         };

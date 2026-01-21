@@ -795,6 +795,13 @@ impl App {
                     t.insert_cell(cell.clone());
                     tui.frame_requester().schedule_frame();
                 }
+                if cell.as_any().is::<crate::history_cell::PlanUpdateCell>() {
+                    self.transcript_cells.retain(|existing| {
+                        !existing
+                            .as_any()
+                            .is::<crate::history_cell::PlanUpdateCell>()
+                    });
+                }
                 self.transcript_cells.push(cell.clone());
                 let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
@@ -1302,6 +1309,9 @@ impl App {
             }
             AppEvent::SecurityReviewComplete { result } => {
                 self.chat_widget.on_security_review_complete(result);
+            }
+            AppEvent::SecurityReviewRerunComplete { result } => {
+                self.chat_widget.on_security_review_rerun_complete(result);
             }
             AppEvent::SecurityReviewSetupComplete { logs } => {
                 self.chat_widget.on_security_review_setup_complete(logs);

@@ -67,13 +67,14 @@ model = "gpt-5.1"  # overrides the default ("gpt-5.1-codex-max" across platforms
 
 ### security_review.models
 
-Codex security reviews run a multi-step pipeline (file triage, spec generation, bug finding, validation, and markdown polishing). You can override the model used for each step:
+Codex security reviews run a multi-step pipeline (file triage, spec generation, threat model drafting, bug finding, validation, and markdown polishing). You can override the model used for each step:
 
 ```toml
 [security_review.models]
 # Current hardcoded defaults:
 file_triage = "gpt-5.2-codex"
 spec = "gpt-5.2"
+threat_model = "gpt-5-codex"
 bugs = "gpt-5.2"
 validation = "gpt-5.2"
 writing = "gpt-5.2"
@@ -91,6 +92,7 @@ Note: `gpt-5-codex*` models only accept `"low"`, `"medium"`, and `"high"`; other
 # Spec defaults to "high" if neither is set.
 file_triage = "medium"
 spec = "high"
+threat_model = "high"
 bugs = "xhigh"
 validation = "xhigh"
 writing = "high"

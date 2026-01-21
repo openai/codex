@@ -3,5 +3,5 @@ source: tui2/src/history_cell.rs
 expression: rendered
 ---
 • Updated Plan
-  └ □ Define error taxonomy
+  └ □ ▶ Define error taxonomy
     □ Implement mapping to user messages

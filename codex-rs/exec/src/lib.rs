@@ -397,6 +397,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             auto_scope_prompt: review_args.auto_scope_prompt,
             resume_checkpoint,
             linear_issue: None,
+            validation_target_url: review_args.target_url,
+            validation_creds_path: review_args.creds_path,
         };
 
         match run_security_review(request).await {
@@ -622,6 +624,8 @@ struct SecurityReviewCliArgs {
     auto_scope_prompt: Option<String>,
     setup: bool,
     resume: bool,
+    target_url: Option<String>,
+    creds_path: Option<PathBuf>,
 }
 
 fn parse_security_review_command(
@@ -643,6 +647,8 @@ fn parse_security_review_command(
     let mut auto_scope_prompt: Option<String> = None;
     let mut setup = false;
     let mut resume = false;
+    let mut target_url: Option<String> = None;
+    let mut creds_path: Option<PathBuf> = None;
 
     let mut iter = tokens.into_iter();
     // Skip the command token.
@@ -681,6 +687,25 @@ fn parse_security_review_command(
                     auto_scope_prompt = Some(trimmed_prompt.to_string());
                 }
             }
+            "--target-url" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--target-url requires a value"))?;
+                let trimmed_target = value.trim();
+                if !trimmed_target.is_empty() {
+                    target_url = Some(trimmed_target.to_string());
+                }
+            }
+            "--creds" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--creds requires a value"))?;
+                let trimmed_path = value.trim();
+                if !trimmed_path.is_empty() {
+                    let (path, _) = resolve_security_review_path(trimmed_path, repo_root)?;
+                    creds_path = Some(path);
+                }
+            }
             "resume" | "--resume" => {
                 resume = true;
             }
@@ -714,6 +739,8 @@ fn parse_security_review_command(
         auto_scope_prompt,
         setup,
         resume,
+        target_url,
+        creds_path,
     }))
 }
 
