@@ -185,9 +185,14 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
             out.push(RtLine::from(header));
         }
 
+        // Keep diff blocks readable by limiting extra indentation. This content is often rendered
+        // inside already-indented UI containers (chat transcript blocks, panels), so avoid stacking
+        // multiple 4-space indents.
+        let indent_cols = 2;
         let mut lines = vec![];
-        render_change(&r.change, &mut lines, wrap_cols - 4);
-        out.extend(prefix_lines(lines, "    ".into(), "    ".into()));
+        render_change(&r.change, &mut lines, wrap_cols.saturating_sub(indent_cols));
+        let indent = " ".repeat(indent_cols);
+        out.extend(prefix_lines(lines, indent.clone().into(), indent.into()));
     }
 
     out
