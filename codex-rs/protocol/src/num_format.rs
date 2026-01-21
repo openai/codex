@@ -25,7 +25,11 @@ fn formatter() -> &'static DecimalFormatter {
 /// Format an i64 with locale-aware digit separators (e.g. "12345" -> "12,345"
 /// for en-US).
 pub fn format_with_separators(n: i64) -> String {
-    formatter().format(&Decimal::from(n)).to_string()
+    format_with_separators_with_formatter(n, formatter())
+}
+
+fn format_with_separators_with_formatter(n: i64, formatter: &DecimalFormatter) -> String {
+    formatter.format(&Decimal::from(n)).to_string()
 }
 
 fn format_si_suffix_with_formatter(n: i64, formatter: &DecimalFormatter) -> String {
@@ -58,7 +62,7 @@ fn format_si_suffix_with_formatter(n: i64, formatter: &DecimalFormatter) -> Stri
     // Above 1000G, keep whole‑G precision.
     format!(
         "{}G",
-        format_with_separators(((n as f64) / 1e9).round() as i64)
+        format_with_separators_with_formatter(((n as f64) / 1e9).round() as i64, formatter)
     )
 }
 
