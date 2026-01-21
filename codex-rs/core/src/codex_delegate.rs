@@ -42,6 +42,8 @@ pub(crate) async fn run_codex_thread_interactive(
     cancel_token: CancellationToken,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
+    let requires_openai_auth = config.model_provider.requires_openai_auth;
+    let auth_manager_clone = Arc::clone(&auth_manager);
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
 
@@ -88,6 +90,8 @@ pub(crate) async fn run_codex_thread_interactive(
         tx_sub: tx_ops,
         rx_event: rx_sub,
         agent_status: codex.agent_status.clone(),
+        auth_manager: auth_manager_clone,
+        requires_openai_auth,
     })
 }
 
@@ -105,6 +109,8 @@ pub(crate) async fn run_codex_thread_one_shot(
     cancel_token: CancellationToken,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
+    let requires_openai_auth = config.model_provider.requires_openai_auth;
+    let auth_manager_clone = Arc::clone(&auth_manager);
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
     let child_cancel = cancel_token.child_token();
@@ -162,6 +168,8 @@ pub(crate) async fn run_codex_thread_one_shot(
         rx_event: rx_bridge,
         tx_sub: tx_closed,
         agent_status,
+        auth_manager: auth_manager_clone,
+        requires_openai_auth,
     })
 }
 
@@ -361,6 +369,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AuthManager;
+    use crate::auth::AuthCredentialsStoreMode;
     use async_channel::bounded;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::protocol::AgentStatus;
@@ -368,6 +378,7 @@ mod tests {
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
     use tokio::sync::watch;
 
     #[tokio::test]
@@ -375,11 +386,18 @@ mod tests {
         let (tx_events, rx_events) = bounded(1);
         let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+        let auth_manager = AuthManager::shared(
+            PathBuf::from("non-existent"),
+            false,
+            AuthCredentialsStoreMode::File,
+        );
         let codex = Arc::new(Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event: rx_events,
             agent_status,
+            auth_manager,
+            requires_openai_auth: false,
         });
 
         let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;

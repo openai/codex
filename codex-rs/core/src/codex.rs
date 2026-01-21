@@ -179,6 +179,8 @@ pub struct Codex {
     pub(crate) rx_event: Receiver<Event>,
     // Last known status of the agent.
     pub(crate) agent_status: watch::Receiver<AgentStatus>,
+    pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) requires_openai_auth: bool,
 }
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
@@ -230,6 +232,10 @@ impl Codex {
         session_source: SessionSource,
         agent_control: AgentControl,
     ) -> CodexResult<CodexSpawnOk> {
+        if config.model_provider.requires_openai_auth && auth_manager.get_auth_mode().is_none() {
+            return Err(CodexErr::AuthRequired);
+        }
+
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -254,6 +260,7 @@ impl Codex {
             .await
             .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?;
 
+        let requires_openai_auth = config.model_provider.requires_openai_auth;
         let config = Arc::new(config);
         let _ = models_manager
             .list_models(
@@ -315,6 +322,8 @@ impl Codex {
             tx_sub,
             rx_event,
             agent_status: agent_status_rx,
+            auth_manager,
+            requires_openai_auth,
         };
 
         #[allow(deprecated)]
@@ -327,6 +336,16 @@ impl Codex {
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
+        if self.requires_openai_auth
+            && matches!(
+                op,
+                Op::UserInput { .. } | Op::UserTurn { .. } | Op::Review { .. }
+            )
+            && self.auth_manager.get_auth_mode().is_none()
+        {
+            return Err(CodexErr::AuthRequired);
+        }
+
         let id = self
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
