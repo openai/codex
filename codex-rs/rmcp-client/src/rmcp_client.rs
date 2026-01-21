@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -109,6 +110,7 @@ impl RmcpClient {
         env_vars: &[String],
         cwd: Option<PathBuf>,
     ) -> io::Result<Self> {
+        let program = resolve_relative_program(program, cwd.as_deref());
         let program_name = program.to_string_lossy().into_owned();
 
         // Build environment for program resolution and subprocess
@@ -433,6 +435,20 @@ impl RmcpClient {
             warn!("failed to refresh OAuth tokens: {error}");
         }
     }
+}
+
+fn resolve_relative_program(program: OsString, cwd: Option<&Path>) -> OsString {
+    let Some(cwd) = cwd else {
+        return program;
+    };
+
+    let program_path = Path::new(&program);
+    let has_separator = program_path.components().count() > 1;
+    if program_path.is_relative() && has_separator {
+        return cwd.join(program_path).into_os_string();
+    }
+
+    program
 }
 
 async fn create_oauth_transport_and_runtime(
