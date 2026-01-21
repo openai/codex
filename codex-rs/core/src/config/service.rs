@@ -135,19 +135,10 @@ impl ConfigService {
         &self,
         params: ConfigReadParams,
     ) -> Result<ConfigReadResponse, ConfigServiceError> {
-        let layers = match params.cwd.as_deref() {
-            Some(cwd) => {
-                let cwd = AbsolutePathBuf::try_from(PathBuf::from(cwd)).map_err(|err| {
-                    ConfigServiceError::io("failed to resolve config cwd to an absolute path", err)
-                })?;
-                self.load_config_with_cwd(cwd).await.map_err(|err| {
-                    ConfigServiceError::io("failed to read configuration layers", err)
-                })?
-            }
-            None => self.load_thread_agnostic_config().await.map_err(|err| {
-                ConfigServiceError::io("failed to read configuration layers", err)
-            })?,
-        };
+        let layers = self
+            .load_thread_agnostic_config()
+            .await
+            .map_err(|err| ConfigServiceError::io("failed to read configuration layers", err))?;
 
         let effective = layers.effective_config();
         validate_config(&effective)
@@ -365,19 +356,6 @@ impl ConfigService {
         load_config_layers_state(
             &self.codex_home,
             cwd,
-            &self.cli_overrides,
-            self.loader_overrides.clone(),
-        )
-        .await
-    }
-
-    async fn load_config_with_cwd(
-        &self,
-        cwd: AbsolutePathBuf,
-    ) -> std::io::Result<ConfigLayerStack> {
-        load_config_layers_state(
-            &self.codex_home,
-            Some(cwd),
             &self.cli_overrides,
             self.loader_overrides.clone(),
         )
