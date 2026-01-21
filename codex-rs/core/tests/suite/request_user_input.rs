@@ -260,7 +260,7 @@ where
     assert_eq!(success, None);
     assert_eq!(
         output,
-        format!("request_user_input is unavailable in {mode_name}")
+        format!("request_user_input is unavailable in {mode_name} mode")
     );
 
     Ok(())
