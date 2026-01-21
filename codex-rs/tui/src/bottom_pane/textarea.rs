@@ -498,6 +498,13 @@ impl TextArea {
         if n == 0 || self.cursor_pos >= self.text.len() {
             return;
         }
+        if self
+            .elements
+            .iter()
+            .any(|element| element.range.start == self.cursor_pos)
+        {
+            return;
+        }
         let mut target = self.cursor_pos;
         for _ in 0..n {
             target = self.next_atomic_boundary(target);
@@ -1325,6 +1332,21 @@ mod tests {
         t.set_cursor(t.text().len());
         t.delete_forward(1);
         assert_eq!(t.text(), "b");
+    }
+
+    #[test]
+    fn delete_forward_skips_element_at_left_edge() {
+        let mut t = TextArea::new();
+        t.insert_str("a");
+        t.insert_element("<element>");
+        t.insert_str("b");
+
+        let elem_start = t.elements[0].range.start;
+        t.set_cursor(elem_start);
+        t.delete_forward(1);
+
+        assert_eq!(t.text(), "a<element>b");
+        assert_eq!(t.cursor(), elem_start);
     }
 
     #[test]

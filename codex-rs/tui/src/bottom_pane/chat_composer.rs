@@ -4852,9 +4852,9 @@ mod tests {
         assert_eq!(composer.textarea.text(), "[Image #1][Image #2]");
         assert_eq!(composer.attached_images.len(), 2);
 
-        // Delete the first element using normal textarea editing (Delete at cursor start).
+        // Delete the first element using normal textarea editing (Backspace at cursor start).
         composer.textarea.set_cursor(0);
-        composer.handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
 
         // Remaining image should be renumbered and the textarea element updated.
         assert_eq!(composer.attached_images.len(), 1);
