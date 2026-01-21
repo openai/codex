@@ -71,7 +71,6 @@ pub enum CodexToolCallApprovalPolicy {
     Untrusted,
     OnFailure,
     OnRequest,
-    OnRequestRule,
     Never,
 }
 
@@ -81,7 +80,6 @@ impl From<CodexToolCallApprovalPolicy> for AskForApproval {
             CodexToolCallApprovalPolicy::Untrusted => AskForApproval::UnlessTrusted,
             CodexToolCallApprovalPolicy::OnFailure => AskForApproval::OnFailure,
             CodexToolCallApprovalPolicy::OnRequest => AskForApproval::OnRequest,
-            CodexToolCallApprovalPolicy::OnRequestRule => AskForApproval::OnRequestRule,
             CodexToolCallApprovalPolicy::Never => AskForApproval::Never,
         }
     }

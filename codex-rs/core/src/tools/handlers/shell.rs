@@ -110,14 +110,7 @@ impl ToolHandler for ShellHandler {
             ToolPayload::Function { arguments } => {
                 let params: ShellToolCallParams = parse_arguments(&arguments)?;
                 let request_approval = params.request_approval.clone();
-                let rule_prefix = if matches!(
-                    turn.approval_policy,
-                    codex_protocol::protocol::AskForApproval::OnRequestRule
-                ) {
-                    params.rule_prefix.clone()
-                } else {
-                    None
-                };
+                let rule_prefix = params.rule_prefix.clone();
                 let exec_params = Self::to_exec_params(&params, turn.as_ref());
                 Self::run_exec_like(
                     tool_name.as_str(),
@@ -196,14 +189,7 @@ impl ToolHandler for ShellCommandHandler {
 
         let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
         let request_approval = params.request_approval.clone();
-        let rule_prefix = if matches!(
-            turn.approval_policy,
-            codex_protocol::protocol::AskForApproval::OnRequestRule
-        ) {
-            params.rule_prefix.clone()
-        } else {
-            None
-        };
+        let rule_prefix = params.rule_prefix.clone();
         let exec_params = Self::to_exec_params(&params, session.as_ref(), turn.as_ref());
         ShellHandler::run_exec_like(
             tool_name.as_str(),
@@ -234,10 +220,24 @@ impl ShellHandler {
     ) -> Result<ToolOutput, FunctionCallError> {
         let mut exec_params = exec_params;
 
+        let features = session.features();
+        let request_rule_enabled = features.enabled(crate::features::Feature::RequestRule);
+        let mut rule_prefix = if request_rule_enabled {
+            rule_prefix
+        } else {
+            None
+        };
+
         if request_approval.is_some() {
+            if !request_rule_enabled {
+                return Err(FunctionCallError::RespondToModel(
+                    "request_approval is not supported unless the request_rule feature is enabled"
+                        .to_string(),
+                ));
+            }
             if !matches!(
                 turn.approval_policy,
-                codex_protocol::protocol::AskForApproval::OnRequestRule
+                codex_protocol::protocol::AskForApproval::OnRequest
             ) {
                 let approval_policy = turn.approval_policy;
                 return Err(FunctionCallError::RespondToModel(format!(
@@ -254,13 +254,16 @@ impl ShellHandler {
             && !matches!(
                 turn.approval_policy,
                 codex_protocol::protocol::AskForApproval::OnRequest
-                    | codex_protocol::protocol::AskForApproval::OnRequestRule
             )
         {
             let approval_policy = turn.approval_policy;
             return Err(FunctionCallError::RespondToModel(format!(
                 "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
             )));
+        }
+
+        if !request_rule_enabled || request_approval.is_none() {
+            rule_prefix = None;
         }
 
         // Intercept apply_patch if present.
@@ -289,7 +292,6 @@ impl ShellHandler {
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         emitter.begin(event_ctx).await;
 
-        let features = session.features();
         let exec_approval_requirement = session
             .services
             .exec_policy

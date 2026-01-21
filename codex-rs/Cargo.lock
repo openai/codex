@@ -1077,6 +1077,7 @@ dependencies = [
  "codex-chatgpt",
  "codex-common",
  "codex-core",
+ "codex-execpolicy",
  "codex-feedback",
  "codex-file-search",
  "codex-login",
@@ -1756,6 +1757,7 @@ name = "codex-protocol"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-execpolicy",
  "codex-git",
  "codex-utils-absolute-path",
  "codex-utils-image",

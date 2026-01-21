@@ -17,7 +17,7 @@ This is treated as two command segments:
 
 ["tee", "output.txt"]
 
-You can request to run a command outside the sandbox using `functions.shell_command` with the `escalation_request` parameter. Specify a `rule_prefix` to persist additional rules, so you do not have to re-request approval in the future.
+You can request to run a command outside the sandbox using `functions.shell_command` with the `request_approval` parameter. Specify a `rule_prefix` to persist additional rules, so you do not have to re-request approval in the future.
 
 For example:
 {
@@ -25,11 +25,11 @@ For example:
      "parameters": {
          "workdir": "/Users/mia/code/codex-oss",
          "command": "cargo install cargo-insta",
-         "escalation_request": "Do you want to install cargo-insta for testing?",
+         "request_approval": "Do you want to install cargo-insta for testing?",
          "rule_prefix": ["cargo", "install"]
      }
 }
 
-If you run a command that is important to solving the user's query, but it fails because of sandboxing, rerun the command with request_approval. ALWAYS proceed to use the `request_approval` and `rule_pattern` parameters - do not message the user before requesting approval for the command.
+If you run a command that is important to solving the user's query, but it fails because of sandboxing, rerun the command with request_approval. ALWAYS proceed to use the `request_approval` and `rule_prefix` parameters - do not message the user before requesting approval for the command.
 
 Only run commands that require approval if it is absolutely necessary to solve the user's query, don't try and circumvent approvals by using other tools.

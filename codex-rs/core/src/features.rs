@@ -89,6 +89,8 @@ pub enum Feature {
     WebSearchCached,
     /// Gate the execpolicy enforcement for shell/unified exec.
     ExecPolicy,
+    /// Allow the model to request approval and propose exec rules.
+    RequestRule,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
     /// Use the elevated Windows sandbox pipeline (setup + runner).
@@ -392,6 +394,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "exec_policy",
         stage: Stage::UnderDevelopment,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::RequestRule,
+        key: "request_rule",
+        stage: Stage::Beta,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,

@@ -144,19 +144,25 @@ impl ToolHandler for UnifiedExecHandler {
                     ..
                 } = args;
 
-                let rule_prefix = if matches!(
-                    context.turn.approval_policy,
-                    codex_protocol::protocol::AskForApproval::OnRequestRule
-                ) {
+                let features = session.features();
+                let request_rule_enabled = features.enabled(crate::features::Feature::RequestRule);
+                let mut rule_prefix = if request_rule_enabled {
                     rule_prefix
                 } else {
                     None
                 };
 
                 let sandbox_permissions = if request_approval.is_some() {
+                    if !request_rule_enabled {
+                        manager.release_process_id(&process_id).await;
+                        return Err(FunctionCallError::RespondToModel(
+                            "request_approval is not supported unless the request_rule feature is enabled"
+                                .to_string(),
+                        ));
+                    }
                     if !matches!(
                         context.turn.approval_policy,
-                        codex_protocol::protocol::AskForApproval::OnRequestRule
+                        codex_protocol::protocol::AskForApproval::OnRequest
                     ) {
                         let approval_policy = context.turn.approval_policy;
                         manager.release_process_id(&process_id).await;
@@ -173,7 +179,6 @@ impl ToolHandler for UnifiedExecHandler {
                     && !matches!(
                         context.turn.approval_policy,
                         codex_protocol::protocol::AskForApproval::OnRequest
-                            | codex_protocol::protocol::AskForApproval::OnRequestRule
                     )
                 {
                     let approval_policy = context.turn.approval_policy;
@@ -181,6 +186,10 @@ impl ToolHandler for UnifiedExecHandler {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
                     )));
+                }
+
+                if !request_rule_enabled || request_approval.is_none() {
+                    rule_prefix = None;
                 }
 
                 let workdir = workdir.filter(|value| !value.is_empty());

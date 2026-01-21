@@ -135,8 +135,10 @@ impl ExecPolicyManager {
             )
         };
         let evaluation = exec_policy.check_multiple(commands.iter(), &exec_policy_fallback);
-        let approval_requested =
-            matches!(approval_policy, AskForApproval::OnRequestRule) && request_approval.is_some();
+        let request_rule_enabled = features.enabled(Feature::RequestRule);
+        let approval_requested = request_rule_enabled
+            && matches!(approval_policy, AskForApproval::OnRequest)
+            && request_approval.is_some();
         let requested_amendment = derive_requested_execpolicy_amendment(
             features,
             &request_approval,
@@ -156,11 +158,15 @@ impl ExecPolicyManager {
                     ExecApprovalRequirement::Forbidden {
                         reason: PROMPT_CONFLICT_REASON.to_string(),
                     }
-                } else if matches!(approval_policy, AskForApproval::OnRequestRule) {
+                } else {
                     ExecApprovalRequirement::NeedsApproval {
-                        reason: request_approval
-                            .clone()
-                            .or_else(|| derive_prompt_reason(command, &evaluation)),
+                        reason: if approval_requested {
+                            request_approval
+                                .clone()
+                                .or_else(|| derive_prompt_reason(command, &evaluation))
+                        } else {
+                            derive_prompt_reason(command, &evaluation)
+                        },
                         proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
                             if approval_requested {
                                 requested_amendment
@@ -169,17 +175,6 @@ impl ExecPolicyManager {
                                     &evaluation.matched_rules,
                                 )
                             }
-                        } else {
-                            None
-                        },
-                    }
-                } else {
-                    ExecApprovalRequirement::NeedsApproval {
-                        reason: derive_prompt_reason(command, &evaluation),
-                        proposed_execpolicy_amendment: if features.enabled(Feature::ExecPolicy) {
-                            try_derive_execpolicy_amendment_for_prompt_rules(
-                                &evaluation.matched_rules,
-                            )
                         } else {
                             None
                         },
@@ -349,7 +344,7 @@ pub fn render_decision_for_unmatched_command(
             // returned false, so we must prompt.
             Decision::Prompt
         }
-        AskForApproval::OnRequest | AskForApproval::OnRequestRule => {
+        AskForApproval::OnRequest => {
             match sandbox_policy {
                 SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                     // The user has indicated we should "just run" commands
@@ -997,19 +992,21 @@ prefix_rule(
     }
 
     #[tokio::test]
-    async fn on_request_rule_uses_requested_approval_and_rule_prefix() {
+    async fn request_rule_uses_requested_approval_and_rule_prefix() {
         let command = vec![
             "cargo".to_string(),
             "install".to_string(),
             "cargo-insta".to_string(),
         ];
         let manager = ExecPolicyManager::default();
+        let mut features = Features::with_defaults();
+        features.enable(Feature::RequestRule);
 
         let requirement = manager
             .create_exec_approval_requirement_for_command(
-                &Features::with_defaults(),
+                &features,
                 &command,
-                AskForApproval::OnRequestRule,
+                AskForApproval::OnRequest,
                 &SandboxPolicy::DangerFullAccess,
                 SandboxPermissions::UseDefault,
                 Some("Install cargo-insta for snapshot tests?".to_string()),

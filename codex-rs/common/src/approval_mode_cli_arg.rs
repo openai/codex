@@ -21,10 +21,6 @@ pub enum ApprovalModeCliArg {
     /// The model decides when to ask the user for approval.
     OnRequest,
 
-    /// The model can request approval and propose a rule to the user to skip
-    /// approval in the future.
-    OnRequestRule,
-
     /// Never ask for user approval
     /// Execution failures are immediately returned to the model.
     Never,
@@ -36,7 +32,6 @@ impl From<ApprovalModeCliArg> for AskForApproval {
             ApprovalModeCliArg::Untrusted => AskForApproval::UnlessTrusted,
             ApprovalModeCliArg::OnFailure => AskForApproval::OnFailure,
             ApprovalModeCliArg::OnRequest => AskForApproval::OnRequest,
-            ApprovalModeCliArg::OnRequestRule => AskForApproval::OnRequestRule,
             ApprovalModeCliArg::Never => AskForApproval::Never,
         }
     }
