@@ -1,4 +1,10 @@
 use crate::config::NetworkMode;
+use anyhow::Context;
+use anyhow::Result;
+use globset::GlobBuilder;
+use globset::GlobSet;
+use globset::GlobSetBuilder;
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
@@ -78,6 +84,117 @@ pub fn normalize_host(host: &str) -> String {
 fn normalize_dns_host(host: &str) -> String {
     let host = host.to_ascii_lowercase();
     host.trim_end_matches('.').to_string()
+}
+
+pub(crate) fn compile_globset(patterns: &[String]) -> Result<GlobSet> {
+    let mut builder = GlobSetBuilder::new();
+    let mut seen = HashSet::new();
+    for pattern in patterns {
+        // Supported domain patterns:
+        // - "example.com": match the exact host
+        // - "*.example.com": match any subdomain (not the apex)
+        // - "**.example.com": match the apex and any subdomain
+        // - "*": match any host
+        for candidate in expand_domain_pattern(pattern) {
+            if !seen.insert(candidate.clone()) {
+                continue;
+            }
+            let glob = GlobBuilder::new(&candidate)
+                .case_insensitive(true)
+                .build()
+                .with_context(|| format!("invalid glob pattern: {candidate}"))?;
+            builder.add(glob);
+        }
+    }
+    Ok(builder.build()?)
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum DomainPattern {
+    Any,
+    ApexAndSubdomains(String),
+    SubdomainsOnly(String),
+    Exact(String),
+}
+
+impl DomainPattern {
+    pub(crate) fn parse(input: &str) -> Self {
+        if input == "*" {
+            Self::Any
+        } else if let Some(domain) = input.strip_prefix("**.") {
+            Self::ApexAndSubdomains(domain.to_string())
+        } else if let Some(domain) = input.strip_prefix("*.") {
+            Self::SubdomainsOnly(domain.to_string())
+        } else {
+            Self::Exact(input.to_string())
+        }
+    }
+
+    pub(crate) fn allows(&self, candidate: &DomainPattern) -> bool {
+        match self {
+            DomainPattern::Any => true,
+            DomainPattern::Exact(domain) => match candidate {
+                DomainPattern::Exact(candidate) => domain_eq(candidate, domain),
+                _ => false,
+            },
+            DomainPattern::SubdomainsOnly(domain) => match candidate {
+                DomainPattern::Any => false,
+                DomainPattern::Exact(candidate) => is_strict_subdomain(candidate, domain),
+                DomainPattern::SubdomainsOnly(candidate) => {
+                    is_subdomain_or_equal(candidate, domain)
+                }
+                DomainPattern::ApexAndSubdomains(candidate) => {
+                    is_strict_subdomain(candidate, domain)
+                }
+            },
+            DomainPattern::ApexAndSubdomains(domain) => match candidate {
+                DomainPattern::Any => false,
+                DomainPattern::Exact(candidate) => is_subdomain_or_equal(candidate, domain),
+                DomainPattern::SubdomainsOnly(candidate) => {
+                    is_subdomain_or_equal(candidate, domain)
+                }
+                DomainPattern::ApexAndSubdomains(candidate) => {
+                    is_subdomain_or_equal(candidate, domain)
+                }
+            },
+        }
+    }
+}
+
+fn expand_domain_pattern(pattern: &str) -> Vec<String> {
+    match DomainPattern::parse(pattern) {
+        DomainPattern::Any => vec![pattern.to_string()],
+        DomainPattern::Exact(domain) => vec![domain],
+        DomainPattern::SubdomainsOnly(domain) => {
+            vec![format!("?*.{domain}")]
+        }
+        DomainPattern::ApexAndSubdomains(domain) => {
+            vec![domain.clone(), format!("?*.{domain}")]
+        }
+    }
+}
+
+fn normalize_domain(domain: &str) -> String {
+    domain.trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn domain_eq(left: &str, right: &str) -> bool {
+    normalize_domain(left) == normalize_domain(right)
+}
+
+fn is_subdomain_or_equal(child: &str, parent: &str) -> bool {
+    let child = normalize_domain(child);
+    let parent = normalize_domain(parent);
+    if child == parent {
+        return true;
+    }
+    child.ends_with(&format!(".{parent}"))
+}
+
+fn is_strict_subdomain(child: &str, parent: &str) -> bool {
+    let child = normalize_domain(child);
+    let parent = normalize_domain(parent);
+    child != parent && child.ends_with(&format!(".{parent}"))
 }
 
 #[cfg(test)]

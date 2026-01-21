@@ -89,14 +89,6 @@ crate.annotation(
 
 inject_repo(crate, "openssl")
 
-# aws-lc-sys: disable cmake path for build scripts under Bazel.
-crate.annotation(
-    build_script_env = {
-        "AWS_LC_SYS_CMAKE_BUILDER": "0",
-    },
-    crate = "aws-lc-sys",
-)
-
 # Fix readme inclusions
 crate.annotation(
     crate = "windows-link",
