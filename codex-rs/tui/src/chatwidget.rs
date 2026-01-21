@@ -1528,6 +1528,7 @@ impl ChatWidget {
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
         // Before streaming agent content, flush any active exec cell group.
+        self.flush_unified_exec_wait_streak();
         self.flush_active_cell();
 
         if self.stream_controller.is_none() {
