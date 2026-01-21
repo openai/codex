@@ -1357,6 +1357,7 @@ impl Config {
         let mut model_providers = built_in_model_providers();
         if features.enabled(Feature::ResponsesWebsockets)
             && let Some(provider) = model_providers.get_mut("openai")
+            && provider.is_openai()
         {
             provider.wire_api = crate::model_provider_info::WireApi::ResponsesWebsocket;
         }
