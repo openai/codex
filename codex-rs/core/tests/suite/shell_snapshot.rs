@@ -41,9 +41,10 @@ async fn wait_for_snapshot(codex_home: &Path) -> Result<PathBuf> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if let Ok(mut entries) = fs::read_dir(&snapshot_dir).await
-            && let Some(entry) = entries.next_entry().await? {
-                return Ok(entry.path());
-            }
+            && let Some(entry) = entries.next_entry().await?
+        {
+            return Ok(entry.path());
+        }
 
         if Instant::now() >= deadline {
             anyhow::bail!("timed out waiting for shell snapshot");
