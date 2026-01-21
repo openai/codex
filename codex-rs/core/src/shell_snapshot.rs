@@ -560,10 +560,9 @@ mod tests {
             shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
         };
 
-        let err =
-            run_script_with_timeout(&shell, "ignored", Duration::from_millis(500), true)
-                .await
-                .expect_err("snapshot shell should time out");
+        let err = run_script_with_timeout(&shell, "ignored", Duration::from_millis(500), true)
+            .await
+            .expect_err("snapshot shell should time out");
         assert!(
             err.to_string().contains("timed out"),
             "expected timeout error, got {err:?}"
