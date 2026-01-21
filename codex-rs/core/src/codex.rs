@@ -3105,10 +3105,7 @@ async fn try_run_sampling_request(
     // turn, capture it in TurnContext at creation time. Using SessionConfiguration here avoids
     // duplicating model settings on TurnContext, but a later Op could update the session config
     // before this write occurs.
-    let collaboration_mode = {
-        let state = sess.state.lock().await;
-        state.session_configuration.collaboration_mode.clone()
-    };
+    let collaboration_mode = sess.current_collaboration_mode().await;
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
