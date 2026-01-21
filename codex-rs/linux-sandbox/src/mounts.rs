@@ -231,6 +231,12 @@ fn is_running_as_root() -> bool {
 }
 
 fn is_permission_denied(err: &CodexErr) -> bool {
+    if let CodexErr::Io(io_error) = err
+        && (io_error.kind() == std::io::ErrorKind::PermissionDenied
+            || io_error.raw_os_error() == Some(libc::EPERM))
+    {
+        return true;
+    }
     let mut current: Option<&(dyn Error + 'static)> = Some(err);
     while let Some(error) = current {
         if let Some(io_error) = error.downcast_ref::<std::io::Error>()
