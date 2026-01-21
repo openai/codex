@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
+use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
@@ -28,6 +29,18 @@ use crate::tools::sandboxing::ToolCtx;
 pub struct ShellHandler;
 
 pub struct ShellCommandHandler;
+
+struct RunExecLikeArgs {
+    tool_name: String,
+    exec_params: ExecParams,
+    request_approval: Option<String>,
+    rule_prefix: Option<Vec<String>>,
+    session: Arc<crate::codex::Session>,
+    turn: Arc<TurnContext>,
+    tracker: crate::tools::context::SharedTurnDiffTracker,
+    call_id: String,
+    freeform: bool,
+}
 
 impl ShellHandler {
     fn to_exec_params(params: &ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
@@ -112,8 +125,8 @@ impl ToolHandler for ShellHandler {
                 let request_approval = params.request_approval.clone();
                 let rule_prefix = params.rule_prefix.clone();
                 let exec_params = Self::to_exec_params(&params, turn.as_ref());
-                Self::run_exec_like(
-                    tool_name.as_str(),
+                Self::run_exec_like(RunExecLikeArgs {
+                    tool_name: tool_name.clone(),
                     exec_params,
                     request_approval,
                     rule_prefix,
@@ -121,23 +134,23 @@ impl ToolHandler for ShellHandler {
                     turn,
                     tracker,
                     call_id,
-                    false,
-                )
+                    freeform: false,
+                })
                 .await
             }
             ToolPayload::LocalShell { params } => {
                 let exec_params = Self::to_exec_params(&params, turn.as_ref());
-                Self::run_exec_like(
-                    tool_name.as_str(),
+                Self::run_exec_like(RunExecLikeArgs {
+                    tool_name: tool_name.clone(),
                     exec_params,
-                    None,
-                    None,
+                    request_approval: None,
+                    rule_prefix: None,
                     session,
                     turn,
                     tracker,
                     call_id,
-                    false,
-                )
+                    freeform: false,
+                })
                 .await
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
@@ -191,8 +204,8 @@ impl ToolHandler for ShellCommandHandler {
         let request_approval = params.request_approval.clone();
         let rule_prefix = params.rule_prefix.clone();
         let exec_params = Self::to_exec_params(&params, session.as_ref(), turn.as_ref());
-        ShellHandler::run_exec_like(
-            tool_name.as_str(),
+        ShellHandler::run_exec_like(RunExecLikeArgs {
+            tool_name,
             exec_params,
             request_approval,
             rule_prefix,
@@ -200,24 +213,25 @@ impl ToolHandler for ShellCommandHandler {
             turn,
             tracker,
             call_id,
-            true,
-        )
+            freeform: true,
+        })
         .await
     }
 }
 
 impl ShellHandler {
-    async fn run_exec_like(
-        tool_name: &str,
-        exec_params: ExecParams,
-        request_approval: Option<String>,
-        rule_prefix: Option<Vec<String>>,
-        session: Arc<crate::codex::Session>,
-        turn: Arc<TurnContext>,
-        tracker: crate::tools::context::SharedTurnDiffTracker,
-        call_id: String,
-        freeform: bool,
-    ) -> Result<ToolOutput, FunctionCallError> {
+    async fn run_exec_like(args: RunExecLikeArgs) -> Result<ToolOutput, FunctionCallError> {
+        let RunExecLikeArgs {
+            tool_name,
+            exec_params,
+            request_approval,
+            rule_prefix,
+            session,
+            turn,
+            tracker,
+            call_id,
+            freeform,
+        } = args;
         let mut exec_params = exec_params;
 
         let features = session.features();
@@ -275,7 +289,7 @@ impl ShellHandler {
             turn.as_ref(),
             Some(&tracker),
             &call_id,
-            tool_name,
+            tool_name.as_str(),
         )
         .await?
         {
@@ -295,15 +309,15 @@ impl ShellHandler {
         let exec_approval_requirement = session
             .services
             .exec_policy
-            .create_exec_approval_requirement_for_command(
-                &features,
-                &exec_params.command,
-                turn.approval_policy,
-                &turn.sandbox_policy,
-                exec_params.sandbox_permissions,
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                features: &features,
+                command: &exec_params.command,
+                approval_policy: turn.approval_policy,
+                sandbox_policy: &turn.sandbox_policy,
+                sandbox_permissions: exec_params.sandbox_permissions,
                 request_approval,
                 rule_prefix,
-            )
+            })
             .await;
 
         let req = ShellRequest {
@@ -321,7 +335,7 @@ impl ShellHandler {
             session: session.as_ref(),
             turn: turn.as_ref(),
             call_id: call_id.clone(),
-            tool_name: tool_name.to_string(),
+            tool_name,
         };
         let out = orchestrator
             .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
