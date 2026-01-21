@@ -297,6 +297,15 @@
         "type": "string"
       }
     },
+    "oauth_rotation": {
+      "description": "OAuth rotation settings for ChatGPT auth.",
+      "default": null,
+      "allOf": [
+        {
+          "$ref": "#/definitions/OAuthRotationConfig"
+        }
+      ]
+    },
     "oss_provider": {
       "description": "Preferred OSS provider for local models, e.g. \"lmstudio\", \"ollama\", or \"ollama-chat\".",
       "type": "string"
@@ -920,6 +929,36 @@
           ]
         }
       ]
+    },
+    "OAuthRotationConfig": {
+      "type": "object",
+      "properties": {
+        "auth_failure_cooldown_ms": {
+          "description": "Auth failure cooldown in milliseconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "max_attempts": {
+          "description": "Maximum OAuth credential attempts per request.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "network_retry_attempts": {
+          "description": "Network retry attempts per OAuth credential before failing.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "rate_limit_cooldown_ms": {
+          "description": "Rate limit cooldown in milliseconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
     },
     "OtelConfigToml": {
       "description": "OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.",

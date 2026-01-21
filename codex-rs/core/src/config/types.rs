@@ -22,6 +22,23 @@ use serde::de::Error as SerdeError;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, Default)]
+#[schemars(deny_unknown_fields)]
+pub struct OAuthRotationConfig {
+    /// Rate limit cooldown in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_limit_cooldown_ms: Option<u64>,
+    /// Auth failure cooldown in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_failure_cooldown_ms: Option<u64>,
+    /// Network retry attempts per OAuth credential before failing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_retry_attempts: Option<u32>,
+    /// Maximum OAuth credential attempts per request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_attempts: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpServerDisabledReason {
     Unknown,

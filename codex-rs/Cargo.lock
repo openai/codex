@@ -1309,6 +1309,7 @@ dependencies = [
  "eventsource-stream",
  "futures",
  "http 1.3.1",
+ "httpdate",
  "image",
  "include_dir",
  "indexmap 2.12.0",

@@ -1,5 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 
 pub use path_absolutize;
 
@@ -39,24 +41,29 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
         }
     }
 
-    match assert_cmd::Command::cargo_bin(name) {
+    let fallback_err = match assert_cmd::Command::cargo_bin(name) {
         Ok(cmd) => {
             let abs = absolutize_from_buck_or_cwd(PathBuf::from(cmd.get_program()))?;
             if abs.exists() {
-                Ok(abs)
-            } else {
-                Err(CargoBinError::ResolvedPathDoesNotExist {
-                    key: "assert_cmd::Command::cargo_bin".to_owned(),
-                    path: abs,
-                })
+                return Ok(abs);
+            }
+            CargoBinError::ResolvedPathDoesNotExist {
+                key: "assert_cmd::Command::cargo_bin".to_owned(),
+                path: abs,
             }
         }
-        Err(err) => Err(CargoBinError::NotFound {
+        Err(err) => CargoBinError::NotFound {
             name: name.to_owned(),
-            env_keys,
+            env_keys: env_keys.clone(),
             fallback: format!("assert_cmd fallback failed: {err}"),
-        }),
+        },
+    };
+
+    if let Ok(path) = build_and_resolve_bin(name) {
+        return Ok(path);
     }
+
+    Err(fallback_err)
 }
 
 fn cargo_bin_env_keys(name: &str) -> Vec<String> {
@@ -177,4 +184,99 @@ pub fn buck_project_root() -> Result<Option<PathBuf>, std::io::Error> {
     }
 
     Ok(None)
+}
+
+fn build_and_resolve_bin(name: &str) -> Result<PathBuf, CargoBinError> {
+    let Some(path) = bin_path(name) else {
+        return Err(CargoBinError::NotFound {
+            name: name.to_owned(),
+            env_keys: cargo_bin_env_keys(name),
+            fallback: "workspace root not found for cargo build".to_string(),
+        });
+    };
+
+    if path.exists() {
+        return Ok(path);
+    }
+
+    ensure_bin_built(name).map_err(|err| CargoBinError::NotFound {
+        name: name.to_owned(),
+        env_keys: cargo_bin_env_keys(name),
+        fallback: err,
+    })?;
+
+    if path.exists() {
+        Ok(path)
+    } else {
+        Err(CargoBinError::ResolvedPathDoesNotExist {
+            key: "cargo build".to_owned(),
+            path,
+        })
+    }
+}
+
+fn ensure_bin_built(name: &str) -> Result<(), String> {
+    static BUILT_BINS: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    let bins = BUILT_BINS.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    {
+        let guard = bins.lock().map_err(|_| "lock poisoned".to_string())?;
+        if guard.contains(name) {
+            return Ok(());
+        }
+    }
+
+    let Some(workspace_root) = find_workspace_root() else {
+        return Err("workspace root not found".to_string());
+    };
+
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let status = std::process::Command::new(cargo)
+        .current_dir(&workspace_root)
+        .args(["build", "--bin", name])
+        .status()
+        .map_err(|err| format!("failed to invoke cargo build: {err}"))?;
+
+    if !status.success() {
+        return Err(format!("cargo build --bin {name} failed with {status}"));
+    }
+
+    let mut guard = bins.lock().map_err(|_| "lock poisoned".to_string())?;
+    guard.insert(name.to_string());
+    Ok(())
+}
+
+fn find_workspace_root() -> Option<PathBuf> {
+    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    loop {
+        let candidate = dir.join("Cargo.toml");
+        if candidate.exists() {
+            if let Ok(contents) = std::fs::read_to_string(&candidate) {
+                if contents.contains("[workspace]") {
+                    return Some(dir);
+                }
+            }
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
+}
+
+fn bin_path(name: &str) -> Option<PathBuf> {
+    let workspace_root = find_workspace_root()?;
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root.join("target"));
+    let profile_dir = if let Ok(target) = std::env::var("CARGO_BUILD_TARGET") {
+        target_dir.join(target).join("debug")
+    } else {
+        target_dir.join("debug")
+    };
+    let bin_name = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    Some(profile_dir.join(bin_name))
 }

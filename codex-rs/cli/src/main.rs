@@ -10,6 +10,7 @@ use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
 use codex_cli::WindowsCommand;
 use codex_cli::login::read_api_key_from_stdin;
+use codex_cli::login::run_login_accounts;
 use codex_cli::login::run_login_status;
 use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
@@ -256,12 +257,23 @@ struct LoginCommand {
 enum LoginSubcommand {
     /// Show login status.
     Status,
+    /// List stored ChatGPT OAuth accounts.
+    #[clap(visible_alias = "list")]
+    Accounts,
 }
 
 #[derive(Debug, Parser)]
 struct LogoutCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
+
+    /// Remove a specific ChatGPT OAuth account by id, email, or label.
+    #[arg(long = "account", value_name = "ACCOUNT", conflicts_with = "all_accounts")]
+    account: Option<String>,
+
+    /// Remove all stored ChatGPT OAuth accounts (keeps API key).
+    #[arg(long = "all-accounts")]
+    all_accounts: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -584,6 +596,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 Some(LoginSubcommand::Status) => {
                     run_login_status(login_cli.config_overrides).await;
                 }
+                Some(LoginSubcommand::Accounts) => {
+                    run_login_accounts(login_cli.config_overrides).await;
+                }
                 None => {
                     if login_cli.use_device_code {
                         run_login_with_device_code(
@@ -611,7 +626,12 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 &mut logout_cli.config_overrides,
                 root_config_overrides.clone(),
             );
-            run_logout(logout_cli.config_overrides).await;
+            run_logout(
+                logout_cli.config_overrides,
+                logout_cli.account,
+                logout_cli.all_accounts,
+            )
+            .await;
         }
         Some(Subcommand::Completion(completion_cli)) => {
             print_completion(completion_cli);
