@@ -24,6 +24,7 @@ use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tracing::debug;
+use tracing::error;
 use tracing::info;
 use tracing::trace;
 use url::Url;
@@ -164,11 +165,14 @@ async fn connect_websocket(
 
     let (stream, response) = match response {
         Ok((stream, response)) => {
-            info!("successfully connected to websocket: {url}");
+            info!(
+                "successfully connected to websocket: {url}, headers: {:?}",
+                response.headers()
+            );
             (stream, response)
         }
         Err(err) => {
-            info!("failed to connect to websocket: {err}, url: {url}");
+            error!("failed to connect to websocket: {err}, url: {url}");
             return Err(map_ws_error(err, &url));
         }
     };
