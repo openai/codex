@@ -1621,6 +1621,7 @@ impl CodexMessageProcessor {
             limit,
             sort_key,
             model_providers,
+            archived,
         } = params;
 
         let requested_page_size = limit
@@ -1632,7 +1633,13 @@ impl CodexMessageProcessor {
             ThreadSortKey::UpdatedAt => CoreThreadSortKey::UpdatedAt,
         };
         let (summaries, next_cursor) = match self
-            .list_threads_common(requested_page_size, cursor, model_providers, core_sort_key)
+            .list_threads_common(
+                requested_page_size,
+                cursor,
+                model_providers,
+                core_sort_key,
+                archived.unwrap_or(false),
+            )
             .await
         {
             Ok(r) => r,
@@ -2198,6 +2205,7 @@ impl CodexMessageProcessor {
                 cursor,
                 model_providers,
                 CoreThreadSortKey::UpdatedAt,
+                false,
             )
             .await
         {
@@ -2217,6 +2225,7 @@ impl CodexMessageProcessor {
         cursor: Option<String>,
         model_providers: Option<Vec<String>>,
         sort_key: CoreThreadSortKey,
+        archived: bool,
     ) -> Result<(Vec<ConversationSummary>, Option<String>), JSONRPCErrorError> {
         let mut cursor_obj: Option<RolloutCursor> = match cursor.as_ref() {
             Some(cursor_str) => {
@@ -2247,21 +2256,39 @@ impl CodexMessageProcessor {
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
-            let page = RolloutRecorder::list_threads(
-                &self.config.codex_home,
-                page_size,
-                cursor_obj.as_ref(),
-                sort_key,
-                INTERACTIVE_SESSION_SOURCES,
-                model_provider_filter.as_deref(),
-                fallback_provider.as_str(),
-            )
-            .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to list threads: {err}"),
-                data: None,
-            })?;
+            let page = if archived {
+                RolloutRecorder::list_archived_threads(
+                    &self.config.codex_home,
+                    page_size,
+                    cursor_obj.as_ref(),
+                    sort_key,
+                    INTERACTIVE_SESSION_SOURCES,
+                    model_provider_filter.as_deref(),
+                    fallback_provider.as_str(),
+                )
+                .await
+                .map_err(|err| JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to list threads: {err}"),
+                    data: None,
+                })?
+            } else {
+                RolloutRecorder::list_threads(
+                    &self.config.codex_home,
+                    page_size,
+                    cursor_obj.as_ref(),
+                    sort_key,
+                    INTERACTIVE_SESSION_SOURCES,
+                    model_provider_filter.as_deref(),
+                    fallback_provider.as_str(),
+                )
+                .await
+                .map_err(|err| JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to list threads: {err}"),
+                    data: None,
+                })?
+            };
 
             let mut filtered = page
                 .items

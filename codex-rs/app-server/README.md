@@ -147,6 +147,7 @@ To branch from a stored session, call `thread/fork` with the `thread.id`. This c
 - `limit` — server defaults to a reasonable page size if unset.
 - `sortKey` — `created_at` (default) or `updated_at`.
 - `modelProviders` — restrict results to specific providers; unset, null, or an empty array will include all providers.
+- `archived` — when `true`, list archived threads only. When `false` or `null`, list non-archived threads (default).
 
 Example:
 
@@ -187,7 +188,7 @@ Use `thread/archive` to move the persisted rollout (stored as a JSONL file on di
 { "id": 21, "result": {} }
 ```
 
-An archived thread will not appear in future calls to `thread/list`.
+An archived thread will not appear in `thread/list` unless `archived` is set to `true`.
 
 ### Example: Start a turn (send user input)
 
