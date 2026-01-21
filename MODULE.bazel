@@ -2,9 +2,8 @@ bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.3.1")
 archive_override(
     module_name = "toolchains_llvm_bootstrapped",
-    integrity = "sha256-4/2h4tYSUSptxFVI9G50yJxWGOwHSeTeOGBlaLQBV8g=",
-    strip_prefix = "toolchains_llvm_bootstrapped-d20baf67e04d8e2887e3779022890d1dc5e6b948",
-    urls = ["https://github.com/cerisier/toolchains_llvm_bootstrapped/archive/d20baf67e04d8e2887e3779022890d1dc5e6b948.tar.gz"],
+    strip_prefix = "toolchains_llvm_bootstrapped-6d099a77c1717e4aae3f511ea1d5b0a3ad3f01f2",
+    urls = ["https://github.com/cerisier/toolchains_llvm_bootstrapped/archive/6d099a77c1717e4aae3f511ea1d5b0a3ad3f01f2.tar.gz"],
 )
 
 osx = use_extension("@toolchains_llvm_bootstrapped//toolchain/extension:osx.bzl", "osx")
