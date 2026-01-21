@@ -5660,6 +5660,7 @@ pub async fn run_security_review(
                             request.spec_model.as_str()
                         };
                         let (summaries, details) = snapshot_summaries_and_details(&loaded);
+                        let before_dedupe_count = summaries.len();
                         let llm_outcome = llm_dedupe_bug_summaries(
                             &model_client,
                             &request.provider,
@@ -5677,6 +5678,13 @@ pub async fn run_security_review(
                         for line in llm_outcome.logs {
                             record(&mut logs, line);
                         }
+                        record(
+                            &mut logs,
+                            format!(
+                                "LLM dedupe findings: {before_dedupe_count} -> {}.",
+                                llm_outcome.summaries.len()
+                            ),
+                        );
                         if llm_outcome.removed > 0 {
                             let llm_removed = llm_outcome.removed;
                             record(
@@ -6131,6 +6139,7 @@ pub async fn run_security_review(
         }
 
         if all_summaries.len() > 1 {
+            let before_dedupe_count = all_summaries.len();
             let dedupe_model = if request.spec_model.trim().is_empty() {
                 SPEC_GENERATION_MODEL
             } else {
@@ -6158,6 +6167,12 @@ pub async fn run_security_review(
                 record(&mut logs, line.clone());
                 aggregated_logs.push(line);
             }
+            let dedupe_count_line = format!(
+                "LLM dedupe findings: {before_dedupe_count} -> {}.",
+                all_summaries.len()
+            );
+            record(&mut logs, dedupe_count_line.clone());
+            aggregated_logs.push(dedupe_count_line);
             if llm_outcome.removed > 0 {
                 let removed = llm_outcome.removed;
                 let msg = format!(
@@ -15704,14 +15719,6 @@ async fn llm_dedupe_bug_summaries_single_bucket(
             detail_by_id.insert(rep_id, updated);
         }
 
-        if agg.members.len() > 1 {
-            logs.push(format!(
-                "LLM dedupe cluster: canonical {rep_id} merges {} finding(s); instances {}; highest severity {best_severity}.",
-                agg.members.len(),
-                agg.file_set.len()
-            ));
-        }
-
         clusters_debug.push(LlmDedupeClusterDebug {
             canonical_id: rep_id,
             member_ids: agg.members.clone(),
@@ -17051,6 +17058,7 @@ async fn rerank_bugs_by_risk(
         );
     }
 
+    let total_findings = summaries.len();
     let mut chunk_results =
         futures::stream::iter(prompt_chunks.into_iter().map(|(ids, prompt)| {
             let provider = provider.clone();
@@ -17060,38 +17068,43 @@ async fn rerank_bugs_by_risk(
             let repo_root = repo_root.to_path_buf();
             let progress_sender = progress_sender.clone();
             let log_sink = log_sink.clone();
+            let chunk_size = ids.len();
 
             async move {
-                run_risk_rerank_chunk(
-                    client,
-                    &provider,
-                    &auth_clone,
-                    model_owned.as_str(),
-                    reasoning_effort,
-                    BUG_RERANK_SYSTEM_PROMPT,
-                    prompt,
-                    metrics_clone,
-                    repo_root,
-                    ids,
-                    progress_sender,
-                    log_sink,
+                (
+                    chunk_size,
+                    run_risk_rerank_chunk(
+                        client,
+                        &provider,
+                        &auth_clone,
+                        model_owned.as_str(),
+                        reasoning_effort,
+                        BUG_RERANK_SYSTEM_PROMPT,
+                        prompt,
+                        metrics_clone,
+                        repo_root,
+                        ids,
+                        progress_sender,
+                        log_sink,
+                    )
+                    .await,
                 )
-                .await
             }
         }))
         .buffer_unordered(max_concurrency);
 
-    let mut completed_chunks = 0usize;
-    while let Some(result) = chunk_results.next().await {
-        completed_chunks = completed_chunks.saturating_add(1);
+    let mut completed_findings = 0usize;
+    while let Some((chunk_size, result)) = chunk_results.next().await {
+        completed_findings = completed_findings.saturating_add(chunk_size);
         if total_chunks > 0
-            && (completed_chunks == total_chunks || completed_chunks.is_multiple_of(5))
+            && (completed_findings >= total_findings || completed_findings.is_multiple_of(5))
         {
+            let clamped_completed = completed_findings.min(total_findings);
             emit_progress_log(
                 &progress_sender,
                 &log_sink,
                 format!(
-                    "Risk rerank progress: {completed_chunks}/{total_chunks} chunk(s) complete.",
+                    "Risk rerank progress: {clamped_completed}/{total_findings} finding(s) complete.",
                 ),
             );
         }
