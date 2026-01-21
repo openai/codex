@@ -15,6 +15,18 @@
 //! [`ChatComposer::handle_key_event_without_popup`]. After every handled key, we call
 //! [`ChatComposer::sync_popups`] so UI state follows the latest buffer/cursor.
 //!
+//! # Submission and Prompt Expansion
+//!
+//! On submit/queue paths, the composer:
+//!
+//! - Expands pending paste placeholders so element ranges align with the final text.
+//! - Trims whitespace and rebases text elements accordingly.
+//! - Expands `/prompts:` custom prompts (named or numeric args), preserving text elements.
+//! - Prunes attached images so only placeholders that survive expansion are sent.
+//!
+//! The numeric auto-submit path used by the slash popup performs the same pending-paste expansion
+//! and attachment pruning, and clears pending paste state on success.
+//!
 //! # Non-bracketed Paste Bursts
 //!
 //! On some terminals (especially on Windows), pastes arrive as a rapid sequence of
@@ -172,8 +184,14 @@ enum PromptSelectionMode {
 }
 
 enum PromptSelectionAction {
-    Insert { text: String, cursor: Option<usize> },
-    Submit { text: String },
+    Insert {
+        text: String,
+        cursor: Option<usize>,
+    },
+    Submit {
+        text: String,
+        text_elements: Vec<TextElement>,
+    },
 }
 
 pub(crate) struct ChatComposer {
@@ -541,6 +559,18 @@ impl ChatComposer {
             .collect()
     }
 
+    fn prune_attached_images_for_submission(&mut self, text: &str, text_elements: &[TextElement]) {
+        if self.attached_images.is_empty() {
+            return;
+        }
+        let image_placeholders: HashSet<&str> = text_elements
+            .iter()
+            .filter_map(|elem| elem.placeholder(text))
+            .collect();
+        self.attached_images
+            .retain(|img| image_placeholders.contains(img.placeholder.as_str()));
+    }
+
     /// Insert an attachment placeholder and track it for the next submission.
     pub fn attach_image(&mut self, path: PathBuf) {
         let image_number = self.attached_images.len() + 1;
@@ -769,6 +799,7 @@ impl ChatComposer {
                                     prompt,
                                     first_line,
                                     PromptSelectionMode::Completion,
+                                    &self.textarea.text_elements(),
                                 ) {
                                     PromptSelectionAction::Insert { text, cursor } => {
                                         let target = cursor.unwrap_or(text.len());
@@ -795,19 +826,31 @@ impl ChatComposer {
                 // If the current line starts with a custom prompt name and includes
                 // positional args for a numeric-style template, expand and submit
                 // immediately regardless of the popup selection.
-                let first_line = self.textarea.text().lines().next().unwrap_or("");
-                if let Some((name, _rest)) = parse_slash_name(first_line)
+                let mut text = self.textarea.text().to_string();
+                let mut text_elements = self.textarea.text_elements();
+                if !self.pending_pastes.is_empty() {
+                    let (expanded, expanded_elements) =
+                        Self::expand_pending_pastes(&text, text_elements, &self.pending_pastes);
+                    text = expanded;
+                    text_elements = expanded_elements;
+                }
+                let first_line = text.lines().next().unwrap_or("");
+                if let Some((name, _rest, _rest_offset)) = parse_slash_name(first_line)
                     && let Some(prompt_name) = name.strip_prefix(&format!("{PROMPTS_CMD_PREFIX}:"))
                     && let Some(prompt) = self.custom_prompts.iter().find(|p| p.name == prompt_name)
                     && let Some(expanded) =
-                        expand_if_numeric_with_positional_args(prompt, first_line)
+                        expand_if_numeric_with_positional_args(prompt, first_line, &text_elements)
                 {
+                    self.prune_attached_images_for_submission(
+                        &expanded.text,
+                        &expanded.text_elements,
+                    );
+                    self.pending_pastes.clear();
                     self.textarea.set_text_clearing_elements("");
                     return (
                         InputResult::Submitted {
-                            text: expanded,
-                            // Expanded prompt is plain text; no UI element ranges to preserve.
-                            text_elements: Vec::new(),
+                            text: expanded.text,
+                            text_elements: expanded.text_elements,
                         },
                         true,
                     );
@@ -825,14 +868,21 @@ impl ChatComposer {
                                     prompt,
                                     first_line,
                                     PromptSelectionMode::Submit,
+                                    &self.textarea.text_elements(),
                                 ) {
-                                    PromptSelectionAction::Submit { text } => {
+                                    PromptSelectionAction::Submit {
+                                        text,
+                                        text_elements,
+                                    } => {
+                                        self.prune_attached_images_for_submission(
+                                            &text,
+                                            &text_elements,
+                                        );
                                         self.textarea.set_text_clearing_elements("");
                                         return (
                                             InputResult::Submitted {
                                                 text,
-                                                // Submitting a slash/custom prompt generates plain text, so there are no UI element ranges.
-                                                text_elements: Vec::new(),
+                                                text_elements,
                                             },
                                             true,
                                         );
@@ -1487,11 +1537,10 @@ impl ChatComposer {
         let expanded_input = text.clone();
 
         // If there is neither text nor attachments, suppress submission entirely.
-        let has_attachments = !self.attached_images.is_empty();
         text = text.trim().to_string();
         text_elements = Self::trim_text_elements(&expanded_input, &text, text_elements);
 
-        if let Some((name, _rest)) = parse_slash_name(&text) {
+        if let Some((name, _rest, _rest_offset)) = parse_slash_name(&text) {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
             if !treat_as_plain_text {
                 let is_builtin =
@@ -1525,29 +1574,31 @@ impl ChatComposer {
             }
         }
 
-        let expanded_prompt = match expand_custom_prompt(&text, &self.custom_prompts) {
-            Ok(expanded) => expanded,
-            Err(err) => {
-                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_error_event(err.user_message()),
-                )));
-                self.set_text_content(
-                    original_input.clone(),
-                    original_text_elements,
-                    original_local_image_paths,
-                );
-                self.pending_pastes.clone_from(&original_pending_pastes);
-                self.textarea.set_cursor(original_input.len());
-                return None;
-            }
-        };
+        let expanded_prompt =
+            match expand_custom_prompt(&text, &text_elements, &self.custom_prompts) {
+                Ok(expanded) => expanded,
+                Err(err) => {
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(err.user_message()),
+                    )));
+                    self.set_text_content(
+                        original_input.clone(),
+                        original_text_elements,
+                        original_local_image_paths,
+                    );
+                    self.pending_pastes.clone_from(&original_pending_pastes);
+                    self.textarea.set_cursor(original_input.len());
+                    return None;
+                }
+            };
         if let Some(expanded) = expanded_prompt {
-            text = expanded;
-            // Expanded prompt (e.g. custom prompt) is plain text; text elements not supported yet.
-            // TODO: Preserve UI element ranges through prompt expansion in a follow-up PR.
-            text_elements = Vec::new();
+            text = expanded.text;
+            text_elements = expanded.text_elements;
         }
-        if text.is_empty() && !has_attachments {
+        // Custom prompt expansion can remove or rewrite image placeholders, so prune any
+        // attachments that no longer have a corresponding placeholder in the expanded text.
+        self.prune_attached_images_for_submission(&text, &text_elements);
+        if text.is_empty() && self.attached_images.is_empty() {
             return None;
         }
         if !text.is_empty() {
@@ -1650,7 +1701,7 @@ impl ChatComposer {
     /// Returns Some(InputResult) if a command was dispatched, None otherwise.
     fn try_dispatch_bare_slash_command(&mut self) -> Option<InputResult> {
         let first_line = self.textarea.text().lines().next().unwrap_or("");
-        if let Some((name, rest)) = parse_slash_name(first_line)
+        if let Some((name, rest, _rest_offset)) = parse_slash_name(first_line)
             && rest.is_empty()
             && let Some((_n, cmd)) =
                 Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
@@ -1671,7 +1722,7 @@ impl ChatComposer {
 
         if !input_starts_with_space {
             let text = self.textarea.text().to_string();
-            if let Some((name, rest)) = parse_slash_name(&text)
+            if let Some((name, rest, _rest_offset)) = parse_slash_name(&text)
                 && !rest.is_empty()
                 && !name.contains('/')
                 && let Some((_n, cmd)) =
@@ -2463,6 +2514,7 @@ fn prompt_selection_action(
     prompt: &CustomPrompt,
     first_line: &str,
     mode: PromptSelectionMode,
+    text_elements: &[TextElement],
 ) -> PromptSelectionAction {
     let named_args = prompt_argument_names(&prompt.content);
     let has_numeric = prompt_has_numeric_placeholders(&prompt.content);
@@ -2494,14 +2546,21 @@ fn prompt_selection_action(
                 };
             }
             if has_numeric {
-                if let Some(expanded) = expand_if_numeric_with_positional_args(prompt, first_line) {
-                    return PromptSelectionAction::Submit { text: expanded };
+                if let Some(expanded) =
+                    expand_if_numeric_with_positional_args(prompt, first_line, text_elements)
+                {
+                    return PromptSelectionAction::Submit {
+                        text: expanded.text,
+                        text_elements: expanded.text_elements,
+                    };
                 }
                 let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
                 return PromptSelectionAction::Insert { text, cursor: None };
             }
             PromptSelectionAction::Submit {
                 text: prompt.content.clone(),
+                // By now we know this custom prompt has no args, so no text elements to preserve.
+                text_elements: Vec::new(),
             }
         }
     }
@@ -2522,6 +2581,7 @@ mod tests {
     use crate::bottom_pane::InputResult;
     use crate::bottom_pane::chat_composer::AttachedImage;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
+    use crate::bottom_pane::prompt_args::PromptArg;
     use crate::bottom_pane::prompt_args::extract_positional_args_for_prompt_line;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
@@ -3792,15 +3852,37 @@ mod tests {
         let args = extract_positional_args_for_prompt_line(
             "/prompts:review \"docs/My File.md\"",
             "review",
+            &[],
         );
-        assert_eq!(args, vec!["docs/My File.md".to_string()]);
+        assert_eq!(
+            args,
+            vec![PromptArg {
+                text: "docs/My File.md".to_string(),
+                text_elements: Vec::new(),
+            }]
+        );
     }
 
     #[test]
     fn extract_args_supports_mixed_quoted_and_unquoted() {
-        let args =
-            extract_positional_args_for_prompt_line("/prompts:cmd \"with spaces\" simple", "cmd");
-        assert_eq!(args, vec!["with spaces".to_string(), "simple".to_string()]);
+        let args = extract_positional_args_for_prompt_line(
+            "/prompts:cmd \"with spaces\" simple",
+            "cmd",
+            &[],
+        );
+        assert_eq!(
+            args,
+            vec![
+                PromptArg {
+                    text: "with spaces".to_string(),
+                    text_elements: Vec::new(),
+                },
+                PromptArg {
+                    text: "simple".to_string(),
+                    text_elements: Vec::new(),
+                }
+            ]
+        );
     }
 
     #[test]
@@ -4831,6 +4913,166 @@ mod tests {
         assert!(composer.textarea.is_empty());
     }
 
+    #[test]
+    fn custom_prompt_submission_preserves_image_placeholder_unquoted() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $IMG".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer
+            .textarea
+            .set_text_clearing_elements("/prompts:my-prompt IMG=");
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        let path = PathBuf::from("/tmp/image_prompt.png");
+        composer.attach_image(path);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted {
+                text,
+                text_elements,
+            } => {
+                let placeholder = local_image_label_text(1);
+                assert_eq!(text, format!("Review {placeholder}"));
+                assert_eq!(
+                    text_elements,
+                    vec![TextElement::new(
+                        ByteRange {
+                            start: "Review ".len(),
+                            end: "Review ".len() + placeholder.len(),
+                        },
+                        Some(placeholder),
+                    )]
+                );
+            }
+            _ => panic!("expected Submitted"),
+        }
+    }
+
+    #[test]
+    fn custom_prompt_submission_preserves_image_placeholder_quoted() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $IMG".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer
+            .textarea
+            .set_text_clearing_elements("/prompts:my-prompt IMG=\"");
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        let path = PathBuf::from("/tmp/image_prompt_quoted.png");
+        composer.attach_image(path);
+        composer.handle_paste("\"".to_string());
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted {
+                text,
+                text_elements,
+            } => {
+                let placeholder = local_image_label_text(1);
+                assert_eq!(text, format!("Review {placeholder}"));
+                assert_eq!(
+                    text_elements,
+                    vec![TextElement::new(
+                        ByteRange {
+                            start: "Review ".len(),
+                            end: "Review ".len() + placeholder.len(),
+                        },
+                        Some(placeholder),
+                    )]
+                );
+            }
+            _ => panic!("expected Submitted"),
+        }
+    }
+
+    #[test]
+    fn custom_prompt_submission_drops_unused_image_arg() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review changes".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer
+            .textarea
+            .set_text_clearing_elements("/prompts:my-prompt IMG=");
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        let path = PathBuf::from("/tmp/unused_image.png");
+        composer.attach_image(path);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted {
+                text,
+                text_elements,
+            } => {
+                assert_eq!(text, "Review changes");
+                assert!(text_elements.is_empty());
+            }
+            _ => panic!("expected Submitted"),
+        }
+        assert!(composer.take_recent_submission_images().is_empty());
+    }
+
     /// Behavior: selecting a custom prompt that includes a large paste placeholder should expand
     /// to the full pasted content before submission.
     #[test]
@@ -4896,6 +5138,65 @@ mod tests {
         }
         assert!(composer.textarea.is_empty());
         assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
+    fn custom_prompt_with_large_paste_and_image_preserves_elements() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $IMG\n\n$CODE".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer
+            .textarea
+            .set_text_clearing_elements("/prompts:my-prompt IMG=");
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        let path = PathBuf::from("/tmp/image_prompt_combo.png");
+        composer.attach_image(path);
+        composer.handle_paste(" CODE=".to_string());
+        let large_content = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5);
+        composer.handle_paste(large_content.clone());
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted {
+                text,
+                text_elements,
+            } => {
+                let placeholder = local_image_label_text(1);
+                assert_eq!(text, format!("Review {placeholder}\n\n{large_content}"));
+                assert_eq!(
+                    text_elements,
+                    vec![TextElement::new(
+                        ByteRange {
+                            start: "Review ".len(),
+                            end: "Review ".len() + placeholder.len(),
+                        },
+                        Some(placeholder),
+                    )]
+                );
+            }
+            _ => panic!("expected Submitted"),
+        }
     }
 
     #[test]
@@ -5114,6 +5415,201 @@ mod tests {
             result,
             InputResult::Submitted { text, .. } if text == expected
         ));
+    }
+
+    #[test]
+    fn popup_prompt_submission_prunes_unused_image_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Hello".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer.attach_image(PathBuf::from("/tmp/unused.png"));
+        composer.textarea.set_cursor(0);
+        composer.handle_paste(format!("/{PROMPTS_CMD_PREFIX}:my-prompt "));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(
+            result,
+            InputResult::Submitted { text, .. } if text == "Hello"
+        ));
+        assert!(
+            composer
+                .take_recent_submission_images_with_placeholders()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn numeric_prompt_auto_submit_prunes_unused_image_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Hello $1".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        type_chars_humanlike(
+            &mut composer,
+            &[
+                '/', 'p', 'r', 'o', 'm', 'p', 't', 's', ':', 'm', 'y', '-', 'p', 'r', 'o', 'm',
+                'p', 't', ' ', 'f', 'o', 'o', ' ',
+            ],
+        );
+        composer.attach_image(PathBuf::from("/tmp/unused.png"));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(
+            result,
+            InputResult::Submitted { text, .. } if text == "Hello foo"
+        ));
+        assert!(
+            composer
+                .take_recent_submission_images_with_placeholders()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn numeric_prompt_auto_submit_expands_pending_pastes() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Echo: $1".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer
+            .textarea
+            .set_text_clearing_elements("/prompts:my-prompt ");
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        let large_content = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 5);
+        composer.handle_paste(large_content.clone());
+
+        assert_eq!(composer.pending_pastes.len(), 1);
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let expected = format!("Echo: {large_content}");
+        assert!(matches!(
+            result,
+            InputResult::Submitted { text, .. } if text == expected
+        ));
+        assert!(composer.pending_pastes.is_empty());
+    }
+
+    #[test]
+    fn queued_prompt_submission_prunes_unused_image_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(false);
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Hello $1".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        composer
+            .textarea
+            .set_text_clearing_elements("/prompts:my-prompt foo ");
+        composer.textarea.set_cursor(composer.textarea.text().len());
+        composer.attach_image(PathBuf::from("/tmp/unused.png"));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert!(matches!(
+            result,
+            InputResult::Queued { text, .. } if text == "Hello foo"
+        ));
+        assert!(
+            composer
+                .take_recent_submission_images_with_placeholders()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn selecting_custom_prompt_with_positional_args_submits_numeric_expansion() {
+        let prompt_text = "Header: $1\nArgs: $ARGUMENTS\n";
+
+        let prompt = CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        };
+
+        let action = prompt_selection_action(
+            &prompt,
+            "/prompts:my-prompt foo bar",
+            PromptSelectionMode::Submit,
+            &[],
+        );
+        match action {
+            PromptSelectionAction::Submit {
+                text,
+                text_elements,
+            } => {
+                assert_eq!(text, "Header: foo\nArgs: foo bar\n");
+                assert!(text_elements.is_empty());
+            }
+            _ => panic!("expected Submit action"),
+        }
     }
 
     #[test]

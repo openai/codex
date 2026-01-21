@@ -51,6 +51,34 @@ The solution is to detect paste-like _bursts_ and buffer them into a single expl
 - After handling the key, `sync_popups()` runs so popup visibility/filters stay consistent with the
   latest text + cursor.
 
+## Submission flow (Enter/Tab)
+
+There are multiple submission paths, but they share the same core rules:
+
+### Normal submit/queue path
+
+`handle_submission` calls `prepare_submission_text` for both submit and queue. That method:
+
+1. Expands any pending paste placeholders so element ranges align with the final text.
+2. Trims whitespace and rebases element ranges to the trimmed buffer.
+3. Expands `/prompts:` custom prompts:
+   - Named args use key=value parsing.
+   - Numeric args use positional parsing for `$1..$9` and `$ARGUMENTS`.
+   The expansion preserves text elements and yields the final submission payload.
+4. Prunes attachments so only placeholders that survive expansion are sent.
+5. Clears pending pastes on success and suppresses submission if the final text is empty and there
+   are no attachments.
+
+### Numeric auto-submit path
+
+When the slash popup is open and the first line matches a numeric-only custom prompt with
+positional args, Enter auto-submits without calling `prepare_submission_text`. That path still:
+
+- Expands pending pastes before parsing positional args.
+- Uses expanded text elements for prompt expansion.
+- Prunes attachments based on expanded placeholders.
+- Clears pending pastes after a successful auto-submit.
+
 ## Paste burst: concepts and assumptions
 
 The burst detector is intentionally conservative: it only processes “plain” character input

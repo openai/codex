@@ -2719,6 +2719,14 @@ mod tests {
                 app.chat_widget.current_model(),
                 event,
                 is_first,
+                false,
+                codex_protocol::config_types::CollaborationMode::Custom(
+                    codex_protocol::config_types::Settings {
+                        model: "gpt-test".to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                ),
             )) as Arc<dyn HistoryCell>
         };
 
