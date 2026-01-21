@@ -909,7 +909,9 @@ impl App {
             AppEvent::ExternalThreadEvent { thread_id, event } => {
                 if matches!(
                     event.msg,
-                    EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_)
+                    EventMsg::ExecApprovalRequest(_)
+                        | EventMsg::ApplyPatchApprovalRequest(_)
+                        | EventMsg::RequestUserInput(_)
                 ) {
                     self.handle_external_approval_request(thread_id, event);
                     return Ok(AppRunControl::Continue);
