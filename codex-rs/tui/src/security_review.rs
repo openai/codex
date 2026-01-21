@@ -62,11 +62,14 @@ use serde_json::json;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
 use std::env;
 use std::fmt::Write;
 use std::fs::OpenOptions;
 use std::fs::{self};
 use std::future::Future;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::io::Read;
 use std::io::Write as IoWrite;
 use std::path::Path;
@@ -134,10 +137,11 @@ const MAX_FILE_SEARCH_RESULTS: usize = 40;
 const BUG_FINDING_PASSES: usize = 1;
 const BUG_POLISH_CONCURRENCY: usize = 8;
 const BUG_DEDUP_CONFIDENCE_THRESHOLD: f32 = 0.85;
-const BUG_LLM_DEDUP_CONCURRENCY: usize = 6;
+const BUG_LLM_DEDUP_CONCURRENCY: usize = 32;
 const BUG_LLM_DEDUP_LINE_BUCKET_SIZE: u32 = 25;
 const BUG_LLM_DEDUP_LOW_SEVERITY_MAX_FINDINGS: usize = 100;
 const BUG_DEDUP_PROMPT_MAX_CHARS: usize = 120_000;
+const BUG_LLM_DEDUP_PASS1_CACHE_FILE: &str = "llm_dedupe_pass1_cache.json";
 const COMMAND_PREVIEW_MAX_LINES: usize = 2;
 const COMMAND_PREVIEW_MAX_GRAPHEMES: usize = 96;
 const MODEL_REASONING_LOG_MAX_GRAPHEMES: usize = 240;
@@ -5665,6 +5669,7 @@ pub async fn run_security_review(
                             details,
                             path.parent().map(Path::to_path_buf),
                             progress_sender.clone(),
+                            log_sink.clone(),
                             metrics.clone(),
                         )
                         .await;
@@ -6140,6 +6145,7 @@ pub async fn run_security_review(
                 all_details,
                 Some(request.output_root.join("context")),
                 progress_sender.clone(),
+                log_sink.clone(),
                 metrics.clone(),
             )
             .await;
@@ -7534,6 +7540,17 @@ fn push_progress_log(
     }
     write_log_sink(log_sink, message.as_str());
     logs.push(message);
+}
+
+fn emit_progress_log(
+    progress_sender: &Option<AppEventSender>,
+    log_sink: &Option<Arc<SecurityReviewLogSink>>,
+    message: String,
+) {
+    if let Some(tx) = progress_sender.as_ref() {
+        tx.send(AppEvent::SecurityReviewLog(message.clone()));
+    }
+    write_log_sink(log_sink, message.as_str());
 }
 
 fn append_log(
@@ -14487,7 +14504,7 @@ fn rewrite_bug_markdown_location(markdown: &str, new_location: &str) -> Option<S
     Some(lines.join("\n"))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct BugDedupeDecision {
     id: usize,
     canonical_id: usize,
@@ -14495,6 +14512,13 @@ struct BugDedupeDecision {
     confidence: Option<f32>,
     #[serde(default)]
     reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct LlmDedupePass1Cache {
+    listing_hash: u64,
+    listing_len: usize,
+    decisions: Vec<BugDedupeDecision>,
 }
 
 struct BugLlmDedupeOutcome {
@@ -14773,6 +14797,98 @@ fn llm_dedupe_debug_prefix(label: &str) -> String {
     format!("llm_dedupe_{session_id}_{label}")
 }
 
+fn llm_dedupe_listing_hash(listing: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    listing.hash(&mut hasher);
+    hasher.finish()
+}
+
+async fn llm_dedupe_read_pass1_cache(
+    debug_dir: Option<&Path>,
+    listing: &str,
+    logs: &mut Vec<String>,
+) -> Option<Vec<BugDedupeDecision>> {
+    let dir = debug_dir?;
+
+    let path = dir.join(BUG_LLM_DEDUP_PASS1_CACHE_FILE);
+    let bytes = match tokio_fs::read(&path).await {
+        Ok(bytes) => bytes,
+        Err(_) => return None,
+    };
+    let cache: LlmDedupePass1Cache = match serde_json::from_slice(&bytes) {
+        Ok(cache) => cache,
+        Err(err) => {
+            logs.push(format!(
+                "LLM dedupe pass1 cache parse failed at {}: {err}",
+                path.display()
+            ));
+            return None;
+        }
+    };
+
+    let listing_hash = llm_dedupe_listing_hash(listing);
+    if cache.listing_hash != listing_hash || cache.listing_len != listing.len() {
+        logs.push(format!(
+            "LLM dedupe pass1 cache mismatch at {}; ignoring.",
+            path.display()
+        ));
+        return None;
+    }
+    if cache.decisions.is_empty() {
+        return None;
+    }
+
+    logs.push(format!(
+        "LLM dedupe pass1 reused cached decisions from {}.",
+        path.display()
+    ));
+    Some(cache.decisions)
+}
+
+async fn llm_dedupe_write_pass1_cache(
+    debug_dir: Option<&Path>,
+    listing: &str,
+    decisions: &[BugDedupeDecision],
+    logs: &mut Vec<String>,
+) {
+    if decisions.is_empty() {
+        return;
+    }
+    let Some(dir) = debug_dir else {
+        return;
+    };
+
+    if let Err(err) = tokio_fs::create_dir_all(dir).await {
+        logs.push(format!(
+            "LLM dedupe pass1 cache: failed to create {}: {err}",
+            dir.display()
+        ));
+        return;
+    }
+
+    let cache = LlmDedupePass1Cache {
+        listing_hash: llm_dedupe_listing_hash(listing),
+        listing_len: listing.len(),
+        decisions: decisions.to_vec(),
+    };
+    let bytes = match serde_json::to_vec_pretty(&cache) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            logs.push(format!(
+                "LLM dedupe pass1 cache: failed to serialize: {err}"
+            ));
+            return;
+        }
+    };
+    let path = dir.join(BUG_LLM_DEDUP_PASS1_CACHE_FILE);
+    if let Err(err) = tokio_fs::write(&path, bytes).await {
+        logs.push(format!(
+            "LLM dedupe pass1 cache: failed to write {}: {err}",
+            path.display()
+        ));
+    }
+}
+
 async fn llm_dedupe_write_debug_prompt(
     debug_dir: Option<&Path>,
     prefix: &str,
@@ -14839,6 +14955,8 @@ async fn llm_dedupe_execute_prompt(
     debug_dir: Option<&Path>,
     debug_prefix: &str,
     log_prefix: &str,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
     metrics: Arc<ReviewMetrics>,
 ) -> (Vec<BugDedupeDecision>, Vec<String>) {
     let mut logs: Vec<String> = Vec::new();
@@ -14872,9 +14990,7 @@ async fn llm_dedupe_execute_prompt(
     .await;
 
     if let Some(reasoning) = response_output.reasoning.as_ref() {
-        let none_sender: Option<AppEventSender> = None;
-        let none_sink: Option<Arc<SecurityReviewLogSink>> = None;
-        log_model_reasoning(reasoning, &none_sender, &none_sink, &mut logs);
+        log_model_reasoning(reasoning, &progress_sender, &log_sink, &mut logs);
     }
 
     let decisions = llm_dedupe_parse_decisions(response_output.text.as_str());
@@ -14898,6 +15014,7 @@ async fn llm_dedupe_bug_summaries(
     details: Vec<BugDetail>,
     debug_dir: Option<PathBuf>,
     progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
     metrics: Arc<ReviewMetrics>,
 ) -> BugLlmDedupeOutcome {
     let total_findings = summaries.len();
@@ -14911,10 +15028,25 @@ async fn llm_dedupe_bug_summaries(
         };
     }
 
+    let low_severity_findings = summaries
+        .iter()
+        .filter(|summary| severity_rank(&summary.severity) == 2)
+        .count();
+    let use_non_low_count = total_findings > BUG_LLM_DEDUP_LOW_SEVERITY_MAX_FINDINGS;
+    let non_low_findings = total_findings.saturating_sub(low_severity_findings);
+    let detail_message = if use_non_low_count {
+        format!("{non_low_findings} finding(s)")
+    } else {
+        format!("{total_findings} finding(s)")
+    };
+
+    let progress_sender_for_heartbeat = progress_sender.clone();
+    let progress_sender_for_dedupe = progress_sender.clone();
+    let log_sink_for_dedupe = log_sink.clone();
     let outcome = await_with_heartbeat(
-        progress_sender,
+        progress_sender_for_heartbeat,
         "running LLM dedupe",
-        Some(&format!("{total_findings} finding(s)")),
+        Some(detail_message.as_str()),
         async move {
             Ok::<BugLlmDedupeOutcome, std::convert::Infallible>(
                 llm_dedupe_bug_summaries_single_bucket(
@@ -14927,6 +15059,8 @@ async fn llm_dedupe_bug_summaries(
                     details,
                     metrics,
                     debug_dir,
+                    progress_sender_for_dedupe,
+                    log_sink_for_dedupe,
                 )
                 .await,
             )
@@ -14951,6 +15085,8 @@ async fn llm_dedupe_bug_summaries_single_bucket(
     mut details: Vec<BugDetail>,
     metrics: Arc<ReviewMetrics>,
     debug_dir: Option<PathBuf>,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
 ) -> BugLlmDedupeOutcome {
     let mut logs: Vec<String> = Vec::new();
 
@@ -15040,6 +15176,15 @@ async fn llm_dedupe_bug_summaries_single_bucket(
         }
     }
 
+    emit_progress_log(
+        &progress_sender,
+        &log_sink,
+        format!(
+            "LLM dedupe pass1 requesting model decision for {} finding(s).",
+            summaries.len()
+        ),
+    );
+
     let max_prompt_chars = bug_dedupe_prompt_max_chars_for_model(model);
     let mut ordered: Vec<&BugSummary> = summaries.iter().collect();
     ordered.sort_by_key(|summary| summary.id);
@@ -15108,20 +15253,42 @@ async fn llm_dedupe_bug_summaries_single_bucket(
     )
     .await;
 
-    let (pass1_decisions, mut pass1_logs) = llm_dedupe_execute_prompt(
-        client,
-        provider,
-        auth,
-        model,
-        reasoning_effort,
-        pass1_choice.prompt.as_str(),
+    let cached_decisions = llm_dedupe_read_pass1_cache(
         debug_dir.as_deref(),
-        pass1_prefix.as_str(),
-        "LLM dedupe pass1",
-        metrics.clone(),
+        pass1_choice.listing.as_str(),
+        &mut logs,
     )
     .await;
+    let used_cache = cached_decisions.is_some();
+    let (pass1_decisions, mut pass1_logs) = if let Some(decisions) = cached_decisions {
+        (decisions, Vec::new())
+    } else {
+        llm_dedupe_execute_prompt(
+            client,
+            provider,
+            auth,
+            model,
+            reasoning_effort,
+            pass1_choice.prompt.as_str(),
+            debug_dir.as_deref(),
+            pass1_prefix.as_str(),
+            "LLM dedupe pass1",
+            progress_sender.clone(),
+            log_sink.clone(),
+            metrics.clone(),
+        )
+        .await
+    };
     logs.append(&mut pass1_logs);
+    if !used_cache {
+        llm_dedupe_write_pass1_cache(
+            debug_dir.as_deref(),
+            pass1_choice.listing.as_str(),
+            &pass1_decisions,
+            &mut logs,
+        )
+        .await;
+    }
 
     if pass1_decisions.is_empty() {
         return BugLlmDedupeOutcome {
@@ -15203,6 +15370,7 @@ async fn llm_dedupe_bug_summaries_single_bucket(
             .collect();
         let semaphore = Arc::new(Semaphore::new(BUG_LLM_DEDUP_CONCURRENCY));
         let mut pass2_tasks: FuturesUnordered<_> = FuturesUnordered::new();
+        let mut pass2_task_count = 0usize;
         for (group_index, group_ids) in candidate_groups.into_iter().enumerate() {
             let mut group_summaries: Vec<&BugSummary> = group_ids
                 .iter()
@@ -15222,6 +15390,8 @@ async fn llm_dedupe_bug_summaries_single_bucket(
             let semaphore = semaphore.clone();
             let group_label = format!("pass2_group_{}", group_index + 1);
             let log_prefix = format!("LLM dedupe pass2 group {}", group_index + 1);
+            let progress_sender = progress_sender.clone();
+            let log_sink = log_sink.clone();
 
             pass2_tasks.push(async move {
                 let _permit = semaphore.acquire_owned().await.ok();
@@ -15268,18 +15438,44 @@ async fn llm_dedupe_bug_summaries_single_bucket(
                     debug_dir.as_deref(),
                     debug_prefix.as_str(),
                     log_prefix.as_str(),
+                    progress_sender,
+                    log_sink,
                     metrics,
                 )
                 .await;
                 logs.append(&mut call_logs);
                 Pass2Outcome { decisions, logs }
             });
+            pass2_task_count += 1;
         }
 
         let mut decisions: Vec<BugDedupeDecision> = Vec::new();
+        let total_groups = pass2_task_count;
+        if total_groups > 0 {
+            emit_progress_log(
+                &progress_sender,
+                &log_sink,
+                format!(
+                    "LLM dedupe pass2 starting for {total_groups} group(s) with concurrency {BUG_LLM_DEDUP_CONCURRENCY}.",
+                ),
+            );
+        }
+        let mut completed_groups = 0usize;
         while let Some(outcome) = pass2_tasks.next().await {
             logs.extend(outcome.logs);
             decisions.extend(outcome.decisions);
+            completed_groups = completed_groups.saturating_add(1);
+            if total_groups > 0
+                && (completed_groups == total_groups || completed_groups.is_multiple_of(5))
+            {
+                emit_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    format!(
+                        "LLM dedupe pass2 progress: {completed_groups}/{total_groups} group(s) complete.",
+                    ),
+                );
+            }
         }
         decisions
     };
@@ -15448,7 +15644,7 @@ async fn llm_dedupe_bug_summaries_single_bucket(
 
         if agg.members.len() > 1 {
             logs.push(format!(
-                "LLM dedupe cluster: rep {rep_id} merges {} finding(s); instances {}; highest severity {best_severity}.",
+                "LLM dedupe cluster: canonical {rep_id} merges {} finding(s); instances {}; highest severity {best_severity}.",
                 agg.members.len(),
                 agg.file_set.len()
             ));
