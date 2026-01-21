@@ -1,4 +1,5 @@
 #![cfg(not(target_os = "windows"))]
+#![allow(clippy::expect_used)]
 // unified exec is not supported on Windows OS
 use std::sync::Arc;
 
@@ -434,13 +435,165 @@ async fn remote_models_preserve_builtin_presets() -> Result<()> {
         .find(|model| model.model == "remote-alpha")
         .expect("remote model should be listed");
     let mut expected_remote: ModelPreset = remote_model.into();
-    expected_remote.is_default = true;
+    expected_remote.is_default = remote.is_default;
     assert_eq!(*remote, expected_remote);
+    let default_model = available
+        .iter()
+        .find(|model| model.show_in_picker)
+        .expect("default model should be set");
+    assert!(default_model.is_default);
+    assert_eq!(
+        available.iter().filter(|model| model.is_default).count(),
+        1,
+        "expected a single default model"
+    );
     assert!(
         available
             .iter()
             .any(|model| model.model == "gpt-5.1-codex-max"),
         "builtin presets should remain available after refresh"
+    );
+    assert_eq!(
+        models_mock.requests().len(),
+        1,
+        "expected a single /models request"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_merge_adds_new_high_priority_first() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let remote_model = test_remote_model("remote-top", ModelVisibility::List, -10_000);
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.features.enable(Feature::RemoteModels);
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let manager = ModelsManager::with_provider(
+        codex_home.path().to_path_buf(),
+        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        provider,
+    );
+
+    let available = manager
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .await;
+    assert_eq!(
+        available.first().map(|model| model.model.as_str()),
+        Some("remote-top")
+    );
+    assert_eq!(
+        models_mock.requests().len(),
+        1,
+        "expected a single /models request"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_merge_replaces_overlapping_model() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let slug = bundled_model_slug();
+    let mut remote_model = test_remote_model(&slug, ModelVisibility::List, 0);
+    remote_model.display_name = "Overridden".to_string();
+    remote_model.description = Some("Overridden description".to_string());
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model.clone()],
+        },
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.features.enable(Feature::RemoteModels);
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let manager = ModelsManager::with_provider(
+        codex_home.path().to_path_buf(),
+        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        provider,
+    );
+
+    let available = manager
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .await;
+    let overridden = available
+        .iter()
+        .find(|model| model.model == slug)
+        .expect("overlapping model should be listed");
+    assert_eq!(overridden.display_name, remote_model.display_name);
+    assert_eq!(
+        overridden.description,
+        remote_model
+            .description
+            .expect("remote model should include description")
+    );
+    assert_eq!(
+        models_mock.requests().len(),
+        1,
+        "expected a single /models request"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_models_merge_preserves_bundled_models_on_empty_response() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = MockServer::start().await;
+    let models_mock = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
+
+    let codex_home = TempDir::new()?;
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.features.enable(Feature::RemoteModels);
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let manager = ModelsManager::with_provider(
+        codex_home.path().to_path_buf(),
+        codex_core::auth::AuthManager::from_auth_for_testing(auth),
+        provider,
+    );
+
+    let available = manager
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .await;
+    let bundled_slug = bundled_model_slug();
+    assert!(
+        available.iter().any(|model| model.model == bundled_slug),
+        "bundled models should remain available after empty remote response"
     );
     assert_eq!(
         models_mock.requests().len(),
@@ -586,6 +739,17 @@ async fn wait_for_model_available(
         }
         sleep(Duration::from_millis(25)).await;
     }
+}
+
+fn bundled_model_slug() -> String {
+    let response: ModelsResponse = serde_json::from_str(include_str!("../../models.json"))
+        .expect("bundled models.json should deserialize");
+    response
+        .models
+        .first()
+        .expect("bundled models.json should include at least one model")
+        .slug
+        .clone()
 }
 
 fn test_remote_model(slug: &str, visibility: ModelVisibility, priority: i32) -> ModelInfo {

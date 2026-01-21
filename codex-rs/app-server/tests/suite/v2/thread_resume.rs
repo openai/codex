@@ -62,7 +62,9 @@ async fn thread_resume_returns_original_thread() -> Result<()> {
     let ThreadResumeResponse {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    assert_eq!(resumed, thread);
+    let mut expected = thread;
+    expected.updated_at = resumed.updated_at;
+    assert_eq!(resumed, expected);
 
     Ok(())
 }
@@ -74,10 +76,10 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let preview = "Saved user message";
-    let text_elements = vec![TextElement {
-        byte_range: ByteRange { start: 0, end: 5 },
-        placeholder: Some("<note>".into()),
-    }];
+    let text_elements = vec![TextElement::new(
+        ByteRange { start: 0, end: 5 },
+        Some("<note>".into()),
+    )];
     let conversation_id = create_fake_rollout_with_text_elements(
         codex_home.path(),
         "2025-01-05T12-00-00",
@@ -179,7 +181,9 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     let ThreadResumeResponse {
         thread: resumed, ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    assert_eq!(resumed, thread);
+    let mut expected = thread;
+    expected.updated_at = resumed.updated_at;
+    assert_eq!(resumed, expected);
 
     Ok(())
 }

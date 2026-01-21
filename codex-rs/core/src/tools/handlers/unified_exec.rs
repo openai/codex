@@ -236,7 +236,7 @@ impl ToolHandler for UnifiedExecHandler {
 fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String> {
     let model_shell = args.shell.as_ref().map(|shell_str| {
         let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
-        shell.shell_snapshot = None;
+        shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
         shell
     });
 
