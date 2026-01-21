@@ -64,7 +64,7 @@ There are multiple submission paths, but they share the same core rules:
 3. Expands `/prompts:` custom prompts:
    - Named args use key=value parsing.
    - Numeric args use positional parsing for `$1..$9` and `$ARGUMENTS`.
-   The expansion preserves text elements and yields the final submission payload.
+     The expansion preserves text elements and yields the final submission payload.
 4. Prunes attachments so only placeholders that survive expansion are sent.
 5. Clears pending pastes on success and suppresses submission if the final text is empty and there
    are no attachments.
