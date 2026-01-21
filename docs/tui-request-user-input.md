@@ -10,8 +10,10 @@ The overlay renders one question at a time and collects:
 - A single selected option (when options exist).
 - Freeform notes (always available).
 
-When options are present, notes are stored per selected option. If no selection
-and no notes are provided, the answer is submitted as `skipped`.
+When options are present, notes are stored per selected option and the first
+option is selected by default, so every option question has an answer. If a
+question has no options and no notes are provided, the answer is submitted as
+`skipped`.
 
 ## Focus and input routing
 

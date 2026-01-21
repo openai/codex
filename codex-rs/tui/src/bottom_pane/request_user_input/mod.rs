@@ -8,6 +8,7 @@
 //! - Unanswered questions submit as "skipped".
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -62,7 +63,7 @@ struct AnswerState {
 pub(crate) struct RequestUserInputOverlay {
     app_event_tx: AppEventSender,
     request: RequestUserInputEvent,
-    queue: Vec<RequestUserInputEvent>,
+    queue: VecDeque<RequestUserInputEvent>,
     answers: Vec<AnswerState>,
     current_idx: usize,
     focus: Focus,
@@ -74,7 +75,7 @@ impl RequestUserInputOverlay {
         let mut overlay = Self {
             app_event_tx,
             request,
-            queue: Vec::new(),
+            queue: VecDeque::new(),
             answers: Vec::new(),
             current_idx: 0,
             focus: Focus::Options,
@@ -264,7 +265,13 @@ impl RequestUserInputOverlay {
         for (idx, question) in self.request.questions.iter().enumerate() {
             let answer_state = &self.answers[idx];
             let options = question.options.as_ref();
-            let selected_idx = answer_state.selected;
+            let selected_idx = if options.is_some_and(|opts| !opts.is_empty()) {
+                answer_state
+                    .selected
+                    .or(answer_state.option_state.selected_idx)
+            } else {
+                answer_state.selected
+            };
             // Notes map to "other". When options exist, notes are per selected option.
             let notes = if options.is_some_and(|opts| !opts.is_empty()) {
                 selected_idx
@@ -282,13 +289,11 @@ impl RequestUserInputOverlay {
                     .map(|opt| opt.label.clone())
             });
             let selected = selected_label.into_iter().collect::<Vec<_>>();
-            // If neither selection nor notes are present, mark as skipped.
-            let other = if notes.is_empty() {
-                if selected.is_empty() {
-                    Some("skipped".to_string())
-                } else {
-                    None
-                }
+            // If there are options, always return a selection and only send notes when present.
+            let other = if notes.is_empty() && options.is_some_and(|opts| !opts.is_empty()) {
+                None
+            } else if notes.is_empty() && selected.is_empty() {
+                Some("skipped".to_string())
             } else {
                 Some(notes)
             };
@@ -302,7 +307,7 @@ impl RequestUserInputOverlay {
                 id: self.request.turn_id.clone(),
                 response: RequestUserInputResponse { answers },
             }));
-        if let Some(next) = self.queue.pop() {
+        if let Some(next) = self.queue.pop_front() {
             self.request = next;
             self.reset_for_request();
             self.ensure_focus_available();
@@ -321,12 +326,7 @@ impl RequestUserInputOverlay {
                 let answer = &self.answers[*idx];
                 let options = question.options.as_ref();
                 if options.is_some_and(|opts| !opts.is_empty()) {
-                    let has_selection = answer.selected.is_some();
-                    let has_notes = answer
-                        .option_notes
-                        .iter()
-                        .any(|entry| !entry.text.text().trim().is_empty());
-                    !(has_selection || has_notes)
+                    false
                 } else {
                     answer.notes.text.text().trim().is_empty()
                 }
@@ -457,7 +457,7 @@ impl BottomPaneView for RequestUserInputOverlay {
         &mut self,
         request: RequestUserInputEvent,
     ) -> Option<RequestUserInputEvent> {
-        self.queue.push(request);
+        self.queue.push_back(request);
         None
     }
 }
