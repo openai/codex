@@ -383,20 +383,31 @@ fn load_skill_interface(skill_path: &Path) -> Option<SkillInterface> {
     // Fail open: optional SKILL.toml metadata should not block loading SKILL.md.
     let skill_dir = skill_path.parent()?;
     let interface_path = skill_dir.join(SKILLS_TOML_FILENAME);
-    let interface_path = if interface_path.exists() {
-        interface_path
-    } else {
-        find_case_insensitive_file(skill_dir, SKILLS_TOML_FILENAME)?
-    };
-
-    let contents = match fs::read_to_string(&interface_path) {
-        Ok(contents) => contents,
+    let (interface_path, contents) = match fs::read_to_string(&interface_path) {
+        Ok(contents) => (interface_path, contents),
         Err(error) => {
-            tracing::warn!(
-                "ignoring {path}: failed to read SKILL.toml: {error}",
-                path = interface_path.display()
-            );
-            return None;
+            let fallback_path = find_case_insensitive_file(skill_dir, SKILLS_TOML_FILENAME);
+            match fallback_path {
+                Some(fallback_path) => match fs::read_to_string(&fallback_path) {
+                    Ok(contents) => (fallback_path, contents),
+                    Err(error) => {
+                        tracing::warn!(
+                            "ignoring {path}: failed to read SKILL.toml: {error}",
+                            path = fallback_path.display()
+                        );
+                        return None;
+                    }
+                },
+                None => {
+                    if error.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!(
+                            "ignoring {path}: failed to read SKILL.toml: {error}",
+                            path = interface_path.display()
+                        );
+                    }
+                    return None;
+                }
+            }
         }
     };
     let parsed: SkillToml = match toml::from_str(&contents) {
