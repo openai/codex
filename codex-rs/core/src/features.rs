@@ -390,7 +390,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::LinuxSandboxBindMounts,
         key: "linux_sandbox_bind_mounts",
-        stage: Stage::Experimental,
+        stage: Stage::Experimental {
+            name: "Linux bind-mount sandbox",
+            menu_description: "Enable read-only bind mounts in the Linux sandbox for extra file-system protection.",
+            announcement: "NEW! Try Linux bind-mount sandboxing for stronger file-system protections. Enable in /experimental.",
+        },
         default_enabled: false,
     },
     FeatureSpec {
