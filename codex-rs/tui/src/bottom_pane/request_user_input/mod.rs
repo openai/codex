@@ -415,6 +415,24 @@ impl BottomPaneView for RequestUserInputOverlay {
                     self.go_next_or_submit();
                     return;
                 }
+                if self.has_options() && matches!(key_event.code, KeyCode::Up | KeyCode::Down) {
+                    let options_len = self.options_len();
+                    let Some(answer) = self.current_answer_mut() else {
+                        return;
+                    };
+                    match key_event.code {
+                        KeyCode::Up => {
+                            answer.option_state.move_up_wrap(options_len);
+                            answer.selected = answer.option_state.selected_idx;
+                        }
+                        KeyCode::Down => {
+                            answer.option_state.move_down_wrap(options_len);
+                            answer.selected = answer.option_state.selected_idx;
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
                 // Notes are per option when options exist.
                 self.ensure_selected_for_notes();
                 if let Some(entry) = self.current_notes_entry_mut() {
@@ -728,5 +746,25 @@ mod tests {
             "request_user_input_freeform",
             render_snapshot(&overlay, area)
         );
+    }
+
+    #[test]
+    fn options_scroll_while_editing_notes() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+        );
+        overlay.focus = Focus::Notes;
+        overlay
+            .current_notes_entry_mut()
+            .expect("notes entry missing")
+            .text
+            .insert_str("Notes");
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+        let answer = overlay.current_answer().expect("answer missing");
+        assert_eq!(answer.selected, Some(1));
     }
 }
