@@ -28,6 +28,7 @@ use bottom_pane_view::BottomPaneView;
 use codex_core::features::Features;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
+use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -37,8 +38,10 @@ use ratatui::text::Line;
 use std::time::Duration;
 
 mod approval_overlay;
+mod request_user_input;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
+pub(crate) use request_user_input::RequestUserInputOverlay;
 mod bottom_pane_view;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -612,8 +615,32 @@ impl BottomPane {
         self.push_view(Box::new(modal));
     }
 
+    /// Called when the agent requests user input.
+    pub fn push_user_input_request(&mut self, request: RequestUserInputEvent) {
+        let request = if let Some(view) = self.view_stack.last_mut() {
+            match view.try_consume_user_input_request(request) {
+                Some(request) => request,
+                None => {
+                    self.request_redraw();
+                    return;
+                }
+            }
+        } else {
+            request
+        };
+
+        let modal = RequestUserInputOverlay::new(request, self.app_event_tx.clone());
+        self.pause_status_timer_for_modal();
+        self.set_composer_input_enabled(
+            false,
+            Some("Answer the questions to continue.".to_string()),
+        );
+        self.push_view(Box::new(modal));
+    }
+
     fn on_active_view_complete(&mut self) {
         self.resume_status_timer_after_modal();
+        self.set_composer_input_enabled(true, None);
     }
 
     fn pause_status_timer_for_modal(&mut self) {

@@ -438,10 +438,10 @@ async fn project_paths_resolve_relative_to_dot_codex_and_override_in_order() -> 
     tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
 
     let root_cfg = r#"
-experimental_instructions_file = "root.txt"
+model_instructions_file = "root.txt"
 "#;
     let nested_cfg = r#"
-experimental_instructions_file = "child.txt"
+model_instructions_file = "child.txt"
 "#;
     tokio::fs::write(project_root.join(".codex").join(CONFIG_TOML_FILE), root_cfg).await?;
     tokio::fs::write(nested.join(".codex").join(CONFIG_TOML_FILE), nested_cfg).await?;
@@ -591,7 +591,7 @@ async fn cli_overrides_with_relative_paths_do_not_break_trust_check() -> std::io
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let cli_overrides = vec![(
-        "experimental_instructions_file".to_string(),
+        "model_instructions_file".to_string(),
         TomlValue::String("relative.md".to_string()),
     )];
 
