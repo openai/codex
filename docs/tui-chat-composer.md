@@ -51,18 +51,21 @@ The solution is to detect paste-like _bursts_ and buffer them into a single expl
 - When a slash command name is completed and the user types a space, the `/command` token is
   promoted into a text element so it renders distinctly and edits atomically.
 
-### History navigation (↑/↓)
+## History navigation (↑/↓)
 
-Up/Down recall is handled by `ChatComposerHistory` and merges two sources:
+`ChatComposerHistory` merges two sources:
 
-- **Persistent history** (cross-session, fetched from `~/.codex/history.jsonl`): text-only. It
-  does **not** carry text element ranges or local image attachments, so recalling one of these
-  entries only restores the text.
-- **Local history** (current session): stores the full submission payload, including text
-  elements and local image paths. Recalling a local entry rehydrates placeholders and attachments.
+- **Persistent history** (cross-session): text-only entries read from the history log. These do not
+  include text elements, local image paths, or pending large-paste payloads so the on-disk format
+  stays backwards-compatible.
+- **Local history** (in-session): full composer snapshots captured during the current session
+  (submitted messages and Ctrl+C-cleared drafts).
 
-This distinction keeps the on-disk history backward compatible and avoids persisting attachments,
-while still providing a richer recall experience for in-session edits.
+When recalling a local entry, the composer restores:
+
+- text elements (so placeholders render as styled elements),
+- local image attachments (by matching placeholders),
+- pending large-paste payloads (so placeholders still expand on submit).
 
 ## Config gating for reuse
 
@@ -100,6 +103,9 @@ There are multiple submission paths, but they share the same core rules:
 `handle_submission` calls `prepare_submission_text` for both submit and queue. That method:
 
 1. Expands any pending paste placeholders so element ranges align with the final text.
+   - Placeholder text is unique within a composer buffer. Both large paste markers and image
+     attachment placeholders are suffixed as needed (`#2`, `#3`, …), so payloads can match
+     elements exactly by placeholder text.
 2. Trims whitespace and rebases element ranges to the trimmed buffer.
 3. Expands `/prompts:` custom prompts:
    - Named args use key=value parsing.

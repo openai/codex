@@ -813,64 +813,13 @@ impl ChatComposer {
     }
 
     fn restore_history_entry(&mut self, entry: HistoryEntry) {
-        let pending_pastes = entry.pending_pastes;
-        let text = entry.text;
-        let mention_bindings = entry.mention_bindings;
-        let text_elements =
-            Self::rehydrate_pending_paste_elements(&text, entry.text_elements, &pending_pastes);
         self.set_text_content_with_mention_bindings(
-            text,
-            text_elements,
+            entry.text,
+            entry.text_elements,
             entry.local_image_paths,
-            mention_bindings,
+            entry.mention_bindings,
         );
-        self.pending_pastes = pending_pastes;
-    }
-
-    fn rehydrate_pending_paste_elements(
-        text: &str,
-        mut elements: Vec<TextElement>,
-        pending_pastes: &[(String, String)],
-    ) -> Vec<TextElement> {
-        if pending_pastes.is_empty() {
-            return elements;
-        }
-
-        let mut covered: HashSet<(usize, usize)> = HashSet::new();
-        for elem in &elements {
-            let start = elem.byte_range.start.min(text.len());
-            let end = elem.byte_range.end.min(text.len());
-            if start < end {
-                covered.insert((start, end));
-            }
-        }
-
-        let mut added = false;
-        for (placeholder, _) in pending_pastes {
-            let mut matched = None;
-            for (pos, _) in text.match_indices(placeholder) {
-                let end = pos.saturating_add(placeholder.len());
-                if end > text.len() {
-                    continue;
-                }
-                let range = (pos, end);
-                if covered.contains(&range) {
-                    continue;
-                }
-                matched = Some((pos, end));
-                break;
-            }
-            if let Some((start, end)) = matched {
-                elements.push(TextElement::new(ByteRange { start, end }, None));
-                covered.insert((start, end));
-                added = true;
-            }
-        }
-
-        if added {
-            elements.sort_by_key(|elem| elem.byte_range.start);
-        }
-        elements
+        self.pending_pastes = entry.pending_pastes;
     }
 
     /// Update the placeholder text without changing input enablement.

@@ -38,6 +38,10 @@ pub struct TextElement {
     /// Byte range in the parent `text` buffer that this element occupies.
     pub byte_range: ByteRange,
     /// Optional human-readable placeholder for the element, displayed in the UI.
+    ///
+    /// Placeholders are unique within a single composer buffer. This includes both generic
+    /// text element placeholders (like large paste markers) and image attachment placeholders,
+    /// enabling exact matching between elements and their backing payloads.
     placeholder: Option<String>,
 }
 
