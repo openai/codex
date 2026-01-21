@@ -2071,6 +2071,7 @@ impl ChatWidget {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
+                    let _ = &self.otel_manager;
                     // Not supported; on non-Windows this command should never be reachable.
                 };
             }

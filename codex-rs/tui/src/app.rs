@@ -49,11 +49,11 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
+use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_otel::OtelManager;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -1074,11 +1074,8 @@ impl App {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
             AppEvent::OpenWindowsSandboxFallbackPrompt { preset, reason } => {
-                self.otel_manager.counter(
-                    "codex.windows_sandbox.fallback_prompt_shown",
-                    1,
-                    &[],
-                );
+                self.otel_manager
+                    .counter("codex.windows_sandbox.fallback_prompt_shown", 1, &[]);
                 self.chat_widget.clear_windows_sandbox_setup_status();
                 if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
                     self.otel_manager.record_duration(
@@ -1165,10 +1162,10 @@ impl App {
                     self.chat_widget.clear_windows_sandbox_setup_status();
                     if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
                         self.otel_manager.record_duration(
-                        "codex.windows_sandbox.elevated_setup_duration_ms",
-                        started_at.elapsed(),
-                        &[("result", "success")],
-                    );
+                            "codex.windows_sandbox.elevated_setup_duration_ms",
+                            started_at.elapsed(),
+                            &[("result", "success")],
+                        );
                     }
                     let profile = self.active_profile.as_deref();
                     let feature_key = Feature::WindowsSandbox.key();
