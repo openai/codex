@@ -2,13 +2,9 @@ bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "toolchains_llvm_bootstrapped", version = "0.3.1")
 archive_override(
     module_name = "toolchains_llvm_bootstrapped",
-    integrity = "sha256-9ks21bgEqbQWmwUIvqeLA64+Jk6o4ZVjC8KxjVa2Vw8=",
-    strip_prefix = "toolchains_llvm_bootstrapped-e3775e66a7b6d287c705ca0cd24497ef4a77c503",
-    urls = ["https://github.com/cerisier/toolchains_llvm_bootstrapped/archive/e3775e66a7b6d287c705ca0cd24497ef4a77c503/master.tar.gz"],
-    patch_strip = 1,
-    patches = [
-        "//patches:llvm_toolchain_archive_params.patch",
-    ],
+    integrity = "sha256-4/2h4tYSUSptxFVI9G50yJxWGOwHSeTeOGBlaLQBV8g=",
+    strip_prefix = "toolchains_llvm_bootstrapped-d20baf67e04d8e2887e3779022890d1dc5e6b948",
+    urls = ["https://github.com/cerisier/toolchains_llvm_bootstrapped/archive/d20baf67e04d8e2887e3779022890d1dc5e6b948.tar.gz"],
 )
 
 osx = use_extension("@toolchains_llvm_bootstrapped//toolchain/extension:osx.bzl", "osx")
@@ -94,7 +90,7 @@ crate.annotation(
     crate = "windows-link",
     patch_args = ["-p1"],
     patches = [
-        "//patches:windows-link.patch"
+        "//patches:windows-link.patch",
     ],
 )
 

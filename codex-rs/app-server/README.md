@@ -504,7 +504,19 @@ Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, wi
     "data": [{
         "cwd": "/Users/me/project",
         "skills": [
-            { "name": "skill-creator", "description": "Create or update a Codex skill", "enabled": true }
+            {
+              "name": "skill-creator",
+              "description": "Create or update a Codex skill",
+              "enabled": true,
+              "interface": {
+                "displayName": "Skill Creator",
+                "shortDescription": "Create or update a Codex skill",
+                "iconSmall": "icon.svg",
+                "iconLarge": "icon-large.svg",
+                "brandColor": "#111111",
+                "defaultPrompt": "Add a new skill for triaging flaky CI."
+              }
+            }
         ],
         "errors": []
     }]

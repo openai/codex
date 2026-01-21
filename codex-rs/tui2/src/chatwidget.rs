@@ -88,6 +88,7 @@ use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
+use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
@@ -314,6 +315,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
     pub(crate) model: Option<String>,
+    pub(crate) otel_manager: OtelManager,
 }
 
 #[derive(Default)]
@@ -360,6 +362,7 @@ pub(crate) struct ChatWidget {
     stored_collaboration_mode: CollaborationMode,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
+    otel_manager: OtelManager,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
@@ -1604,6 +1607,7 @@ impl ChatWidget {
             feedback,
             is_first_run,
             model,
+            otel_manager,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -1654,6 +1658,7 @@ impl ChatWidget {
             stored_collaboration_mode,
             auth_manager,
             models_manager,
+            otel_manager,
             session_header: SessionHeader::new(model_for_header),
             initial_user_message,
             token_info: None,
@@ -1718,6 +1723,7 @@ impl ChatWidget {
             models_manager,
             feedback,
             model,
+            otel_manager,
             ..
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
@@ -1766,6 +1772,7 @@ impl ChatWidget {
             stored_collaboration_mode,
             auth_manager,
             models_manager,
+            otel_manager,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
@@ -2053,11 +2060,17 @@ impl ChatWidget {
                         return;
                     }
 
+                    self.otel_manager.counter(
+                        "codex.windows_sandbox.setup_elevated_sandbox_command",
+                        1,
+                        &[],
+                    );
                     self.app_event_tx
                         .send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
+                    let _ = &self.otel_manager;
                     // Not supported; on non-Windows this command should never be reachable.
                 };
             }
