@@ -15,6 +15,23 @@ use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum CommandMatchKind {
+    Exact = 0,
+    Prefix = 1,
+    Fuzzy = 2,
+}
+
+#[derive(Clone, Debug)]
+struct RankedCommand {
+    item: CommandItem,
+    match_indices: Option<Vec<usize>>,
+    score: i32,
+    kind: CommandMatchKind,
+    name_len: usize,
+    order_idx: usize,
+}
+
 fn windows_degraded_sandbox_active() -> bool {
     cfg!(target_os = "windows")
         && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -137,20 +154,72 @@ impl CommandPopup {
             return out;
         }
 
-        for (_, cmd) in self.builtins.iter() {
-            if let Some((indices, score)) = fuzzy_match(cmd.command(), filter) {
-                out.push((CommandItem::Builtin(*cmd), Some(indices), score));
+        let filter_lower = filter.to_lowercase();
+        let mut ranked: Vec<RankedCommand> = Vec::new();
+
+        for (idx, (_, cmd)) in self.builtins.iter().enumerate() {
+            let name = cmd.command();
+            if let Some((indices, score)) = fuzzy_match(name, filter) {
+                let name_lower = name.to_lowercase();
+                let kind = if name_lower == filter_lower {
+                    CommandMatchKind::Exact
+                } else if name_lower.starts_with(&filter_lower) {
+                    CommandMatchKind::Prefix
+                } else {
+                    CommandMatchKind::Fuzzy
+                };
+                ranked.push(RankedCommand {
+                    item: CommandItem::Builtin(*cmd),
+                    match_indices: Some(indices),
+                    score,
+                    kind,
+                    name_len: name.len(),
+                    order_idx: idx,
+                });
             }
         }
         // Support both search styles:
         // - Typing "name" should surface "/prompts:name" results.
         // - Typing "prompts:name" should also work.
+        let base_idx = self.builtins.len();
         for (idx, p) in self.prompts.iter().enumerate() {
             let display = format!("{PROMPTS_CMD_PREFIX}:{}", p.name);
             if let Some((indices, score)) = fuzzy_match(&display, filter) {
-                out.push((CommandItem::UserPrompt(idx), Some(indices), score));
+                let name_lower = p.name.to_lowercase();
+                let display_lower = display.to_lowercase();
+                let kind = if name_lower == filter_lower || display_lower == filter_lower {
+                    CommandMatchKind::Exact
+                } else if name_lower.starts_with(&filter_lower)
+                    || display_lower.starts_with(&filter_lower)
+                {
+                    CommandMatchKind::Prefix
+                } else {
+                    CommandMatchKind::Fuzzy
+                };
+                ranked.push(RankedCommand {
+                    item: CommandItem::UserPrompt(idx),
+                    match_indices: Some(indices),
+                    score,
+                    kind,
+                    name_len: display.len(),
+                    order_idx: base_idx + idx,
+                });
             }
         }
+
+        ranked.sort_by(|a, b| {
+            a.kind
+                .cmp(&b.kind)
+                .then_with(|| a.score.cmp(&b.score))
+                .then_with(|| a.name_len.cmp(&b.name_len))
+                .then_with(|| a.order_idx.cmp(&b.order_idx))
+        });
+
+        out.extend(
+            ranked
+                .into_iter()
+                .map(|entry| (entry.item, entry.match_indices, entry.score)),
+        );
         out
     }
 
@@ -286,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn filtered_commands_keep_presentation_order() {
+    fn filtered_commands_rank_by_match_quality() {
         let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
         popup.on_composer_text_change("/m".to_string());
 
@@ -301,12 +370,12 @@ mod tests {
         assert_eq!(
             cmds,
             vec![
+                "mcp",
                 "model",
-                "experimental",
+                "mention",
                 "resume",
                 "compact",
-                "mention",
-                "mcp"
+                "experimental"
             ]
         );
     }
