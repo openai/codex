@@ -23,7 +23,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -174,6 +173,7 @@ mod session_header;
 use self::session_header::SessionHeader;
 use crate::streaming::controller::StreamController;
 use crate::version::CODEX_CLI_VERSION;
+use std::path::Path;
 
 use chrono::Local;
 use codex_common::approval_presets::ApprovalPreset;
@@ -399,7 +399,6 @@ pub(crate) struct ChatWidget {
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     conversation_id: Option<ThreadId>,
-    thread_name: Option<String>,
     forked_from: Option<ThreadId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
@@ -634,7 +633,6 @@ impl ChatWidget {
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
         self.conversation_id = Some(event.session_id);
-        self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = Some(event.rollout_path.clone());
         let initial_messages = event.initial_messages.clone();
@@ -675,13 +673,6 @@ impl ChatWidget {
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
-    }
-
-    fn on_thread_name_updated(&mut self, event: codex_core::protocol::ThreadNameUpdatedEvent) {
-        if self.conversation_id == Some(event.thread_id) {
-            self.thread_name = event.thread_name;
-        }
-        self.request_redraw();
     }
 
     fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
@@ -1689,7 +1680,6 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             conversation_id: None,
-            thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
@@ -1804,7 +1794,6 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             conversation_id: None,
-            thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
@@ -2029,9 +2018,6 @@ impl ChatWidget {
             SlashCommand::Review => {
                 self.open_review_popup();
             }
-            SlashCommand::Rename => {
-                self.show_rename_prompt();
-            }
             SlashCommand::Model => {
                 self.open_model_popup();
             }
@@ -2199,12 +2185,6 @@ impl ChatWidget {
 
         let trimmed = args.trim();
         match cmd {
-            SlashCommand::Rename if !trimmed.is_empty() => {
-                let name = trimmed.to_string();
-                self.add_info_message(format!("Thread renamed to \"{name}\""), None);
-                self.app_event_tx
-                    .send(AppEvent::CodexOp(Op::SetThreadName { name }));
-            }
             SlashCommand::Review if !trimmed.is_empty() => {
                 self.submit_op(Op::Review {
                     review_request: ReviewRequest {
@@ -2225,23 +2205,6 @@ impl ChatWidget {
             }
             _ => self.dispatch_command(cmd),
         }
-    }
-
-    fn show_rename_prompt(&mut self) {
-        let tx = self.app_event_tx.clone();
-        let view = CustomPromptView::new(
-            "Rename thread".to_string(),
-            "Type a new name and press Enter".to_string(),
-            None,
-            Box::new(move |name: String| {
-                tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_info_event(format!("Thread renamed to \"{name}\""), None),
-                )));
-                tx.send(AppEvent::CodexOp(Op::SetThreadName { name }));
-            }),
-        );
-
-        self.bottom_pane.show_view(Box::new(view));
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
@@ -2415,10 +2378,7 @@ impl ChatWidget {
     /// distinguish replayed events from live ones.
     fn replay_initial_messages(&mut self, events: Vec<EventMsg>) {
         for msg in events {
-            if matches!(
-                msg,
-                EventMsg::SessionConfigured(_) | EventMsg::ThreadNameUpdated(_)
-            ) {
+            if matches!(msg, EventMsg::SessionConfigured(_)) {
                 continue;
             }
             // `id: None` indicates a synthetic/fake id coming from replay.
@@ -2454,7 +2414,6 @@ impl ChatWidget {
 
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
-            EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
             EventMsg::AgentMessage(AgentMessageEvent { message }) => self.on_agent_message(message),
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
@@ -2726,7 +2685,6 @@ impl ChatWidget {
             token_info,
             total_usage,
             &self.conversation_id,
-            self.thread_name.clone(),
             self.forked_from,
             self.rate_limit_snapshot.as_ref(),
             self.plan_type,
@@ -4575,10 +4533,6 @@ impl ChatWidget {
 
     pub(crate) fn conversation_id(&self) -> Option<ThreadId> {
         self.conversation_id
-    }
-
-    pub(crate) fn thread_name(&self) -> Option<String> {
-        self.thread_name.clone()
     }
 
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {

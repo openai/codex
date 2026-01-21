@@ -302,7 +302,6 @@ mod tests {
             vec![
                 "model",
                 "experimental",
-                "rename",
                 "resume",
                 "compact",
                 "mention",
