@@ -1,4 +1,5 @@
 use crate::agent::AgentStatus;
+use crate::agent::guards::Guards;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::thread_manager::ThreadManagerState;
@@ -12,18 +13,25 @@ use tokio::sync::watch;
 /// Control-plane handle for multi-agent operations.
 /// `AgentControl` is held by each session (via `SessionServices`). It provides capability to
 /// spawn new agents and the inter-agent communication layer.
+/// An `AgentControl` instance is shared per "user session" which means the same `AgentControl`
+/// is used for every sub-agent spawned by Codex. By doing so, we make sure the guards are
+/// scoped to a user session.
 #[derive(Clone, Default)]
 pub(crate) struct AgentControl {
     /// Weak handle back to the global thread registry/state.
     /// This is `Weak` to avoid reference cycles and shadow persistence of the form
     /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
     manager: Weak<ThreadManagerState>,
+    state: Arc<Guards>,
 }
 
 impl AgentControl {
     /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
     pub(crate) fn new(manager: Weak<ThreadManagerState>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            ..Default::default()
+        }
     }
 
     /// Spawn a new agent thread and submit the initial prompt.
@@ -33,7 +41,11 @@ impl AgentControl {
         prompt: String,
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
+        let reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+
+        // The same `AgentControl` is sent to spawn the thread.
         let new_thread = state.spawn_new_thread(config, self.clone()).await?;
+        reservation.commit(new_thread.thread_id);
 
         // Notify a new thread has been created. This notification will be processed by clients
         // to subscribe or drain this newly created thread.
@@ -67,6 +79,7 @@ impl AgentControl {
             .await;
         if matches!(result, Err(CodexErr::InternalAgentDied)) {
             let _ = state.remove_thread(&agent_id).await;
+            self.state.release_spawned_thread(agent_id);
         }
         result
     }
@@ -82,6 +95,7 @@ impl AgentControl {
         let state = self.upgrade()?;
         let result = state.send_op(agent_id, Op::Shutdown {}).await;
         let _ = state.remove_thread(&agent_id).await;
+        self.state.release_spawned_thread(agent_id);
         result
     }
 
@@ -132,15 +146,23 @@ mod tests {
     use codex_protocol::protocol::TurnStartedEvent;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+    use toml::Value as TomlValue;
 
-    async fn test_config() -> (TempDir, Config) {
+    async fn test_config_with_cli_overrides(
+        cli_overrides: Vec<(String, TomlValue)>,
+    ) -> (TempDir, Config) {
         let home = TempDir::new().expect("create temp dir");
         let config = ConfigBuilder::default()
             .codex_home(home.path().to_path_buf())
+            .cli_overrides(cli_overrides)
             .build()
             .await
             .expect("load default test config");
         (home, config)
+    }
+
+    async fn test_config() -> (TempDir, Config) {
+        test_config_with_cli_overrides(Vec::new()).await
     }
 
     struct AgentControlHarness {
@@ -372,5 +394,118 @@ mod tests {
             .into_iter()
             .find(|entry| *entry == expected);
         assert_eq!(captured, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_respects_max_threads_limit() {
+        let max_threads = 1usize;
+        let (_home, config) = test_config_with_cli_overrides(vec![(
+            "agents.max_threads".to_string(),
+            TomlValue::Integer(max_threads as i64),
+        )])
+        .await;
+        let manager = ThreadManager::with_models_provider_and_home(
+            CodexAuth::from_api_key("dummy"),
+            config.model_provider.clone(),
+            config.codex_home.clone(),
+        );
+        let control = manager.agent_control();
+
+        let _ = manager
+            .start_thread(config.clone())
+            .await
+            .expect("start thread");
+
+        let first_agent_id = control
+            .spawn_agent(config.clone(), "hello".to_string())
+            .await
+            .expect("spawn_agent should succeed");
+
+        let err = control
+            .spawn_agent(config, "hello again".to_string())
+            .await
+            .expect_err("spawn_agent should respect max threads");
+        let CodexErr::AgentLimitReached {
+            max_threads: seen_max_threads,
+        } = err
+        else {
+            panic!("expected CodexErr::AgentLimitReached");
+        };
+        assert_eq!(seen_max_threads, max_threads);
+
+        let _ = control
+            .shutdown_agent(first_agent_id)
+            .await
+            .expect("shutdown agent");
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_releases_slot_after_shutdown() {
+        let max_threads = 1usize;
+        let (_home, config) = test_config_with_cli_overrides(vec![(
+            "agents.max_threads".to_string(),
+            TomlValue::Integer(max_threads as i64),
+        )])
+        .await;
+        let manager = ThreadManager::with_models_provider_and_home(
+            CodexAuth::from_api_key("dummy"),
+            config.model_provider.clone(),
+            config.codex_home.clone(),
+        );
+        let control = manager.agent_control();
+
+        let first_agent_id = control
+            .spawn_agent(config.clone(), "hello".to_string())
+            .await
+            .expect("spawn_agent should succeed");
+        let _ = control
+            .shutdown_agent(first_agent_id)
+            .await
+            .expect("shutdown agent");
+
+        let second_agent_id = control
+            .spawn_agent(config.clone(), "hello again".to_string())
+            .await
+            .expect("spawn_agent should succeed after shutdown");
+        let _ = control
+            .shutdown_agent(second_agent_id)
+            .await
+            .expect("shutdown agent");
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_limit_shared_across_clones() {
+        let max_threads = 1usize;
+        let (_home, config) = test_config_with_cli_overrides(vec![(
+            "agents.max_threads".to_string(),
+            TomlValue::Integer(max_threads as i64),
+        )])
+        .await;
+        let manager = ThreadManager::with_models_provider_and_home(
+            CodexAuth::from_api_key("dummy"),
+            config.model_provider.clone(),
+            config.codex_home.clone(),
+        );
+        let control = manager.agent_control();
+        let cloned = control.clone();
+
+        let first_agent_id = cloned
+            .spawn_agent(config.clone(), "hello".to_string())
+            .await
+            .expect("spawn_agent should succeed");
+
+        let err = control
+            .spawn_agent(config, "hello again".to_string())
+            .await
+            .expect_err("spawn_agent should respect shared guard");
+        let CodexErr::AgentLimitReached { max_threads } = err else {
+            panic!("expected CodexErr::AgentLimitReached");
+        };
+        assert_eq!(max_threads, 1);
+
+        let _ = control
+            .shutdown_agent(first_agent_id)
+            .await
+            .expect("shutdown agent");
     }
 }
