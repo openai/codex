@@ -723,18 +723,12 @@ impl Session {
         let mut default_shell = shell::default_user_shell();
         // Create the mutable state for the Session.
         if config.features.enabled(Feature::ShellSnapshot) {
-            let timer = otel_manager.start_timer("codex.shell_snapshot.duration_ms", &[]);
-            default_shell.shell_snapshot =
-                ShellSnapshot::try_new(&config.codex_home, conversation_id, &default_shell)
-                    .await
-                    .map(Arc::new);
-            let success = if default_shell.shell_snapshot.is_some() {
-                "true"
-            } else {
-                "false"
-            };
-            let _ = timer.map(|timer| timer.record(&[("success", success)]));
-            otel_manager.counter("codex.shell_snapshot", 1, &[("success", success)])
+            ShellSnapshot::start_snapshotting(
+                config.codex_home.clone(),
+                conversation_id,
+                &mut default_shell,
+                otel_manager.clone(),
+            );
         }
         let state = SessionState::new(session_configuration.clone());
 
