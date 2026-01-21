@@ -140,6 +140,7 @@ const BUG_DEDUP_CONFIDENCE_THRESHOLD: f32 = 0.85;
 const BUG_LLM_DEDUP_CONCURRENCY: usize = 32;
 const BUG_LLM_DEDUP_LINE_BUCKET_SIZE: u32 = 25;
 const BUG_LLM_DEDUP_LOW_SEVERITY_MAX_FINDINGS: usize = 100;
+const BUG_LLM_DEDUP_REASON_LOG_LIMIT: usize = 12;
 const BUG_DEDUP_PROMPT_MAX_CHARS: usize = 120_000;
 const BUG_LLM_DEDUP_PASS1_CACHE_FILE: &str = "llm_dedupe_pass1_cache.json";
 const COMMAND_PREVIEW_MAX_LINES: usize = 2;
@@ -5653,10 +5654,10 @@ pub async fn run_security_review(
                     let mut removed = 0usize;
                     let mut filtered_low = 0usize;
                     if loaded.bugs.len() > 1 {
-                        let dedupe_model = if request.triage_model.trim().is_empty() {
-                            FILE_TRIAGE_MODEL
+                        let dedupe_model = if request.spec_model.trim().is_empty() {
+                            SPEC_GENERATION_MODEL
                         } else {
-                            request.triage_model.as_str()
+                            request.spec_model.as_str()
                         };
                         let (summaries, details) = snapshot_summaries_and_details(&loaded);
                         let llm_outcome = llm_dedupe_bug_summaries(
@@ -5664,7 +5665,7 @@ pub async fn run_security_review(
                             &request.provider,
                             &request.auth,
                             dedupe_model,
-                            bug_reasoning_effort,
+                            spec_reasoning_effort,
                             summaries,
                             details,
                             path.parent().map(Path::to_path_buf),
@@ -6130,17 +6131,17 @@ pub async fn run_security_review(
         }
 
         if all_summaries.len() > 1 {
-            let dedupe_model = if request.triage_model.trim().is_empty() {
-                FILE_TRIAGE_MODEL
+            let dedupe_model = if request.spec_model.trim().is_empty() {
+                SPEC_GENERATION_MODEL
             } else {
-                request.triage_model.as_str()
+                request.spec_model.as_str()
             };
             let llm_outcome = llm_dedupe_bug_summaries(
                 &model_client,
                 &request.provider,
                 &request.auth,
                 dedupe_model,
-                bug_reasoning_effort,
+                spec_reasoning_effort,
                 all_summaries,
                 all_details,
                 Some(request.output_root.join("context")),
@@ -6189,13 +6190,13 @@ pub async fn run_security_review(
                 &request.repo_path,
                 &repository_summary,
                 spec_for_rerank,
+                progress_sender.clone(),
+                log_sink.clone(),
                 metrics.clone(),
             )
             .await;
-            aggregated_logs.extend(risk_logs.clone());
-            for line in risk_logs {
-                record(&mut logs, line);
-            }
+            logs.extend(risk_logs.clone());
+            aggregated_logs.extend(risk_logs);
         }
 
         // Normalize severities again after rerank and update markdown + details.
@@ -7608,6 +7609,58 @@ fn log_model_reasoning(
             let message = format!("Model reasoning: {truncated}");
             push_progress_log(progress_sender, log_sink, logs, message);
         }
+    }
+}
+
+fn log_dedupe_decision_reasons(
+    decisions: &[BugDedupeDecision],
+    log_prefix: &str,
+    progress_sender: &Option<AppEventSender>,
+    log_sink: &Option<Arc<SecurityReviewLogSink>>,
+    logs: &mut Vec<String>,
+) {
+    let mut total_merges = 0usize;
+    let mut logged = 0usize;
+    for decision in decisions {
+        if decision.canonical_id == decision.id {
+            continue;
+        }
+        total_merges = total_merges.saturating_add(1);
+        let Some(reason) = decision
+            .reason
+            .as_ref()
+            .map(|reason| reason.trim())
+            .filter(|reason| !reason.is_empty())
+        else {
+            continue;
+        };
+        if logged >= BUG_LLM_DEDUP_REASON_LOG_LIMIT {
+            continue;
+        }
+        let truncated = truncate_text(reason, MODEL_REASONING_LOG_MAX_GRAPHEMES);
+        let id = decision.id;
+        let canonical_id = decision.canonical_id;
+        let message = format!("{log_prefix} decision: {id} -> {canonical_id} ({truncated})");
+        push_progress_log(progress_sender, log_sink, logs, message);
+        logged = logged.saturating_add(1);
+    }
+    if total_merges > 0 && logged == 0 {
+        push_progress_log(
+            progress_sender,
+            log_sink,
+            logs,
+            format!("{log_prefix} decision reasons unavailable for {total_merges} merge(s)."),
+        );
+        return;
+    }
+    let remaining = total_merges.saturating_sub(logged);
+    if remaining > 0 {
+        push_progress_log(
+            progress_sender,
+            log_sink,
+            logs,
+            format!("{log_prefix} decision reasons omitted for {remaining} merge(s)."),
+        );
     }
 }
 
@@ -13645,6 +13698,8 @@ async fn analyze_files_individually(
             repo_root,
             repository_summary,
             spec_markdown,
+            progress_sender.clone(),
+            log_sink.clone(),
             metrics.clone(),
         )
         .await;
@@ -14981,6 +15036,7 @@ async fn llm_dedupe_execute_prompt(
         }
     };
 
+    let decisions = llm_dedupe_parse_decisions(response_output.text.as_str());
     llm_dedupe_write_debug_response(
         debug_dir,
         debug_prefix,
@@ -14991,9 +15047,15 @@ async fn llm_dedupe_execute_prompt(
 
     if let Some(reasoning) = response_output.reasoning.as_ref() {
         log_model_reasoning(reasoning, &progress_sender, &log_sink, &mut logs);
+    } else {
+        log_dedupe_decision_reasons(
+            &decisions,
+            log_prefix,
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+        );
     }
-
-    let decisions = llm_dedupe_parse_decisions(response_output.text.as_str());
     if decisions.is_empty() {
         logs.push(format!(
             "{log_prefix} returned no parseable JSON Lines; skipping."
@@ -16518,6 +16580,8 @@ async fn run_risk_rerank_chunk(
     metrics: Arc<ReviewMetrics>,
     repo_root: PathBuf,
     ids: Vec<usize>,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
 ) -> Result<RiskRerankChunkSuccess, RiskRerankChunkFailure> {
     let mut conversation: Vec<String> = Vec::new();
     let mut seen_search_requests: HashSet<String> = HashSet::new();
@@ -16535,9 +16599,14 @@ async fn run_risk_rerank_chunk(
 
     loop {
         if tool_rounds > BUG_RERANK_MAX_TOOL_ROUNDS {
-            logs.push(format!(
-                "Risk rerank chunk for bug id(s) {id_list} exceeded {BUG_RERANK_MAX_TOOL_ROUNDS} tool rounds."
-            ));
+            push_progress_log(
+                &progress_sender,
+                &log_sink,
+                &mut logs,
+                format!(
+                    "Risk rerank chunk for bug id(s) {id_list} exceeded {BUG_RERANK_MAX_TOOL_ROUNDS} tool rounds."
+                ),
+            );
             return Err(RiskRerankChunkFailure {
                 ids,
                 error: format!("Risk rerank exceeded {BUG_RERANK_MAX_TOOL_ROUNDS} tool rounds"),
@@ -16566,7 +16635,12 @@ async fn run_risk_rerank_chunk(
         {
             Ok(output) => output,
             Err(err) => {
-                logs.push(format!("Risk rerank model request failed: {err}"));
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    format!("Risk rerank model request failed: {err}"),
+                );
                 return Err(RiskRerankChunkFailure {
                     ids,
                     error: err,
@@ -16582,7 +16656,12 @@ async fn run_risk_rerank_chunk(
                 .filter(|line| !line.is_empty())
             {
                 let truncated = truncate_text(line, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-                logs.push(format!("Risk rerank reasoning: {truncated}"));
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    format!("Risk rerank reasoning: {truncated}"),
+                );
             }
         }
 
@@ -16603,10 +16682,15 @@ async fn run_risk_rerank_chunk(
             let cmd_label = request.command.label();
             let key = request.dedupe_key();
             if !seen_read_requests.insert(key) {
-                logs.push(format!(
-                    "Risk rerank {cmd_label} `{}` skipped (already provided).",
-                    request.path.display(),
-                ));
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    format!(
+                        "Risk rerank {cmd_label} `{}` skipped (already provided).",
+                        request.path.display(),
+                    ),
+                );
                 conversation.push(format!(
                     "Tool {cmd_label} `{}` already provided earlier.",
                     request.path.display()
@@ -16627,10 +16711,15 @@ async fn run_risk_rerank_chunk(
             .await
             {
                 Ok(output) => {
-                    logs.push(format!(
-                        "Risk rerank {cmd_label} `{}` returned content.",
-                        request.path.display(),
-                    ));
+                    push_progress_log(
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                        format!(
+                            "Risk rerank {cmd_label} `{}` returned content.",
+                            request.path.display(),
+                        ),
+                    );
                     conversation.push(format!(
                         "Tool {cmd_label} `{}`:\n{}",
                         request.path.display(),
@@ -16638,19 +16727,29 @@ async fn run_risk_rerank_chunk(
                     ));
                 }
                 Err(err) => {
-                    logs.push(format!(
-                        "Risk rerank {cmd_label} `{}` failed: {err}",
-                        request.path.display(),
-                    ));
+                    push_progress_log(
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                        format!(
+                            "Risk rerank {cmd_label} `{}` failed: {err}",
+                            request.path.display(),
+                        ),
+                    );
                     conversation.push(format!(
                         "Tool {cmd_label} `{}` error: {err}",
                         request.path.display()
                     ));
                     command_error_count += 1;
                     if command_error_count >= BUG_RERANK_MAX_COMMAND_ERRORS {
-                        logs.push(format!(
-                            "Risk rerank aborted after {BUG_RERANK_MAX_COMMAND_ERRORS} tool errors."
-                        ));
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            format!(
+                                "Risk rerank aborted after {BUG_RERANK_MAX_COMMAND_ERRORS} tool errors."
+                            ),
+                        );
                         return Err(RiskRerankChunkFailure {
                             ids,
                             error: format!(
@@ -16672,10 +16771,15 @@ async fn run_risk_rerank_chunk(
                 match &request {
                     ToolRequest::Content { term, mode, .. } => {
                         let display_term = summarize_search_term(term, 80);
-                        logs.push(format!(
-                            "Risk rerank search `{display_term}` ({}) skipped (already provided).",
-                            mode.as_str()
-                        ));
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            format!(
+                                "Risk rerank search `{display_term}` ({}) skipped (already provided).",
+                                mode.as_str()
+                            ),
+                        );
                         conversation.push(format!(
                             "Tool SEARCH `{display_term}` ({}) already provided earlier.",
                             mode.as_str()
@@ -16695,9 +16799,12 @@ async fn run_risk_rerank_chunk(
                             shown["limit"] =
                                 serde_json::Value::Number(serde_json::Number::from(limit as u64));
                         }
-                        logs.push(format!(
-                            "Risk rerank GREP_FILES {shown} skipped (already provided)."
-                        ));
+                        push_progress_log(
+                            &progress_sender,
+                            &log_sink,
+                            &mut logs,
+                            format!("Risk rerank GREP_FILES {shown} skipped (already provided)."),
+                        );
                         conversation
                             .push(format!("Tool GREP_FILES {shown} already provided earlier."));
                     }
@@ -16711,20 +16818,30 @@ async fn run_risk_rerank_chunk(
                 && !reason.trim().is_empty()
             {
                 let truncated = truncate_text(reason, MODEL_REASONING_LOG_MAX_GRAPHEMES);
-                logs.push(format!(
-                    "Risk rerank tool rationale ({}): {truncated}",
-                    request.kind_label()
-                ));
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    format!(
+                        "Risk rerank tool rationale ({}): {truncated}",
+                        request.kind_label()
+                    ),
+                );
             }
 
             match request {
                 ToolRequest::Content { term, mode, .. } => {
                     executed_command = true;
                     let display_term = summarize_search_term(&term, 80);
-                    logs.push(format!(
-                        "Risk rerank {mode} content search for `{display_term}` — path {repo_display}",
-                        mode = mode.as_str()
-                    ));
+                    push_progress_log(
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                        format!(
+                            "Risk rerank {mode} content search for `{display_term}` — path {repo_display}",
+                            mode = mode.as_str()
+                        ),
+                    );
                     match run_content_search(&repo_root, &term, mode, &metrics).await {
                         SearchResult::Matches(output) => {
                             conversation.push(format!(
@@ -16736,26 +16853,41 @@ async fn run_risk_rerank_chunk(
                             let message = format!(
                                 "No content matches found for `{display_term}` — path {repo_display}"
                             );
-                            logs.push(message.clone());
+                            push_progress_log(
+                                &progress_sender,
+                                &log_sink,
+                                &mut logs,
+                                message.clone(),
+                            );
                             conversation.push(format!(
                                 "Tool SEARCH `{display_term}` ({}) results:\n{message}",
                                 mode.as_str()
                             ));
                         }
                         SearchResult::Error(err) => {
-                            logs.push(format!(
-                                "Risk rerank search `{display_term}` ({}) failed: {err} — path {repo_display}",
-                                mode.as_str()
-                            ));
+                            push_progress_log(
+                                &progress_sender,
+                                &log_sink,
+                                &mut logs,
+                                format!(
+                                    "Risk rerank search `{display_term}` ({}) failed: {err} — path {repo_display}",
+                                    mode.as_str()
+                                ),
+                            );
                             conversation.push(format!(
                                 "Tool SEARCH `{display_term}` ({}) error: {err}",
                                 mode.as_str()
                             ));
                             command_error_count += 1;
                             if command_error_count >= BUG_RERANK_MAX_COMMAND_ERRORS {
-                                logs.push(format!(
-                                    "Risk rerank aborted after {BUG_RERANK_MAX_COMMAND_ERRORS} tool errors."
-                                ));
+                                push_progress_log(
+                                    &progress_sender,
+                                    &log_sink,
+                                    &mut logs,
+                                    format!(
+                                        "Risk rerank aborted after {BUG_RERANK_MAX_COMMAND_ERRORS} tool errors."
+                                    ),
+                                );
                                 return Err(RiskRerankChunkFailure {
                                     ids,
                                     error: format!(
@@ -16782,28 +16914,44 @@ async fn run_risk_rerank_chunk(
                         shown["limit"] =
                             serde_json::Value::Number(serde_json::Number::from(limit as u64));
                     }
-                    logs.push(format!(
-                        "Risk rerank GREP_FILES {shown} — path {repo_display}"
-                    ));
+                    push_progress_log(
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                        format!("Risk rerank GREP_FILES {shown} — path {repo_display}"),
+                    );
                     match run_grep_files(&repo_root, &args, &metrics).await {
                         SearchResult::Matches(output) => {
                             conversation.push(format!("Tool GREP_FILES {shown}:\n{output}"));
                         }
                         SearchResult::NoMatches => {
                             let message = "No matches found.".to_string();
-                            logs.push(format!(
-                                "Risk rerank GREP_FILES {shown} returned no matches."
-                            ));
+                            push_progress_log(
+                                &progress_sender,
+                                &log_sink,
+                                &mut logs,
+                                format!("Risk rerank GREP_FILES {shown} returned no matches."),
+                            );
                             conversation.push(format!("Tool GREP_FILES {shown}:\n{message}"));
                         }
                         SearchResult::Error(err) => {
-                            logs.push(format!("Risk rerank GREP_FILES {shown} failed: {err}"));
+                            push_progress_log(
+                                &progress_sender,
+                                &log_sink,
+                                &mut logs,
+                                format!("Risk rerank GREP_FILES {shown} failed: {err}"),
+                            );
                             conversation.push(format!("Tool GREP_FILES {shown} error: {err}"));
                             command_error_count += 1;
                             if command_error_count >= BUG_RERANK_MAX_COMMAND_ERRORS {
-                                logs.push(format!(
-                                    "Risk rerank aborted after {BUG_RERANK_MAX_COMMAND_ERRORS} tool errors."
-                                ));
+                                push_progress_log(
+                                    &progress_sender,
+                                    &log_sink,
+                                    &mut logs,
+                                    format!(
+                                        "Risk rerank aborted after {BUG_RERANK_MAX_COMMAND_ERRORS} tool errors."
+                                    ),
+                                );
                                 return Err(RiskRerankChunkFailure {
                                     ids,
                                     error: format!(
@@ -16845,6 +16993,8 @@ async fn rerank_bugs_by_risk(
     repo_root: &Path,
     _repository_summary: &str,
     spec_context: Option<&str>,
+    progress_sender: Option<AppEventSender>,
+    log_sink: Option<Arc<SecurityReviewLogSink>>,
     metrics: Arc<ReviewMetrics>,
 ) -> Vec<String> {
     if summaries.is_empty() {
@@ -16887,37 +17037,65 @@ async fn rerank_bugs_by_risk(
     let total_chunks = prompt_chunks.len();
     let max_concurrency = BUG_RERANK_MAX_CONCURRENCY.max(1).min(total_chunks.max(1));
 
-    let chunk_results = futures::stream::iter(prompt_chunks.into_iter().map(|(ids, prompt)| {
-        let provider = provider.clone();
-        let auth_clone = auth.clone();
-        let model_owned = model.to_string();
-        let metrics_clone = metrics.clone();
-        let repo_root = repo_root.to_path_buf();
-
-        async move {
-            run_risk_rerank_chunk(
-                client,
-                &provider,
-                &auth_clone,
-                model_owned.as_str(),
-                reasoning_effort,
-                BUG_RERANK_SYSTEM_PROMPT,
-                prompt,
-                metrics_clone,
-                repo_root,
-                ids,
-            )
-            .await
-        }
-    }))
-    .buffer_unordered(max_concurrency)
-    .collect::<Vec<_>>()
-    .await;
-
     let mut logs: Vec<String> = Vec::new();
     let mut decisions: HashMap<usize, RiskDecision> = HashMap::new();
+    if total_chunks > 0 {
+        push_progress_log(
+            &progress_sender,
+            &log_sink,
+            &mut logs,
+            format!(
+                "Risk rerank starting for {} finding(s) with concurrency {max_concurrency}.",
+                summaries.len()
+            ),
+        );
+    }
 
-    for result in chunk_results {
+    let mut chunk_results =
+        futures::stream::iter(prompt_chunks.into_iter().map(|(ids, prompt)| {
+            let provider = provider.clone();
+            let auth_clone = auth.clone();
+            let model_owned = model.to_string();
+            let metrics_clone = metrics.clone();
+            let repo_root = repo_root.to_path_buf();
+            let progress_sender = progress_sender.clone();
+            let log_sink = log_sink.clone();
+
+            async move {
+                run_risk_rerank_chunk(
+                    client,
+                    &provider,
+                    &auth_clone,
+                    model_owned.as_str(),
+                    reasoning_effort,
+                    BUG_RERANK_SYSTEM_PROMPT,
+                    prompt,
+                    metrics_clone,
+                    repo_root,
+                    ids,
+                    progress_sender,
+                    log_sink,
+                )
+                .await
+            }
+        }))
+        .buffer_unordered(max_concurrency);
+
+    let mut completed_chunks = 0usize;
+    while let Some(result) = chunk_results.next().await {
+        completed_chunks = completed_chunks.saturating_add(1);
+        if total_chunks > 0
+            && (completed_chunks == total_chunks || completed_chunks.is_multiple_of(5))
+        {
+            emit_progress_log(
+                &progress_sender,
+                &log_sink,
+                format!(
+                    "Risk rerank progress: {completed_chunks}/{total_chunks} chunk(s) complete.",
+                ),
+            );
+        }
+
         match result {
             Ok(mut success) => {
                 logs.append(&mut success.logs);
@@ -16973,10 +17151,15 @@ async fn rerank_bugs_by_risk(
                     .map(std::string::ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(", ");
-                logs.push(format!(
-                    "Risk rerank chunk failed for bug id(s) {id_list}: {error}",
-                    error = failure.error
-                ));
+                push_progress_log(
+                    &progress_sender,
+                    &log_sink,
+                    &mut logs,
+                    format!(
+                        "Risk rerank chunk failed for bug id(s) {id_list}: {error}",
+                        error = failure.error
+                    ),
+                );
             }
         }
     }
@@ -17002,9 +17185,13 @@ async fn rerank_bugs_by_risk(
             let impact = update.impact.label();
             let likelihood = update.likelihood.label();
             let product = update.product;
-            logs.push(format!(
-                "Severity matrix: bug #{id} updated from {previous} to {computed} (impact {impact} * likelihood {likelihood} = {product})."
-            ));
+            append_log(
+                &log_sink,
+                &mut logs,
+                format!(
+                    "Severity matrix: bug #{id} updated from {previous} to {computed} (impact {impact} * likelihood {likelihood} = {product})."
+                ),
+            );
         }
     }
 
@@ -17027,7 +17214,7 @@ async fn rerank_bugs_by_risk(
                 "Risk rerank: bug #{id} retained original severity {severity} (no model decision)"
             )
         };
-        logs.push(log_entry);
+        append_log(&log_sink, &mut logs, log_entry);
     }
 
     logs
