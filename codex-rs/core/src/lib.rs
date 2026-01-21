@@ -46,6 +46,7 @@ pub mod parse_command;
 pub mod path_utils;
 pub mod powershell;
 pub mod sandboxing;
+mod session_prefix;
 mod stream_events_utils;
 mod text_encoding;
 pub mod token_data;

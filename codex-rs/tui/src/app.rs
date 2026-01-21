@@ -84,6 +84,17 @@ pub struct AppExitInfo {
     pub exit_reason: ExitReason,
 }
 
+impl AppExitInfo {
+    pub fn fatal(message: impl Into<String>) -> Self {
+        Self {
+            token_usage: TokenUsage::default(),
+            thread_id: None,
+            update_action: None,
+            exit_reason: ExitReason::Fatal(message.into()),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum AppRunControl {
     Continue,

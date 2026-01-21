@@ -701,11 +701,14 @@ impl BottomPane {
             if !self.unified_exec_footer.is_empty() {
                 flex.push(0, RenderableItem::Borrowed(&self.unified_exec_footer));
             }
+            let has_queued_messages = !self.queued_user_messages.messages.is_empty();
+            let has_status_or_footer =
+                self.status.is_some() || !self.unified_exec_footer.is_empty();
+            if has_queued_messages && has_status_or_footer {
+                flex.push(0, RenderableItem::Owned("".into()));
+            }
             flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
-            if self.status.is_some()
-                || !self.unified_exec_footer.is_empty()
-                || !self.queued_user_messages.messages.is_empty()
-            {
+            if !has_queued_messages && has_status_or_footer {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
             let mut flex2 = FlexRenderable::new();
@@ -947,6 +950,60 @@ mod tests {
         let area = Rect::new(0, 0, 30, height);
         assert_snapshot!(
             "status_and_composer_fill_height_without_bottom_padding",
+            render_snapshot(&pane, area)
+        );
+    }
+
+    #[test]
+    fn status_only_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        assert_snapshot!("status_only_snapshot", render_snapshot(&pane, area));
+    }
+
+    #[test]
+    fn status_with_details_and_queued_messages_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.update_status(
+            "Working".to_string(),
+            Some("First detail line\nSecond detail line".to_string()),
+        );
+        pane.set_queued_user_messages(vec!["Queued follow-up question".to_string()]);
+
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        assert_snapshot!(
+            "status_with_details_and_queued_messages_snapshot",
             render_snapshot(&pane, area)
         );
     }
