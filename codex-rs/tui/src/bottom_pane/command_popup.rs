@@ -10,27 +10,9 @@ use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
-use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum CommandMatchKind {
-    Exact = 0,
-    Prefix = 1,
-    Fuzzy = 2,
-}
-
-#[derive(Clone, Debug)]
-struct RankedCommand {
-    item: CommandItem,
-    match_indices: Option<Vec<usize>>,
-    score: i32,
-    kind: CommandMatchKind,
-    name_len: usize,
-    order_idx: usize,
-}
 
 fn windows_degraded_sandbox_active() -> bool {
     cfg!(target_os = "windows")
@@ -136,104 +118,84 @@ impl CommandPopup {
         measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width)
     }
 
-    /// Compute fuzzy-filtered matches over built-in commands and user prompts,
-    /// paired with optional highlight indices and score. Preserves the original
+    /// Compute exact/prefix matches over built-in commands and user prompts,
+    /// paired with optional highlight indices. Preserves the original
     /// presentation order for built-ins and prompts.
-    fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>, i32)> {
+    fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>)> {
         let filter = self.command_filter.trim();
-        let mut out: Vec<(CommandItem, Option<Vec<usize>>, i32)> = Vec::new();
+        let mut out: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         if filter.is_empty() {
             // Built-ins first, in presentation order.
             for (_, cmd) in self.builtins.iter() {
-                out.push((CommandItem::Builtin(*cmd), None, 0));
+                out.push((CommandItem::Builtin(*cmd), None));
             }
             // Then prompts, already sorted by name.
             for idx in 0..self.prompts.len() {
-                out.push((CommandItem::UserPrompt(idx), None, 0));
+                out.push((CommandItem::UserPrompt(idx), None));
             }
             return out;
         }
 
         let filter_lower = filter.to_lowercase();
-        let mut ranked: Vec<RankedCommand> = Vec::new();
+        let filter_chars = filter.chars().count();
+        let mut exact: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
+        let mut prefix: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
+        let prompt_prefix_len = PROMPTS_CMD_PREFIX.chars().count() + 1;
+        let indices_for = |offset| Some((offset..offset + filter_chars).collect());
 
-        for (idx, (_, cmd)) in self.builtins.iter().enumerate() {
-            let name = cmd.command();
-            if let Some((indices, score)) = fuzzy_match(name, filter) {
-                let name_lower = name.to_lowercase();
-                let kind = if name_lower == filter_lower {
-                    CommandMatchKind::Exact
-                } else if name_lower.starts_with(&filter_lower) {
-                    CommandMatchKind::Prefix
-                } else {
-                    CommandMatchKind::Fuzzy
-                };
-                ranked.push(RankedCommand {
-                    item: CommandItem::Builtin(*cmd),
-                    match_indices: Some(indices),
-                    score,
-                    kind,
-                    name_len: name.len(),
-                    order_idx: idx,
-                });
-            }
+        let mut push_match =
+            |item: CommandItem, display: &str, name: Option<&str>, name_offset: usize| {
+                let display_lower = display.to_lowercase();
+                let name_lower = name.map(str::to_lowercase);
+                let display_exact = display_lower == filter_lower;
+                let name_exact = name_lower.as_deref() == Some(filter_lower.as_str());
+                if display_exact || name_exact {
+                    let offset = if display_exact { 0 } else { name_offset };
+                    exact.push((item, indices_for(offset)));
+                    return;
+                }
+                let display_prefix = display_lower.starts_with(&filter_lower);
+                let name_prefix = name_lower
+                    .as_ref()
+                    .is_some_and(|name| name.starts_with(&filter_lower));
+                if display_prefix || name_prefix {
+                    let offset = if display_prefix { 0 } else { name_offset };
+                    prefix.push((item, indices_for(offset)));
+                }
+            };
+
+        for (_, cmd) in self.builtins.iter() {
+            push_match(CommandItem::Builtin(*cmd), cmd.command(), None, 0);
         }
         // Support both search styles:
         // - Typing "name" should surface "/prompts:name" results.
         // - Typing "prompts:name" should also work.
-        let base_idx = self.builtins.len();
         for (idx, p) in self.prompts.iter().enumerate() {
             let display = format!("{PROMPTS_CMD_PREFIX}:{}", p.name);
-            if let Some((indices, score)) = fuzzy_match(&display, filter) {
-                let name_lower = p.name.to_lowercase();
-                let display_lower = display.to_lowercase();
-                let kind = if name_lower == filter_lower || display_lower == filter_lower {
-                    CommandMatchKind::Exact
-                } else if name_lower.starts_with(&filter_lower)
-                    || display_lower.starts_with(&filter_lower)
-                {
-                    CommandMatchKind::Prefix
-                } else {
-                    CommandMatchKind::Fuzzy
-                };
-                ranked.push(RankedCommand {
-                    item: CommandItem::UserPrompt(idx),
-                    match_indices: Some(indices),
-                    score,
-                    kind,
-                    name_len: display.len(),
-                    order_idx: base_idx + idx,
-                });
-            }
+            push_match(
+                CommandItem::UserPrompt(idx),
+                &display,
+                Some(&p.name),
+                prompt_prefix_len,
+            );
         }
 
-        ranked.sort_by(|a, b| {
-            a.kind
-                .cmp(&b.kind)
-                .then_with(|| a.score.cmp(&b.score))
-                .then_with(|| a.name_len.cmp(&b.name_len))
-                .then_with(|| a.order_idx.cmp(&b.order_idx))
-        });
-
-        out.extend(
-            ranked
-                .into_iter()
-                .map(|entry| (entry.item, entry.match_indices, entry.score)),
-        );
+        out.extend(exact);
+        out.extend(prefix);
         out
     }
 
     fn filtered_items(&self) -> Vec<CommandItem> {
-        self.filtered().into_iter().map(|(c, _, _)| c).collect()
+        self.filtered().into_iter().map(|(c, _)| c).collect()
     }
 
     fn rows_from_matches(
         &self,
-        matches: Vec<(CommandItem, Option<Vec<usize>>, i32)>,
+        matches: Vec<(CommandItem, Option<Vec<usize>>)>,
     ) -> Vec<GenericDisplayRow> {
         matches
             .into_iter()
-            .map(|(item, indices, _)| {
+            .map(|(item, indices)| {
                 let (name, description) = match item {
                     CommandItem::Builtin(cmd) => {
                         (format!("/{}", cmd.command()), cmd.description().to_string())
@@ -355,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn filtered_commands_rank_by_match_quality() {
+    fn filtered_commands_keep_presentation_order_for_prefix() {
         let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
         popup.on_composer_text_change("/m".to_string());
 
@@ -367,17 +329,7 @@ mod tests {
                 CommandItem::UserPrompt(_) => None,
             })
             .collect();
-        assert_eq!(
-            cmds,
-            vec![
-                "mcp",
-                "model",
-                "mention",
-                "resume",
-                "compact",
-                "experimental"
-            ]
-        );
+        assert_eq!(cmds, vec!["model", "mention", "mcp"]);
     }
 
     #[test]
@@ -447,7 +399,7 @@ mod tests {
             }],
             CommandPopupFlags::default(),
         );
-        let rows = popup.rows_from_matches(vec![(CommandItem::UserPrompt(0), None, 0)]);
+        let rows = popup.rows_from_matches(vec![(CommandItem::UserPrompt(0), None)]);
         let description = rows.first().and_then(|row| row.description.as_deref());
         assert_eq!(
             description,
@@ -467,13 +419,13 @@ mod tests {
             }],
             CommandPopupFlags::default(),
         );
-        let rows = popup.rows_from_matches(vec![(CommandItem::UserPrompt(0), None, 0)]);
+        let rows = popup.rows_from_matches(vec![(CommandItem::UserPrompt(0), None)]);
         let description = rows.first().and_then(|row| row.description.as_deref());
         assert_eq!(description, Some("send saved prompt"));
     }
 
     #[test]
-    fn fuzzy_filter_matches_subsequence_for_ac() {
+    fn prefix_filter_limits_matches_for_ac() {
         let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
         popup.on_composer_text_change("/ac".to_string());
 
@@ -486,8 +438,8 @@ mod tests {
             })
             .collect();
         assert!(
-            cmds.contains(&"compact") && cmds.contains(&"feedback"),
-            "expected fuzzy search for '/ac' to include compact and feedback, got {cmds:?}"
+            !cmds.contains(&"compact"),
+            "expected prefix search for '/ac' to exclude 'compact', got {cmds:?}"
         );
     }
 
