@@ -47,10 +47,14 @@ impl AgentControl {
         let reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
 
         // The same `AgentControl` is sent to spawn the thread.
-        let new_thread = state.start_thread(config,
-                                            InitialHistory::New,
-                                            self.clone(),
-                                            session_source_override,).await?;
+        let new_thread = state
+            .start_thread(
+                config,
+                InitialHistory::New,
+                self.clone(),
+                session_source_override,
+            )
+            .await?;
         reservation.commit(new_thread.thread_id);
 
         // Notify a new thread has been created. This notification will be processed by clients
@@ -437,12 +441,12 @@ mod tests {
             .expect("start thread");
 
         let first_agent_id = control
-            .spawn_agent(config.clone(), "hello".to_string())
+            .spawn_agent(config.clone(), Some("hello".to_string()), None)
             .await
             .expect("spawn_agent should succeed");
 
         let err = control
-            .spawn_agent(config, "hello again".to_string())
+            .spawn_agent(config, Some("hello again".to_string()), None)
             .await
             .expect_err("spawn_agent should respect max threads");
         let CodexErr::AgentLimitReached {
@@ -475,7 +479,7 @@ mod tests {
         let control = manager.agent_control();
 
         let first_agent_id = control
-            .spawn_agent(config.clone(), "hello".to_string())
+            .spawn_agent(config.clone(), Some("hello".to_string()), None)
             .await
             .expect("spawn_agent should succeed");
         let _ = control
@@ -484,7 +488,7 @@ mod tests {
             .expect("shutdown agent");
 
         let second_agent_id = control
-            .spawn_agent(config.clone(), "hello again".to_string())
+            .spawn_agent(config.clone(), Some("hello again".to_string()), None)
             .await
             .expect("spawn_agent should succeed after shutdown");
         let _ = control
@@ -510,12 +514,12 @@ mod tests {
         let cloned = control.clone();
 
         let first_agent_id = cloned
-            .spawn_agent(config.clone(), "hello".to_string())
+            .spawn_agent(config.clone(), Some("hello".to_string()), None)
             .await
             .expect("spawn_agent should succeed");
 
         let err = control
-            .spawn_agent(config, "hello again".to_string())
+            .spawn_agent(config, Some("hello again".to_string()), None)
             .await
             .expect_err("spawn_agent should respect shared guard");
         let CodexErr::AgentLimitReached { max_threads } = err else {
