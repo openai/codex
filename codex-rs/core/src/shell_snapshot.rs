@@ -287,9 +287,29 @@ if alias >/dev/null 2>&1; then
 else
   echo '# aliases 0'
 fi
-export_count=$(env | awk -F= '$1 ~ /^[A-Za-z_][A-Za-z0-9_]*$/ {count++} END{print count}')
-echo "# exports $export_count"
-env | sort | while IFS='=' read -r key value; do
+tmp="${TMPDIR:-/tmp}/codex-env-$$"
+env > "$tmp"
+if command -v sort >/dev/null 2>&1; then
+  if sort "$tmp" > "${tmp}.sorted"; then
+    mv "${tmp}.sorted" "$tmp"
+  else
+    rm -f "${tmp}.sorted"
+  fi
+fi
+count=0
+while IFS= read -r line; do
+  key=${line%%=*}
+  case "$key" in
+    ""|[0-9]*|*[^A-Za-z0-9_]*)
+      continue
+      ;;
+  esac
+  count=$((count+1))
+done < "$tmp"
+echo "# exports $count"
+while IFS= read -r line; do
+  key=${line%%=*}
+  value=${line#*=}
   case "$key" in
     ""|[0-9]*|*[^A-Za-z0-9_]*)
       continue
@@ -297,7 +317,8 @@ env | sort | while IFS='=' read -r key value; do
   esac
   escaped=$(printf "%s" "$value" | sed "s/'/'\"'\"'/g")
   printf "export %s='%s'\n" "$key" "$escaped"
-done
+done < "$tmp"
+rm -f "$tmp"
 "##
 }
 
