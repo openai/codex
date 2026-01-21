@@ -1085,6 +1085,11 @@ impl Session {
             .await
     }
 
+    pub(crate) async fn current_collaboration_mode(&self) -> CollaborationMode {
+        let state = self.state.lock().await;
+        state.session_configuration.collaboration_mode.clone()
+    }
+
     fn build_environment_update_item(
         &self,
         previous: Option<&Arc<TurnContext>>,
@@ -3188,11 +3193,17 @@ async fn try_run_sampling_request(
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
+    // TODO: If we need to guarantee the persisted mode always matches the prompt used for this
+    // turn, capture it in TurnContext at creation time. Using SessionConfiguration here avoids
+    // duplicating model settings on TurnContext, but a later Op could update the session config
+    // before this write occurs.
+    let collaboration_mode = sess.current_collaboration_mode().await;
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
         model: turn_context.client.get_model(),
+        collaboration_mode: Some(collaboration_mode),
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
         user_instructions: turn_context.user_instructions.clone(),
