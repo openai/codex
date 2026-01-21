@@ -137,18 +137,18 @@ jobs:
           nslookup appstoreconnect.apple.com
           curl -Iv --connect-timeout 10 https://appstoreconnect.apple.com/
 
-      # - if: ${{ github.event_name == 'push' && runner.os == 'macOS' }}
-      #   name: MacOS code signing (binaries)
-      #   uses: ./.github/actions/macos-code-sign
-      #   with:
-      #     target: ${{ matrix.target }}
-      #     sign-binaries: "true"
-      #     sign-dmg: "false"
-      #     apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-      #     apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      #     apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
-      #     apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
-      #     apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+      - if: ${{ runner.os == 'macOS' }}
+        name: MacOS code signing (binaries)
+        uses: ./.github/actions/macos-code-sign
+        with:
+          target: ${{ matrix.target }}
+          sign-binaries: "true"
+          sign-dmg: "false"
+          apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
+          apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
 
       # - if: ${{ github.event_name == 'push' && runner.os == 'macOS' }}
       #   name: Build macOS dmg
