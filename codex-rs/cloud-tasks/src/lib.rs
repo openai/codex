@@ -2387,7 +2387,9 @@ mod tests {
         async fn list_tasks(
             &self,
             _env: Option<&str>,
-        ) -> codex_cloud_tasks_client::Result<Vec<TaskSummary>> {
+            _limit: Option<i64>,
+            _cursor: Option<&str>,
+        ) -> codex_cloud_tasks_client::Result<codex_cloud_tasks_client::TaskListPage> {
             Err(codex_cloud_tasks_client::CloudTaskError::Unimplemented(
                 "list_tasks",
             ))
