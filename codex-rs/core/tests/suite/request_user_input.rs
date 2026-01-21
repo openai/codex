@@ -257,7 +257,7 @@ where
 
     let req = second_mock.single_request();
     let (output, success) = call_output_content_and_success(&req, &call_id);
-    assert_eq!(success, Some(false));
+    assert_eq!(success, None);
     assert_eq!(
         output,
         format!("request_user_input is unavailable in {mode_name}")
