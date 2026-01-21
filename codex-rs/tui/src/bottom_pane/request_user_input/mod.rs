@@ -296,7 +296,7 @@ impl RequestUserInputOverlay {
             });
             let mut answer_list = selected_label.into_iter().collect::<Vec<_>>();
             if !notes.is_empty() {
-                answer_list.push(notes);
+                answer_list.push(format!("user_note: {notes}"));
             }
             answers.insert(
                 question.id.clone(),
@@ -651,7 +651,10 @@ mod tests {
         let answer = response.answers.get("q1").expect("answer missing");
         assert_eq!(
             answer.answers,
-            vec!["Option 2".to_string(), "Notes for option 2".to_string()]
+            vec![
+                "Option 2".to_string(),
+                "user_note: Notes for option 2".to_string(),
+            ]
         );
     }
 
