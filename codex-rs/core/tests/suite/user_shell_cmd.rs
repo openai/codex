@@ -25,6 +25,7 @@ use core_test_support::wait_for_event_match;
 use regex_lite::escape;
 use std::path::PathBuf;
 use tempfile::TempDir;
+use codex_core::features::Feature;
 
 #[tokio::test]
 async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
@@ -129,7 +130,10 @@ async fn user_shell_cmd_can_be_interrupted() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
-    let mut builder = core_test_support::test_codex::test_codex();
+    // Disable it to ease command matching.
+    let mut builder = core_test_support::test_codex::test_codex().with_config(move |config| {
+        config.features.disable(Feature::ShellSnapshot);
+    });
     let test = builder.build(&server).await?;
 
     #[cfg(windows)]

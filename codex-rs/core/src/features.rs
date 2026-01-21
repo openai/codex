@@ -365,7 +365,7 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
             announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
         },
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ChildAgentsMd,
