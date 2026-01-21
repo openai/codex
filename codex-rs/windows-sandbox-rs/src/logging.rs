@@ -22,7 +22,8 @@ fn preview(command: &[String]) -> String {
     if joined.len() <= LOG_COMMAND_PREVIEW_LIMIT {
         joined
     } else {
-        joined[..LOG_COMMAND_PREVIEW_LIMIT].to_string()
+        codex_utils_string::take_bytes_at_char_boundary(&joined, LOG_COMMAND_PREVIEW_LIMIT)
+            .to_string()
     }
 }
 
