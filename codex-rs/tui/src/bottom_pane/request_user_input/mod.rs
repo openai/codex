@@ -461,3 +461,266 @@ impl BottomPaneView for RequestUserInputOverlay {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use crate::render::renderable::Renderable;
+    use codex_protocol::request_user_input::RequestUserInputQuestion;
+    use codex_protocol::request_user_input::RequestUserInputQuestionOption;
+    use pretty_assertions::assert_eq;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn test_sender() -> (
+        AppEventSender,
+        tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    ) {
+        let (tx_raw, rx) = unbounded_channel::<AppEvent>();
+        (AppEventSender::new(tx_raw), rx)
+    }
+
+    fn question_with_options(id: &str, header: &str) -> RequestUserInputQuestion {
+        RequestUserInputQuestion {
+            id: id.to_string(),
+            header: header.to_string(),
+            question: "Choose an option.".to_string(),
+            options: Some(vec![
+                RequestUserInputQuestionOption {
+                    label: "Option 1".to_string(),
+                    description: "First choice.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Option 2".to_string(),
+                    description: "Second choice.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Option 3".to_string(),
+                    description: "Third choice.".to_string(),
+                },
+            ]),
+        }
+    }
+
+    fn question_without_options(id: &str, header: &str) -> RequestUserInputQuestion {
+        RequestUserInputQuestion {
+            id: id.to_string(),
+            header: header.to_string(),
+            question: "Share details.".to_string(),
+            options: None,
+        }
+    }
+
+    fn request_event(
+        turn_id: &str,
+        questions: Vec<RequestUserInputQuestion>,
+    ) -> RequestUserInputEvent {
+        RequestUserInputEvent {
+            call_id: "call-1".to_string(),
+            turn_id: turn_id.to_string(),
+            questions,
+        }
+    }
+
+    fn snapshot_buffer(buf: &Buffer) -> String {
+        let mut lines = Vec::new();
+        for y in 0..buf.area().height {
+            let mut row = String::new();
+            for x in 0..buf.area().width {
+                row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            lines.push(row);
+        }
+        lines.join("\n")
+    }
+
+    fn render_snapshot(overlay: &RequestUserInputOverlay, area: Rect) -> String {
+        let mut buf = Buffer::empty(area);
+        overlay.render(area, &mut buf);
+        snapshot_buffer(&buf)
+    }
+
+    #[test]
+    fn queued_requests_are_fifo() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "First")]),
+            tx,
+        );
+        overlay.try_consume_user_input_request(request_event(
+            "turn-2",
+            vec![question_with_options("q2", "Second")],
+        ));
+        overlay.try_consume_user_input_request(request_event(
+            "turn-3",
+            vec![question_with_options("q3", "Third")],
+        ));
+
+        overlay.submit_answers();
+        assert_eq!(overlay.request.turn_id, "turn-2");
+
+        overlay.submit_answers();
+        assert_eq!(overlay.request.turn_id, "turn-3");
+    }
+
+    #[test]
+    fn options_always_return_a_selection() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+        );
+
+        overlay.submit_answers();
+
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { id, response }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        assert_eq!(id, "turn-1");
+        let answer = response.answers.get("q1").expect("answer missing");
+        assert_eq!(answer.selected, vec!["Option 1".to_string()]);
+        assert_eq!(answer.other, None);
+    }
+
+    #[test]
+    fn freeform_questions_submit_skipped_when_empty() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_without_options("q1", "Notes")]),
+            tx,
+        );
+
+        overlay.submit_answers();
+
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let answer = response.answers.get("q1").expect("answer missing");
+        assert_eq!(answer.selected, Vec::<String>::new());
+        assert_eq!(answer.other, Some("skipped".to_string()));
+    }
+
+    #[test]
+    fn notes_are_captured_for_selected_option() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+        );
+
+        {
+            let answer = overlay.current_answer_mut().expect("answer missing");
+            answer.option_state.selected_idx = Some(1);
+        }
+        overlay.select_current_option();
+        overlay
+            .current_notes_entry_mut()
+            .expect("notes entry missing")
+            .text
+            .insert_str("Notes for option 2");
+
+        overlay.submit_answers();
+
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let answer = response.answers.get("q1").expect("answer missing");
+        assert_eq!(answer.selected, vec!["Option 2".to_string()]);
+        assert_eq!(answer.other, Some("Notes for option 2".to_string()));
+    }
+
+    #[test]
+    fn request_user_input_options_snapshot() {
+        let (tx, _rx) = test_sender();
+        let overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Area")]),
+            tx,
+        );
+        let area = Rect::new(0, 0, 64, 16);
+        insta::assert_snapshot!(
+            "request_user_input_options",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn request_user_input_tight_height_snapshot() {
+        let (tx, _rx) = test_sender();
+        let overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Area")]),
+            tx,
+        );
+        let area = Rect::new(0, 0, 60, 8);
+        insta::assert_snapshot!(
+            "request_user_input_tight_height",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn request_user_input_scroll_options_snapshot() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![RequestUserInputQuestion {
+                    id: "q1".to_string(),
+                    header: "Next Step".to_string(),
+                    question: "What would you like to do next?".to_string(),
+                    options: Some(vec![
+                        RequestUserInputQuestionOption {
+                            label: "Discuss a code change (Recommended)".to_string(),
+                            description: "Walk through a plan and edit code together.".to_string(),
+                        },
+                        RequestUserInputQuestionOption {
+                            label: "Run tests".to_string(),
+                            description: "Pick a crate and run its tests.".to_string(),
+                        },
+                        RequestUserInputQuestionOption {
+                            label: "Review a diff".to_string(),
+                            description: "Summarize or review current changes.".to_string(),
+                        },
+                        RequestUserInputQuestionOption {
+                            label: "Refactor".to_string(),
+                            description: "Tighten structure and remove dead code.".to_string(),
+                        },
+                        RequestUserInputQuestionOption {
+                            label: "Ship it".to_string(),
+                            description: "Finalize and open a PR.".to_string(),
+                        },
+                    ]),
+                }],
+            ),
+            tx,
+        );
+        {
+            let answer = overlay.current_answer_mut().expect("answer missing");
+            answer.option_state.selected_idx = Some(3);
+            answer.selected = Some(3);
+        }
+        let area = Rect::new(0, 0, 68, 10);
+        insta::assert_snapshot!(
+            "request_user_input_scrolling_options",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn request_user_input_freeform_snapshot() {
+        let (tx, _rx) = test_sender();
+        let overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_without_options("q1", "Goal")]),
+            tx,
+        );
+        let area = Rect::new(0, 0, 64, 10);
+        insta::assert_snapshot!(
+            "request_user_input_freeform",
+            render_snapshot(&overlay, area)
+        );
+    }
+}
