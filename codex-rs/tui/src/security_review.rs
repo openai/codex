@@ -1468,9 +1468,11 @@ impl SecurityReviewPlanTracker {
     }
 
     fn start_step(&mut self, step: SecurityReviewPlanStep) {
-        if !matches!(self.status_for(step), Some(StepStatus::Completed))
-            && self.set_status_if_present(step, StepStatus::InProgress)
-        {
+        if matches!(self.status_for(step), Some(StepStatus::Completed)) {
+            return;
+        }
+
+        if self.set_status_if_present(step, StepStatus::InProgress) {
             self.emit_update();
             if self.snapshots_enabled {
                 self.emit_plan_snapshot();
@@ -1518,6 +1520,32 @@ impl SecurityReviewPlanTracker {
         }
         entry.status = status;
         true
+    }
+
+    fn normalize_validation_in_progress(&mut self) -> bool {
+        let mut found = false;
+        let mut changed = false;
+        for step in [
+            SecurityReviewPlanStep::ValidateFindings,
+            SecurityReviewPlanStep::PostValidationRefine,
+            SecurityReviewPlanStep::AssembleReport,
+        ] {
+            let Some(entry) = self.steps.iter_mut().find(|item| item.kind == step) else {
+                continue;
+            };
+            if !matches!(entry.status, StepStatus::InProgress) {
+                continue;
+            }
+            if found {
+                entry.status = StepStatus::Pending;
+                entry.started_at = None;
+                entry.completed_at = None;
+                changed = true;
+            } else {
+                found = true;
+            }
+        }
+        changed
     }
 
     fn emit_update(&self) {
@@ -1574,6 +1602,7 @@ impl SecurityReviewPlanTracker {
                 changed |= self.set_status_if_present(step, status.clone());
             }
         }
+        changed |= self.normalize_validation_in_progress();
         if changed {
             self.emit_update();
         }
