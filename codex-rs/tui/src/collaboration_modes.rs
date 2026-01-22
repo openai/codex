@@ -48,3 +48,10 @@ pub(crate) fn next_mode(
         .map_or(0, |idx| (idx + 1) % presets.len());
     presets.get(next_index).cloned()
 }
+
+pub(crate) fn execute_mode(models_manager: &ModelsManager) -> Option<CollaborationMode> {
+    models_manager
+        .list_collaboration_modes()
+        .into_iter()
+        .find(|preset| mode_kind(preset) == ModeKind::Execute)
+}

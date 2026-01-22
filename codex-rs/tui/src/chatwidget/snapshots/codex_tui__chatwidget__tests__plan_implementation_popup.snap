@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Implement this plan?
+
+› 1. Yes, implement this plan                       Switch to Execute and start
+                                                    coding.
+  2. No, and tell the model what to do differently  Keep planning and share
+                                                    adjustments.
+
+  Press enter to confirm or esc to go back

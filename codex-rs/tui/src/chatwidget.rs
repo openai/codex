@@ -119,6 +119,10 @@ use tokio::task::JoinHandle;
 use tracing::debug;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
+const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
+const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
+const PLAN_IMPLEMENTATION_NO: &str = "No, and tell the model what to do differently";
+const PLAN_IMPLEMENTATION_EXECUTE_MESSAGE: &str = "Implement the plan.";
 
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
@@ -884,6 +888,9 @@ impl ChatWidget {
         self.clear_unified_exec_processes();
         self.request_redraw();
 
+        if self.queued_user_messages.is_empty() {
+            self.maybe_prompt_plan_implementation(last_agent_message.as_deref());
+        }
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
@@ -892,6 +899,97 @@ impl ChatWidget {
         });
 
         self.maybe_show_pending_rate_limit_prompt();
+    }
+
+    fn maybe_prompt_plan_implementation(&mut self, last_agent_message: Option<&str>) {
+        if !self.collaboration_modes_enabled() {
+            return;
+        }
+        if !matches!(self.stored_collaboration_mode, CollaborationMode::Plan(_)) {
+            return;
+        }
+        let Some(message) = last_agent_message else {
+            return;
+        };
+        if message.trim().is_empty() {
+            return;
+        }
+        if !self.bottom_pane.no_modal_or_popup_active() {
+            return;
+        }
+
+        self.open_plan_implementation_prompt();
+    }
+
+    fn open_plan_implementation_prompt(&mut self) {
+        let execute_mode = collaboration_modes::execute_mode(self.models_manager.as_ref());
+        let (implement_actions, implement_disabled_reason) = match execute_mode {
+            Some(mode) => {
+                let collaboration_mode = mode.clone();
+                let model = mode.model().to_string();
+                let effort = mode.reasoning_effort();
+                let cwd = self.config.cwd.clone();
+                let approval_policy = self.config.approval_policy.value();
+                let sandbox_policy = self.config.sandbox_policy.get().clone();
+                let summary = self.config.model_reasoning_summary;
+                let user_text = PLAN_IMPLEMENTATION_EXECUTE_MESSAGE.to_string();
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::UpdateCollaborationMode(
+                        collaboration_mode.clone(),
+                    ));
+                    tx.send(AppEvent::CodexOp(Op::UserTurn {
+                        items: vec![UserInput::Text {
+                            text: user_text.clone(),
+                            text_elements: Vec::new(),
+                        }],
+                        cwd: cwd.clone(),
+                        approval_policy,
+                        sandbox_policy: sandbox_policy.clone(),
+                        model: model.clone(),
+                        effort,
+                        summary,
+                        personality: None,
+                        final_output_json_schema: None,
+                        collaboration_mode: Some(collaboration_mode.clone()),
+                    }));
+                    tx.send(AppEvent::CodexOp(Op::AddToHistory {
+                        text: user_text.clone(),
+                    }));
+                })];
+                (actions, None)
+            }
+            None => (Vec::new(), Some("Execute mode unavailable".to_string())),
+        };
+
+        let items = vec![
+            SelectionItem {
+                name: PLAN_IMPLEMENTATION_YES.to_string(),
+                description: Some("Switch to Execute and start coding.".to_string()),
+                selected_description: None,
+                is_current: false,
+                actions: implement_actions,
+                disabled_reason: implement_disabled_reason,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: PLAN_IMPLEMENTATION_NO.to_string(),
+                description: Some("Keep planning and share adjustments.".to_string()),
+                selected_description: None,
+                is_current: false,
+                actions: Vec::new(),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(PLAN_IMPLEMENTATION_TITLE.to_string()),
+            subtitle: None,
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {

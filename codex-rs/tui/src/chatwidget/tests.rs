@@ -1170,6 +1170,15 @@ async fn rate_limit_switch_prompt_popup_snapshot() {
     assert_snapshot!("rate_limit_switch_prompt_popup", popup);
 }
 
+#[tokio::test]
+async fn plan_implementation_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.open_plan_implementation_prompt();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("plan_implementation_popup", popup);
+}
+
 // (removed experimental resize snapshot test)
 
 #[tokio::test]
