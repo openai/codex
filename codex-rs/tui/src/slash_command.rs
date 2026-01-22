@@ -25,6 +25,7 @@ pub enum SlashCommand {
     Fork,
     Init,
     Compact,
+    Immortality,
     Collab,
     // Undo,
     Diff,
@@ -48,6 +49,9 @@ impl SlashCommand {
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
+            SlashCommand::Immortality => {
+                "auto-continue by generating the next user message each turn"
+            }
             SlashCommand::Review => "review my current changes and find issues",
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Fork => "fork the current chat",
@@ -101,7 +105,8 @@ impl SlashCommand {
             | SlashCommand::Mcp
             | SlashCommand::Feedback
             | SlashCommand::Quit
-            | SlashCommand::Exit => true,
+            | SlashCommand::Exit
+            | SlashCommand::Immortality => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Collab => true,
