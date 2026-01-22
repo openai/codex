@@ -4438,18 +4438,6 @@ impl ChatWidget {
 
         self.stored_collaboration_mode = mode;
         self.update_collaboration_mode_indicator();
-
-        let label = self.collaboration_mode_label();
-        if let Some(label) = label {
-            let flash = Line::from(vec![
-                label.bold(),
-                " (".dim(),
-                key_hint::shift(KeyCode::Tab).into(),
-                " to change mode)".dim(),
-            ]);
-            const FLASH_DURATION: Duration = Duration::from_secs(2);
-            self.bottom_pane.flash_footer_hint(flash, FLASH_DURATION);
-        }
         self.request_redraw();
     }
 

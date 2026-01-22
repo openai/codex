@@ -34,7 +34,6 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
 use std::time::Duration;
 
 mod approval_overlay;
@@ -554,23 +553,6 @@ impl BottomPane {
     /// Update custom prompts available for the slash popup.
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.composer.set_custom_prompts(prompts);
-        self.request_redraw();
-    }
-
-    pub(crate) fn flash_footer_hint(&mut self, line: Line<'static>, duration: Duration) {
-        self.composer.show_footer_flash(line, duration);
-        let frame_requester = self.frame_requester.clone();
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                tokio::time::sleep(duration).await;
-                frame_requester.schedule_frame();
-            });
-        } else {
-            std::thread::spawn(move || {
-                std::thread::sleep(duration);
-                frame_requester.schedule_frame();
-            });
-        }
         self.request_redraw();
     }
 
