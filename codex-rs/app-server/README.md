@@ -445,7 +445,7 @@ Certain actions (shell commands or modifying files) may require explicit user ap
 Order of messages:
 
 1. `item/started` — shows the pending `commandExecution` item with `command`, `cwd`, and other fields so you can render the proposed action.
-2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `reason` or `risk`, plus `parsedCmd` for friendly display.
+2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `reason`, plus `command`, `cwd`, and `commandActions` for friendly display.
 3. Client response — `{ "decision": "accept", "acceptSettings": { "forSession": false } }` or `{ "decision": "decline" }`.
 4. `item/completed` — final `commandExecution` item with `status: "completed" | "failed" | "declined"` and execution output. Render this as the authoritative result.
 
@@ -504,7 +504,19 @@ Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, wi
     "data": [{
         "cwd": "/Users/me/project",
         "skills": [
-            { "name": "skill-creator", "description": "Create or update a Codex skill", "enabled": true }
+            {
+              "name": "skill-creator",
+              "description": "Create or update a Codex skill",
+              "enabled": true,
+              "interface": {
+                "displayName": "Skill Creator",
+                "shortDescription": "Create or update a Codex skill",
+                "iconSmall": "icon.svg",
+                "iconLarge": "icon-large.svg",
+                "brandColor": "#111111",
+                "defaultPrompt": "Add a new skill for triaging flaky CI."
+              }
+            }
         ],
         "errors": []
     }]

@@ -27,6 +27,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         priority,
         upgrade: preset.upgrade.as_ref().map(|u| u.into()),
         base_instructions: "base instructions".to_string(),
+        model_instructions_template: None,
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,

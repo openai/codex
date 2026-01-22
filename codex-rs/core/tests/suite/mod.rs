@@ -48,6 +48,7 @@ mod models_etag_responses;
 mod otel;
 mod pending_input;
 mod permissions_messages;
+mod personality;
 mod prompt_caching;
 mod quota_exceeded;
 mod read_file;

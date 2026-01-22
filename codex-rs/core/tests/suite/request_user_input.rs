@@ -152,8 +152,7 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
     answers.insert(
         "confirm_path".to_string(),
         RequestUserInputAnswer {
-            selected: vec!["yes".to_string()],
-            other: None,
+            answers: vec!["yes".to_string()],
         },
     );
     let response = RequestUserInputResponse { answers };
@@ -173,7 +172,7 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
         output_json,
         json!({
             "answers": {
-                "confirm_path": { "selected": ["yes"], "other": Value::Null }
+                "confirm_path": { "answers": ["yes"] }
             }
         })
     );

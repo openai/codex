@@ -66,6 +66,27 @@ pub enum SandboxMode {
 }
 
 #[derive(
+    Debug,
+    Serialize,
+    Deserialize,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Display,
+    JsonSchema,
+    TS,
+    PartialOrd,
+    Ord,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum Personality {
+    Friendly,
+    Pragmatic,
+}
+
+#[derive(
     Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS, Default,
 )]
 #[serde(rename_all = "lowercase")]
@@ -128,6 +149,16 @@ pub enum AltScreenMode {
     Always,
     /// Never use alternate screen (inline mode only).
     Never,
+}
+
+/// Initial collaboration mode to use when the TUI starts.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ModeKind {
+    Plan,
+    PairProgramming,
+    Execute,
+    Custom,
 }
 
 /// Collaboration mode for a Codex session.

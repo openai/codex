@@ -1003,7 +1003,7 @@ impl ChatComposer {
     /// Because this path mixes "insert immediately" with "maybe retro-grab later", it must clamp
     /// the cursor to a UTF-8 char boundary before slicing `textarea.text()`.
     #[inline]
-    fn handle_non_ascii_char(&mut self, input: KeyEvent) -> (InputResult, bool) {
+    fn handle_non_ascii_char(&mut self, input: KeyEvent, now: Instant) -> (InputResult, bool) {
         if self.disable_paste_burst {
             // When burst detection is disabled, treat IME/non-ASCII input as normal typing.
             // In particular, do not retro-capture or buffer already-inserted prefix text.
@@ -1018,7 +1018,6 @@ impl ChatComposer {
             ..
         } = input
         {
-            let now = Instant::now();
             if self.paste_burst.try_append_char_if_active(ch, now) {
                 return (InputResult::None, true);
             }
@@ -1682,6 +1681,14 @@ impl ChatComposer {
     /// Common logic for handling message submission/queuing.
     /// Returns the appropriate InputResult based on `should_queue`.
     fn handle_submission(&mut self, should_queue: bool) -> (InputResult, bool) {
+        self.handle_submission_with_time(should_queue, Instant::now())
+    }
+
+    fn handle_submission_with_time(
+        &mut self,
+        should_queue: bool,
+        now: Instant,
+    ) -> (InputResult, bool) {
         // If the first line is a bare built-in slash command (no args),
         // dispatch it even when the slash popup isn't visible. This preserves
         // the workflow: type a prefix ("/di"), press Tab to complete to
@@ -1704,15 +1711,15 @@ impl ChatComposer {
                 .next()
                 .unwrap_or("")
                 .starts_with('/');
-        if !self.disable_paste_burst && self.paste_burst.is_active() && !in_slash_context {
-            let now = Instant::now();
-            if self.paste_burst.append_newline_if_active(now) {
-                return (InputResult::None, true);
-            }
+        if !self.disable_paste_burst
+            && self.paste_burst.is_active()
+            && !in_slash_context
+            && self.paste_burst.append_newline_if_active(now)
+        {
+            return (InputResult::None, true);
         }
 
         // During a paste-like burst, treat Enter/Ctrl+Shift+Q as a newline instead of submit.
-        let now = Instant::now();
         if !in_slash_context
             && !self.disable_paste_burst
             && self
@@ -1920,9 +1927,16 @@ impl ChatComposer {
     ///   otherwise `clear_window_after_non_char()` can leave buffered text waiting without a
     ///   timestamp to time out against.
     fn handle_input_basic(&mut self, input: KeyEvent) -> (InputResult, bool) {
+        self.handle_input_basic_with_time(input, Instant::now())
+    }
+
+    fn handle_input_basic_with_time(
+        &mut self,
+        input: KeyEvent,
+        now: Instant,
+    ) -> (InputResult, bool) {
         // If we have a buffered non-bracketed paste burst and enough time has
         // elapsed since the last char, flush it before handling a new input.
-        let now = Instant::now();
         self.handle_paste_burst_flush(now);
 
         if !matches!(input.code, KeyCode::Esc) {
@@ -1954,7 +1968,7 @@ impl ChatComposer {
                 // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts, so avoid
                 // holding the first char while still allowing burst detection for paste input.
                 if !ch.is_ascii() {
-                    return self.handle_non_ascii_char(input);
+                    return self.handle_non_ascii_char(input, now);
                 }
 
                 match self.paste_burst.on_plain_char(ch, now) {
@@ -2307,12 +2321,10 @@ impl ChatComposer {
             }
             _ => {
                 if is_editing_slash_command_name {
-                    let skills_enabled = self.skills_enabled();
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
-                            skills_enabled,
                             collaboration_modes_enabled,
                         },
                     );
@@ -3356,26 +3368,38 @@ mod tests {
         composer.set_steer_enabled(true);
         composer.set_steer_enabled(true);
 
-        // Force an active burst so this test doesn't depend on tight timing.
-        composer
-            .paste_burst
-            .begin_with_retro_grabbed(String::new(), Instant::now());
+        let mut now = Instant::now();
+        let step = Duration::from_millis(1);
 
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
-        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        let _ = composer.handle_input_basic_with_time(
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE),
+            now,
+        );
+        now += step;
+        let _ = composer.handle_input_basic_with_time(
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+            now,
+        );
+        now += step;
 
-        let (result, _) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let (result, _) = composer.handle_submission_with_time(!composer.steer_enabled, now);
         assert!(
             matches!(result, InputResult::None),
             "Enter during a burst should insert newline, not submit"
         );
 
         for ch in ['t', 'h', 'e', 'r', 'e'] {
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            now += step;
+            let _ = composer.handle_input_basic_with_time(
+                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+                now,
+            );
         }
 
-        let _ = flush_after_paste_burst(&mut composer);
+        assert!(composer.textarea.text().is_empty());
+        let flush_time = now + PasteBurst::recommended_active_flush_delay() + step;
+        let flushed = composer.handle_paste_burst_flush(flush_time);
+        assert!(flushed, "expected paste burst to flush");
         assert_eq!(composer.textarea.text(), "hi\nthere");
     }
 
@@ -5849,9 +5873,13 @@ mod tests {
         );
 
         let count = 32;
+        let mut now = Instant::now();
+        let step = Duration::from_millis(1);
         for _ in 0..count {
-            let _ =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+            let _ = composer.handle_input_basic_with_time(
+                KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+                now,
+            );
             assert!(
                 composer.is_in_paste_burst(),
                 "expected active paste burst during fast typing"
@@ -5860,13 +5888,15 @@ mod tests {
                 composer.textarea.text().is_empty(),
                 "text should not appear during burst"
             );
+            now += step;
         }
 
         assert!(
             composer.textarea.text().is_empty(),
             "text should remain empty until flush"
         );
-        let flushed = flush_after_paste_burst(&mut composer);
+        let flush_time = now + PasteBurst::recommended_active_flush_delay() + step;
+        let flushed = composer.handle_paste_burst_flush(flush_time);
         assert!(flushed, "expected buffered text to flush after stop");
         assert_eq!(composer.textarea.text(), "a".repeat(count));
         assert!(
@@ -5879,10 +5909,6 @@ mod tests {
     /// the payload is large, it should insert a placeholder and defer the full text until submit.
     #[test]
     fn burst_paste_fast_large_inserts_placeholder_on_flush() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -5894,14 +5920,20 @@ mod tests {
         );
 
         let count = LARGE_PASTE_CHAR_THRESHOLD + 1; // > threshold to trigger placeholder
+        let mut now = Instant::now();
+        let step = Duration::from_millis(1);
         for _ in 0..count {
-            let _ =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+            let _ = composer.handle_input_basic_with_time(
+                KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+                now,
+            );
+            now += step;
         }
 
         // Nothing should appear until we stop and flush
         assert!(composer.textarea.text().is_empty());
-        let flushed = flush_after_paste_burst(&mut composer);
+        let flush_time = now + PasteBurst::recommended_active_flush_delay() + step;
+        let flushed = composer.handle_paste_burst_flush(flush_time);
         assert!(flushed, "expected flush after stopping fast input");
 
         let expected_placeholder = format!("[Pasted Content {count} chars]");
