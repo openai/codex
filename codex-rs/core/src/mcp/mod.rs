@@ -10,7 +10,6 @@ use mcp_types::Tool as McpTool;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::landlock::resolve_use_linux_sandbox_bind_mounts;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::SandboxState;
@@ -44,10 +43,9 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         sandbox_policy: SandboxPolicy::ReadOnly,
         codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
         sandbox_cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-        use_linux_sandbox_bind_mounts: resolve_use_linux_sandbox_bind_mounts(
-            &config.features,
-            config.codex_linux_sandbox_exe.as_ref(),
-        ),
+        use_linux_sandbox_bind_mounts: config
+            .features
+            .enabled(crate::features::Feature::LinuxSandboxBindMounts),
     };
 
     mcp_connection_manager

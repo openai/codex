@@ -9,7 +9,6 @@ use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::exec_env::create_env;
-use codex_core::landlock::resolve_use_linux_sandbox_bind_mounts;
 use codex_core::landlock::spawn_command_under_linux_sandbox;
 #[cfg(target_os = "macos")]
 use codex_core::seatbelt::spawn_command_under_seatbelt;
@@ -235,10 +234,9 @@ async fn run_command_under_sandbox(
                 cwd,
                 config.sandbox_policy.get(),
                 sandbox_policy_cwd.as_path(),
-                resolve_use_linux_sandbox_bind_mounts(
-                    &config.features,
-                    Some(&codex_linux_sandbox_exe),
-                ),
+                config
+                    .features
+                    .enabled(codex_core::features::Feature::LinuxSandboxBindMounts),
                 stdio_policy,
                 env,
             )

@@ -3,7 +3,6 @@ use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::features::Features;
-use crate::landlock::resolve_use_linux_sandbox_bind_mounts;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
@@ -21,7 +20,6 @@ use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
@@ -38,7 +36,6 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_info: &'a ModelInfo,
     pub(crate) features: &'a Features,
     pub(crate) web_search_mode: Option<WebSearchMode>,
-    pub(crate) codex_linux_sandbox_exe: Option<&'a PathBuf>,
 }
 
 impl ToolsConfig {
@@ -47,13 +44,12 @@ impl ToolsConfig {
             model_info,
             features,
             web_search_mode,
-            codex_linux_sandbox_exe,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
         let use_linux_sandbox_bind_mounts =
-            resolve_use_linux_sandbox_bind_mounts(features, *codex_linux_sandbox_exe);
+            features.enabled(crate::features::Feature::LinuxSandboxBindMounts);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -1503,7 +1499,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
-            codex_linux_sandbox_exe: None,
         });
         let (tools, _) = build_specs(&config, None).build();
 
@@ -1568,7 +1563,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
-            codex_linux_sandbox_exe: None,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
         assert_contains_tool_names(
@@ -1587,7 +1581,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
-            codex_linux_sandbox_exe: None,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
         assert!(
@@ -1600,7 +1593,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
-            codex_linux_sandbox_exe: None,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
         assert_contains_tool_names(&tools, &["request_user_input"]);
@@ -1618,7 +1610,6 @@ mod tests {
             model_info: &model_info,
             features,
             web_search_mode,
-            codex_linux_sandbox_exe: None,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
@@ -1635,7 +1626,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
-            codex_linux_sandbox_exe: None,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1658,7 +1648,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
-            codex_linux_sandbox_exe: None,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1905,7 +1894,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
-            codex_linux_sandbox_exe: None,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
 
@@ -1928,7 +1916,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
-            codex_linux_sandbox_exe: None,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1948,7 +1935,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
-            codex_linux_sandbox_exe: None,
         });
         let (tools, _) = build_specs(&tools_config, None).build();
 
@@ -1980,7 +1966,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
-            codex_linux_sandbox_exe: None,
         });
         let (tools, _) = build_specs(
             &tools_config,
@@ -2076,7 +2061,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
-            codex_linux_sandbox_exe: None,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -2154,7 +2138,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
-            codex_linux_sandbox_exe: None,
         });
 
         let (tools, _) = build_specs(
@@ -2212,7 +2195,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
-            codex_linux_sandbox_exe: None,
         });
 
         let (tools, _) = build_specs(
@@ -2267,7 +2249,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
-            codex_linux_sandbox_exe: None,
         });
 
         let (tools, _) = build_specs(
@@ -2324,7 +2305,6 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
-            codex_linux_sandbox_exe: None,
         });
 
         let (tools, _) = build_specs(
@@ -2437,7 +2417,6 @@ Examples of valid command strings:
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
-            codex_linux_sandbox_exe: None,
         });
         let (tools, _) = build_specs(
             &tools_config,

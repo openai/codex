@@ -20,7 +20,6 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
 use crate::features::Features;
-use crate::landlock::resolve_use_linux_sandbox_bind_mounts;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -558,7 +557,6 @@ impl Session {
             model_info: &model_info,
             features: &per_turn_config.features,
             web_search_mode: per_turn_config.web_search_mode,
-            codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.as_ref(),
         });
 
         TurnContext {
@@ -795,10 +793,9 @@ impl Session {
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             sandbox_cwd: session_configuration.cwd.clone(),
-            use_linux_sandbox_bind_mounts: resolve_use_linux_sandbox_bind_mounts(
-                &config.features,
-                config.codex_linux_sandbox_exe.as_ref(),
-            ),
+            use_linux_sandbox_bind_mounts: config
+                .features
+                .enabled(crate::features::Feature::LinuxSandboxBindMounts),
         };
         let cancel_token = sess.mcp_startup_cancellation_token().await;
 
@@ -1009,10 +1006,9 @@ impl Session {
                 sandbox_policy: per_turn_config.sandbox_policy.get().clone(),
                 codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
                 sandbox_cwd: per_turn_config.cwd.clone(),
-                use_linux_sandbox_bind_mounts: resolve_use_linux_sandbox_bind_mounts(
-                    &per_turn_config.features,
-                    per_turn_config.codex_linux_sandbox_exe.as_ref(),
-                ),
+                use_linux_sandbox_bind_mounts: per_turn_config
+                    .features
+                    .enabled(crate::features::Feature::LinuxSandboxBindMounts),
             };
             if let Err(e) = self
                 .services
@@ -1956,10 +1952,9 @@ impl Session {
             sandbox_policy: turn_context.sandbox_policy.clone(),
             codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
             sandbox_cwd: turn_context.cwd.clone(),
-            use_linux_sandbox_bind_mounts: resolve_use_linux_sandbox_bind_mounts(
-                &self.features,
-                turn_context.codex_linux_sandbox_exe.as_ref(),
-            ),
+            use_linux_sandbox_bind_mounts: self
+                .features
+                .enabled(crate::features::Feature::LinuxSandboxBindMounts),
         };
         let cancel_token = self.reset_mcp_startup_cancellation_token().await;
 
@@ -2682,7 +2677,6 @@ async fn spawn_review_thread(
         model_info: &review_model_info,
         features: &review_features,
         web_search_mode: Some(review_web_search_mode),
-        codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.as_ref(),
     });
 
     let review_prompt = resolved.prompt.clone();
