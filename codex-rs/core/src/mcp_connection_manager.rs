@@ -1176,6 +1176,7 @@ mod tests {
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
             auth_status: McpAuthStatus::Unsupported,
         };
@@ -1221,6 +1222,7 @@ mod tests {
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
             auth_status: McpAuthStatus::Unsupported,
         };

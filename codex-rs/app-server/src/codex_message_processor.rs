@@ -2490,6 +2490,8 @@ impl CodexMessageProcessor {
             }
         };
 
+        let scopes = scopes.or_else(|| server.scopes.clone());
+
         match perform_oauth_login_return_url(
             &name,
             &url,
