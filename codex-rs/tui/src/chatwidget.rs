@@ -874,7 +874,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_task_complete(&mut self, last_agent_message: Option<String>) {
+    fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         self.flush_unified_exec_wait_streak();
@@ -888,7 +888,7 @@ impl ChatWidget {
         self.clear_unified_exec_processes();
         self.request_redraw();
 
-        if self.queued_user_messages.is_empty() {
+        if !from_replay && self.queued_user_messages.is_empty() {
             self.maybe_prompt_plan_implementation(last_agent_message.as_deref());
         }
         // If there is a queued user message, send exactly one now to begin the next turn.
@@ -903,6 +903,9 @@ impl ChatWidget {
 
     fn maybe_prompt_plan_implementation(&mut self, last_agent_message: Option<&str>) {
         if !self.collaboration_modes_enabled() {
+            return;
+        }
+        if !self.queued_user_messages.is_empty() {
             return;
         }
         if !matches!(self.stored_collaboration_mode, CollaborationMode::Plan(_)) {
@@ -2774,7 +2777,7 @@ impl ChatWidget {
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TurnStarted(_) => self.on_task_started(),
             EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
-                self.on_task_complete(last_agent_message)
+                self.on_task_complete(last_agent_message, from_replay)
             }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
