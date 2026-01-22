@@ -151,6 +151,16 @@ pub enum AltScreenMode {
     Never,
 }
 
+/// Initial collaboration mode to use when the TUI starts.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ModeKind {
+    Plan,
+    PairProgramming,
+    Execute,
+    Custom,
+}
+
 /// Collaboration mode for a Codex session.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "mode", rename_all = "lowercase")]

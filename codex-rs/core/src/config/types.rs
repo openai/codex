@@ -5,6 +5,7 @@
 
 use crate::config_loader::RequirementSource;
 pub use codex_protocol::config_types::AltScreenMode;
+pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::WebSearchMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -437,6 +438,11 @@ pub struct Tui {
     /// Defaults to `true`.
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
+
+    /// Start the TUI in the specified collaboration mode (plan/execute/etc.).
+    /// Defaults to unset.
+    #[serde(default)]
+    pub experimental_mode: Option<ModeKind>,
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///

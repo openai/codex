@@ -93,6 +93,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
@@ -1844,20 +1845,19 @@ impl ChatWidget {
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
 
         let model_for_header = model.unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let fallback_custom = Settings {
+            model: model_for_header.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        };
         let stored_collaboration_mode = if config.features.enabled(Feature::CollaborationModes) {
-            collaboration_modes::default_mode(models_manager.as_ref()).unwrap_or_else(|| {
-                CollaborationMode::Custom(Settings {
-                    model: model_for_header.clone(),
-                    reasoning_effort: None,
-                    developer_instructions: None,
-                })
-            })
+            initial_collaboration_mode(
+                models_manager.as_ref(),
+                fallback_custom,
+                config.experimental_mode,
+            )
         } else {
-            CollaborationMode::Custom(Settings {
-                model: model_for_header.clone(),
-                reasoning_effort: None,
-                developer_instructions: None,
-            })
+            CollaborationMode::Custom(fallback_custom)
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(
@@ -1969,20 +1969,19 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
+        let fallback_custom = Settings {
+            model: header_model.clone(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        };
         let stored_collaboration_mode = if config.features.enabled(Feature::CollaborationModes) {
-            collaboration_modes::default_mode(models_manager.as_ref()).unwrap_or_else(|| {
-                CollaborationMode::Custom(Settings {
-                    model: header_model.clone(),
-                    reasoning_effort: None,
-                    developer_instructions: None,
-                })
-            })
+            initial_collaboration_mode(
+                models_manager.as_ref(),
+                fallback_custom,
+                config.experimental_mode,
+            )
         } else {
-            CollaborationMode::Custom(Settings {
-                model: header_model.clone(),
-                reasoning_effort: None,
-                developer_instructions: None,
-            })
+            CollaborationMode::Custom(fallback_custom)
         };
 
         let mut widget = Self {
@@ -4296,9 +4295,13 @@ impl ChatWidget {
                 | CollaborationMode::Execute(settings)
                 | CollaborationMode::Custom(settings) => settings.clone(),
             };
+            let fallback_custom = settings.clone();
             self.stored_collaboration_mode = if enabled {
-                collaboration_modes::default_mode(self.models_manager.as_ref())
-                    .unwrap_or(CollaborationMode::Custom(settings))
+                initial_collaboration_mode(
+                    self.models_manager.as_ref(),
+                    fallback_custom,
+                    self.config.experimental_mode,
+                )
             } else {
                 CollaborationMode::Custom(settings)
             };
@@ -5029,6 +5032,24 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+fn initial_collaboration_mode(
+    models_manager: &ModelsManager,
+    fallback_custom: Settings,
+    desired_mode: Option<ModeKind>,
+) -> CollaborationMode {
+    if let Some(kind) = desired_mode {
+        if kind == ModeKind::Custom {
+            return CollaborationMode::Custom(fallback_custom);
+        }
+        if let Some(mode) = collaboration_modes::mode_for_kind(models_manager, kind) {
+            return mode;
+        }
+    }
+
+    collaboration_modes::default_mode(models_manager)
+        .unwrap_or(CollaborationMode::Custom(fallback_custom))
 }
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {
