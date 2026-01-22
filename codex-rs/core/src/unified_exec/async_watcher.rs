@@ -111,6 +111,7 @@ pub(crate) fn spawn_exit_watcher(
     command: Vec<String>,
     cwd: PathBuf,
     process_id: String,
+    os_pid: Option<u32>,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     started_at: Instant,
 ) {
@@ -130,6 +131,7 @@ pub(crate) fn spawn_exit_watcher(
             command,
             cwd,
             Some(process_id),
+            os_pid,
             transcript,
             String::new(),
             exit_code,
@@ -182,6 +184,7 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
     command: Vec<String>,
     cwd: PathBuf,
     process_id: Option<String>,
+    os_pid: Option<u32>,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     fallback_output: String,
     exit_code: i32,
@@ -195,6 +198,7 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
         aggregated_output: StreamOutput::new(aggregated_output),
         duration,
         timed_out: false,
+        os_pid,
     };
     let event_ctx = ToolEventCtx::new(session_ref.as_ref(), turn_ref.as_ref(), &call_id, None);
     let emitter = ToolEmitter::unified_exec(
@@ -202,6 +206,7 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
         cwd,
         ExecCommandSource::UnifiedExecStartup,
         process_id,
+        os_pid,
     );
     emitter
         .emit(event_ctx, ToolEventStage::Success(output))

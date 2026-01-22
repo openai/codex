@@ -223,6 +223,7 @@ async fn spawn_process_with_stdin_mode(
         writer_tx,
         output_tx,
         initial_output_rx,
+        Some(pid),
         Box::new(PipeChildTerminator {
             #[cfg(windows)]
             pid,

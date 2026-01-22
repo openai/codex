@@ -142,6 +142,7 @@ impl UnifiedExecProcessManager {
         };
 
         let transcript = Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default()));
+        let os_pid = process.os_pid();
         let event_ctx = ToolEventCtx::new(
             context.session.as_ref(),
             context.turn.as_ref(),
@@ -153,6 +154,7 @@ impl UnifiedExecProcessManager {
             cwd.clone(),
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.clone()),
+            os_pid,
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
@@ -198,6 +200,7 @@ impl UnifiedExecProcessManager {
                 request.command.clone(),
                 cwd,
                 Some(process_id),
+                os_pid,
                 Arc::clone(&transcript),
                 output.clone(),
                 exit,
@@ -219,6 +222,7 @@ impl UnifiedExecProcessManager {
                 cwd.clone(),
                 start,
                 process_id,
+                os_pid,
                 request.tty,
                 Arc::clone(&transcript),
             )
@@ -409,6 +413,7 @@ impl UnifiedExecProcessManager {
         cwd: PathBuf,
         started_at: Instant,
         process_id: String,
+        os_pid: Option<u32>,
         tty: bool,
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     ) {
@@ -445,6 +450,7 @@ impl UnifiedExecProcessManager {
             command.to_vec(),
             cwd,
             process_id,
+            os_pid,
             transcript,
             started_at,
         );

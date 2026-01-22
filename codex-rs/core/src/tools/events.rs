@@ -58,6 +58,7 @@ pub(crate) enum ToolEventFailure {
     Message(String),
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn emit_exec_command_begin(
     ctx: ToolEventCtx<'_>,
     command: &[String],
@@ -66,21 +67,22 @@ pub(crate) async fn emit_exec_command_begin(
     source: ExecCommandSource,
     interaction_input: Option<String>,
     process_id: Option<&str>,
+    os_pid: Option<u32>,
 ) {
+    let event = ExecCommandBeginEvent {
+        call_id: ctx.call_id.to_string(),
+        process_id: process_id.map(str::to_owned),
+        os_pid,
+        turn_id: ctx.turn.sub_id.clone(),
+        command: command.to_vec(),
+        cwd: cwd.to_path_buf(),
+        parsed_cmd: parsed_cmd.to_vec(),
+        source,
+        interaction_input,
+    };
+    record_exec_span_metadata(process_id, os_pid);
     ctx.session
-        .send_event(
-            ctx.turn,
-            EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-                call_id: ctx.call_id.to_string(),
-                process_id: process_id.map(str::to_owned),
-                turn_id: ctx.turn.sub_id.clone(),
-                command: command.to_vec(),
-                cwd: cwd.to_path_buf(),
-                parsed_cmd: parsed_cmd.to_vec(),
-                source,
-                interaction_input,
-            }),
-        )
+        .send_event(ctx.turn, EventMsg::ExecCommandBegin(event))
         .await;
 }
 // Concrete, allocation-free emitter: avoid trait objects and boxed futures.
@@ -102,6 +104,7 @@ pub(crate) enum ToolEmitter {
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
         process_id: Option<String>,
+        os_pid: Option<u32>,
     },
 }
 
@@ -134,6 +137,7 @@ impl ToolEmitter {
         cwd: PathBuf,
         source: ExecCommandSource,
         process_id: Option<String>,
+        os_pid: Option<u32>,
     ) -> Self {
         let parsed_cmd = parse_command(command);
         Self::UnifiedExec {
@@ -142,6 +146,7 @@ impl ToolEmitter {
             source,
             parsed_cmd,
             process_id,
+            os_pid,
         }
     }
 
@@ -159,7 +164,15 @@ impl ToolEmitter {
             ) => {
                 emit_exec_stage(
                     ctx,
-                    ExecCommandInput::new(command, cwd.as_path(), parsed_cmd, *source, None, None),
+                    ExecCommandInput::new(
+                        command,
+                        cwd.as_path(),
+                        parsed_cmd,
+                        *source,
+                        None,
+                        None,
+                        None,
+                    ),
                     stage,
                 )
                 .await;
@@ -231,6 +244,7 @@ impl ToolEmitter {
                     source,
                     parsed_cmd,
                     process_id,
+                    os_pid,
                 },
                 stage,
             ) => {
@@ -243,6 +257,7 @@ impl ToolEmitter {
                         *source,
                         None,
                         process_id.as_deref(),
+                        *os_pid,
                     ),
                     stage,
                 )
@@ -328,6 +343,7 @@ struct ExecCommandInput<'a> {
     source: ExecCommandSource,
     interaction_input: Option<&'a str>,
     process_id: Option<&'a str>,
+    os_pid: Option<u32>,
 }
 
 impl<'a> ExecCommandInput<'a> {
@@ -338,6 +354,7 @@ impl<'a> ExecCommandInput<'a> {
         source: ExecCommandSource,
         interaction_input: Option<&'a str>,
         process_id: Option<&'a str>,
+        os_pid: Option<u32>,
     ) -> Self {
         Self {
             command,
@@ -346,6 +363,7 @@ impl<'a> ExecCommandInput<'a> {
             source,
             interaction_input,
             process_id,
+            os_pid,
         }
     }
 }
@@ -357,6 +375,7 @@ struct ExecCommandResult {
     exit_code: i32,
     duration: Duration,
     formatted_output: String,
+    os_pid: Option<u32>,
 }
 
 async fn emit_exec_stage(
@@ -374,11 +393,13 @@ async fn emit_exec_stage(
                 exec_input.source,
                 exec_input.interaction_input.map(str::to_owned),
                 exec_input.process_id,
+                exec_input.os_pid,
             )
             .await;
         }
         ToolEventStage::Success(output)
         | ToolEventStage::Failure(ToolEventFailure::Output(output)) => {
+            let os_pid = exec_input.os_pid.or(output.os_pid);
             let exec_result = ExecCommandResult {
                 stdout: output.stdout.text.clone(),
                 stderr: output.stderr.text.clone(),
@@ -386,6 +407,7 @@ async fn emit_exec_stage(
                 exit_code: output.exit_code,
                 duration: output.duration,
                 formatted_output: format_exec_output_str(&output, ctx.turn.truncation_policy),
+                os_pid,
             };
             emit_exec_end(ctx, exec_input, exec_result).await;
         }
@@ -398,6 +420,7 @@ async fn emit_exec_stage(
                 exit_code: -1,
                 duration: Duration::ZERO,
                 formatted_output: text,
+                os_pid: exec_input.os_pid,
             };
             emit_exec_end(ctx, exec_input, exec_result).await;
         }
@@ -409,27 +432,43 @@ async fn emit_exec_end(
     exec_input: ExecCommandInput<'_>,
     exec_result: ExecCommandResult,
 ) {
+    let event = ExecCommandEndEvent {
+        call_id: ctx.call_id.to_string(),
+        process_id: exec_input.process_id.map(str::to_owned),
+        os_pid: exec_result.os_pid,
+        turn_id: ctx.turn.sub_id.clone(),
+        command: exec_input.command.to_vec(),
+        cwd: exec_input.cwd.to_path_buf(),
+        parsed_cmd: exec_input.parsed_cmd.to_vec(),
+        source: exec_input.source,
+        interaction_input: exec_input.interaction_input.map(str::to_owned),
+        stdout: exec_result.stdout,
+        stderr: exec_result.stderr,
+        aggregated_output: exec_result.aggregated_output,
+        exit_code: exec_result.exit_code,
+        duration: exec_result.duration,
+        formatted_output: exec_result.formatted_output,
+    };
+    record_exec_span_metadata(
+        exec_input.process_id,
+        exec_result.os_pid.or(exec_input.os_pid),
+    );
     ctx.session
-        .send_event(
-            ctx.turn,
-            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                call_id: ctx.call_id.to_string(),
-                process_id: exec_input.process_id.map(str::to_owned),
-                turn_id: ctx.turn.sub_id.clone(),
-                command: exec_input.command.to_vec(),
-                cwd: exec_input.cwd.to_path_buf(),
-                parsed_cmd: exec_input.parsed_cmd.to_vec(),
-                source: exec_input.source,
-                interaction_input: exec_input.interaction_input.map(str::to_owned),
-                stdout: exec_result.stdout,
-                stderr: exec_result.stderr,
-                aggregated_output: exec_result.aggregated_output,
-                exit_code: exec_result.exit_code,
-                duration: exec_result.duration,
-                formatted_output: exec_result.formatted_output,
-            }),
-        )
+        .send_event(ctx.turn, EventMsg::ExecCommandEnd(event))
         .await;
+}
+
+fn record_exec_span_metadata(process_id: Option<&str>, os_pid: Option<u32>) {
+    let span = tracing::Span::current();
+    if span.is_disabled() {
+        return;
+    }
+    if let Some(process_id) = process_id {
+        span.record("process_id", process_id);
+    }
+    if let Some(os_pid) = os_pid {
+        span.record("os_pid", os_pid);
+    }
 }
 
 async fn emit_patch_end(

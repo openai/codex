@@ -95,6 +95,10 @@ impl UnifiedExecProcess {
         self.process_handle.output_receiver()
     }
 
+    pub(crate) fn os_pid(&self) -> Option<u32> {
+        self.process_handle.os_pid()
+    }
+
     pub(super) fn cancellation_token(&self) -> CancellationToken {
         self.cancellation_token.clone()
     }
@@ -156,6 +160,7 @@ impl UnifiedExecProcess {
             exit_code,
             stderr: StreamOutput::new(text.to_string()),
             aggregated_output: StreamOutput::new(text.to_string()),
+            os_pid: self.os_pid(),
             ..Default::default()
         };
         if is_likely_sandbox_denied(sandbox_type, &exec_output) {

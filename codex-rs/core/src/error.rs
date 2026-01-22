@@ -640,6 +640,7 @@ mod tests {
             aggregated_output: StreamOutput::new("aggregate detail".to_string()),
             duration: Duration::from_millis(10),
             timed_out: false,
+            os_pid: None,
         };
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
@@ -656,6 +657,7 @@ mod tests {
             aggregated_output: StreamOutput::new(String::new()),
             duration: Duration::from_millis(10),
             timed_out: false,
+            os_pid: None,
         };
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
@@ -672,6 +674,7 @@ mod tests {
             aggregated_output: StreamOutput::new(String::new()),
             duration: Duration::from_millis(8),
             timed_out: false,
+            os_pid: None,
         };
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),
@@ -715,6 +718,7 @@ mod tests {
             aggregated_output: StreamOutput::new(String::new()),
             duration: Duration::from_millis(5),
             timed_out: false,
+            os_pid: None,
         };
         let err = CodexErr::Sandbox(SandboxErr::Denied {
             output: Box::new(output),

@@ -641,6 +641,7 @@ fn exec_command_end_success_produces_completed_command_item() {
         EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "1".to_string(),
             process_id: None,
+            os_pid: None,
             turn_id: "turn-1".to_string(),
             command: command.clone(),
             cwd: cwd.clone(),
@@ -671,6 +672,7 @@ fn exec_command_end_success_produces_completed_command_item() {
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "1".to_string(),
             process_id: None,
+            os_pid: None,
             turn_id: "turn-1".to_string(),
             command,
             cwd,
@@ -718,6 +720,7 @@ fn command_execution_output_delta_updates_item_progress() {
         EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "delta-1".to_string(),
             process_id: Some("42".to_string()),
+            os_pid: None,
             turn_id: "turn-1".to_string(),
             command: command.clone(),
             cwd: cwd.clone(),
@@ -758,6 +761,7 @@ fn command_execution_output_delta_updates_item_progress() {
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "delta-1".to_string(),
             process_id: Some("42".to_string()),
+            os_pid: None,
             turn_id: "turn-1".to_string(),
             command,
             cwd,
@@ -802,6 +806,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
         EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
             call_id: "2".to_string(),
             process_id: None,
+            os_pid: None,
             turn_id: "turn-1".to_string(),
             command: command.clone(),
             cwd: cwd.clone(),
@@ -831,6 +836,7 @@ fn exec_command_end_failure_produces_failed_command_item() {
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "2".to_string(),
             process_id: None,
+            os_pid: None,
             turn_id: "turn-1".to_string(),
             command,
             cwd,
@@ -872,6 +878,7 @@ fn exec_command_end_without_begin_is_ignored() {
         EventMsg::ExecCommandEnd(ExecCommandEndEvent {
             call_id: "no-begin".to_string(),
             process_id: None,
+            os_pid: None,
             turn_id: "turn-1".to_string(),
             command: Vec::new(),
             cwd: PathBuf::from("."),

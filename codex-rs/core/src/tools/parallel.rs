@@ -6,6 +6,7 @@ use tokio_util::either::Either;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
+use tracing::field;
 use tracing::instrument;
 use tracing::trace_span;
 
@@ -66,6 +67,8 @@ impl ToolCallRuntime {
             tool_name = call.tool_name.as_str(),
             call_id = call.call_id.as_str(),
             aborted = false,
+            process_id = field::Empty,
+            os_pid = field::Empty,
         );
 
         let handle: AbortOnDropHandle<Result<ResponseInputItem, FunctionCallError>> =
