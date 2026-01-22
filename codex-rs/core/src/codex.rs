@@ -201,6 +201,7 @@ use crate::skills::injection::ToolMentionKind;
 use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
 use crate::skills::resolve_skill_dependencies_for_turn;
+use crate::slack::SlackThreadManager;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -422,6 +423,9 @@ impl Codex {
         tokio::spawn(
             submission_loop(Arc::clone(&session), config, rx_sub).instrument(session_loop_span),
         );
+        if let Some(slack) = session.services.slack.clone() {
+            slack.start(Arc::clone(&session), tx_sub.clone());
+        }
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -1047,6 +1051,19 @@ impl Session {
             default_shell.shell_snapshot = rx;
             tx
         };
+        let slack_manager = match SlackThreadManager::from_env(
+            &config,
+            conversation_id,
+            session_configuration.cwd.clone(),
+        )
+        .await
+        {
+            Ok(manager) => manager,
+            Err(err) => {
+                warn!("failed to initialize Slack integration: {err:#}");
+                None
+            }
+        };
         let thread_name =
             match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id).await
             {
@@ -1072,6 +1089,7 @@ impl Session {
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            slack: slack_manager,
             exec_policy,
             auth_manager: Arc::clone(&auth_manager),
             otel_manager,
@@ -3541,6 +3559,9 @@ mod handlers {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
+        if let Some(slack) = &sess.services.slack {
+            slack.shutdown();
+        }
         info!("Shutting down Codex instance");
         let history = sess.clone_history().await;
         let turn_count = history
@@ -6174,6 +6195,7 @@ mod tests {
             user_shell: Arc::new(default_user_shell()),
             shell_snapshot_tx: watch::channel(None).0,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            slack: None,
             exec_policy,
             auth_manager: auth_manager.clone(),
             otel_manager: otel_manager.clone(),
@@ -6307,6 +6329,7 @@ mod tests {
             user_shell: Arc::new(default_user_shell()),
             shell_snapshot_tx: watch::channel(None).0,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            slack: None,
             exec_policy,
             auth_manager: Arc::clone(&auth_manager),
             otel_manager: otel_manager.clone(),
