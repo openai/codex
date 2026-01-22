@@ -2243,6 +2243,12 @@ pub struct CollabAgentSpawnEndEvent {
     /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
     /// beginning.
     pub prompt: String,
+    /// Model slug used for the newly spawned agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Reasoning effort used for the newly spawned agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffortConfig>,
     /// Last known status of the new agent reported to the sender agent.
     pub status: AgentStatus,
 }

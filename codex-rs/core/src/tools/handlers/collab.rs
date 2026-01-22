@@ -13,6 +13,7 @@ use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::CollabAgentInteractionBeginEvent;
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
@@ -84,6 +85,8 @@ mod spawn {
     struct SpawnAgentArgs {
         message: String,
         agent_type: Option<AgentRole>,
+        model: Option<String>,
+        reasoning_effort: Option<ReasoningEffort>,
     }
 
     #[derive(Debug, Serialize)]
@@ -99,6 +102,13 @@ mod spawn {
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: SpawnAgentArgs = parse_arguments(&arguments)?;
         let agent_role = args.agent_type.unwrap_or(AgentRole::Default);
+        if let Some(model) = args.model.as_deref()
+            && model.trim().is_empty()
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "model must be non-empty when provided".to_string(),
+            ));
+        }
         let prompt = args.message;
         if prompt.trim().is_empty() {
             return Err(FunctionCallError::RespondToModel(
@@ -121,7 +131,12 @@ mod spawn {
         agent_role
             .apply_to_config(&mut config)
             .map_err(FunctionCallError::RespondToModel)?;
+        // Allow explicit per-spawn overrides to supersede both the inherited turn
+        // configuration and any role-specific defaults (e.g. Worker model).
+        apply_agent_spawn_overrides(&mut config, args.model, args.reasoning_effort);
 
+        let model = config.model.clone();
+        let reasoning_effort = config.model_reasoning_effort;
         let result = session
             .services
             .agent_control
@@ -143,6 +158,8 @@ mod spawn {
                     sender_thread_id: session.conversation_id,
                     new_thread_id,
                     prompt,
+                    model,
+                    reasoning_effort,
                     status,
                 }
                 .into(),
@@ -592,6 +609,19 @@ fn build_agent_spawn_config(
     Ok(config)
 }
 
+fn apply_agent_spawn_overrides(
+    config: &mut Config,
+    model: Option<String>,
+    reasoning_effort: Option<ReasoningEffort>,
+) {
+    if let Some(model) = model {
+        config.model = Some(model);
+    }
+    if let Some(reasoning_effort) = reasoning_effort {
+        config.model_reasoning_effort = Some(reasoning_effort);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -720,6 +750,54 @@ mod tests {
         assert_eq!(
             err,
             FunctionCallError::RespondToModel("collab manager unavailable".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_empty_model_override() {
+        let (session, turn) = make_session_and_context().await;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "hello",
+                "model": "   ",
+            })),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("empty model should be rejected");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel("model must be non-empty when provided".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_overrides_win_over_role_defaults() {
+        use crate::agent::AgentRole;
+
+        let (_session, turn) = make_session_and_context().await;
+        let base_instructions = BaseInstructions {
+            text: "base".to_string(),
+        };
+
+        let mut config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
+        AgentRole::Worker
+            .apply_to_config(&mut config)
+            .expect("apply worker role");
+
+        apply_agent_spawn_overrides(
+            &mut config,
+            Some("gpt-5".to_string()),
+            Some(ReasoningEffort::Minimal),
+        );
+
+        assert_eq!(config.model, Some("gpt-5".to_string()));
+        assert_eq!(
+            config.model_reasoning_effort,
+            Some(ReasoningEffort::Minimal)
         );
     }
 

@@ -23,6 +23,8 @@ pub(crate) fn spawn_end(ev: CollabAgentSpawnEndEvent) -> PlainHistoryCell {
         sender_thread_id: _,
         new_thread_id,
         prompt,
+        model,
+        reasoning_effort,
         status,
     } = ev;
     let new_agent = new_thread_id
@@ -31,8 +33,14 @@ pub(crate) fn spawn_end(ev: CollabAgentSpawnEndEvent) -> PlainHistoryCell {
     let mut details = vec![
         detail_line("call", call_id),
         detail_line("agent", new_agent),
-        status_line(&status),
     ];
+    if let Some(model) = model {
+        details.push(detail_line("model", model));
+    }
+    if let Some(reasoning_effort) = reasoning_effort {
+        details.push(detail_line("effort", reasoning_effort.to_string()));
+    }
+    details.push(status_line(&status));
     if let Some(line) = prompt_line(&prompt) {
         details.push(line);
     }

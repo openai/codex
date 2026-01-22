@@ -454,6 +454,24 @@ fn create_spawn_agent_tool() -> ToolSpec {
             )),
         },
     );
+    properties.insert(
+        "model".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional model override for the spawned agent (e.g. \"gpt-5.2-codex\"). When set, overrides the inherited session model and any agent_type defaults."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "reasoning_effort".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional reasoning effort for the spawned agent (one of: \"none\", \"minimal\", \"low\", \"medium\", \"high\", \"xhigh\"). When set, overrides the inherited session reasoning effort."
+                    .to_string(),
+            ),
+        },
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
