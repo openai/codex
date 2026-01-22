@@ -927,8 +927,7 @@ impl ChatWidget {
     fn open_plan_implementation_prompt(&mut self) {
         let execute_mode = collaboration_modes::execute_mode(self.models_manager.as_ref());
         let (implement_actions, implement_disabled_reason) = match execute_mode {
-            Some(mode) => {
-                let collaboration_mode = mode.clone();
+            Some(collaboration_mode) => {
                 let user_text = PLAN_IMPLEMENTATION_EXECUTE_MESSAGE.to_string();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                     tx.send(AppEvent::SubmitUserMessageWithMode {
