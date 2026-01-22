@@ -86,16 +86,39 @@ fn normalize_dns_host(host: &str) -> String {
     host.trim_end_matches('.').to_string()
 }
 
+fn normalize_pattern(pattern: &str) -> String {
+    let pattern = pattern.trim();
+    if pattern == "*" {
+        return "*".to_string();
+    }
+
+    let (prefix, remainder) = if let Some(domain) = pattern.strip_prefix("**.") {
+        ("**.", domain)
+    } else if let Some(domain) = pattern.strip_prefix("*.") {
+        ("*.", domain)
+    } else {
+        ("", pattern)
+    };
+
+    let remainder = normalize_host(remainder);
+    if prefix.is_empty() {
+        remainder
+    } else {
+        format!("{prefix}{remainder}")
+    }
+}
+
 pub(crate) fn compile_globset(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     let mut seen = HashSet::new();
     for pattern in patterns {
+        let pattern = normalize_pattern(pattern);
         // Supported domain patterns:
         // - "example.com": match the exact host
         // - "*.example.com": match any subdomain (not the apex)
         // - "**.example.com": match the apex and any subdomain
         // - "*": match any host
-        for candidate in expand_domain_pattern(pattern) {
+        for candidate in expand_domain_pattern(&pattern) {
             if !seen.insert(candidate.clone()) {
                 continue;
             }
@@ -217,6 +240,37 @@ mod tests {
         assert!(method_allowed(NetworkMode::Limited, "OPTIONS"));
         assert!(!method_allowed(NetworkMode::Limited, "POST"));
         assert!(!method_allowed(NetworkMode::Limited, "CONNECT"));
+    }
+
+    #[test]
+    fn compile_globset_normalizes_trailing_dots() {
+        let set = compile_globset(&vec!["Example.COM.".to_string()]).unwrap();
+
+        assert_eq!(true, set.is_match("example.com"));
+        assert_eq!(false, set.is_match("api.example.com"));
+    }
+
+    #[test]
+    fn compile_globset_normalizes_wildcards() {
+        let set = compile_globset(&vec!["*.Example.COM.".to_string()]).unwrap();
+
+        assert_eq!(true, set.is_match("api.example.com"));
+        assert_eq!(false, set.is_match("example.com"));
+    }
+
+    #[test]
+    fn compile_globset_normalizes_apex_and_subdomains() {
+        let set = compile_globset(&vec!["**.Example.COM.".to_string()]).unwrap();
+
+        assert_eq!(true, set.is_match("example.com"));
+        assert_eq!(true, set.is_match("api.example.com"));
+    }
+
+    #[test]
+    fn compile_globset_normalizes_bracketed_ipv6_literals() {
+        let set = compile_globset(&vec!["[::1]".to_string()]).unwrap();
+
+        assert_eq!(true, set.is_match("::1"));
     }
 
     #[test]

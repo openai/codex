@@ -75,6 +75,32 @@ pub async fn run_socks5(
                     .extensions()
                     .get::<SocketInfo>()
                     .map(|info| info.peer_addr().to_string());
+                match app_state.enabled().await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        let _ = app_state
+                            .record_blocked(BlockedRequest::new(
+                                host.clone(),
+                                "proxy_disabled".to_string(),
+                                client.clone(),
+                                None,
+                                None,
+                                "socks5".to_string(),
+                            ))
+                            .await;
+                        let client = client.as_deref().unwrap_or_default();
+                        warn!("SOCKS blocked; proxy disabled (client={client}, host={host})");
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "proxy disabled",
+                        )
+                        .into());
+                    }
+                    Err(err) => {
+                        error!("failed to read enabled state: {err}");
+                        return Err(io::Error::other("proxy error").into());
+                    }
+                }
                 match app_state.network_mode().await {
                     Ok(NetworkMode::Limited) => {
                         let _ = app_state
@@ -168,6 +194,33 @@ pub async fn run_socks5(
                     let client = extensions
                         .get::<SocketInfo>()
                         .map(|info| info.peer_addr().to_string());
+                    match udp_state.enabled().await {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            let _ = udp_state
+                                .record_blocked(BlockedRequest::new(
+                                    host.clone(),
+                                    "proxy_disabled".to_string(),
+                                    client.clone(),
+                                    None,
+                                    None,
+                                    "socks5-udp".to_string(),
+                                ))
+                                .await;
+                            let client = client.as_deref().unwrap_or_default();
+                            warn!(
+                                "SOCKS UDP blocked; proxy disabled (client={client}, host={host})"
+                            );
+                            return Ok(RelayResponse {
+                                maybe_payload: None,
+                                extensions,
+                            });
+                        }
+                        Err(err) => {
+                            error!("failed to read enabled state: {err}");
+                            return Err(io::Error::other("proxy error"));
+                        }
+                    }
 
                     match udp_state.network_mode().await {
                         Ok(NetworkMode::Limited) => {

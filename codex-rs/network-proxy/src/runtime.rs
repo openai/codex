@@ -4,6 +4,7 @@ use crate::mitm::MitmState;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
 use crate::policy::method_allowed;
+use crate::policy::normalize_host;
 use crate::state::NetworkProxyConstraints;
 use crate::state::build_config_state;
 use crate::state::validate_policy_against_constraints;
@@ -111,6 +112,12 @@ impl AppState {
         ))
     }
 
+    pub async fn enabled(&self) -> Result<bool> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.config.network_proxy.enabled)
+    }
+
     pub async fn force_reload(&self) -> Result<()> {
         let mut guard = self.state.write().await;
         let previous_cfg = guard.config.clone();
@@ -136,13 +143,14 @@ impl AppState {
 
     pub async fn host_blocked(&self, host: &str, port: u16) -> Result<(bool, String)> {
         self.reload_if_needed().await?;
-        let (deny_set, allow_set, allow_local_binding, allowed_domains_empty) = {
+        let (deny_set, allow_set, allow_local_binding, allowed_domains_empty, allowed_domains) = {
             let guard = self.state.read().await;
             (
                 guard.deny_set.clone(),
                 guard.allow_set.clone(),
                 guard.config.network_proxy.policy.allow_local_binding,
                 guard.config.network_proxy.policy.allowed_domains.is_empty(),
+                guard.config.network_proxy.policy.allowed_domains.clone(),
             )
         };
 
@@ -177,7 +185,7 @@ impl AppState {
             };
 
             if local_literal {
-                if !is_allowlisted {
+                if !is_explicit_local_allowlisted(&allowed_domains, host) {
                     return Ok((true, "not_allowed_local".to_string()));
                 }
             } else if host_resolves_to_non_public_ip(host, port).await? {
@@ -368,6 +376,20 @@ fn log_domain_list_changes(list_name: &str, previous: &[String], next: &[String]
     }
 }
 
+fn is_explicit_local_allowlisted(allowed_domains: &[String], host: &str) -> bool {
+    let normalized_host = normalize_host(host);
+    allowed_domains.iter().any(|pattern| {
+        let pattern = pattern.trim();
+        if pattern == "*" || pattern.starts_with("*.") || pattern.starts_with("**.") {
+            return false;
+        }
+        if pattern.contains('*') || pattern.contains('?') {
+            return false;
+        }
+        normalize_host(pattern) == normalized_host
+    })
+}
+
 fn unix_timestamp() -> i64 {
     OffsetDateTime::now_utc().unix_timestamp()
 }
@@ -479,6 +501,34 @@ mod tests {
         );
         assert_eq!(
             state.host_blocked("localhost", 80).await.unwrap(),
+            (true, "not_allowed_local".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_rejects_loopback_when_allowlist_is_wildcard() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["*".to_string()],
+            allow_local_binding: false,
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("127.0.0.1", 80).await.unwrap(),
+            (true, "not_allowed_local".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_rejects_private_ip_literal_when_allowlist_is_wildcard() {
+        let state = app_state_for_policy(NetworkPolicy {
+            allowed_domains: vec!["*".to_string()],
+            allow_local_binding: false,
+            ..NetworkPolicy::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("10.0.0.1", 80).await.unwrap(),
             (true, "not_allowed_local".to_string())
         );
     }
