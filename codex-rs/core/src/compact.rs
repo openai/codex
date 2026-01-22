@@ -305,6 +305,7 @@ fn build_compacted_history_with_limit(
             content: vec![ContentItem::InputText {
                 text: message.clone(),
             }],
+            end_turn: None,
         });
     }
 
@@ -318,6 +319,7 @@ fn build_compacted_history_with_limit(
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText { text: summary_text }],
+        end_turn: None,
     });
 
     history
@@ -406,6 +408,7 @@ mod tests {
                 content: vec![ContentItem::OutputText {
                     text: "ignored".to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: Some("user".to_string()),
@@ -413,6 +416,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "first".to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Other,
         ];
@@ -432,6 +436,7 @@ mod tests {
                     text: "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\ndo things\n</INSTRUCTIONS>"
                         .to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -439,6 +444,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "<ENVIRONMENT_CONTEXT>cwd=/tmp</ENVIRONMENT_CONTEXT>".to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -446,6 +452,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "real user message".to_string(),
                 }],
+                end_turn: None,
             },
         ];
 
@@ -530,6 +537,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: marker.clone(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -537,6 +545,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "real user message".to_string(),
                 }],
+                end_turn: None,
             },
         ];
 
