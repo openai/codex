@@ -368,17 +368,34 @@ impl DeveloperInstructions {
     }
 }
 
-fn format_allow_prefixes(exec_policy: &Policy) -> Option<String> {
-    let prefixes = exec_policy.allow_prefixes();
-    if prefixes.is_empty() {
+pub fn render_command_prefix_list<I, P>(prefixes: I) -> Option<String>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<[String]>,
+{
+    let lines = prefixes
+        .into_iter()
+        .map(|prefix| format!("- {}", render_command_prefix(prefix.as_ref())))
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
         return None;
     }
 
-    let lines = prefixes
-        .into_iter()
-        .map(|prefix| format!("- {}", prefix.join(" ")))
+    Some(lines.join("\n"))
+}
+
+fn render_command_prefix(prefix: &[String]) -> String {
+    let tokens = prefix
+        .iter()
+        .map(|token| serde_json::to_string(token).unwrap_or_else(|_| format!("{token:?}")))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join(", ");
+    format!("[{tokens}]")
+}
+
+fn format_allow_prefixes(exec_policy: &Policy) -> Option<String> {
+    let prefixes = exec_policy.allow_prefixes();
+    let lines = render_command_prefix_list(prefixes)?;
     Some(format!("Approved command prefixes:\n{lines}"))
 }
 
@@ -980,7 +997,7 @@ mod tests {
         assert!(text.contains("request_approval"));
         assert!(text.contains("rule_prefix"));
         assert!(text.contains("Approved command prefixes"));
-        assert!(text.contains("git pull"));
+        assert!(text.contains(r#"["git", "pull"]"#));
     }
 
     #[test]

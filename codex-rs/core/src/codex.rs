@@ -190,6 +190,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::render_command_prefix_list;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
@@ -1418,6 +1419,44 @@ impl Session {
         Ok(())
     }
 
+    async fn turn_context_for_sub_id(&self, sub_id: &str) -> Option<Arc<TurnContext>> {
+        let active = self.active_turn.lock().await;
+        active
+            .as_ref()
+            .and_then(|turn| turn.tasks.get(sub_id))
+            .map(|task| Arc::clone(&task.turn_context))
+    }
+
+    pub(crate) async fn record_execpolicy_amendment_message(
+        &self,
+        sub_id: &str,
+        amendment: &ExecPolicyAmendment,
+    ) {
+        let Some(prefixes) = render_command_prefix_list([amendment.command.as_slice()]) else {
+            warn!("execpolicy amendment for {sub_id} had no command prefix");
+            return;
+        };
+        let text = format!("Approved command prefix saved:\n{prefixes}");
+        let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
+
+        if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
+            self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
+                .await;
+            return;
+        }
+
+        if self
+            .inject_response_items(vec![ResponseInputItem::Message {
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText { text }],
+            }])
+            .await
+            .is_err()
+        {
+            warn!("no active turn found to record execpolicy amendment message for {sub_id}");
+        }
+    }
+
     /// Emit an exec approval request event and await the user's decision.
     ///
     /// The request is keyed by `sub_id`/`call_id` so matching responses are delivered
@@ -2599,18 +2638,26 @@ mod handlers {
         if let ReviewDecision::ApprovedExecpolicyAmendment {
             proposed_execpolicy_amendment,
         } = &decision
-            && let Err(err) = sess
+        {
+            match sess
                 .persist_execpolicy_amendment(proposed_execpolicy_amendment)
                 .await
-        {
-            let message = format!("Failed to apply execpolicy amendment: {err}");
-            tracing::warn!("{message}");
-            let warning = EventMsg::Warning(WarningEvent { message });
-            sess.send_event_raw(Event {
-                id: id.clone(),
-                msg: warning,
-            })
-            .await;
+            {
+                Ok(()) => {
+                    sess.record_execpolicy_amendment_message(&id, proposed_execpolicy_amendment)
+                        .await;
+                }
+                Err(err) => {
+                    let message = format!("Failed to apply execpolicy amendment: {err}");
+                    tracing::warn!("{message}");
+                    let warning = EventMsg::Warning(WarningEvent { message });
+                    sess.send_event_raw(Event {
+                        id: id.clone(),
+                        msg: warning,
+                    })
+                    .await;
+                }
+            }
         }
         match decision {
             ReviewDecision::Abort => {

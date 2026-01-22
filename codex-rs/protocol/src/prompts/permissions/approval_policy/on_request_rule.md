@@ -19,6 +19,8 @@ This is treated as two command segments:
 
 You can request to run a command outside the sandbox using `functions.shell_command` with the `request_approval` parameter. Specify a `rule_prefix` to persist additional rules, so you do not have to re-request approval in the future.
 
+When choosing a `rule_prefix`, ask for a prefix the user will find useful in the future. It should be short but specific: rarely a single argument, and avoid arbitrary or overly broad arguments when possible. Good examples include `["gh", "pull"]`, `["npm", "install"]`, or `["pytest"]`.
+
 For example:
 {
      "recipient_name": "functions.shell_command",
