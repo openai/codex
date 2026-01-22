@@ -4,12 +4,12 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::SystemTime;
 
-use chrono::DateTime;
-use chrono::Utc;
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
+use chrono::DateTime;
+use chrono::Utc;
 use codex_api::AggregateStreamExt;
 use codex_api::ChatClient as ApiChatClient;
 use codex_api::CompactClient as ApiCompactClient;
@@ -56,8 +56,8 @@ use tracing::warn;
 
 use crate::AuthManager;
 use crate::CodexAuth;
-use crate::auth::RefreshTokenError;
 use crate::auth::DEFAULT_OAUTH_NAMESPACE;
+use crate::auth::RefreshTokenError;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
@@ -503,7 +503,8 @@ impl ModelClientSession {
                 .execute(|_, auth| async {
                     let transport = ReqwestTransport::new(build_reqwest_client());
                     let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
-                    let compression = responses_request_compression_from_state(&self.state, Some(&auth));
+                    let compression =
+                        responses_request_compression_from_state(&self.state, Some(&auth));
                     let api_auth = auth_provider_from_auth(Some(auth), &self.state.provider)
                         .map_err(|err| ApiError::Stream(err.to_string()))?;
                     let options = self.build_responses_options(prompt, compression);
@@ -517,7 +518,10 @@ impl ModelClientSession {
                 })
                 .await
                 .map_err(map_api_error)?;
-            return Ok(map_response_stream(api_stream, self.state.otel_manager.clone()));
+            return Ok(map_response_stream(
+                api_stream,
+                self.state.otel_manager.clone(),
+            ));
         }
 
         let mut auth_recovery = auth_manager
@@ -583,8 +587,7 @@ impl ModelClientSession {
             let turn_state = Arc::clone(&self.turn_state);
             let api_prompt_for_request = api_prompt.clone();
             let last_items = self.websocket_last_items.clone();
-            let connection_cell =
-                Arc::new(tokio::sync::Mutex::new(self.connection.take()));
+            let connection_cell = Arc::new(tokio::sync::Mutex::new(self.connection.take()));
             let stream_result = rotation
                 .execute({
                     let connection_cell = Arc::clone(&connection_cell);
@@ -603,9 +606,8 @@ impl ModelClientSession {
                         async move {
                             let compression =
                                 responses_request_compression_from_state(&state, Some(&auth));
-                            let api_auth =
-                                auth_provider_from_auth(Some(auth), &state.provider)
-                                    .map_err(|err| ApiError::Stream(err.to_string()))?;
+                            let api_auth = auth_provider_from_auth(Some(auth), &state.provider)
+                                .map_err(|err| ApiError::Stream(err.to_string()))?;
                             let options = build_responses_options_from_state(
                                 &state,
                                 &turn_state,
@@ -623,12 +625,10 @@ impl ModelClientSession {
                             headers.extend(build_conversation_headers(
                                 options.conversation_id.clone(),
                             ));
-                            let new_conn = ApiWebSocketResponsesClient::new(
-                                api_provider.clone(),
-                                api_auth,
-                            )
-                            .connect(headers, options.turn_state.clone())
-                            .await?;
+                            let new_conn =
+                                ApiWebSocketResponsesClient::new(api_provider.clone(), api_auth)
+                                    .connect(headers, options.turn_state.clone())
+                                    .await?;
                             let stream = new_conn.stream_request(request).await?;
                             {
                                 let mut guard = connection_cell.lock().await;
@@ -773,12 +773,7 @@ impl OAuthRotationPlan {
         })
     }
 
-    fn refreshed_snapshot(
-        &self,
-    ) -> (
-        Vec<String>,
-        HashMap<String, crate::auth::OAuthPoolRecord>,
-    ) {
+    fn refreshed_snapshot(&self) -> (Vec<String>, HashMap<String, crate::auth::OAuthPoolRecord>) {
         if let Ok(snapshot) = self.auth_manager.oauth_snapshot(&self.namespace) {
             let record_by_id: HashMap<_, _> = snapshot
                 .records
@@ -818,8 +813,7 @@ impl OAuthRotationPlan {
 
         for attempt in 0..max_attempts {
             let (candidates, record_by_id) = self.refreshed_snapshot();
-            let Some(record_id) =
-                pick_next_candidate(&candidates, &record_by_id, &attempted)
+            let Some(record_id) = pick_next_candidate(&candidates, &record_by_id, &attempted)
             else {
                 break;
             };
@@ -849,9 +843,12 @@ impl OAuthRotationPlan {
                         let headers_ref = headers.as_ref();
 
                         if status == StatusCode::BAD_REQUEST {
-                            let _ = self
-                                .auth_manager
-                                .oauth_record_outcome(&record_id, status_code, false, None);
+                            let _ = self.auth_manager.oauth_record_outcome(
+                                &record_id,
+                                status_code,
+                                false,
+                                None,
+                            );
                             return Err(ApiError::Transport(TransportError::Http {
                                 status,
                                 url,
@@ -861,17 +858,16 @@ impl OAuthRotationPlan {
                         }
 
                         if status == StatusCode::PAYMENT_REQUIRED {
-                            let exhausted_until = cooldown_until_from_duration(
-                                self.config.payment_required_cooldown,
-                            );
+                            let exhausted_until =
+                                cooldown_until_from_duration(self.config.payment_required_cooldown);
                             let _ = self.auth_manager.oauth_record_exhausted(
                                 &record_id,
                                 status_code,
                                 Some(exhausted_until),
                             );
-                            let _ =
-                                self.auth_manager
-                                    .oauth_move_to_back(&self.namespace, &record_id);
+                            let _ = self
+                                .auth_manager
+                                .oauth_move_to_back(&self.namespace, &record_id);
                             let err = ApiError::Transport(TransportError::Http {
                                 status,
                                 url,
@@ -895,9 +891,9 @@ impl OAuthRotationPlan {
                                 false,
                                 Some(cooldown_until),
                             );
-                            let _ =
-                                self.auth_manager
-                                    .oauth_move_to_back(&self.namespace, &record_id);
+                            let _ = self
+                                .auth_manager
+                                .oauth_move_to_back(&self.namespace, &record_id);
                             let err = ApiError::Transport(TransportError::Http {
                                 status,
                                 url,
@@ -916,17 +912,16 @@ impl OAuthRotationPlan {
                                 refreshed.insert(record_id.clone());
                                 match self.auth_manager.refresh_record(&record_id).await {
                                     Ok(()) => {
-                                        let Some(auth) = self.auth_manager.auth_for_record(&record_id) else {
+                                        let Some(auth) =
+                                            self.auth_manager.auth_for_record(&record_id)
+                                        else {
                                             break;
                                         };
                                         let retry = request_fn(&record_id, auth).await;
                                         match retry {
                                             Ok(value) => {
                                                 let _ = self.auth_manager.oauth_record_outcome(
-                                                    &record_id,
-                                                    200,
-                                                    true,
-                                                    None,
+                                                    &record_id, 200, true, None,
                                                 );
                                                 return Ok(value);
                                             }
@@ -954,26 +949,27 @@ impl OAuthRotationPlan {
                                                 }
 
                                                 if status == StatusCode::PAYMENT_REQUIRED {
-                                                    let exhausted_until = cooldown_until_from_duration(
-                                                        self.config.payment_required_cooldown,
-                                                    );
-                                                    let _ = self.auth_manager.oauth_record_exhausted(
-                                                        &record_id,
-                                                        status.as_u16(),
-                                                        Some(exhausted_until),
-                                                    );
+                                                    let exhausted_until =
+                                                        cooldown_until_from_duration(
+                                                            self.config.payment_required_cooldown,
+                                                        );
+                                                    let _ =
+                                                        self.auth_manager.oauth_record_exhausted(
+                                                            &record_id,
+                                                            status.as_u16(),
+                                                            Some(exhausted_until),
+                                                        );
                                                     let _ = self.auth_manager.oauth_move_to_back(
                                                         &self.namespace,
                                                         &record_id,
                                                     );
-                                                    let err = ApiError::Transport(
-                                                        TransportError::Http {
+                                                    let err =
+                                                        ApiError::Transport(TransportError::Http {
                                                             status,
                                                             url,
                                                             headers,
                                                             body,
-                                                        },
-                                                    );
+                                                        });
                                                     if attempt + 1 >= max_attempts {
                                                         return Err(err);
                                                     }
@@ -982,8 +978,11 @@ impl OAuthRotationPlan {
                                                 }
 
                                                 if status == StatusCode::TOO_MANY_REQUESTS {
-                                                    let cooldown = retry_after_duration(headers.as_ref())
-                                                        .unwrap_or(self.config.rate_limit_cooldown);
+                                                    let cooldown =
+                                                        retry_after_duration(headers.as_ref())
+                                                            .unwrap_or(
+                                                                self.config.rate_limit_cooldown,
+                                                            );
                                                     let cooldown_until =
                                                         cooldown_until_from_duration(cooldown);
                                                     let _ = self.auth_manager.oauth_record_outcome(
@@ -996,14 +995,13 @@ impl OAuthRotationPlan {
                                                         &self.namespace,
                                                         &record_id,
                                                     );
-                                                    let err = ApiError::Transport(
-                                                        TransportError::Http {
+                                                    let err =
+                                                        ApiError::Transport(TransportError::Http {
                                                             status,
                                                             url,
                                                             headers,
                                                             body,
-                                                        },
-                                                    );
+                                                        });
                                                     if attempt + 1 >= max_attempts {
                                                         return Err(err);
                                                     }
@@ -1024,22 +1022,68 @@ impl OAuthRotationPlan {
                                                     &self.namespace,
                                                     &record_id,
                                                 );
-                                                let err = ApiError::Transport(TransportError::Http {
-                                                    status,
-                                                    url,
-                                                    headers,
-                                                    body,
-                                                });
+                                                let err =
+                                                    ApiError::Transport(TransportError::Http {
+                                                        status,
+                                                        url,
+                                                        headers,
+                                                        body,
+                                                    });
                                                 if attempt + 1 >= max_attempts {
                                                     return Err(err);
                                                 }
                                                 last_error = Some(err);
                                                 break;
                                             }
-                                            Err(ApiError::Transport(TransportError::Timeout))
-                                            | Err(ApiError::Transport(TransportError::Network(_)))
-                                            | Err(ApiError::Transport(TransportError::Build(_))) => {
-                                                return retry;
+                                            Err(ApiError::Transport(TransportError::Timeout)) => {
+                                                let err =
+                                                    ApiError::Transport(TransportError::Timeout);
+                                                let _ = self.auth_manager.oauth_record_outcome(
+                                                    &record_id, 0, false, None,
+                                                );
+                                                if network_attempt
+                                                    < self.config.network_retry_attempts
+                                                {
+                                                    network_attempt += 1;
+                                                    continue;
+                                                }
+                                                last_error = Some(err);
+                                                break;
+                                            }
+                                            Err(ApiError::Transport(TransportError::Network(
+                                                msg,
+                                            ))) => {
+                                                let err = ApiError::Transport(
+                                                    TransportError::Network(msg),
+                                                );
+                                                let _ = self.auth_manager.oauth_record_outcome(
+                                                    &record_id, 0, false, None,
+                                                );
+                                                if network_attempt
+                                                    < self.config.network_retry_attempts
+                                                {
+                                                    network_attempt += 1;
+                                                    continue;
+                                                }
+                                                last_error = Some(err);
+                                                break;
+                                            }
+                                            Err(ApiError::Transport(TransportError::Build(
+                                                msg,
+                                            ))) => {
+                                                let err =
+                                                    ApiError::Transport(TransportError::Build(msg));
+                                                let _ = self.auth_manager.oauth_record_outcome(
+                                                    &record_id, 0, false, None,
+                                                );
+                                                if network_attempt
+                                                    < self.config.network_retry_attempts
+                                                {
+                                                    network_attempt += 1;
+                                                    continue;
+                                                }
+                                                last_error = Some(err);
+                                                break;
                                             }
                                             Err(err) => return Err(err),
                                         }
@@ -1053,9 +1097,8 @@ impl OAuthRotationPlan {
                                                 | Some(RefreshTokenFailedReason::Other)
                                         );
                                         if requires_relogin {
-                                            let _ = self
-                                                .auth_manager
-                                                .oauth_record_requires_relogin(
+                                            let _ =
+                                                self.auth_manager.oauth_record_requires_relogin(
                                                     &record_id,
                                                     status_code,
                                                 );
@@ -1070,10 +1113,9 @@ impl OAuthRotationPlan {
                                                 Some(cooldown_until),
                                             );
                                         }
-                                        let _ = self.auth_manager.oauth_move_to_back(
-                                            &self.namespace,
-                                            &record_id,
-                                        );
+                                        let _ = self
+                                            .auth_manager
+                                            .oauth_move_to_back(&self.namespace, &record_id);
                                         let err = ApiError::Transport(TransportError::Http {
                                             status,
                                             url,
@@ -1113,9 +1155,12 @@ impl OAuthRotationPlan {
                             }
                         }
 
-                        let _ = self
-                            .auth_manager
-                            .oauth_record_outcome(&record_id, status_code, false, None);
+                        let _ = self.auth_manager.oauth_record_outcome(
+                            &record_id,
+                            status_code,
+                            false,
+                            None,
+                        );
                         let _ = self
                             .auth_manager
                             .oauth_move_to_back(&self.namespace, &record_id);
@@ -1133,9 +1178,9 @@ impl OAuthRotationPlan {
                     }
                     Err(ApiError::Transport(TransportError::Timeout)) => {
                         let err = ApiError::Transport(TransportError::Timeout);
-                        let _ =
-                            self.auth_manager
-                                .oauth_record_outcome(&record_id, 0, false, None);
+                        let _ = self
+                            .auth_manager
+                            .oauth_record_outcome(&record_id, 0, false, None);
                         if network_attempt < self.config.network_retry_attempts {
                             network_attempt += 1;
                             continue;
@@ -1145,9 +1190,9 @@ impl OAuthRotationPlan {
                     }
                     Err(ApiError::Transport(TransportError::Network(msg))) => {
                         let err = ApiError::Transport(TransportError::Network(msg));
-                        let _ =
-                            self.auth_manager
-                                .oauth_record_outcome(&record_id, 0, false, None);
+                        let _ = self
+                            .auth_manager
+                            .oauth_record_outcome(&record_id, 0, false, None);
                         if network_attempt < self.config.network_retry_attempts {
                             network_attempt += 1;
                             continue;
@@ -1157,9 +1202,9 @@ impl OAuthRotationPlan {
                     }
                     Err(ApiError::Transport(TransportError::Build(msg))) => {
                         let err = ApiError::Transport(TransportError::Build(msg));
-                        let _ =
-                            self.auth_manager
-                                .oauth_record_outcome(&record_id, 0, false, None);
+                        let _ = self
+                            .auth_manager
+                            .oauth_record_outcome(&record_id, 0, false, None);
                         if network_attempt < self.config.network_retry_attempts {
                             network_attempt += 1;
                             continue;
@@ -1179,12 +1224,12 @@ impl OAuthRotationPlan {
     }
 }
 
-fn resolve_oauth_rotation_config(config: &Config, candidate_len: usize) -> OAuthRotationConfigResolved {
+fn resolve_oauth_rotation_config(
+    config: &Config,
+    candidate_len: usize,
+) -> OAuthRotationConfigResolved {
     let settings = &config.oauth_rotation;
-    let max_attempts = settings
-        .max_attempts
-        .unwrap_or(candidate_len as u32)
-        .max(1) as usize;
+    let max_attempts = settings.max_attempts.unwrap_or(candidate_len as u32).max(1) as usize;
     let max_attempts = max_attempts.min(candidate_len.max(1));
     let rate_limit_cooldown = Duration::from_millis(
         settings
@@ -1285,8 +1330,8 @@ fn retry_after_duration(headers: Option<&ApiHeaderMap>) -> Option<Duration> {
 }
 
 fn cooldown_until_from_duration(duration: Duration) -> DateTime<Utc> {
-    let chrono_duration = chrono::Duration::from_std(duration)
-        .unwrap_or_else(|_| chrono::Duration::zero());
+    let chrono_duration =
+        chrono::Duration::from_std(duration).unwrap_or_else(|_| chrono::Duration::zero());
     Utc::now() + chrono_duration
 }
 
@@ -1340,7 +1385,10 @@ fn build_responses_options_from_state(
     };
 
     let verbosity = if model_info.support_verbosity {
-        state.config.model_verbosity.or(model_info.default_verbosity)
+        state
+            .config
+            .model_verbosity
+            .or(model_info.default_verbosity)
     } else {
         if state.config.model_verbosity.is_some() {
             warn!(
@@ -1376,9 +1424,8 @@ fn get_incremental_items_from(
     // If items in the new request contain all the items from the previous request we build
     // a response.append request otherwise we start with a fresh response.create request.
     let previous_len = last_items.len();
-    let can_append = previous_len > 0
-        && input_items.starts_with(last_items)
-        && previous_len < input_items.len();
+    let can_append =
+        previous_len > 0 && input_items.starts_with(last_items) && previous_len < input_items.len();
     if can_append {
         Some(input_items[previous_len..].to_vec())
     } else {
@@ -1393,7 +1440,9 @@ fn prepare_websocket_request_with_last_items(
     last_items: &[ResponseItem],
 ) -> ResponsesWsRequest {
     if let Some(append_items) = get_incremental_items_from(last_items, &api_prompt.input) {
-        return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest { input: append_items });
+        return ResponsesWsRequest::ResponseAppend(ResponseAppendWsRequest {
+            input: append_items,
+        });
     }
 
     let ApiResponsesOptions {

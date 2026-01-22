@@ -20,7 +20,6 @@ mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
 mod approvals;
 mod auth_refresh;
-mod oauth_rotation;
 mod cli_stream;
 mod client;
 mod client_websockets;
@@ -46,6 +45,7 @@ mod model_overrides;
 mod model_tools;
 mod models_cache_ttl;
 mod models_etag_responses;
+mod oauth_rotation;
 mod otel;
 mod pending_input;
 mod permissions_messages;

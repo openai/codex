@@ -94,7 +94,7 @@ Rotate only for OpenAI providers + ChatGPT auth when multiple accounts exist.
 - **429**: set cooldown based on `Retry-After` (seconds or HTTP-date); move account to back; try next.
 - **401/403**: refresh once; if refresh succeeds, retry same account once; on refresh failure or repeat failure, cooldown + rotate.
 - **Other HTTP errors**: mark failure, rotate.
-- **Network/timeout/build**: retry same account up to `network_retry_attempts`; do not rotate on network errors.
+- **Network/timeout/build**: retry same account up to `network_retry_attempts`; after retries, continue rotation.
 
 **Success handling:**
 - Clear cooldown; increment success count.

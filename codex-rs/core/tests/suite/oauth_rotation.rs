@@ -1,3 +1,4 @@
+use base64::Engine;
 use codex_core::AuthManager;
 use codex_core::ContentItem;
 use codex_core::ModelClient;
@@ -6,25 +7,24 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
-use codex_core::config::Config;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_core::auth::add_oauth_account;
 use codex_core::auth::list_oauth_accounts;
 use codex_core::built_in_model_providers;
+use codex_core::config::Config;
 use codex_core::error::CodexErr;
+use codex_core::models_manager::manager::ModelsManager;
 use codex_core::token_data::IdTokenInfo;
 use codex_core::token_data::TokenData;
-use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use futures::StreamExt;
-use httpdate::fmt_http_date;
 use http::StatusCode;
-use base64::Engine;
+use httpdate::fmt_http_date;
 use serial_test::serial;
 use std::ffi::OsString;
 use std::sync::Arc;
@@ -65,15 +65,22 @@ fn minimal_jwt() -> String {
         alg: &'static str,
         typ: &'static str,
     }
-    let header = Header { alg: "none", typ: "JWT" };
+    let header = Header {
+        alg: "none",
+        typ: "JWT",
+    };
     let payload = serde_json::json!({ "sub": "user-123" });
 
     fn b64(data: &[u8]) -> String {
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
     }
 
-    let header_b64 = b64(&serde_json::to_vec(&header).expect("serialize header"));
-    let payload_b64 = b64(&serde_json::to_vec(&payload).expect("serialize payload"));
+    let header_bytes =
+        serde_json::to_vec(&header).unwrap_or_else(|err| panic!("serialize header: {err}"));
+    let payload_bytes =
+        serde_json::to_vec(&payload).unwrap_or_else(|err| panic!("serialize payload: {err}"));
+    let header_b64 = b64(&header_bytes);
+    let payload_b64 = b64(&payload_bytes);
     let signature_b64 = b64(b"sig");
     format!("{header_b64}.{payload_b64}.{signature_b64}")
 }
@@ -198,9 +205,7 @@ async fn rotates_on_429_and_uses_next_account() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(header("authorization", format!("Bearer {a1_access}")))
-        .respond_with(
-            ResponseTemplate::new(429).insert_header("Retry-After", "1"),
-        )
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "1"))
         .expect(1)
         .mount(&server)
         .await;
@@ -208,10 +213,9 @@ async fn rotates_on_429_and_uses_next_account() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(header("authorization", format!("Bearer {a2_access}")))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            sse_completed("resp2"),
-            "text/event-stream",
-        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(sse_completed("resp2"), "text/event-stream"),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -290,11 +294,13 @@ async fn refreshes_on_401_and_reuses_same_account() {
 
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
-        .and(header("authorization", format!("Bearer {refreshed_access}")))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            sse_completed("resp1"),
-            "text/event-stream",
+        .and(header(
+            "authorization",
+            format!("Bearer {refreshed_access}"),
         ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(sse_completed("resp1"), "text/event-stream"),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -377,11 +383,13 @@ async fn refreshes_on_403_and_reuses_same_account() {
 
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
-        .and(header("authorization", format!("Bearer {refreshed_access}")))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            sse_completed("resp403"),
-            "text/event-stream",
+        .and(header(
+            "authorization",
+            format!("Bearer {refreshed_access}"),
         ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(sse_completed("resp403"), "text/event-stream"),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -420,7 +428,10 @@ async fn refreshes_on_403_and_reuses_same_account() {
     let accounts = list_oauth_accounts(codex_home.path(), AuthCredentialsStoreMode::File)
         .expect("list accounts");
     let ordered_ids: Vec<String> = accounts.iter().map(|a| a.record_id.clone()).collect();
-    assert_eq!(ordered_ids.first().map(String::as_str), Some(record1.as_str()));
+    assert_eq!(
+        ordered_ids.first().map(String::as_str),
+        Some(record1.as_str())
+    );
 
     let refreshed_auth = auth_manager
         .auth_for_record(&record1)
@@ -460,10 +471,9 @@ async fn rotates_when_refresh_fails() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(header("authorization", "Bearer access-good"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            sse_completed("resp2"),
-            "text/event-stream",
-        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(sse_completed("resp2"), "text/event-stream"),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -525,10 +535,9 @@ async fn rotates_on_non_auth_failure() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(header("authorization", "Bearer access-2"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            sse_completed("resp2"),
-            "text/event-stream",
-        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(sse_completed("resp2"), "text/event-stream"),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -580,9 +589,7 @@ async fn respects_retry_after_http_date() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(header("authorization", "Bearer access-1"))
-        .respond_with(
-            ResponseTemplate::new(429).insert_header("Retry-After", retry_header),
-        )
+        .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", retry_header))
         .expect(1)
         .mount(&server)
         .await;
@@ -590,10 +597,9 @@ async fn respects_retry_after_http_date() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(header("authorization", "Bearer access-2"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            sse_completed("resp2"),
-            "text/event-stream",
-        ))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_raw(sse_completed("resp2"), "text/event-stream"),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -635,7 +641,10 @@ async fn respects_retry_after_http_date() {
         .iter()
         .find(|account| account.record_id == record1)
         .expect("record should exist");
-    let cooldown = record.health.cooldown_until.expect("cooldown should be set");
+    let cooldown = record
+        .health
+        .cooldown_until
+        .expect("cooldown should be set");
 
     let retry_at = chrono::DateTime::<chrono::Utc>::from(retry_at);
     let delta = cooldown - retry_at;
@@ -780,7 +789,9 @@ async fn errors_when_all_accounts_rate_limited() {
     let accounts = list_oauth_accounts(codex_home.path(), AuthCredentialsStoreMode::File)
         .expect("list accounts");
     assert!(
-        accounts.iter().all(|account| account.health.cooldown_until.is_some()),
+        accounts
+            .iter()
+            .all(|account| account.health.cooldown_until.is_some()),
         "expected all accounts to enter cooldown"
     );
 }
@@ -869,10 +880,10 @@ async fn relogin_overrides_quarantined_account_by_account_id() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(header("authorization", "Bearer access-good"))
-        .respond_with(ResponseTemplate::new(200).set_body_raw(
-            sse_completed("resp-relogin"),
-            "text/event-stream",
-        ))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(sse_completed("resp-relogin"), "text/event-stream"),
+        )
         .expect(1)
         .mount(&server)
         .await;

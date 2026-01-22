@@ -261,7 +261,11 @@ struct LogoutCommand {
     config_overrides: CliConfigOverrides,
 
     /// Remove a specific ChatGPT OAuth account by id, email, or label.
-    #[arg(long = "account", value_name = "ACCOUNT", conflicts_with = "all_accounts")]
+    #[arg(
+        long = "account",
+        value_name = "ACCOUNT",
+        conflicts_with = "all_accounts"
+    )]
     account: Option<String>,
 
     /// Remove all stored ChatGPT OAuth accounts (keeps API key).
