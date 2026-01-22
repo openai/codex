@@ -1516,6 +1516,14 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_install_instructions_event(install_url: String) -> PrefixedWrappedHistoryCell {
+    let instructions = Line::from("Install this app in your browser, then reload Codex.");
+    let open_label = Line::from(vec!["Open:".dim()]);
+    let url_line = Line::from(vec![install_url.cyan().underlined()]);
+    let text = Text::from(vec![instructions, open_label, url_line]);
+    PrefixedWrappedHistoryCell::new(text, "• ".dim(), "  ")
+}
+
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // Use a hair space (U+200A) to create a subtle, near-invisible separation
     // before the text. VS16 is intentionally omitted to keep spacing tighter

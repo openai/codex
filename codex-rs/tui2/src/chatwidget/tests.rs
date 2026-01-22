@@ -411,6 +411,7 @@ async fn make_chatwidget_manual(
         task_complete_pending: false,
         agent_turn_running: false,
         mcp_startup_status: None,
+        connectors_cache: ConnectorsCacheState::default(),
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),

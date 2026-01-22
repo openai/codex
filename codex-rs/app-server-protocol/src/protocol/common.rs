@@ -133,6 +133,10 @@ client_request_definitions! {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
     },
+    ConnectorsList => "connectors/list" {
+        params: v2::ConnectorsListParams,
+        response: v2::ConnectorsListResponse,
+    },
     SkillsConfigWrite => "skills/config/write" {
         params: v2::SkillsConfigWriteParams,
         response: v2::SkillsConfigWriteResponse,

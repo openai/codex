@@ -1694,6 +1694,12 @@ impl App {
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
             }
+            AppEvent::ConnectorsLoaded(result) => {
+                self.chat_widget.on_connectors_loaded(result);
+            }
+            AppEvent::InsertComposerText(text) => {
+                self.chat_widget.insert_composer_text(&text);
+            }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
             }

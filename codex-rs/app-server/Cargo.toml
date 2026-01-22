@@ -22,6 +22,7 @@ codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
+codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }

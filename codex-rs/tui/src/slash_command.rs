@@ -30,6 +30,8 @@ pub enum SlashCommand {
     Mention,
     Status,
     Mcp,
+    #[strum(serialize = "apps")]
+    Connectors,
     Logout,
     Quit,
     Exit,
@@ -63,6 +65,7 @@ impl SlashCommand {
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::Experimental => "toggle beta features",
             SlashCommand::Mcp => "list configured MCP tools",
+            SlashCommand::Connectors => "browse app connectors",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
@@ -96,6 +99,7 @@ impl SlashCommand {
             | SlashCommand::Status
             | SlashCommand::Ps
             | SlashCommand::Mcp
+            | SlashCommand::Connectors
             | SlashCommand::Feedback
             | SlashCommand::Quit
             | SlashCommand::Exit => true,

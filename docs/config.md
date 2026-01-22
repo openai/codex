@@ -12,6 +12,19 @@ Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the c
 
 - https://developers.openai.com/codex/config-reference
 
+## Apps (Connectors)
+
+Use `$` in the composer to insert a ChatGPT connector; the popover lists accessible
+apps. Connected apps appear first and are labeled as connected; others are marked
+as can be installed. The `/apps` command still lists apps, but it is read-only.
+Inserting an app adds `<connector name>` to the composer. Apps are exposed
+through the built-in `codex_apps_mcp` MCP server when the connectors feature is
+enabled. Only connectors inserted into the conversation are enabled as tools, and
+there is no connectors-specific configuration in `config.toml`. By default, the
+built-in server uses the same bearer token as other Codex backend requests. To
+override it, set the `CODEX_CONNECTORS_TOKEN` environment variable to a non-empty
+value.
+
 ## Notify
 
 Codex can run a notification hook when the agent finishes a turn. See the configuration reference for the latest notification settings:

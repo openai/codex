@@ -3,7 +3,7 @@
 //! It is responsible for:
 //!
 //! - Editing the input buffer (a [`TextArea`]), including placeholder "elements" for attachments.
-//! - Routing keys to the active popup (slash commands, file search, skill mentions).
+//! - Routing keys to the active popup (slash commands, file search, skill/connector mentions).
 //! - Handling submit vs newline on Enter.
 //! - Turning raw key streams into explicit paste operations on platforms where terminals
 //!   don't provide reliable bracketed paste (notably Windows).
@@ -92,6 +92,7 @@ use super::footer::reset_mode_after_activity;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+use super::skill_popup::MentionItem;
 use super::skill_popup::SkillPopup;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::expand_custom_prompt;
@@ -112,6 +113,7 @@ use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use codex_protocol::models::local_image_label_text;
 
 use crate::app_event::AppEvent;
+use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
@@ -119,6 +121,8 @@ use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
+use codex_chatgpt::connectors;
+use codex_chatgpt::connectors::ConnectorInfo;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
@@ -197,10 +201,12 @@ pub(crate) struct ChatComposer {
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
-    dismissed_skill_popup_token: Option<String>,
+    connectors_snapshot: Option<ConnectorsSnapshot>,
+    dismissed_mention_popup_token: Option<String>,
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
     collaboration_modes_enabled: bool,
+    connectors_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -258,9 +264,11 @@ impl ChatComposer {
             context_window_percent: None,
             context_window_used_tokens: None,
             skills: None,
-            dismissed_skill_popup_token: None,
+            connectors_snapshot: None,
+            dismissed_mention_popup_token: None,
             steer_enabled: false,
             collaboration_modes_enabled: false,
+            connectors_enabled: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -269,6 +277,10 @@ impl ChatComposer {
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
+    }
+
+    pub fn set_connector_mentions(&mut self, connectors_snapshot: Option<ConnectorsSnapshot>) {
+        self.connectors_snapshot = connectors_snapshot;
     }
 
     /// Enables or disables "Steer" behavior for submission keys.
@@ -283,6 +295,10 @@ impl ChatComposer {
 
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
         self.collaboration_modes_enabled = enabled;
+    }
+
+    pub fn set_connectors_enabled(&mut self, enabled: bool) {
+        self.connectors_enabled = enabled;
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -1097,8 +1113,8 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
-                if let Some(tok) = self.current_skill_token() {
-                    self.dismissed_skill_popup_token = Some(tok);
+                if let Some(tok) = self.current_mention_token() {
+                    self.dismissed_mention_popup_token = Some(tok);
                 }
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
@@ -1111,9 +1127,11 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                let selected = popup.selected_skill().map(|skill| skill.name.clone());
-                if let Some(name) = selected {
-                    self.insert_selected_skill(&name);
+                let selected = popup
+                    .selected_mention()
+                    .map(|mention| mention.insert_text.clone());
+                if let Some(insert_text) = selected {
+                    self.insert_selected_mention(&insert_text);
                 }
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
@@ -1133,6 +1151,19 @@ impl ChatComposer {
 
     pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
         self.skills.as_ref()
+    }
+
+    fn mentions_enabled(&self) -> bool {
+        let skills_ready = self
+            .skills
+            .as_ref()
+            .is_some_and(|skills| !skills.is_empty());
+        let connectors_ready = self.connectors_enabled
+            && self
+                .connectors_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| !snapshot.connectors.is_empty());
+        skills_ready || connectors_ready
     }
 
     /// Extract a token prefixed with `prefix` under the cursor, if any.
@@ -1248,8 +1279,8 @@ impl ChatComposer {
         Self::current_prefixed_token(textarea, '@', false)
     }
 
-    fn current_skill_token(&self) -> Option<String> {
-        if !self.skills_enabled() {
+    fn current_mention_token(&self) -> Option<String> {
+        if !self.mentions_enabled() {
             return None;
         }
         Self::current_prefixed_token(&self.textarea, '$', true)
@@ -1306,7 +1337,7 @@ impl ChatComposer {
         self.textarea.set_cursor(new_cursor);
     }
 
-    fn insert_selected_skill(&mut self, skill_name: &str) {
+    fn insert_selected_mention(&mut self, insert_text: &str) {
         let cursor_offset = self.textarea.cursor();
         let text = self.textarea.text();
         let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
@@ -1327,7 +1358,7 @@ impl ChatComposer {
             .unwrap_or(after_cursor.len());
         let end_idx = safe_cursor + end_rel_idx;
 
-        let inserted = format!("${skill_name}");
+        let inserted = insert_text.to_string();
 
         let mut new_text =
             String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
@@ -1376,9 +1407,11 @@ impl ChatComposer {
         if let Some((name, _rest)) = parse_slash_name(&text) {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
             if !treat_as_plain_text {
-                let is_builtin =
-                    Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                        .any(|(command_name, _)| command_name == name);
+                let is_builtin = Self::built_in_slash_commands_for_input(
+                    self.collaboration_modes_enabled,
+                    self.connectors_enabled,
+                )
+                .any(|(command_name, _)| command_name == name);
                 let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
                 let is_known_prompt = name
                     .strip_prefix(&prompt_prefix)
@@ -1495,9 +1528,11 @@ impl ChatComposer {
         let first_line = self.textarea.text().lines().next().unwrap_or("");
         if let Some((name, rest)) = parse_slash_name(first_line)
             && rest.is_empty()
-            && let Some((_n, cmd)) =
-                Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                    .find(|(n, _)| *n == name)
+            && let Some((_n, cmd)) = Self::built_in_slash_commands_for_input(
+                self.collaboration_modes_enabled,
+                self.connectors_enabled,
+            )
+            .find(|(n, _)| *n == name)
         {
             self.textarea.set_text("");
             Some(InputResult::Command(cmd))
@@ -1517,9 +1552,11 @@ impl ChatComposer {
             if let Some((name, rest)) = parse_slash_name(&text)
                 && !rest.is_empty()
                 && !name.contains('/')
-                && let Some((_n, cmd)) =
-                    Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                        .find(|(command_name, _)| *command_name == name)
+                && let Some((_n, cmd)) = Self::built_in_slash_commands_for_input(
+                    self.collaboration_modes_enabled,
+                    self.connectors_enabled,
+                )
+                .find(|(command_name, _)| *command_name == name)
                 && cmd == SlashCommand::Review
             {
                 self.textarea.set_text("");
@@ -1908,22 +1945,22 @@ impl ChatComposer {
             self.active_popup = ActivePopup::None;
             return;
         }
-        let skill_token = self.current_skill_token();
+        let mention_token = self.current_mention_token();
 
-        let allow_command_popup = file_token.is_none() && skill_token.is_none();
+        let allow_command_popup = file_token.is_none() && mention_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
         if matches!(self.active_popup, ActivePopup::Command(_)) {
             self.dismissed_file_popup_token = None;
-            self.dismissed_skill_popup_token = None;
+            self.dismissed_mention_popup_token = None;
             return;
         }
 
-        if let Some(token) = skill_token {
-            self.sync_skill_popup(token);
+        if let Some(token) = mention_token {
+            self.sync_mention_popup(token);
             return;
         }
-        self.dismissed_skill_popup_token = None;
+        self.dismissed_mention_popup_token = None;
 
         if let Some(token) = file_token {
             self.sync_file_search_popup(token);
@@ -1975,9 +2012,11 @@ impl ChatComposer {
             return rest_after_name.is_empty();
         }
 
-        let builtin_match =
-            Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
+        let builtin_match = Self::built_in_slash_commands_for_input(
+            self.collaboration_modes_enabled,
+            self.connectors_enabled,
+        )
+        .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
 
         if builtin_match {
             return true;
@@ -2031,11 +2070,13 @@ impl ChatComposer {
                 if is_editing_slash_command_name {
                     let skills_enabled = self.skills_enabled();
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
+                    let connectors_enabled = self.connectors_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
                             skills_enabled,
                             collaboration_modes_enabled,
+                            connectors_enabled,
                         },
                     );
                     command_popup.on_composer_text_change(first_line.to_string());
@@ -2047,12 +2088,14 @@ impl ChatComposer {
 
     fn built_in_slash_commands_for_input(
         collaboration_modes_enabled: bool,
+        connectors_enabled: bool,
     ) -> impl Iterator<Item = (&'static str, SlashCommand)> {
         let allow_elevate_sandbox = windows_degraded_sandbox_active();
         built_in_slash_commands()
             .into_iter()
             .filter(move |(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
             .filter(move |(_, cmd)| collaboration_modes_enabled || *cmd != SlashCommand::Collab)
+            .filter(move |(_, cmd)| connectors_enabled || *cmd != SlashCommand::Connectors)
     }
 
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
@@ -2098,30 +2141,93 @@ impl ChatComposer {
         self.dismissed_file_popup_token = None;
     }
 
-    fn sync_skill_popup(&mut self, query: String) {
-        if self.dismissed_skill_popup_token.as_ref() == Some(&query) {
+    fn sync_mention_popup(&mut self, query: String) {
+        if self.dismissed_mention_popup_token.as_ref() == Some(&query) {
             return;
         }
 
-        let skills = match self.skills.as_ref() {
-            Some(skills) if !skills.is_empty() => skills.clone(),
-            _ => {
-                self.active_popup = ActivePopup::None;
-                return;
-            }
-        };
+        let mentions = self.mention_items();
+        if mentions.is_empty() {
+            self.active_popup = ActivePopup::None;
+            return;
+        }
 
         match &mut self.active_popup {
             ActivePopup::Skill(popup) => {
                 popup.set_query(&query);
-                popup.set_skills(skills);
+                popup.set_mentions(mentions);
             }
             _ => {
-                let mut popup = SkillPopup::new(skills);
+                let mut popup = SkillPopup::new(mentions);
                 popup.set_query(&query);
                 self.active_popup = ActivePopup::Skill(popup);
             }
         }
+    }
+
+    fn mention_items(&self) -> Vec<MentionItem> {
+        let mut mentions = Vec::new();
+
+        if let Some(skills) = self.skills.as_ref() {
+            for skill in skills {
+                let display_name = skill_display_name(skill).to_string();
+                let description = skill_description(skill);
+                let skill_name = skill.name.clone();
+                let search_terms = if display_name == skill.name {
+                    vec![skill_name.clone()]
+                } else {
+                    vec![skill_name.clone(), display_name.clone()]
+                };
+                mentions.push(MentionItem {
+                    display_name,
+                    description,
+                    insert_text: format!("${skill_name}"),
+                    search_terms,
+                });
+            }
+        }
+
+        if self.connectors_enabled
+            && let Some(snapshot) = self.connectors_snapshot.as_ref()
+        {
+            for connector in &snapshot.connectors {
+                if !connector.is_accessible {
+                    continue;
+                }
+                let display_name = connectors::connector_display_label(connector);
+                let description = Some(Self::connector_brief_description(connector));
+                let search_terms = vec![display_name.clone(), connector.connector_id.clone()];
+                mentions.push(MentionItem {
+                    display_name: display_name.clone(),
+                    description,
+                    insert_text: display_name.clone(),
+                    search_terms,
+                });
+            }
+        }
+
+        mentions
+    }
+
+    fn connector_brief_description(connector: &ConnectorInfo) -> String {
+        let status_label = if connector.is_accessible {
+            "Connected"
+        } else {
+            "Can be installed"
+        };
+        match Self::connector_description(connector) {
+            Some(description) => format!("{status_label} - {description}"),
+            None => status_label.to_string(),
+        }
+    }
+
+    fn connector_description(connector: &ConnectorInfo) -> Option<String> {
+        connector
+            .connector_description
+            .as_deref()
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+            .map(str::to_string)
     }
 
     fn set_has_focus(&mut self, has_focus: bool) {
@@ -2160,6 +2266,25 @@ impl ChatComposer {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
     }
+}
+
+fn skill_display_name(skill: &SkillMetadata) -> &str {
+    skill
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.display_name.as_deref())
+        .unwrap_or(&skill.name)
+}
+
+fn skill_description(skill: &SkillMetadata) -> Option<String> {
+    let description = skill
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.short_description.as_deref())
+        .or(skill.short_description.as_deref())
+        .unwrap_or(&skill.description);
+    let trimmed = description.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 impl Renderable for ChatComposer {
@@ -2322,6 +2447,7 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::app_event::AppEvent;
+
     use crate::bottom_pane::AppEventSender;
     use crate::bottom_pane::ChatComposer;
     use crate::bottom_pane::InputResult;

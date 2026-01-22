@@ -26,6 +26,9 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::CommandExecParams;
+use codex_app_server_protocol::ConnectorInfo as ApiConnectorInfo;
+use codex_app_server_protocol::ConnectorsListParams;
+use codex_app_server_protocol::ConnectorsListResponse;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
@@ -120,6 +123,7 @@ use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_app_server_protocol::build_turns_from_event_msgs;
 use codex_backend_client::Client as BackendClient;
+use codex_chatgpt::connectors;
 use codex_core::AuthManager;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
@@ -404,6 +408,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
+            }
+            ClientRequest::ConnectorsList { request_id, params } => {
+                self.connectors_list(request_id, params).await;
             }
             ClientRequest::SkillsConfigWrite { request_id, params } => {
                 self.skills_config_write(request_id, params).await;
@@ -3260,6 +3267,49 @@ impl CodexMessageProcessor {
 
         self.outgoing
             .send_response(request_id, SendUserTurnResponse {})
+            .await;
+    }
+
+    async fn connectors_list(&self, request_id: RequestId, params: ConnectorsListParams) {
+        let ConnectorsListParams {} = params;
+        let config = match self.load_latest_config().await {
+            Ok(config) => config,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        if !config.features.enabled(Feature::Connectors) {
+            self.outgoing
+                .send_response(request_id, ConnectorsListResponse { data: Vec::new() })
+                .await;
+            return;
+        }
+
+        let connectors = match connectors::list_connectors(&config).await {
+            Ok(connectors) => connectors,
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to list connectors: {err}"))
+                    .await;
+                return;
+            }
+        };
+
+        let data = connectors
+            .into_iter()
+            .map(|connector| ApiConnectorInfo {
+                connector_id: connector.connector_id,
+                connector_name: connector.connector_name,
+                connector_description: connector.connector_description,
+                logo_url: connector.logo_url,
+                install_url: connector.install_url,
+                is_accessible: connector.is_accessible,
+            })
+            .collect();
+
+        self.outgoing
+            .send_response(request_id, ConnectorsListResponse { data })
             .await;
     }
 
