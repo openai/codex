@@ -124,16 +124,16 @@ pub(crate) fn probe_bind_mounts() -> BindMountProbeStatus {
         }
     };
     let protected = probe_dir.join("protected");
-    let status = loop {
+    let status = (|| {
         if let Err(err) = std::fs::create_dir_all(&protected) {
-            break BindMountProbeStatus::Unsupported {
+            return BindMountProbeStatus::Unsupported {
                 reason: format!("create probe path failed: {err}"),
             };
         }
         let protected_abs = match AbsolutePathBuf::try_from(protected.as_path()) {
             Ok(path) => path,
             Err(err) => {
-                break BindMountProbeStatus::Unsupported {
+                return BindMountProbeStatus::Unsupported {
                     reason: format!("resolve probe path failed: {err}"),
                 };
             }
@@ -143,24 +143,24 @@ pub(crate) fn probe_bind_mounts() -> BindMountProbeStatus {
         let original_egid = unsafe { libc::getegid() };
 
         if let Err(err) = unshare_user_and_mount_namespaces() {
-            break probe_unsupported("unshare user+mount namespaces", err);
+            return probe_unsupported("unshare user+mount namespaces", err);
         }
         if let Err(err) = write_user_namespace_maps(original_euid, original_egid) {
-            break probe_unsupported("write user namespace maps", err);
+            return probe_unsupported("write user namespace maps", err);
         }
         let targets = [protected_abs];
         match apply_read_only_bind_mounts(&targets, true) {
             Ok(BindMountAttempt::Applied) => {}
             Ok(BindMountAttempt::PermissionDenied(err)) => {
-                break probe_unsupported("apply bind mounts", err);
+                return probe_unsupported("apply bind mounts", err);
             }
             Err(err) => {
-                break probe_unsupported("apply bind mounts", err);
+                return probe_unsupported("apply bind mounts", err);
             }
         }
 
-        break BindMountProbeStatus::Supported;
-    };
+        BindMountProbeStatus::Supported
+    })();
 
     let _ = std::fs::remove_dir_all(&probe_dir);
     status
@@ -400,11 +400,14 @@ fn reset_force_flags() {
 }
 
 #[cfg(test)]
-struct ForceFlagsGuard(std::sync::MutexGuard<'static, ()>);
+struct ForceFlagsGuard {
+    guard: std::sync::MutexGuard<'static, ()>,
+}
 
 #[cfg(test)]
 impl Drop for ForceFlagsGuard {
     fn drop(&mut self) {
+        let _ = &self.guard;
         reset_force_flags();
     }
 }
@@ -413,7 +416,7 @@ impl Drop for ForceFlagsGuard {
 fn force_flags_guard() -> ForceFlagsGuard {
     let guard = FORCE_FLAGS_LOCK.lock().expect("force flags lock");
     reset_force_flags();
-    ForceFlagsGuard(guard)
+    ForceFlagsGuard { guard }
 }
 
 fn log_namespace_fallback(err: &CodexErr) {
