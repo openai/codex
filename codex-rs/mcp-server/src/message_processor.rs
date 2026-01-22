@@ -15,6 +15,7 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
+use codex_core::find_thread_path_by_id_str;
 use codex_core::protocol::Submission;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
@@ -40,6 +41,8 @@ pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     initialized: bool,
     codex_linux_sandbox_exe: Option<PathBuf>,
+    config: Arc<Config>,
+    auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
 }
@@ -60,13 +63,15 @@ impl MessageProcessor {
         );
         let thread_manager = Arc::new(ThreadManager::new(
             config.codex_home.clone(),
-            auth_manager,
+            auth_manager.clone(),
             SessionSource::Mcp,
         ));
         Self {
             outgoing,
             initialized: false,
             codex_linux_sandbox_exe,
+            config,
+            auth_manager,
             thread_manager,
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -494,17 +499,73 @@ impl MessageProcessor {
         let outgoing = self.outgoing.clone();
         let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
 
+        // First try to get the thread from memory (same session).
+        // If not found, try to load from disk (cross-session resume).
         let codex = match self.thread_manager.get_thread(thread_id).await {
             Ok(c) => c,
             Err(_) => {
-                tracing::warn!("Session not found for thread_id: {thread_id}");
-                let result = crate::codex_tool_runner::create_call_tool_result_with_thread_id(
-                    thread_id,
-                    format!("Session not found for thread_id: {thread_id}"),
-                    Some(true),
+                tracing::info!(
+                    "Thread {thread_id} not found in memory, attempting to load from disk"
                 );
-                outgoing.send_response(request_id, result).await;
-                return;
+
+                // Try to find the rollout file on disk by thread ID.
+                let rollout_path = match find_thread_path_by_id_str(
+                    &self.config.codex_home,
+                    &thread_id.to_string(),
+                )
+                .await
+                {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
+                        tracing::warn!("Session not found on disk for thread_id: {thread_id}");
+                        let result =
+                            crate::codex_tool_runner::create_call_tool_result_with_thread_id(
+                                thread_id,
+                                format!("Session not found for thread_id: {thread_id}"),
+                                Some(true),
+                            );
+                        outgoing.send_response(request_id, result).await;
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::error!("Error searching for rollout file: {e}");
+                        let result =
+                            crate::codex_tool_runner::create_call_tool_result_with_thread_id(
+                                thread_id,
+                                format!("Error searching for session: {e}"),
+                                Some(true),
+                            );
+                        outgoing.send_response(request_id, result).await;
+                        return;
+                    }
+                };
+
+                // Load the thread from the rollout file.
+                match self
+                    .thread_manager
+                    .resume_thread_from_rollout(
+                        (*self.config).clone(),
+                        rollout_path,
+                        self.auth_manager.clone(),
+                    )
+                    .await
+                {
+                    Ok(new_thread) => {
+                        tracing::info!("Successfully resumed thread {thread_id} from disk");
+                        new_thread.thread
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to resume thread from rollout: {e}");
+                        let result =
+                            crate::codex_tool_runner::create_call_tool_result_with_thread_id(
+                                thread_id,
+                                format!("Failed to resume session: {e}"),
+                                Some(true),
+                            );
+                        outgoing.send_response(request_id, result).await;
+                        return;
+                    }
+                }
             }
         };
 
