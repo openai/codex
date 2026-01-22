@@ -1279,17 +1279,23 @@ fn resolve_collaboration_mode_override(
         .and_then(|v| v.reasoning_effort)
         .or_else(|| base.and_then(|v| v.reasoning_effort));
 
-    let instructions_file = profile
-        .and_then(|v| v.developer_instructions_file.as_ref())
-        .or_else(|| base.and_then(|v| v.developer_instructions_file.as_ref()));
-    let developer_instructions = if let Some(path) = instructions_file {
-        Config::try_read_non_empty_file(
-            Some(path),
-            &format!("collaboration mode {label} instructions file"),
-        )?
+    let context = format!("collaboration mode {label} instructions file");
+    let profile_inline =
+        trimmed_config_string(profile.and_then(|v| v.developer_instructions.as_ref()));
+    let developer_instructions = if profile_inline.is_some() {
+        profile_inline
+    } else if let Some(path) = profile.and_then(|v| v.developer_instructions_file.as_ref()) {
+        Config::try_read_non_empty_file(Some(path), &context)?
     } else {
-        trimmed_config_string(profile.and_then(|v| v.developer_instructions.as_ref()))
-            .or_else(|| trimmed_config_string(base.and_then(|v| v.developer_instructions.as_ref())))
+        let base_inline =
+            trimmed_config_string(base.and_then(|v| v.developer_instructions.as_ref()));
+        if base_inline.is_some() {
+            base_inline
+        } else if let Some(path) = base.and_then(|v| v.developer_instructions_file.as_ref()) {
+            Config::try_read_non_empty_file(Some(path), &context)?
+        } else {
+            None
+        }
     };
 
     if model.is_none() && reasoning_effort.is_none() && developer_instructions.is_none() {
@@ -3637,6 +3643,68 @@ model = "gpt-5.1-codex"
         assert_eq!(
             config.compact_prompt.as_deref(),
             Some("summarize differently")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn collaboration_mode_instructions_profile_inline_overrides_base_file() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cwd_temp_dir = TempDir::new()?;
+        std::fs::write(cwd_temp_dir.path().join(".git"), "gitdir: nowhere")?;
+
+        let base_path = codex_home.path().join("collab_base_instructions.txt");
+        std::fs::write(&base_path, "base instructions")?;
+        let base_path = AbsolutePathBuf::from_absolute_path(base_path)?;
+
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "profile-inline".to_string(),
+            ConfigProfile {
+                collaboration_modes: Some(CollaborationModesToml {
+                    plan: Some(CollaborationModeOverrideToml {
+                        developer_instructions: Some("profile inline".to_string()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+
+        let cfg = ConfigToml {
+            collaboration_modes: Some(CollaborationModesToml {
+                plan: Some(CollaborationModeOverrideToml {
+                    developer_instructions_file: Some(base_path),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            profiles,
+            ..Default::default()
+        };
+
+        let overrides = ConfigOverrides {
+            config_profile: Some("profile-inline".to_string()),
+            cwd: Some(cwd_temp_dir.path().to_path_buf()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            overrides,
+            codex_home.path().to_path_buf(),
+        )?;
+
+        let plan_override = config
+            .collaboration_modes
+            .and_then(|modes| modes.plan)
+            .expect("plan override should resolve");
+
+        assert_eq!(
+            plan_override.developer_instructions.as_deref(),
+            Some("profile inline")
         );
 
         Ok(())
