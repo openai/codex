@@ -17,6 +17,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use crate::LoginStatus;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInState;
+use crate::onboarding::build_test::BuildTestCommandsWidget;
 use crate::onboarding::sophistication::SophisticationWidget;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
@@ -34,6 +35,7 @@ use super::SophisticationLevel;
 enum Step {
     Welcome(WelcomeWidget),
     Sophistication(SophisticationWidget),
+    BuildTest(BuildTestCommandsWidget),
     Auth(AuthModeWidget),
     TrustDirectory(TrustDirectoryWidget),
 }
@@ -62,7 +64,9 @@ pub(crate) struct OnboardingScreen {
 }
 
 pub(crate) struct OnboardingScreenArgs {
+    pub show_welcome_screen: bool,
     pub show_sophistication_screen: bool,
+    pub show_build_test_commands: bool,
     pub show_trust_screen: bool,
     pub show_login_screen: bool,
     pub login_status: LoginStatus,
@@ -73,13 +77,16 @@ pub(crate) struct OnboardingScreenArgs {
 pub(crate) struct OnboardingResult {
     pub directory_trust_decision: Option<TrustDirectorySelection>,
     pub sophistication_level: Option<SophisticationLevel>,
+    pub build_test_commands: Option<String>,
     pub should_exit: bool,
 }
 
 impl OnboardingScreen {
     pub(crate) fn new(tui: &mut Tui, args: OnboardingScreenArgs) -> Self {
         let OnboardingScreenArgs {
+            show_welcome_screen,
             show_sophistication_screen,
+            show_build_test_commands,
             show_trust_screen,
             show_login_screen,
             login_status,
@@ -92,13 +99,18 @@ impl OnboardingScreen {
         let codex_home = config.codex_home;
         let cli_auth_credentials_store_mode = config.cli_auth_credentials_store_mode;
         let mut steps: Vec<Step> = Vec::new();
-        steps.push(Step::Welcome(WelcomeWidget::new(
-            !matches!(login_status, LoginStatus::NotAuthenticated),
-            tui.frame_requester(),
-            config.animations,
-        )));
+        if show_welcome_screen {
+            steps.push(Step::Welcome(WelcomeWidget::new(
+                !matches!(login_status, LoginStatus::NotAuthenticated),
+                tui.frame_requester(),
+                config.animations,
+            )));
+        }
         if show_sophistication_screen {
             steps.push(Step::Sophistication(SophisticationWidget::new()));
+        }
+        if show_build_test_commands {
+            steps.push(Step::BuildTest(BuildTestCommandsWidget::new()));
         }
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
@@ -217,6 +229,16 @@ impl OnboardingScreen {
                 }
             })
             .flatten()
+    }
+
+    pub fn build_test_commands(&self) -> Option<String> {
+        self.steps.iter().find_map(|step| {
+            if let Step::BuildTest(widget) = step {
+                widget.commands()
+            } else {
+                None
+            }
+        })
     }
 
     fn is_api_key_entry_active(&self) -> bool {
@@ -357,6 +379,7 @@ impl KeyboardHandler for Step {
         match self {
             Step::Welcome(widget) => widget.handle_key_event(key_event),
             Step::Sophistication(widget) => widget.handle_key_event(key_event),
+            Step::BuildTest(widget) => widget.handle_key_event(key_event),
             Step::Auth(widget) => widget.handle_key_event(key_event),
             Step::TrustDirectory(widget) => widget.handle_key_event(key_event),
         }
@@ -366,6 +389,7 @@ impl KeyboardHandler for Step {
         match self {
             Step::Welcome(_) => {}
             Step::Sophistication(_) => {}
+            Step::BuildTest(widget) => widget.handle_paste(pasted),
             Step::Auth(widget) => widget.handle_paste(pasted),
             Step::TrustDirectory(widget) => widget.handle_paste(pasted),
         }
@@ -377,6 +401,7 @@ impl StepStateProvider for Step {
         match self {
             Step::Welcome(w) => w.get_step_state(),
             Step::Sophistication(w) => w.get_step_state(),
+            Step::BuildTest(w) => w.get_step_state(),
             Step::Auth(w) => w.get_step_state(),
             Step::TrustDirectory(w) => w.get_step_state(),
         }
@@ -390,6 +415,9 @@ impl WidgetRef for Step {
                 widget.render_ref(area, buf);
             }
             Step::Sophistication(widget) => {
+                widget.render_ref(area, buf);
+            }
+            Step::BuildTest(widget) => {
                 widget.render_ref(area, buf);
             }
             Step::Auth(widget) => {
@@ -469,6 +497,7 @@ pub(crate) async fn run_onboarding_app(
     Ok(OnboardingResult {
         directory_trust_decision: onboarding_screen.directory_trust_decision(),
         sophistication_level: onboarding_screen.sophistication_level(),
+        build_test_commands: onboarding_screen.build_test_commands(),
         should_exit: onboarding_screen.should_exit(),
     })
 }

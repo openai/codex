@@ -393,19 +393,15 @@ async fn run_ratatui_app(
     let should_show_trust_screen = should_show_trust_screen(&initial_config);
     let should_show_sophistication_screen =
         should_show_sophistication_screen(&initial_config, cli.force_onboarding_question);
-    let should_show_onboarding = should_show_onboarding(
-        login_status,
-        &initial_config,
-        should_show_trust_screen,
-        should_show_sophistication_screen,
-    );
-
-    let config = if should_show_onboarding {
+    let mut show_welcome_screen = true;
+    if should_show_sophistication_screen {
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
-                show_sophistication_screen: should_show_sophistication_screen,
-                show_login_screen: should_show_login_screen(login_status, &initial_config),
-                show_trust_screen: should_show_trust_screen,
+                show_welcome_screen: false,
+                show_sophistication_screen: true,
+                show_build_test_commands: true,
+                show_login_screen: false,
+                show_trust_screen: false,
                 login_status,
                 auth_manager: auth_manager.clone(),
                 config: initial_config.clone(),
@@ -432,11 +428,45 @@ async fn run_ratatui_app(
         {
             error!("Failed to persist sophistication onboarding flag: {err}");
         }
+        let build_test_commands = onboarding_result.build_test_commands.clone();
         if onboarding_result.sophistication_level == Some(SophisticationLevel::Low)
             && is_first_time_user
-            && let Err(err) = scaffold_guardrail_files(&initial_config.cwd)
+            && let Err(err) =
+                scaffold_guardrail_files(&initial_config.cwd, build_test_commands.as_deref())
         {
             error!("Failed to scaffold guardrail files: {err}");
+        }
+        show_welcome_screen = false;
+    }
+
+    let should_show_onboarding =
+        should_show_onboarding(login_status, &initial_config, should_show_trust_screen);
+
+    let config = if should_show_onboarding {
+        let onboarding_result = run_onboarding_app(
+            OnboardingScreenArgs {
+                show_welcome_screen,
+                show_sophistication_screen: false,
+                show_build_test_commands: false,
+                show_login_screen: should_show_login_screen(login_status, &initial_config),
+                show_trust_screen: should_show_trust_screen,
+                login_status,
+                auth_manager: auth_manager.clone(),
+                config: initial_config.clone(),
+            },
+            &mut tui,
+        )
+        .await?;
+        if onboarding_result.should_exit {
+            restore();
+            session_log::log_session_end();
+            let _ = tui.terminal.clear();
+            return Ok(AppExitInfo {
+                token_usage: codex_core::protocol::TokenUsage::default(),
+                conversation_id: None,
+                update_action: None,
+                session_lines: Vec::new(),
+            });
         }
         // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
         if onboarding_result
@@ -635,13 +665,12 @@ fn should_show_onboarding(
     login_status: LoginStatus,
     config: &Config,
     show_trust_screen: bool,
-    show_sophistication_screen: bool,
 ) -> bool {
     if show_trust_screen {
         return true;
     }
 
-    show_sophistication_screen || should_show_login_screen(login_status, config)
+    should_show_login_screen(login_status, config)
 }
 
 fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool {

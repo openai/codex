@@ -5,9 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
-use ratatui::widgets::Wrap;
 
 use crate::key_hint;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
@@ -72,14 +70,6 @@ impl WidgetRef for &SophisticationWidget {
         ]));
         column.push("");
 
-        column.push(
-            Paragraph::new(
-                "This helps decide whether to auto-create AGENTS.md and PLANS.md on first run."
-                    .to_string(),
-            )
-            .wrap(Wrap { trim: true })
-            .inset(Insets::tlbr(0, 2, 0, 0)),
-        );
         column.push("");
 
         let options = [

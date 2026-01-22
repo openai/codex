@@ -1,4 +1,5 @@
 mod auth;
+mod build_test;
 pub mod onboarding_screen;
 mod sophistication;
 mod trust_directory;
