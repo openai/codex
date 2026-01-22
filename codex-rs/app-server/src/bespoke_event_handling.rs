@@ -243,6 +243,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                     // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                     item_id: item_id.clone(),
                     reason,
+                    command: Some(command_string.clone()),
+                    cwd: Some(cwd.clone()),
+                    command_actions: Some(command_actions.clone()),
                     proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                 };
                 let rx = outgoing
@@ -1481,8 +1484,7 @@ async fn on_request_user_input_response(
                 (
                     id,
                     CoreRequestUserInputAnswer {
-                        selected: answer.selected,
-                        other: answer.other,
+                        answers: answer.answers,
                     },
                 )
             })

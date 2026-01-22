@@ -174,6 +174,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         priority,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
+        model_instructions_template: None,
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,

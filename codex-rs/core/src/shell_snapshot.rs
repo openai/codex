@@ -74,7 +74,7 @@ impl ShellSnapshot {
         });
 
         // Make the new snapshot.
-        match write_shell_snapshot(shell.shell_type.clone(), &path).await {
+        let snapshot = match write_shell_snapshot(shell.shell_type.clone(), &path).await {
             Ok(path) => {
                 tracing::info!("Shell snapshot successfully created: {}", path.display());
                 Some(Self { path })
@@ -86,7 +86,16 @@ impl ShellSnapshot {
                 );
                 None
             }
+        };
+
+        if let Some(snapshot) = snapshot.as_ref()
+            && let Err(err) = validate_snapshot(shell, &snapshot.path).await
+        {
+            tracing::error!("Shell snapshot validation failed: {err:?}");
+            return None;
         }
+
+        snapshot
     }
 }
 
@@ -146,16 +155,25 @@ fn strip_snapshot_preamble(snapshot: &str) -> Result<String> {
     Ok(snapshot[start..].to_string())
 }
 
-async fn run_shell_script(shell: &Shell, script: &str) -> Result<String> {
-    run_shell_script_with_timeout(shell, script, SNAPSHOT_TIMEOUT).await
+async fn validate_snapshot(shell: &Shell, snapshot_path: &Path) -> Result<()> {
+    let snapshot_path_display = snapshot_path.display();
+    let script = format!("set -e; . \"{snapshot_path_display}\"");
+    run_script_with_timeout(shell, &script, SNAPSHOT_TIMEOUT, false)
+        .await
+        .map(|_| ())
 }
 
-async fn run_shell_script_with_timeout(
+async fn run_shell_script(shell: &Shell, script: &str) -> Result<String> {
+    run_script_with_timeout(shell, script, SNAPSHOT_TIMEOUT, true).await
+}
+
+async fn run_script_with_timeout(
     shell: &Shell,
     script: &str,
     snapshot_timeout: Duration,
+    use_login_shell: bool,
 ) -> Result<String> {
-    let args = shell.derive_exec_args(script, true);
+    let args = shell.derive_exec_args(script, use_login_shell);
     let shell_name = shell.name();
 
     // Handler is kept as guard to control the drop. The `mut` pattern is required because .args()
@@ -205,9 +223,21 @@ alias_count=$(alias -L | wc -l | tr -d ' ')
 print "# aliases $alias_count"
 alias -L
 print ''
-export_count=$(export -p | wc -l | tr -d ' ')
+export_lines=$(export -p | awk '
+/^(export|declare -x|typeset -x) / {
+  line=$0
+  name=line
+  sub(/^(export|declare -x|typeset -x) /, "", name)
+  sub(/=.*/, "", name)
+  if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+    print line
+  }
+}')
+export_count=$(printf '%s\n' "$export_lines" | sed '/^$/d' | wc -l | tr -d ' ')
 print "# exports $export_count"
-export -p
+if [[ -n "$export_lines" ]]; then
+  print -r -- "$export_lines"
+fi
 "##
 }
 
@@ -232,9 +262,21 @@ alias_count=$(alias -p | wc -l | tr -d ' ')
 echo "# aliases $alias_count"
 alias -p
 echo ''
-export_count=$(export -p | wc -l | tr -d ' ')
+export_lines=$(export -p | awk '
+/^(export|declare -x|typeset -x) / {
+  line=$0
+  name=line
+  sub(/^(export|declare -x|typeset -x) /, "", name)
+  sub(/=.*/, "", name)
+  if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+    print line
+  }
+}')
+export_count=$(printf '%s\n' "$export_lines" | sed '/^$/d' | wc -l | tr -d ' ')
 echo "# exports $export_count"
-export -p
+if [ -n "$export_lines" ]; then
+  printf '%s\n' "$export_lines"
+fi
 "##
 }
 
@@ -272,13 +314,28 @@ else
   echo '# aliases 0'
 fi
 if export -p >/dev/null 2>&1; then
-  export_count=$(export -p | wc -l | tr -d ' ')
+  export_lines=$(export -p | awk '
+/^(export|declare -x|typeset -x) / {
+  line=$0
+  name=line
+  sub(/^(export|declare -x|typeset -x) /, "", name)
+  sub(/=.*/, "", name)
+  if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+    print line
+  }
+}')
+  export_count=$(printf '%s\n' "$export_lines" | sed '/^$/d' | wc -l | tr -d ' ')
   echo "# exports $export_count"
-  export -p
+  if [ -n "$export_lines" ]; then
+    printf '%s\n' "$export_lines"
+  fi
 else
-  export_count=$(env | wc -l | tr -d ' ')
+  export_count=$(env | sort | awk -F= '$1 ~ /^[A-Za-z_][A-Za-z0-9_]*$/ { count++ } END { print count }')
   echo "# exports $export_count"
   env | sort | while IFS='=' read -r key value; do
+    case "$key" in
+      ""|[0-9]*|*[!A-Za-z0-9_]* ) continue ;;
+    esac
     escaped=$(printf "%s" "$value" | sed "s/'/'\"'\"'/g")
     printf "export %s='%s'\n" "$key" "$escaped"
   done
@@ -389,6 +446,8 @@ mod tests {
     use std::os::unix::ffi::OsStrExt;
     #[cfg(target_os = "linux")]
     use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::process::Command;
     #[cfg(target_os = "linux")]
     use std::process::Command as StdCommand;
 
@@ -425,6 +484,28 @@ mod tests {
     fn strip_snapshot_preamble_requires_marker() {
         let result = strip_snapshot_preamble("missing header");
         assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bash_snapshot_filters_invalid_exports() -> Result<()> {
+        let output = Command::new("/bin/bash")
+            .arg("-c")
+            .arg(bash_snapshot_script())
+            .env("BASH_ENV", "/dev/null")
+            .env("VALID_NAME", "ok")
+            .env("NEXTEST_BIN_EXE_codex-write-config-schema", "/path/to/bin")
+            .env("BAD-NAME", "broken")
+            .output()?;
+
+        assert!(output.status.success());
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("VALID_NAME"));
+        assert!(!stdout.contains("NEXTEST_BIN_EXE_codex-write-config-schema"));
+        assert!(!stdout.contains("BAD-NAME"));
+
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -479,7 +560,7 @@ mod tests {
             shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
         };
 
-        let err = run_shell_script_with_timeout(&shell, "ignored", Duration::from_millis(500))
+        let err = run_script_with_timeout(&shell, "ignored", Duration::from_millis(500), true)
             .await
             .expect_err("snapshot shell should time out");
         assert!(

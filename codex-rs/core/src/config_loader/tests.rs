@@ -478,6 +478,42 @@ model_instructions_file = "child.txt"
 }
 
 #[tokio::test]
+async fn cli_override_model_instructions_file_sets_base_instructions() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), "").await?;
+
+    let cwd = tmp.path().join("work");
+    tokio::fs::create_dir_all(&cwd).await?;
+
+    let instructions_path = tmp.path().join("instr.md");
+    tokio::fs::write(&instructions_path, "cli override instructions").await?;
+
+    let cli_overrides = vec![(
+        "model_instructions_file".to_string(),
+        TomlValue::String(instructions_path.to_string_lossy().to_string()),
+    )];
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .cli_overrides(cli_overrides)
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd),
+            ..ConfigOverrides::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.base_instructions.as_deref(),
+        Some("cli override instructions")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");

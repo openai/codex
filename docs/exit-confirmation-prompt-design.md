@@ -1,8 +1,8 @@
-# Exit and shutdown flow (tui + tui2)
+# Exit and shutdown flow (tui)
 
-This document describes how exit, shutdown, and interruption work in the Rust TUIs (`codex-rs/tui`
-and `codex-rs/tui2`). It is intended for Codex developers and Codex itself when reasoning about
-future exit/shutdown changes.
+This document describes how exit, shutdown, and interruption work in the Rust TUI (`codex-rs/tui`).
+It is intended for Codex developers and Codex itself when reasoning about future exit/shutdown
+changes.
 
 This doc replaces earlier separate history and design notes. High-level history is summarized
 below; full details are captured in PR #8936.

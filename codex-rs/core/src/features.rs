@@ -95,8 +95,6 @@ pub enum Feature {
     ShellSnapshot,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
-    /// Experimental TUI v2 (viewport) implementation.
-    Tui2,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
@@ -439,12 +437,6 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Allow Codex to spawn and collaborate with other agents on request (formerly named `collab`).",
             announcement: "NEW! Codex can now spawn other agents and work with them to solve your problems. Enable in /experimental!",
         },
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::Tui2,
-        key: "tui2",
-        stage: Stage::Beta,
         default_enabled: false,
     },
     FeatureSpec {
