@@ -497,6 +497,8 @@ pub(crate) struct ChatWidget {
     // This gates rendering of the "Worked for …" separator so purely conversational turns don't
     // show an empty divider. It is reset when the separator is emitted.
     had_work_activity: bool,
+    // Whether the current turn emitted a plan update.
+    saw_plan_update_this_turn: bool,
     // Status-indicator elapsed seconds captured at the last emitted final-message separator.
     //
     // This lets the separator show per-chunk work time (since the previous separator) rather than
@@ -862,6 +864,7 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
+        self.saw_plan_update_this_turn = false;
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
@@ -911,10 +914,8 @@ impl ChatWidget {
         if !matches!(self.stored_collaboration_mode, CollaborationMode::Plan(_)) {
             return;
         }
-        let Some(message) = last_agent_message else {
-            return;
-        };
-        if message.trim().is_empty() {
+        let has_message = last_agent_message.is_some_and(|message| !message.trim().is_empty());
+        if !has_message && !self.saw_plan_update_this_turn {
             return;
         }
         if !self.bottom_pane.no_modal_or_popup_active() {
@@ -1267,6 +1268,7 @@ impl ChatWidget {
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
+        self.saw_plan_update_this_turn = true;
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
@@ -2001,6 +2003,7 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
+            saw_plan_update_this_turn: false,
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -2120,6 +2123,7 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
+            saw_plan_update_this_turn: false,
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,

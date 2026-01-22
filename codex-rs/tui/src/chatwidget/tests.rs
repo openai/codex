@@ -840,6 +840,7 @@ async fn make_chatwidget_manual(
         pre_review_token_info: None,
         needs_final_message_separator: false,
         had_work_activity: false,
+        saw_plan_update_this_turn: false,
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
@@ -1269,6 +1270,33 @@ async fn plan_implementation_popup_skips_when_messages_queued() {
     assert!(
         !popup.contains(PLAN_IMPLEMENTATION_TITLE),
         "expected no plan popup with queued messages, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_shows_on_plan_update_without_message() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.stored_collaboration_mode = CollaborationMode::Plan(Settings {
+        model: chat.current_model().to_string(),
+        reasoning_effort: None,
+        developer_instructions: None,
+    });
+
+    chat.on_task_started();
+    chat.on_plan_update(UpdatePlanArgs {
+        explanation: None,
+        plan: vec![PlanItemArg {
+            step: "First".to_string(),
+            status: StepStatus::Pending,
+        }],
+    });
+    chat.on_task_complete(None, false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup after plan update, got {popup:?}"
     );
 }
 
