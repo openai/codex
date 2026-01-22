@@ -1119,6 +1119,9 @@
         "collaboration_modes": {
           "type": "boolean"
         },
+        "connectors": {
+          "type": "boolean"
+        },
         "elevated_windows_sandbox": {
           "type": "boolean"
         },
