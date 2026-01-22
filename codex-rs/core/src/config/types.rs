@@ -439,7 +439,7 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
 
-    /// Start the TUI in the specified collaboration mode (plan/execute/etc.).
+    /// Start the TUI in the specified collaboration mode (plan/code).
     /// Defaults to unset.
     #[serde(default)]
     pub experimental_mode: Option<ModeKind>,

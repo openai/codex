@@ -1048,9 +1048,7 @@ impl SessionHeaderHistoryCell {
         }
         match &self.collaboration_mode {
             CollaborationMode::Plan(_) => Some("Plan"),
-            CollaborationMode::PairProgramming(_) => Some("Pair Programming"),
-            CollaborationMode::Execute(_) => Some("Execute"),
-            CollaborationMode::Custom(_) => None,
+            CollaborationMode::Code(_) => Some("Code"),
         }
     }
 
@@ -1128,7 +1126,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
             } else if let Some(mode_label) = self.collaboration_mode_label() {
                 spans.push(Span::styled(mode_label.to_string(), self.model_style));
             } else {
-                spans.push(Span::styled("Custom", self.model_style));
+                spans.push(Span::styled("Code", self.model_style));
             }
             spans.push("   ".dim());
             let shift_tab_span: Span<'static> = key_hint::shift(KeyCode::Tab).into();
@@ -2342,7 +2340,7 @@ mod tests {
             std::env::temp_dir(),
             "test",
             false,
-            CollaborationMode::Custom(Settings {
+            CollaborationMode::Code(Settings {
                 model: "gpt-4o".to_string(),
                 reasoning_effort: Some(ReasoningEffortConfig::High),
                 developer_instructions: None,

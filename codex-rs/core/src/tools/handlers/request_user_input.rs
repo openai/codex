@@ -37,8 +37,7 @@ impl ToolHandler for RequestUserInputHandler {
         };
 
         let disallowed_mode = match session.collaboration_mode().await {
-            CollaborationMode::Execute(_) => Some("Execute"),
-            CollaborationMode::Custom(_) => Some("Custom"),
+            CollaborationMode::Code(_) => Some("Code"),
             _ => None,
         };
         if let Some(mode_name) = disallowed_mode {

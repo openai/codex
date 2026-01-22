@@ -156,9 +156,13 @@ pub enum AltScreenMode {
 #[serde(rename_all = "snake_case")]
 pub enum ModeKind {
     Plan,
-    PairProgramming,
-    Execute,
-    Custom,
+    #[serde(
+        alias = "pair_programming",
+        alias = "pairprogramming",
+        alias = "execute",
+        alias = "custom"
+    )]
+    Code,
 }
 
 /// Collaboration mode for a Codex session.
@@ -166,19 +170,21 @@ pub enum ModeKind {
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum CollaborationMode {
     Plan(Settings),
-    PairProgramming(Settings),
-    Execute(Settings),
-    Custom(Settings),
+    #[serde(
+        rename = "code",
+        alias = "pairprogramming",
+        alias = "pair_programming",
+        alias = "execute",
+        alias = "custom"
+    )]
+    Code(Settings),
 }
 
 impl CollaborationMode {
     /// Returns a reference to the settings, regardless of variant.
     fn settings(&self) -> &Settings {
         match self {
-            CollaborationMode::Plan(settings)
-            | CollaborationMode::PairProgramming(settings)
-            | CollaborationMode::Execute(settings)
-            | CollaborationMode::Custom(settings) => settings,
+            CollaborationMode::Plan(settings) | CollaborationMode::Code(settings) => settings,
         }
     }
 
@@ -213,11 +219,7 @@ impl CollaborationMode {
 
         match self {
             CollaborationMode::Plan(_) => CollaborationMode::Plan(updated_settings),
-            CollaborationMode::PairProgramming(_) => {
-                CollaborationMode::PairProgramming(updated_settings)
-            }
-            CollaborationMode::Execute(_) => CollaborationMode::Execute(updated_settings),
-            CollaborationMode::Custom(_) => CollaborationMode::Custom(updated_settings),
+            CollaborationMode::Code(_) => CollaborationMode::Code(updated_settings),
         }
     }
 }

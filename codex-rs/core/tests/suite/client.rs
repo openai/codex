@@ -884,7 +884,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
         .build(&server)
         .await?;
 
-    let collaboration_mode = CollaborationMode::Custom(Settings {
+    let collaboration_mode = CollaborationMode::Code(Settings {
         model: "gpt-5.1".to_string(),
         reasoning_effort: Some(ReasoningEffort::High),
         developer_instructions: None,

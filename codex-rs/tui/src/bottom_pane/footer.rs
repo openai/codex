@@ -14,11 +14,12 @@ use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::line_utils::prefix_lines;
 use crate::status::format_tokens_compact;
+use crate::terminal_palette::best_color;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
+use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -50,8 +51,7 @@ pub(crate) struct FooterProps {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CollaborationModeIndicator {
     Plan,
-    PairProgramming,
-    Execute,
+    Code,
 }
 
 const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
@@ -60,19 +60,17 @@ impl CollaborationModeIndicator {
     fn label(self) -> String {
         match self {
             CollaborationModeIndicator::Plan => format!("Plan mode ({MODE_CYCLE_HINT})"),
-            CollaborationModeIndicator::PairProgramming => {
-                format!("Pair Programming mode ({MODE_CYCLE_HINT})")
-            }
-            CollaborationModeIndicator::Execute => format!("Execute mode ({MODE_CYCLE_HINT})"),
+            CollaborationModeIndicator::Code => format!("Code mode ({MODE_CYCLE_HINT})"),
         }
     }
 
     fn styled_span(self) -> Span<'static> {
         let label = self.label();
         match self {
-            CollaborationModeIndicator::Plan => Span::from(label).magenta(),
-            CollaborationModeIndicator::PairProgramming => Span::from(label).cyan(),
-            CollaborationModeIndicator::Execute => Span::from(label).dim(),
+            CollaborationModeIndicator::Plan => {
+                Span::styled(label, Style::default().fg(best_color((0xD7, 0x2E, 0xE1))))
+            }
+            CollaborationModeIndicator::Code => Span::from(label).dim(),
         }
     }
 }

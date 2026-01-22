@@ -347,9 +347,7 @@
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
-        "pair_programming",
-        "execute",
-        "custom"
+        "code"
       ],
       "type": "string"
     },
@@ -970,7 +968,7 @@
             }
           ],
           "default": null,
-          "description": "Start the TUI in the specified collaboration mode (plan/execute/etc.). Defaults to unset."
+          "description": "Start the TUI in the specified collaboration mode (plan/code). Defaults to unset."
         },
         "notifications": {
           "allOf": [

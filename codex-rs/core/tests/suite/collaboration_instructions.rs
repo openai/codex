@@ -22,7 +22,7 @@ fn sse_completed(id: &str) -> String {
 }
 
 fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMode {
-    CollaborationMode::Custom(Settings {
+    CollaborationMode::Code(Settings {
         model: "gpt-5.1".to_string(),
         reasoning_effort: None,
         developer_instructions: instructions.map(str::to_string),

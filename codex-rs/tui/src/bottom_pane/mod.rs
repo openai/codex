@@ -72,9 +72,12 @@ pub mod popup_consts;
 mod queued_user_messages;
 mod scroll_state;
 mod selection_popup_common;
+mod skills_toggle_view;
 mod textarea;
 mod unified_exec_footer;
 pub(crate) use feedback_view::FeedbackNoteView;
+pub(crate) use skills_toggle_view::SkillsToggleItem;
+pub(crate) use skills_toggle_view::SkillsToggleView;
 
 /// How long the "press again to quit" hint stays visible.
 ///

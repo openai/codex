@@ -5,9 +5,7 @@ use codex_protocol::config_types::ModeKind;
 fn mode_kind(mode: &CollaborationMode) -> ModeKind {
     match mode {
         CollaborationMode::Plan(_) => ModeKind::Plan,
-        CollaborationMode::PairProgramming(_) => ModeKind::PairProgramming,
-        CollaborationMode::Execute(_) => ModeKind::Execute,
-        CollaborationMode::Custom(_) => ModeKind::Custom,
+        CollaborationMode::Code(_) => ModeKind::Code,
     }
 }
 
@@ -15,7 +13,7 @@ pub(crate) fn default_mode(models_manager: &ModelsManager) -> Option<Collaborati
     let presets = models_manager.list_collaboration_modes();
     presets
         .iter()
-        .find(|preset| matches!(preset, CollaborationMode::PairProgramming(_)))
+        .find(|preset| matches!(preset, CollaborationMode::Code(_)))
         .cloned()
         .or_else(|| presets.into_iter().next())
 }

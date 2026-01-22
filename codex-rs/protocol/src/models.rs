@@ -253,10 +253,7 @@ impl DeveloperInstructions {
     /// Returns developer instructions from a collaboration mode if they exist and are non-empty.
     pub fn from_collaboration_mode(collaboration_mode: &CollaborationMode) -> Option<Self> {
         let settings = match collaboration_mode {
-            CollaborationMode::Plan(settings)
-            | CollaborationMode::PairProgramming(settings)
-            | CollaborationMode::Execute(settings)
-            | CollaborationMode::Custom(settings) => settings,
+            CollaborationMode::Plan(settings) | CollaborationMode::Code(settings) => settings,
         };
         settings
             .developer_instructions

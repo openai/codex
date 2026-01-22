@@ -413,7 +413,7 @@ pub(crate) struct ChatWidget {
     /// Stored collaboration mode with model and reasoning effort.
     ///
     /// When collaboration modes feature is enabled, this is initialized to the first preset.
-    /// When disabled, this is Custom. The model and reasoning effort are stored here instead of
+    /// When disabled, this is Code. The model and reasoning effort are stored here instead of
     /// being read from config or current_model.
     stored_collaboration_mode: CollaborationMode,
     auth_manager: Arc<AuthManager>,
@@ -725,7 +725,7 @@ impl ChatWidget {
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
         // Only update stored collaboration settings when collaboration modes are disabled.
-        // When enabled, we preserve the selected variant (Plan/Pair/Execute/Custom) and its
+        // When enabled, we preserve the selected variant (Plan/Code) and its
         // instructions as-is; the session configured event should not override it.
         if !self.collaboration_modes_enabled() {
             self.stored_collaboration_mode = self.stored_collaboration_mode.with_updates(
@@ -1846,7 +1846,7 @@ impl ChatWidget {
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
 
         let model_for_header = model.unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
-        let fallback_custom = Settings {
+        let fallback_settings = Settings {
             model: model_for_header.clone(),
             reasoning_effort: None,
             developer_instructions: None,
@@ -1854,11 +1854,11 @@ impl ChatWidget {
         let stored_collaboration_mode = if config.features.enabled(Feature::CollaborationModes) {
             initial_collaboration_mode(
                 models_manager.as_ref(),
-                fallback_custom,
+                fallback_settings,
                 config.experimental_mode,
             )
         } else {
-            CollaborationMode::Custom(fallback_custom)
+            CollaborationMode::Code(fallback_settings)
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(
@@ -1971,7 +1971,7 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
-        let fallback_custom = Settings {
+        let fallback_settings = Settings {
             model: header_model.clone(),
             reasoning_effort: None,
             developer_instructions: None,
@@ -1979,11 +1979,11 @@ impl ChatWidget {
         let stored_collaboration_mode = if config.features.enabled(Feature::CollaborationModes) {
             initial_collaboration_mode(
                 models_manager.as_ref(),
-                fallback_custom,
+                fallback_settings,
                 config.experimental_mode,
             )
         } else {
-            CollaborationMode::Custom(fallback_custom)
+            CollaborationMode::Code(fallback_settings)
         };
 
         let mut widget = Self {
@@ -3333,9 +3333,7 @@ impl ChatWidget {
             .map(|preset| {
                 let name = match preset {
                     CollaborationMode::Plan(_) => "Plan",
-                    CollaborationMode::PairProgramming(_) => "Pair Programming",
-                    CollaborationMode::Execute(_) => "Execute",
-                    CollaborationMode::Custom(_) => "Custom",
+                    CollaborationMode::Code(_) => "Code",
                 };
                 let is_current =
                     collaboration_modes::same_variant(&self.stored_collaboration_mode, &preset);
@@ -4293,20 +4291,18 @@ impl ChatWidget {
         if feature == Feature::CollaborationModes {
             self.bottom_pane.set_collaboration_modes_enabled(enabled);
             let settings = match &self.stored_collaboration_mode {
-                CollaborationMode::Plan(settings)
-                | CollaborationMode::PairProgramming(settings)
-                | CollaborationMode::Execute(settings)
-                | CollaborationMode::Custom(settings) => settings.clone(),
+                CollaborationMode::Plan(settings) | CollaborationMode::Code(settings) => {
+                    settings.clone()
+                }
             };
-            let fallback_custom = settings.clone();
             self.stored_collaboration_mode = if enabled {
                 initial_collaboration_mode(
                     self.models_manager.as_ref(),
-                    fallback_custom,
+                    settings,
                     self.config.experimental_mode,
                 )
             } else {
-                CollaborationMode::Custom(settings)
+                CollaborationMode::Code(settings)
             };
             self.update_collaboration_mode_indicator();
         }
@@ -4388,9 +4384,7 @@ impl ChatWidget {
         }
         match &self.stored_collaboration_mode {
             CollaborationMode::Plan(_) => Some("Plan"),
-            CollaborationMode::PairProgramming(_) => Some("Pair Programming"),
-            CollaborationMode::Execute(_) => Some("Execute"),
-            CollaborationMode::Custom(_) => None,
+            CollaborationMode::Code(_) => Some("Code"),
         }
     }
 
@@ -4400,11 +4394,7 @@ impl ChatWidget {
         }
         match &self.stored_collaboration_mode {
             CollaborationMode::Plan(_) => Some(CollaborationModeIndicator::Plan),
-            CollaborationMode::PairProgramming(_) => {
-                Some(CollaborationModeIndicator::PairProgramming)
-            }
-            CollaborationMode::Execute(_) => Some(CollaborationModeIndicator::Execute),
-            CollaborationMode::Custom(_) => None,
+            CollaborationMode::Code(_) => Some(CollaborationModeIndicator::Code),
         }
     }
 
@@ -4413,7 +4403,7 @@ impl ChatWidget {
         self.bottom_pane.set_collaboration_mode_indicator(indicator);
     }
 
-    /// Cycle to the next collaboration mode variant (Plan -> PairProgramming -> Execute -> Plan).
+    /// Cycle to the next collaboration mode variant (Plan -> Code -> Plan).
     fn cycle_collaboration_mode(&mut self) {
         if !self.collaboration_modes_enabled() {
             return;
@@ -5048,20 +5038,17 @@ fn extract_first_bold(s: &str) -> Option<String> {
 
 fn initial_collaboration_mode(
     models_manager: &ModelsManager,
-    fallback_custom: Settings,
+    fallback_settings: Settings,
     desired_mode: Option<ModeKind>,
 ) -> CollaborationMode {
-    if let Some(kind) = desired_mode {
-        if kind == ModeKind::Custom {
-            return CollaborationMode::Custom(fallback_custom);
-        }
-        if let Some(mode) = collaboration_modes::mode_for_kind(models_manager, kind) {
-            return mode;
-        }
+    if let Some(kind) = desired_mode
+        && let Some(mode) = collaboration_modes::mode_for_kind(models_manager, kind)
+    {
+        return mode;
     }
 
     collaboration_modes::default_mode(models_manager)
-        .unwrap_or(CollaborationMode::Custom(fallback_custom))
+        .unwrap_or(CollaborationMode::Code(fallback_settings))
 }
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {
