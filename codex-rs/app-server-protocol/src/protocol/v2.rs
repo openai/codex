@@ -968,28 +968,21 @@ pub struct ListMcpServerStatusResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ConnectorsListParams {}
+pub struct AppsListParams {
+    /// Opaque pagination cursor returned by a previous call.
+    pub cursor: Option<String>,
+    /// Optional page size; defaults to a reasonable server-side value.
+    pub limit: Option<u32>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ConnectorInfo {
-    #[serde(rename = "id")]
-    pub connector_id: String,
-    #[serde(rename = "name")]
-    pub connector_name: String,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "description"
-    )]
-    #[ts(optional)]
-    pub connector_description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
+pub struct AppInfo {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
     pub logo_url: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub install_url: Option<String>,
     #[serde(default)]
     pub is_accessible: bool,
@@ -998,8 +991,11 @@ pub struct ConnectorInfo {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ConnectorsListResponse {
-    pub data: Vec<ConnectorInfo>,
+pub struct AppsListResponse {
+    pub data: Vec<AppInfo>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// If None, there are no more items to return.
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
