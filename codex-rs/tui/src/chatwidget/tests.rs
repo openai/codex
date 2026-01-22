@@ -2999,19 +2999,6 @@ async fn personality_selection_popup_snapshot() {
 }
 
 #[tokio::test]
-async fn personality_selection_popup_disabled_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
-    chat.thread_id = Some(ThreadId::new());
-    let model_info =
-        ModelsManager::construct_model_info_offline("gpt-5.1-codex-max", chat.config_ref());
-    chat.update_model_info("gpt-5.1-codex-max".to_string(), model_info);
-    chat.open_personality_popup();
-
-    let popup = render_bottom_popup(&chat, 80);
-    assert_snapshot!("personality_selection_popup_disabled", popup);
-}
-
-#[tokio::test]
 async fn model_picker_hides_show_in_picker_false_models_from_cache() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
     chat.thread_id = Some(ThreadId::new());

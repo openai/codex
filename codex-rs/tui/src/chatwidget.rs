@@ -3461,28 +3461,21 @@ impl ChatWidget {
             })
             .collect();
 
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from("Select Personality".bold()));
+        header.push(Line::from(
+            "Choose a communication style for future responses.".dim(),
+        ));
         if let Some(message) = disabled_message {
-            let mut header = ColumnRenderable::new();
-            header.push(Line::from("Select Personality".bold()));
-            header.push(Line::from(
-                "Choose a communication style for future responses.".dim(),
-            ));
             header.push(Line::from(message.red()));
-            self.bottom_pane.show_selection_view(SelectionViewParams {
-                header: Box::new(header),
-                footer_hint: Some(standard_popup_hint_line()),
-                items,
-                ..Default::default()
-            });
-        } else {
-            self.bottom_pane.show_selection_view(SelectionViewParams {
-                title: Some("Select Personality".to_string()),
-                subtitle: Some("Choose a communication style for future responses.".to_string()),
-                footer_hint: Some(standard_popup_hint_line()),
-                items,
-                ..Default::default()
-            });
         }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
     }
 
     fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
@@ -4745,17 +4738,11 @@ impl ChatWidget {
             self.bottom_pane
                 .set_personality_command_enabled(supports_personality);
         }
-        if self
-            .pending_personality_popup_model
-            .as_ref()
-            .is_some_and(|pending| pending == &model)
-        {
+        if self.pending_personality_popup_model.as_ref() == Some(&model) {
             self.pending_personality_popup_model = None;
             if let Some(model_info) = self.current_model_info.clone() {
                 self.open_personality_popup_with_model_info(&model_info);
             }
-        } else if self.pending_personality_popup_model.as_ref() == Some(&model) {
-            self.pending_personality_popup_model = None;
         }
     }
 
