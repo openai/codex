@@ -402,6 +402,7 @@ impl App {
             is_first_run: false,
             model: Some(self.chat_widget.current_model().to_string()),
             otel_manager: self.otel_manager.clone(),
+            immortality_enable_after_first_turn: false,
         }
     }
 
@@ -423,6 +424,7 @@ impl App {
         active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
+        immortal: bool,
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
@@ -499,6 +501,7 @@ impl App {
                     is_first_run,
                     model: Some(model.clone()),
                     otel_manager: otel_manager.clone(),
+                    immortality_enable_after_first_turn: immortal,
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
@@ -527,6 +530,7 @@ impl App {
                     is_first_run,
                     model: config.model.clone(),
                     otel_manager: otel_manager.clone(),
+                    immortality_enable_after_first_turn: immortal,
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
@@ -555,6 +559,7 @@ impl App {
                     is_first_run,
                     model: config.model.clone(),
                     otel_manager: otel_manager.clone(),
+                    immortality_enable_after_first_turn: immortal,
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
@@ -757,6 +762,7 @@ impl App {
                     is_first_run: false,
                     model: Some(model),
                     otel_manager: self.otel_manager.clone(),
+                    immortality_enable_after_first_turn: false,
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 if let Some(summary) = summary {

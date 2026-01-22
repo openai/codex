@@ -595,6 +595,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         no_alt_screen,
+        immortal,
         ..
     } = cli;
 
@@ -608,6 +609,7 @@ async fn run_ratatui_app(
         active_profile,
         prompt,
         images,
+        immortal,
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?

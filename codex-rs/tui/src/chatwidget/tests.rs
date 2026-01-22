@@ -720,6 +720,7 @@ async fn helpers_are_available_and_do_not_panic() {
         is_first_run: true,
         model: Some(resolved_model),
         otel_manager,
+        immortality_enable_after_first_turn: false,
     };
     let mut w = ChatWidget::new(init, thread_manager);
     // Basic construction sanity.
@@ -839,7 +840,7 @@ async fn make_chatwidget_manual(
         is_review_mode: false,
         pre_review_token_info: None,
         immortality_mode: false,
-        immortality_generation_inflight: false,
+        immortality_enable_after_first_turn: false,
         needs_final_message_separator: false,
         had_work_activity: false,
         last_separator_elapsed_secs: None,
