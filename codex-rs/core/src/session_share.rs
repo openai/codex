@@ -144,37 +144,47 @@ pub async fn upload_rollout_with_owner(
 
     if exists {
         let meta = fetch_meta(&store, &meta_key).await?;
-        let Some(meta) = meta else {
-            return Err(anyhow::anyhow!(
-                "remote session already exists without metadata; refusing to overwrite"
-            ));
-        };
-        if meta.owner != owner {
-            return Err(anyhow::anyhow!(
-                "remote session already exists and belongs to another user"
-            ));
+        if let Some(meta) = meta {
+            if meta.owner != owner {
+                return Err(anyhow::anyhow!(
+                    "remote session already exists and belongs to another user"
+                ));
+            }
+            store
+                .put_object(&key, data, "application/x-ndjson")
+                .await
+                .with_context(|| format!("failed to upload rollout for id {session_id}"))?;
+            let updated = SessionShareMeta {
+                owner: meta.owner,
+                created_at: meta.created_at,
+                updated_at: now,
+            };
+            upload_meta(&store, &meta_key, &updated).await?;
+        } else {
+            // Recover from a previous metadata upload failure by restoring metadata
+            // and overwriting the rollout blob.
+            let meta = SessionShareMeta {
+                owner: owner.to_string(),
+                created_at: now,
+                updated_at: now,
+            };
+            upload_meta(&store, &meta_key, &meta).await?;
+            store
+                .put_object(&key, data, "application/x-ndjson")
+                .await
+                .with_context(|| format!("failed to upload rollout for id {session_id}"))?;
         }
-        store
-            .put_object(&key, data, "application/x-ndjson")
-            .await
-            .with_context(|| format!("failed to upload rollout for id {session_id}"))?;
-        let updated = SessionShareMeta {
-            owner: meta.owner,
-            created_at: meta.created_at,
-            updated_at: now,
-        };
-        upload_meta(&store, &meta_key, &updated).await?;
     } else {
-        store
-            .put_object(&key, data, "application/x-ndjson")
-            .await
-            .with_context(|| format!("failed to upload rollout for id {session_id}"))?;
         let meta = SessionShareMeta {
             owner: owner.to_string(),
             created_at: now,
             updated_at: now,
         };
         upload_meta(&store, &meta_key, &meta).await?;
+        store
+            .put_object(&key, data, "application/x-ndjson")
+            .await
+            .with_context(|| format!("failed to upload rollout for id {session_id}"))?;
     }
 
     let object_url = store.object_url(&key)?;
