@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -16,6 +17,8 @@ use reqwest::Url;
 use serde::Deserialize;
 use serde::Serialize;
 use time::OffsetDateTime;
+use time::format_description::FormatItem;
+use time::macros::format_description;
 
 const SHARE_OBJECT_PREFIX: &str = "sessions";
 const SHARE_OBJECT_SUFFIX: &str = ".jsonl";
@@ -181,6 +184,29 @@ pub async fn upload_rollout_with_owner(
     })
 }
 
+pub async fn download_rollout_if_available(
+    base_url: &str,
+    session_id: ThreadId,
+    codex_home: &Path,
+) -> anyhow::Result<Option<PathBuf>> {
+    let store = SessionObjectStore::new(base_url).await?;
+    let key = object_key(session_id);
+    let Some(data) = store.get_object_bytes(&key).await? else {
+        return Ok(None);
+    };
+    let path = build_rollout_download_path(codex_home, session_id)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("failed to resolve rollout directory"))?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .with_context(|| format!("failed to create rollout directory {}", parent.display()))?;
+    tokio::fs::write(&path, data)
+        .await
+        .with_context(|| format!("failed to write rollout file {}", path.display()))?;
+    Ok(Some(path))
+}
+
 fn object_key(id: ThreadId) -> String {
     format!("{SHARE_OBJECT_PREFIX}/{id}{SHARE_OBJECT_SUFFIX}")
 }
@@ -209,6 +235,23 @@ async fn upload_meta(
     let payload = serde_json::to_vec(meta).with_context(|| "failed to serialize metadata")?;
     store.put_object(key, payload, "application/json").await?;
     Ok(())
+}
+
+fn build_rollout_download_path(codex_home: &Path, session_id: ThreadId) -> anyhow::Result<PathBuf> {
+    let timestamp = OffsetDateTime::now_local()
+        .map_err(|e| anyhow::anyhow!("failed to get local time: {e}"))?;
+    let format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+    let date_str = timestamp
+        .format(format)
+        .map_err(|e| anyhow::anyhow!("failed to format timestamp: {e}"))?;
+    let mut dir = codex_home.to_path_buf();
+    dir.push(crate::rollout::SESSIONS_SUBDIR);
+    dir.push(timestamp.year().to_string());
+    dir.push(format!("{:02}", u8::from(timestamp.month())));
+    dir.push(format!("{:02}", timestamp.day()));
+    let filename = format!("rollout-{date_str}-{session_id}.jsonl");
+    Ok(dir.join(filename))
 }
 
 impl HttpObjectStore {

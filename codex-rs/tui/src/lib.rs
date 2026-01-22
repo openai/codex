@@ -32,8 +32,10 @@ use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_core::protocol::AskForApproval;
 use codex_core::read_session_meta_line;
+use codex_core::session_share::download_rollout_if_available;
 use codex_core::terminal::Multiplexer;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -544,8 +546,15 @@ async fn run_ratatui_app(
     } else {
         initial_config
     };
-    let mut missing_session_exit = |id_str: &str, action: &str| {
-        error!("Error finding conversation path: {id_str}");
+    let ollama_chat_support_notice = match ollama_chat_deprecation_notice(&config).await {
+        Ok(notice) => notice,
+        Err(err) => {
+            tracing::warn!(?err, "Failed to detect Ollama wire API");
+            None
+        }
+    };
+    let mut fatal_exit = |message: String| {
+        error!("{message}");
         restore();
         session_log::log_session_end();
         let _ = tui.terminal.clear();
@@ -554,10 +563,13 @@ async fn run_ratatui_app(
             thread_id: None,
             thread_name: None,
             update_action: None,
-            exit_reason: ExitReason::Fatal(format!(
-                "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
-            )),
+            exit_reason: ExitReason::Fatal(message),
         })
+    };
+    let mut missing_session_exit = |id_str: &str, action: &str| {
+        fatal_exit(format!(
+            "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
+        ))
     };
 
     let use_fork = cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some();
@@ -571,7 +583,25 @@ async fn run_ratatui_app(
             };
             match path {
                 Some(path) => resume_picker::SessionSelection::Fork(path),
-                None => return missing_session_exit(id_str, "fork"),
+                None => {
+                    let Some(storage_url) = config.session_object_storage_url.as_deref() else {
+                        return missing_session_exit(id_str, "fork");
+                    };
+                    let Ok(session_id) = ThreadId::from_string(id_str) else {
+                        return missing_session_exit(id_str, "fork");
+                    };
+                    match download_rollout_if_available(storage_url, session_id, &config.codex_home)
+                        .await
+                    {
+                        Ok(Some(path)) => resume_picker::SessionSelection::Fork(path),
+                        Ok(None) => return missing_session_exit(id_str, "fork"),
+                        Err(err) => {
+                            return fatal_exit(format!(
+                                "Failed to fetch remote session {id_str}: {err}"
+                            ));
+                        }
+                    }
+                }
             }
         } else if cli.fork_last {
             let provider_filter = vec![config.model_provider_id.clone()];

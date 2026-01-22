@@ -432,7 +432,7 @@ fn parse_share_scope(response: &RequestUserInputResponse) -> ShareScope {
     response
         .answers
         .get(SHARE_SCOPE_QUESTION_ID)
-        .and_then(|answer| selected_label(answer))
+        .and_then(selected_label)
         .map(|label| {
             if label == SHARE_SCOPE_EMAIL_LABEL {
                 ShareScope::Emails
@@ -452,7 +452,7 @@ fn parse_share_emails(response: &RequestUserInputResponse) -> Vec<String> {
         return Vec::new();
     };
     note.split(',')
-        .map(|entry| entry.trim())
+        .map(str::trim)
         .filter(|entry| !entry.is_empty())
         .map(ToString::to_string)
         .collect()
