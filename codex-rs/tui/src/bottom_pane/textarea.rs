@@ -89,7 +89,10 @@ impl TextArea {
                 if start >= end {
                     continue;
                 }
-                self.elements.push(TextElement { range: start..end });
+                self.elements.push(TextElement {
+                    range: start..end,
+                    id: None,
+                });
             }
             self.elements.sort_by_key(|e| e.range.start);
         }

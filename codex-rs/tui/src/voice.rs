@@ -1,6 +1,7 @@
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use codex_core::auth::AuthCredentialsStoreMode;
+use codex_core::config::Config;
 use codex_core::config::find_codex_home;
 use codex_core::default_client::get_codex_user_agent;
 use codex_login::AuthMode;
@@ -20,6 +21,13 @@ use std::sync::atomic::Ordering;
 use tracing::error;
 use tracing::info;
 use tracing::trace;
+
+struct TranscriptionAuthContext {
+    mode: AuthMode,
+    bearer_token: String,
+    chatgpt_account_id: Option<String>,
+    chatgpt_base_url: String,
+}
 
 pub struct RecordedAudio {
     pub data: Vec<i16>,
@@ -327,7 +335,21 @@ fn encode_wav_normalized(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
     Ok(wav_bytes)
 }
 
-async fn resolve_auth() -> Result<(String, Option<String>), String> {
+fn normalize_chatgpt_base_url(input: &str) -> String {
+    let mut base_url = input.to_string();
+    while base_url.ends_with('/') {
+        base_url.pop();
+    }
+    if (base_url.starts_with("https://chatgpt.com")
+        || base_url.starts_with("https://chat.openai.com"))
+        && !base_url.contains("/backend-api")
+    {
+        base_url = format!("{base_url}/backend-api");
+    }
+    base_url
+}
+
+async fn resolve_auth() -> Result<TranscriptionAuthContext, String> {
     let codex_home = find_codex_home().map_err(|e| format!("failed to find codex home: {e}"))?;
     let auth = CodexAuth::from_auth_storage(&codex_home, AuthCredentialsStoreMode::Auto)
         .map_err(|e| format!("failed to read auth.json: {e}"))?
@@ -340,9 +362,16 @@ async fn resolve_auth() -> Result<(String, Option<String>), String> {
 
     let token = auth
         .get_token()
-        .await
         .map_err(|e| format!("failed to get auth token: {e}"))?;
-    Ok((token, chatgpt_account_id))
+    let config = Config::load_with_cli_overrides(Vec::new())
+        .await
+        .map_err(|e| format!("failed to load config: {e}"))?;
+    Ok(TranscriptionAuthContext {
+        mode: auth.mode,
+        bearer_token: token,
+        chatgpt_account_id,
+        chatgpt_base_url: normalize_chatgpt_base_url(&config.chatgpt_base_url),
+    })
 }
 
 async fn transcribe_bytes(
@@ -350,38 +379,55 @@ async fn transcribe_bytes(
     context: Option<String>,
     duration_seconds: f32,
 ) -> Result<String, String> {
-    let (bearer_token, chatgpt_account_id) = resolve_auth().await?;
-
+    let auth = resolve_auth().await?;
     let client = reqwest::Client::new();
     let audio_bytes = wav_bytes.len();
     let prompt_for_log = context.as_deref().unwrap_or("").to_string();
-    let part = reqwest::multipart::Part::bytes(wav_bytes)
-        .file_name("audio.wav")
-        .mime_str("audio/wav")
-        .map_err(|e| format!("failed to set mime: {e}"))?;
-    let mut form = reqwest::multipart::Form::new()
-        .text("model", "gpt-4o-transcribe")
-        .part("file", part);
-    if let Some(context) = context {
-        form = form.text("prompt", context);
-    }
-
-    let mut req = client
-        .post("https://api.openai.com/v1/audio/transcriptions")
-        .bearer_auth(bearer_token)
-        .multipart(form)
-        .header("User-Agent", get_codex_user_agent());
-
-    if let Some(acc) = chatgpt_account_id {
-        req = req.header("chatgpt-account-id", acc);
-    }
+    let (endpoint, request) = if auth.mode == AuthMode::ChatGPT {
+        let part = reqwest::multipart::Part::bytes(wav_bytes)
+            .file_name("audio.wav")
+            .mime_str("audio/wav")
+            .map_err(|e| format!("failed to set mime: {e}"))?;
+        let form = reqwest::multipart::Form::new().part("file", part);
+        let endpoint = format!("{}/transcribe", auth.chatgpt_base_url);
+        let mut req = client
+            .post(&endpoint)
+            .bearer_auth(&auth.bearer_token)
+            .multipart(form)
+            .header("User-Agent", get_codex_user_agent());
+        if let Some(acc) = auth.chatgpt_account_id {
+            req = req.header("ChatGPT-Account-Id", acc);
+        }
+        (endpoint, req)
+    } else {
+        let part = reqwest::multipart::Part::bytes(wav_bytes)
+            .file_name("audio.wav")
+            .mime_str("audio/wav")
+            .map_err(|e| format!("failed to set mime: {e}"))?;
+        let mut form = reqwest::multipart::Form::new()
+            .text("model", "gpt-4o-transcribe")
+            .part("file", part);
+        if let Some(context) = context {
+            form = form.text("prompt", context);
+        }
+        let endpoint = "https://api.openai.com/v1/audio/transcriptions".to_string();
+        (
+            endpoint,
+            client
+                .post("https://api.openai.com/v1/audio/transcriptions")
+                .bearer_auth(&auth.bearer_token)
+                .multipart(form)
+                .header("User-Agent", get_codex_user_agent()),
+        )
+    };
 
     let audio_kib = audio_bytes as f32 / 1024.0;
+    let mode = auth.mode;
     trace!(
-        "sending transcription request: duration={duration_seconds:.2}s audio={audio_kib:.1}KiB prompt={prompt_for_log}"
+        "sending transcription request: mode={mode:?} endpoint={endpoint} duration={duration_seconds:.2}s audio={audio_kib:.1}KiB prompt={prompt_for_log}"
     );
 
-    let resp = req
+    let resp = request
         .send()
         .await
         .map_err(|e| format!("transcription request failed: {e}"))?;

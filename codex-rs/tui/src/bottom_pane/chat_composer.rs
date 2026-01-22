@@ -419,6 +419,10 @@ impl ChatComposer {
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        if !self.input_enabled {
+            return None;
+        }
+
         // Hide the cursor while recording voice input.
         #[cfg(not(target_env = "musl"))]
         if self.voice.is_some() {
@@ -2014,6 +2018,9 @@ impl ChatComposer {
                 kind: KeyEventKind::Press,
                 ..
             } => {
+                if self.paste_burst.is_active() {
+                    return self.handle_input_basic(key_event);
+                }
                 // If textarea is empty, start recording immediately without inserting a space
                 if self.textarea.text().is_empty() {
                     #[cfg(not(target_env = "musl"))]
@@ -2802,7 +2809,7 @@ impl ChatComposer {
         stop: Arc<std::sync::atomic::AtomicBool>,
     ) {
         let tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
+        let task = move || {
             use std::time::Duration;
             let width: usize = 4;
             // Bar glyphs low→high; single-line sparkline that scrolls left.
@@ -2862,14 +2869,20 @@ impl ChatComposer {
                     text,
                 });
 
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                thread::sleep(Duration::from_millis(100));
             }
-        });
+        };
+
+        if let Ok(handle) = Handle::try_current() {
+            handle.spawn_blocking(task);
+        } else {
+            thread::spawn(task);
+        }
     }
 
     fn spawn_transcribing_spinner(&self, id: String) {
         let tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
+        let task = move || {
             use std::time::Duration;
             let frames: Vec<&'static str> = vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
             let mut i: usize = 0;
@@ -2882,9 +2895,15 @@ impl ChatComposer {
                     text,
                 });
                 i = i.wrapping_add(1);
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                thread::sleep(Duration::from_millis(100));
             }
-        });
+        };
+
+        if let Ok(handle) = Handle::try_current() {
+            handle.spawn_blocking(task);
+        } else {
+            thread::spawn(task);
+        }
     }
 
     pub fn replace_transcription(&mut self, id: &str, text: &str) {
