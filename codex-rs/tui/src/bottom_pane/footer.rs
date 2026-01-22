@@ -70,7 +70,7 @@ impl CollaborationModeIndicator {
     fn styled_span(self) -> Span<'static> {
         let label = self.label();
         match self {
-            CollaborationModeIndicator::Plan => Span::from(label).fg(Color::Rgb(0xD7, 0x2E, 0xE1)),
+            CollaborationModeIndicator::Plan => Span::from(label).magenta(),
             CollaborationModeIndicator::PairProgramming => Span::from(label).cyan(),
             CollaborationModeIndicator::Execute => Span::from(label).dim(),
         }
