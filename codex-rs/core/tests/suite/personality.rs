@@ -1,13 +1,26 @@
 use codex_core::config::types::Personality;
+use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
+use codex_core::models_manager::manager::RefreshStrategy;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelInstructionsTemplate;
+use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::PersonalityMessages;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -16,7 +29,14 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use tempfile::TempDir;
+use tokio::time::Duration;
+use tokio::time::Instant;
+use tokio::time::sleep;
+use wiremock::BodyPrintLimit;
+use wiremock::MockServer;
 
 fn sse_completed(id: &str) -> String {
     sse(vec![ev_response_created(id), ev_completed(id)])
@@ -191,4 +211,175 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
     );
 
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_turn_personality_remote_model_template_includes_update_message() -> anyhow::Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
+        .start()
+        .await;
+
+    let remote_slug = "codex-remote-personality";
+    let remote_personality_message = "Friendly from remote template";
+    let remote_model = ModelInfo {
+        slug: remote_slug.to_string(),
+        display_name: "Remote personality test".to_string(),
+        description: Some("Remote model with personality template".to_string()),
+        default_reasoning_level: Some(ReasoningEffort::Medium),
+        supported_reasoning_levels: vec![ReasoningEffortPreset {
+            effort: ReasoningEffort::Medium,
+            description: ReasoningEffort::Medium.to_string(),
+        }],
+        shell_type: ConfigShellToolType::UnifiedExec,
+        visibility: ModelVisibility::List,
+        supported_in_api: true,
+        priority: 1,
+        upgrade: None,
+        base_instructions: "base instructions".to_string(),
+        model_instructions_template: Some(ModelInstructionsTemplate {
+            template: "Base instructions\n{{ personality_message }}\n".to_string(),
+            personality_messages: Some(PersonalityMessages(BTreeMap::from([(
+                Personality::Friendly,
+                remote_personality_message.to_string(),
+            )]))),
+        }),
+        supports_reasoning_summaries: false,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        context_window: Some(128_000),
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
+        experimental_supported_tools: Vec::new(),
+    };
+
+    let _models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![remote_model],
+        },
+    )
+    .await;
+
+    let resp_mock = mount_sse_sequence(
+        &server,
+        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(codex_core::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.features.enable(Feature::RemoteModels);
+            config.model = Some("gpt-5.2-codex".to_string());
+        });
+    let test = builder.build(&server).await?;
+
+    wait_for_model_available(
+        &test.thread_manager.get_models_manager(),
+        remote_slug,
+        &test.config,
+    )
+    .await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: test.session_configured.model.clone(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            model: Some(remote_slug.to_string()),
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: Some(Personality::Friendly),
+        })
+        .await?;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: remote_slug.to_string(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = resp_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two requests");
+    let request = requests
+        .last()
+        .expect("expected personality update request");
+    let developer_texts = request.message_input_texts("developer");
+    let personality_text = developer_texts
+        .iter()
+        .find(|text| text.contains("<personality_spec>"))
+        .expect("expected personality update message in developer input");
+
+    assert!(
+        personality_text.contains("The user has requested a new communication style."),
+        "expected personality update preamble, got {personality_text:?}"
+    );
+    assert!(
+        personality_text.contains(remote_personality_message),
+        "expected personality update to include remote template, got: {personality_text:?}"
+    );
+
+    Ok(())
+}
+
+async fn wait_for_model_available(
+    manager: &Arc<ModelsManager>,
+    slug: &str,
+    config: &codex_core::config::Config,
+) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let models = manager
+            .list_models(config, RefreshStrategy::OnlineIfUncached)
+            .await;
+        if models.iter().any(|model| model.model == slug) {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for the remote model {slug} to appear");
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
 }
