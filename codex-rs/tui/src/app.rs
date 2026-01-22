@@ -1230,6 +1230,7 @@ impl App {
                                         effort: None,
                                         summary: None,
                                         collaboration_mode: None,
+                                        personality: None,
                                     },
                                 ));
                                 self.app_event_tx

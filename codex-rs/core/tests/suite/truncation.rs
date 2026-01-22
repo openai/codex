@@ -548,6 +548,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 

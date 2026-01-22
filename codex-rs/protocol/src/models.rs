@@ -11,7 +11,9 @@ use serde::ser::Serializer;
 use ts_rs::TS;
 
 use crate::config_types::CollaborationMode;
+use crate::config_types::Personality;
 use crate::config_types::SandboxMode;
+use crate::openai_models::ModelInfo;
 use crate::protocol::AskForApproval;
 use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
 use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
@@ -219,6 +221,28 @@ impl DeveloperInstructions {
         let mut text = self.text;
         text.push_str(&other.into().text);
         Self { text }
+    }
+
+    pub fn from_personality_update(model_info: &ModelInfo, personality: Personality) -> Self {
+        let personality_message = model_info
+            .model_instructions_template
+            .as_ref()
+            .and_then(|template| template.personality_messages.as_ref())
+            .and_then(|messages| messages.0.get(&personality))
+            .cloned()
+            .unwrap_or_else(|| {
+                tracing::warn!(
+                    model = %model_info.slug,
+                    %personality,
+                    "Personality message missing for model; falling back to personality label."
+                );
+                format!("Personality: {personality}")
+            });
+
+        let message = format!(
+            "<personality_spec> The user has requested a new communication style. Future messages should adhere to the following personality: \n{personality_message} </personality_spec>"
+        );
+        DeveloperInstructions::new(message)
     }
 
     pub fn from_policy(

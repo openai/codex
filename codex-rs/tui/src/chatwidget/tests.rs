@@ -2084,6 +2084,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
             collaboration_mode: Some(CollaborationMode::PairProgramming(_)),
+            personality: None,
             ..
         } => {}
         other => {
@@ -2097,6 +2098,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
             collaboration_mode: Some(CollaborationMode::PairProgramming(_)),
+            personality: None,
             ..
         } => {}
         other => {
@@ -2117,6 +2119,7 @@ async fn collab_mode_defaults_to_pair_programming_when_enabled() {
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
             collaboration_mode: Some(CollaborationMode::PairProgramming(_)),
+            personality: None,
             ..
         } => {}
         other => {
@@ -3132,6 +3135,7 @@ async fn approvals_popup_navigation_skips_disabled() {
             ev,
             AppEvent::CodexOp(Op::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::OnRequest),
+                personality: None,
                 ..
             })
         )),
@@ -3142,6 +3146,7 @@ async fn approvals_popup_navigation_skips_disabled() {
             ev,
             AppEvent::CodexOp(Op::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::Never),
+                personality: None,
                 ..
             })
         )),

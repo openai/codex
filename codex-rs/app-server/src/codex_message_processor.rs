@@ -3288,6 +3288,7 @@ impl CodexMessageProcessor {
                 summary,
                 final_output_json_schema: output_schema,
                 collaboration_mode: None,
+                personality: None,
             })
             .await;
 
@@ -3415,6 +3416,7 @@ impl CodexMessageProcessor {
                     effort: params.effort.map(Some),
                     summary: params.summary,
                     collaboration_mode: params.collaboration_mode,
+                    personality: None,
                 })
                 .await;
         }
