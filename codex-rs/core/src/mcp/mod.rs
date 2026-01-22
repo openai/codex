@@ -22,7 +22,6 @@ use crate::mcp_connection_manager::SandboxState;
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 pub(crate) const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps_mcp";
-const CODEX_APPS_MCP_URL: &str = "http://localhost:10000/backend-api/wham/apps";
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
 
 fn codex_apps_mcp_bearer_token_env_var() -> Option<String> {
@@ -59,17 +58,35 @@ fn codex_apps_mcp_http_headers(auth: Option<&CodexAuth>) -> Option<HashMap<Strin
     }
 }
 
-fn codex_apps_mcp_server_config(auth: Option<&CodexAuth>) -> McpServerConfig {
+fn codex_apps_mcp_url(base_url: &str) -> String {
+    let mut base_url = base_url.trim_end_matches('/').to_string();
+    if (base_url.starts_with("https://chatgpt.com")
+        || base_url.starts_with("https://chat.openai.com"))
+        && !base_url.contains("/backend-api")
+    {
+        base_url = format!("{base_url}/backend-api");
+    }
+    if base_url.contains("/backend-api") {
+        format!("{base_url}/wham/apps")
+    } else if base_url.contains("/api/codex") {
+        format!("{base_url}/apps")
+    } else {
+        format!("{base_url}/api/codex/apps")
+    }
+}
+
+fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> McpServerConfig {
     let bearer_token_env_var = codex_apps_mcp_bearer_token_env_var();
     let http_headers = if bearer_token_env_var.is_some() {
         None
     } else {
         codex_apps_mcp_http_headers(auth)
     };
+    let url = codex_apps_mcp_url(&config.chatgpt_base_url);
 
     McpServerConfig {
         transport: McpServerTransportConfig::StreamableHttp {
-            url: CODEX_APPS_MCP_URL.to_string(),
+            url,
             bearer_token_env_var,
             http_headers,
             env_http_headers: None,
@@ -87,11 +104,12 @@ pub(crate) fn with_codex_apps_mcp(
     mut servers: HashMap<String, McpServerConfig>,
     connectors_enabled: bool,
     auth: Option<&CodexAuth>,
+    config: &Config,
 ) -> HashMap<String, McpServerConfig> {
     if connectors_enabled {
         servers.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            codex_apps_mcp_server_config(auth),
+            codex_apps_mcp_server_config(config, auth),
         );
     } else {
         servers.remove(CODEX_APPS_MCP_SERVER_NAME);
@@ -107,6 +125,7 @@ pub(crate) fn effective_mcp_servers(
         config.mcp_servers.get().clone(),
         config.features.enabled(Feature::Connectors),
         auth,
+        config,
     )
 }
 

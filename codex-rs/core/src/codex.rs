@@ -1956,10 +1956,12 @@ impl Session {
         };
 
         let auth = self.services.auth_manager.auth().await;
+        let config = self.get_config().await;
         let mcp_servers = with_codex_apps_mcp(
             mcp_servers,
             self.features.enabled(Feature::Connectors),
             auth.as_ref(),
+            config.as_ref(),
         );
         let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
         let sandbox_state = SandboxState {
