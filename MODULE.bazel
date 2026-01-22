@@ -27,6 +27,9 @@ register_toolchains(
     "@toolchains_llvm_bootstrapped//toolchain:all",
 )
 
+# Annoyuing dep bumps for modules pulled by sprawling protobuf to get bazel9-compat
+bazel_dep(name = "rules_kotlin", version = "2.2.2")
+bazel_dep(name = "rules_android", version = "0.7.1")
 bazel_dep(name = "rules_cc", version = "0.2.16")
 bazel_dep(name = "rules_platform", version = "0.1.0")
 bazel_dep(name = "rules_rust", version = "0.68.1")
