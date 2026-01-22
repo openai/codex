@@ -1263,7 +1263,7 @@ impl CodexMessageProcessor {
         let outgoing = self.outgoing.clone();
         let req_id = request_id;
         let sandbox_cwd = self.config.cwd.clone();
-        let linux_sandbox_bind_mounts = self
+        let use_linux_sandbox_bind_mounts = self
             .config
             .features
             .enabled(Feature::LinuxSandboxBindMounts);
@@ -1274,7 +1274,7 @@ impl CodexMessageProcessor {
                 &effective_policy,
                 sandbox_cwd.as_path(),
                 &codex_linux_sandbox_exe,
-                linux_sandbox_bind_mounts,
+                use_linux_sandbox_bind_mounts,
                 None,
             )
             .await

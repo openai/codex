@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::error::Error;
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
@@ -14,6 +12,7 @@ use codex_core::error::Result;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::WritableRoot;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use tracing::warn;
 
 /// Apply read-only bind mounts for protected subpaths before Landlock.
 ///
@@ -24,8 +23,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 /// - Non-root path: unshare user+mount namespaces up front to gain the
 ///   capabilities needed for remounting.
 /// - If namespace or mount setup is denied in either path, skip mount-based
-///   protections and continue with Landlock-only sandboxing, emitting a debug
-///   log when CODEX_SANDBOX_DEBUG=1.
+///   protections and continue with Landlock-only sandboxing, emitting a
+///   warning log.
 ///
 /// Once in the namespace(s), we make mounts private, bind each protected
 /// target onto itself, remount read-only, and drop any userns-granted caps.
@@ -210,12 +209,13 @@ fn unshare_mount_namespace() -> Result<()> {
 /// Unshare user + mount namespaces so the process can remount read-only without privileges.
 fn unshare_user_and_mount_namespaces() -> Result<()> {
     #[cfg(test)]
-    if FORCE_UNSHARE_USERNS_SUCCESS.load(std::sync::atomic::Ordering::SeqCst) {
-        return Ok(());
-    }
-    #[cfg(test)]
-    if FORCE_UNSHARE_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+    {
+        if FORCE_UNSHARE_USERNS_SUCCESS.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        if FORCE_UNSHARE_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+        }
     }
     let result = unsafe { libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) };
     if result != 0 {
@@ -274,7 +274,10 @@ static FORCE_DROP_CAPS_SUCCESS: AtomicBool = AtomicBool::new(false);
 static FORCE_FLAGS_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
-// Tests mutate global FORCE_* flags; serialize them and reset to avoid cross-test races.
+// Tests mutate global FORCE_* flags; use force_flags_guard() to serialize and reset
+// state to avoid cross-test contamination when tests run in parallel. An alternative
+// would be integration tests that spawn separate codex-linux-sandbox processes and
+// inject failures via per-process flags/env vars, avoiding global state entirely.
 fn reset_force_flags() {
     FORCE_UNSHARE_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
     FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -305,19 +308,10 @@ fn force_flags_guard() -> ForceFlagsGuard {
     ForceFlagsGuard(guard)
 }
 
-fn sandbox_debug_enabled() -> bool {
-    matches!(
-        std::env::var("CODEX_SANDBOX_DEBUG").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE")
-    )
-}
-
 fn log_namespace_fallback(err: &CodexErr) {
-    if sandbox_debug_enabled() {
-        eprintln!(
-            "codex-linux-sandbox: falling back to Landlock-only sandboxing because namespaces are unavailable (seccomp/caps likely): {err}"
-        );
-    }
+    warn!(
+        "codex-linux-sandbox: falling back to Landlock-only sandboxing because namespaces are unavailable (seccomp/caps likely): {err}"
+    );
 }
 
 #[repr(C)]

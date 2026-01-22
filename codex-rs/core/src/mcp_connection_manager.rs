@@ -301,7 +301,7 @@ pub struct SandboxState {
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub sandbox_cwd: PathBuf,
     #[serde(default)]
-    pub linux_sandbox_bind_mounts: bool,
+    pub use_linux_sandbox_bind_mounts: bool,
 }
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.

@@ -29,7 +29,7 @@ pub(crate) struct ToolsConfig {
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub experimental_supported_tools: Vec<String>,
-    pub linux_sandbox_bind_mounts: bool,
+    pub use_linux_sandbox_bind_mounts: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -48,7 +48,7 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
-        let linux_sandbox_bind_mounts = features.enabled(Feature::LinuxSandboxBindMounts);
+        let use_linux_sandbox_bind_mounts = features.enabled(Feature::LinuxSandboxBindMounts);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -82,7 +82,7 @@ impl ToolsConfig {
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
-            linux_sandbox_bind_mounts,
+            use_linux_sandbox_bind_mounts,
         }
     }
 }

@@ -26,6 +26,7 @@ use seccompiler::SeccompFilter;
 use seccompiler::SeccompRule;
 use seccompiler::TargetArch;
 use seccompiler::apply_filter;
+use tracing::warn;
 
 #[derive(Debug)]
 pub(crate) enum SandboxSetupError {
@@ -86,6 +87,7 @@ fn is_permission_denied(err: &CodexErr) -> bool {
     {
         return true;
     }
+
     let mut current: Option<&(dyn Error + 'static)> = Some(err);
     while let Some(error) = current {
         if let Some(io_error) = error.downcast_ref::<std::io::Error>()
@@ -99,19 +101,10 @@ fn is_permission_denied(err: &CodexErr) -> bool {
     false
 }
 
-fn sandbox_debug_enabled() -> bool {
-    matches!(
-        std::env::var("CODEX_SANDBOX_DEBUG").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE")
-    )
-}
-
 fn log_landlock_fallback(err: &CodexErr) {
-    if sandbox_debug_enabled() {
-        eprintln!(
-            "codex-linux-sandbox: falling back to no-Landlock sandboxing because Landlock is unavailable or not enforced: {err}"
-        );
-    }
+    warn!(
+        "codex-linux-sandbox: falling back to no-Landlock sandboxing because Landlock is unavailable or not enforced: {err}"
+    );
 }
 
 fn set_no_new_privs() -> Result<()> {

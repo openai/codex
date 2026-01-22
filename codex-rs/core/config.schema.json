@@ -108,7 +108,7 @@
         "include_apply_patch_tool": {
           "type": "boolean"
         },
-        "linux_sandbox_bind_mounts": {
+        "use_linux_sandbox_bind_mounts": {
           "type": "boolean"
         },
         "powershell_utf8": {
@@ -618,7 +618,7 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
-            "linux_sandbox_bind_mounts": {
+            "use_linux_sandbox_bind_mounts": {
               "type": "boolean"
             },
             "powershell_utf8": {

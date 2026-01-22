@@ -20,7 +20,7 @@ pub async fn spawn_command_under_linux_sandbox<P>(
     command_cwd: PathBuf,
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
-    linux_sandbox_bind_mounts: bool,
+    use_linux_sandbox_bind_mounts: bool,
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child>
@@ -31,7 +31,7 @@ where
         command,
         sandbox_policy,
         sandbox_policy_cwd,
-        linux_sandbox_bind_mounts,
+        use_linux_sandbox_bind_mounts,
     );
     let arg0 = Some("codex-linux-sandbox");
     spawn_child_async(
@@ -51,7 +51,7 @@ pub(crate) fn create_linux_sandbox_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
     sandbox_policy_cwd: &Path,
-    linux_sandbox_bind_mounts: bool,
+    use_linux_sandbox_bind_mounts: bool,
 ) -> Vec<String> {
     #[expect(clippy::expect_used)]
     let sandbox_policy_cwd = sandbox_policy_cwd
@@ -70,7 +70,7 @@ pub(crate) fn create_linux_sandbox_command_args(
         sandbox_policy_json,
     ];
 
-    if linux_sandbox_bind_mounts {
+    if use_linux_sandbox_bind_mounts {
         linux_cmd.push("--enable-bind-mounts".to_string());
     }
 
