@@ -478,6 +478,8 @@ pub fn load_auth_dot_json(
 #[derive(Debug, Clone)]
 pub struct OAuthHealthSummary {
     pub cooldown_until: Option<DateTime<Utc>>,
+    pub exhausted_until: Option<DateTime<Utc>>,
+    pub requires_relogin: bool,
     pub last_status_code: Option<u16>,
     pub last_error_at: Option<DateTime<Utc>>,
     pub success_count: u64,
@@ -499,6 +501,24 @@ pub struct OAuthAccountSummary {
 }
 
 #[derive(Debug, Clone)]
+pub struct OAuthRotationSummary {
+    pub total: usize,
+    pub ready: usize,
+    pub cooldown: usize,
+    pub exhausted: usize,
+    pub requires_relogin: usize,
+}
+
+impl OAuthRotationSummary {
+    pub fn format_compact(&self) -> String {
+        format!(
+            "{}/{} ready, {} cooldown, {} exhausted, {} relogin",
+            self.ready, self.total, self.cooldown, self.exhausted, self.requires_relogin
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct OAuthPoolRecord {
     pub id: String,
     pub health: OAuthHealth,
@@ -510,10 +530,43 @@ pub(crate) struct OAuthPoolSnapshot {
     pub ordered_ids: Vec<String>,
 }
 
+fn record_account_id(record: &OAuthRecord) -> Option<&str> {
+    record
+        .tokens
+        .account_id
+        .as_deref()
+        .or(record.tokens.id_token.chatgpt_account_id.as_deref())
+}
+
+fn record_email(record: &OAuthRecord) -> Option<&str> {
+    record.tokens.id_token.email.as_deref()
+}
+
+fn unique_record_match<F>(
+    provider: &OAuthProvider,
+    namespace: &str,
+    mut predicate: F,
+) -> Option<String>
+where
+    F: FnMut(&OAuthRecord) -> bool,
+{
+    let mut matched: Option<&OAuthRecord> = None;
+    for record in provider.records.iter() {
+        if record.namespace != namespace || !predicate(record) {
+            continue;
+        }
+        if matched.is_some() {
+            return None;
+        }
+        matched = Some(record);
+    }
+    matched.map(|record| record.id.clone())
+}
+
 pub fn add_oauth_account(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    tokens: TokenData,
+    mut tokens: TokenData,
     last_refresh: Option<DateTime<Utc>>,
     label: Option<String>,
 ) -> std::io::Result<String> {
@@ -522,17 +575,40 @@ pub fn add_oauth_account(
     update_auth_store(codex_home, &storage, default_lock_options(), |store| {
         let provider = ensure_oauth_provider(store, DEFAULT_OAUTH_PROVIDER_ID);
         let now = Utc::now();
+
+        if tokens.account_id.is_none() {
+            tokens.account_id = tokens.id_token.chatgpt_account_id.clone();
+        }
+        let account_id = tokens.account_id.as_deref();
+        let email = tokens.id_token.email.as_deref();
+
         let existing_id = provider
             .records
             .iter()
             .find(|record| record.namespace == namespace && record.tokens.refresh_token == tokens.refresh_token)
             .map(|record| record.id.clone());
+        let existing_id = existing_id
+            .or_else(|| {
+                account_id.and_then(|id| {
+                    unique_record_match(provider, &namespace, |record| {
+                        record_account_id(record) == Some(id)
+                    })
+                })
+            })
+            .or_else(|| {
+                email.and_then(|email| {
+                    unique_record_match(provider, &namespace, |record| {
+                        record_email(record) == Some(email)
+                    })
+                })
+            });
 
         let record_id = if let Some(existing_id) = existing_id {
             if let Some(record) = find_record_mut(provider, &existing_id) {
                 record.tokens = tokens;
                 record.last_refresh = last_refresh.or(Some(now));
                 record.updated_at = now;
+                record.health.requires_relogin = false;
                 if label.is_some() {
                     record.label = label;
                 }
@@ -596,6 +672,8 @@ pub fn list_oauth_accounts(
         if let Some(record) = find_record(provider, &id) {
             let health = OAuthHealthSummary {
                 cooldown_until: record.health.cooldown_until,
+                exhausted_until: record.health.exhausted_until,
+                requires_relogin: record.health.requires_relogin,
                 last_status_code: record.health.last_status_code,
                 last_error_at: record.health.last_error_at,
                 success_count: record.health.success_count,
@@ -1236,6 +1314,54 @@ impl AuthManager {
         Ok(OAuthPoolSnapshot { records, ordered_ids })
     }
 
+    pub fn oauth_rotation_summary(&self) -> std::io::Result<Option<OAuthRotationSummary>> {
+        let storage = self.auth_storage();
+        let store = storage.load()?.unwrap_or_default();
+        let provider = match store.providers.get(DEFAULT_OAUTH_PROVIDER_ID) {
+            Some(AuthProviderEntry::Oauth(provider)) => provider,
+            _ => return Ok(None),
+        };
+        let namespace = normalize_oauth_namespace(DEFAULT_OAUTH_NAMESPACE);
+        let records: Vec<_> = provider
+            .records
+            .iter()
+            .filter(|record| record.namespace == namespace)
+            .collect();
+        if records.len() <= 1 {
+            return Ok(None);
+        }
+
+        let now = Utc::now();
+        let mut summary = OAuthRotationSummary {
+            total: records.len(),
+            ready: 0,
+            cooldown: 0,
+            exhausted: 0,
+            requires_relogin: 0,
+        };
+
+        for record in records {
+            let health = &record.health;
+            if health.requires_relogin {
+                summary.requires_relogin += 1;
+            } else if health
+                .exhausted_until
+                .is_some_and(|until| until > now)
+            {
+                summary.exhausted += 1;
+            } else if health
+                .cooldown_until
+                .is_some_and(|until| until > now)
+            {
+                summary.cooldown += 1;
+            } else {
+                summary.ready += 1;
+            }
+        }
+
+        Ok(Some(summary))
+    }
+
     pub(crate) fn oauth_move_to_back(&self, namespace: &str, record_id: &str) -> std::io::Result<()> {
         let storage = self.auth_storage();
         let namespace = normalize_oauth_namespace(namespace);
@@ -1262,6 +1388,45 @@ impl AuthManager {
         })
     }
 
+    fn update_oauth_health_success(
+        record: &mut OAuthRecord,
+        status_code: u16,
+        _now: DateTime<Utc>,
+    ) {
+        let prev = record.health.clone();
+        record.health = OAuthHealth {
+            cooldown_until: None,
+            exhausted_until: None,
+            requires_relogin: false,
+            last_status_code: Some(status_code),
+            last_error_at: None,
+            success_count: prev.success_count + 1,
+            failure_count: prev.failure_count,
+        };
+    }
+
+    fn update_oauth_health_failure(
+        record: &mut OAuthRecord,
+        status_code: u16,
+        cooldown_until: Option<DateTime<Utc>>,
+        exhausted_until: Option<DateTime<Utc>>,
+        requires_relogin: Option<bool>,
+        now: DateTime<Utc>,
+    ) {
+        let prev = record.health.clone();
+        let prev_cooldown = prev.cooldown_until.filter(|until| *until > now);
+        let prev_exhausted = prev.exhausted_until.filter(|until| *until > now);
+        record.health = OAuthHealth {
+            cooldown_until: cooldown_until.or(prev_cooldown),
+            exhausted_until: exhausted_until.or(prev_exhausted),
+            requires_relogin: requires_relogin.unwrap_or(prev.requires_relogin),
+            last_status_code: Some(status_code),
+            last_error_at: Some(now),
+            success_count: prev.success_count,
+            failure_count: prev.failure_count + 1,
+        };
+    }
+
     pub(crate) fn oauth_record_outcome(
         &self,
         record_id: &str,
@@ -1280,18 +1445,70 @@ impl AuthManager {
                 None => return Ok(false),
             };
             let now = Utc::now();
-            let prev_cooldown = record
-                .health
-                .cooldown_until
-                .filter(|until| *until > now);
-            let cooldown_until = if ok { None } else { cooldown_until.or(prev_cooldown) };
-            record.health = OAuthHealth {
-                cooldown_until,
-                last_status_code: Some(status_code),
-                last_error_at: if ok { None } else { Some(now) },
-                success_count: record.health.success_count + if ok { 1 } else { 0 },
-                failure_count: record.health.failure_count + if ok { 0 } else { 1 },
+            if ok {
+                Self::update_oauth_health_success(record, status_code, now);
+            } else {
+                Self::update_oauth_health_failure(
+                    record,
+                    status_code,
+                    cooldown_until,
+                    None,
+                    None,
+                    now,
+                );
+            }
+            record.updated_at = now;
+            Ok(true)
+        })
+    }
+
+    pub(crate) fn oauth_record_requires_relogin(
+        &self,
+        record_id: &str,
+        status_code: u16,
+    ) -> std::io::Result<()> {
+        let storage = self.auth_storage();
+        update_auth_store_best_effort(&self.codex_home, &storage, |store| {
+            let provider = match store.providers.get_mut(DEFAULT_OAUTH_PROVIDER_ID) {
+                Some(AuthProviderEntry::Oauth(provider)) => provider,
+                _ => return Ok(false),
             };
+            let record = match find_record_mut(provider, record_id) {
+                Some(record) => record,
+                None => return Ok(false),
+            };
+            let now = Utc::now();
+            Self::update_oauth_health_failure(record, status_code, None, None, Some(true), now);
+            record.updated_at = now;
+            Ok(true)
+        })
+    }
+
+    pub(crate) fn oauth_record_exhausted(
+        &self,
+        record_id: &str,
+        status_code: u16,
+        exhausted_until: Option<DateTime<Utc>>,
+    ) -> std::io::Result<()> {
+        let storage = self.auth_storage();
+        update_auth_store_best_effort(&self.codex_home, &storage, |store| {
+            let provider = match store.providers.get_mut(DEFAULT_OAUTH_PROVIDER_ID) {
+                Some(AuthProviderEntry::Oauth(provider)) => provider,
+                _ => return Ok(false),
+            };
+            let record = match find_record_mut(provider, record_id) {
+                Some(record) => record,
+                None => return Ok(false),
+            };
+            let now = Utc::now();
+            Self::update_oauth_health_failure(
+                record,
+                status_code,
+                None,
+                exhausted_until,
+                None,
+                now,
+            );
             record.updated_at = now;
             Ok(true)
         })

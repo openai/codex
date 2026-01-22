@@ -64,6 +64,7 @@ use crate::client_common::ResponseStream;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
+use crate::error::RefreshTokenFailedReason;
 use crate::error::Result;
 use crate::features::FEATURES;
 use crate::features::Feature;
@@ -77,6 +78,7 @@ pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const DEFAULT_RATE_LIMIT_COOLDOWN_MS: u64 = 30_000;
 const DEFAULT_AUTH_FAILURE_COOLDOWN_MS: u64 = 5 * 60_000;
+const DEFAULT_PAYMENT_REQUIRED_COOLDOWN_MS: u64 = 60 * 60_000;
 const DEFAULT_NETWORK_RETRY_ATTEMPTS: u32 = 1;
 
 #[derive(Debug)]
@@ -714,6 +716,7 @@ struct OAuthRotationConfigResolved {
     max_attempts: usize,
     rate_limit_cooldown: Duration,
     auth_failure_cooldown: Duration,
+    payment_required_cooldown: Duration,
     network_retry_attempts: u32,
 }
 
@@ -845,6 +848,43 @@ impl OAuthRotationPlan {
                         let status_code = status.as_u16();
                         let headers_ref = headers.as_ref();
 
+                        if status == StatusCode::BAD_REQUEST {
+                            let _ = self
+                                .auth_manager
+                                .oauth_record_outcome(&record_id, status_code, false, None);
+                            return Err(ApiError::Transport(TransportError::Http {
+                                status,
+                                url,
+                                headers,
+                                body,
+                            }));
+                        }
+
+                        if status == StatusCode::PAYMENT_REQUIRED {
+                            let exhausted_until = cooldown_until_from_duration(
+                                self.config.payment_required_cooldown,
+                            );
+                            let _ = self.auth_manager.oauth_record_exhausted(
+                                &record_id,
+                                status_code,
+                                Some(exhausted_until),
+                            );
+                            let _ =
+                                self.auth_manager
+                                    .oauth_move_to_back(&self.namespace, &record_id);
+                            let err = ApiError::Transport(TransportError::Http {
+                                status,
+                                url,
+                                headers,
+                                body,
+                            });
+                            if attempt + 1 >= max_attempts {
+                                return Err(err);
+                            }
+                            last_error = Some(err);
+                            break;
+                        }
+
                         if status == StatusCode::TOO_MANY_REQUESTS {
                             let cooldown = retry_after_duration(headers_ref)
                                 .unwrap_or(self.config.rate_limit_cooldown);
@@ -896,6 +936,51 @@ impl OAuthRotationPlan {
                                                 headers,
                                                 body,
                                             })) => {
+                                                if status == StatusCode::BAD_REQUEST {
+                                                    let _ = self.auth_manager.oauth_record_outcome(
+                                                        &record_id,
+                                                        status.as_u16(),
+                                                        false,
+                                                        None,
+                                                    );
+                                                    return Err(ApiError::Transport(
+                                                        TransportError::Http {
+                                                            status,
+                                                            url,
+                                                            headers,
+                                                            body,
+                                                        },
+                                                    ));
+                                                }
+
+                                                if status == StatusCode::PAYMENT_REQUIRED {
+                                                    let exhausted_until = cooldown_until_from_duration(
+                                                        self.config.payment_required_cooldown,
+                                                    );
+                                                    let _ = self.auth_manager.oauth_record_exhausted(
+                                                        &record_id,
+                                                        status.as_u16(),
+                                                        Some(exhausted_until),
+                                                    );
+                                                    let _ = self.auth_manager.oauth_move_to_back(
+                                                        &self.namespace,
+                                                        &record_id,
+                                                    );
+                                                    let err = ApiError::Transport(
+                                                        TransportError::Http {
+                                                            status,
+                                                            url,
+                                                            headers,
+                                                            body,
+                                                        },
+                                                    );
+                                                    if attempt + 1 >= max_attempts {
+                                                        return Err(err);
+                                                    }
+                                                    last_error = Some(err);
+                                                    break;
+                                                }
+
                                                 if status == StatusCode::TOO_MANY_REQUESTS {
                                                     let cooldown = retry_after_duration(headers.as_ref())
                                                         .unwrap_or(self.config.rate_limit_cooldown);
@@ -959,16 +1044,32 @@ impl OAuthRotationPlan {
                                             Err(err) => return Err(err),
                                         }
                                     }
-                                    Err(_) => {
-                                        let cooldown_until = cooldown_until_from_duration(
-                                            self.config.auth_failure_cooldown,
+                                    Err(err) => {
+                                        let requires_relogin = matches!(
+                                            err.failed_reason(),
+                                            Some(RefreshTokenFailedReason::Expired)
+                                                | Some(RefreshTokenFailedReason::Exhausted)
+                                                | Some(RefreshTokenFailedReason::Revoked)
+                                                | Some(RefreshTokenFailedReason::Other)
                                         );
-                                        let _ = self.auth_manager.oauth_record_outcome(
-                                            &record_id,
-                                            status_code,
-                                            false,
-                                            Some(cooldown_until),
-                                        );
+                                        if requires_relogin {
+                                            let _ = self
+                                                .auth_manager
+                                                .oauth_record_requires_relogin(
+                                                    &record_id,
+                                                    status_code,
+                                                );
+                                        } else {
+                                            let cooldown_until = cooldown_until_from_duration(
+                                                self.config.auth_failure_cooldown,
+                                            );
+                                            let _ = self.auth_manager.oauth_record_outcome(
+                                                &record_id,
+                                                status_code,
+                                                false,
+                                                Some(cooldown_until),
+                                            );
+                                        }
                                         let _ = self.auth_manager.oauth_move_to_back(
                                             &self.namespace,
                                             &record_id,
@@ -1095,6 +1196,11 @@ fn resolve_oauth_rotation_config(config: &Config, candidate_len: usize) -> OAuth
             .auth_failure_cooldown_ms
             .unwrap_or(DEFAULT_AUTH_FAILURE_COOLDOWN_MS),
     );
+    let payment_required_cooldown = Duration::from_millis(
+        settings
+            .payment_required_cooldown_ms
+            .unwrap_or(DEFAULT_PAYMENT_REQUIRED_COOLDOWN_MS),
+    );
     let network_retry_attempts = settings
         .network_retry_attempts
         .unwrap_or(DEFAULT_NETWORK_RETRY_ATTEMPTS);
@@ -1103,6 +1209,7 @@ fn resolve_oauth_rotation_config(config: &Config, candidate_len: usize) -> OAuth
         max_attempts,
         rate_limit_cooldown,
         auth_failure_cooldown,
+        payment_required_cooldown,
         network_retry_attempts,
     }
 }
@@ -1119,12 +1226,43 @@ fn pick_next_candidate(
             if attempted.contains(*id) {
                 return false;
             }
-            let cooldown = record_by_id
-                .get(*id)
-                .and_then(|record| record.health.cooldown_until);
+            let Some(record) = record_by_id.get(*id) else {
+                return false;
+            };
+            if record.health.requires_relogin {
+                return false;
+            }
+            if record
+                .health
+                .exhausted_until
+                .is_some_and(|until| until > now)
+            {
+                return false;
+            }
+            let cooldown = record.health.cooldown_until;
             cooldown.map(|until| until <= now).unwrap_or(true)
         })
-        .or_else(|| candidates.iter().find(|id| !attempted.contains(*id)))
+        .or_else(|| {
+            candidates.iter().find(|id| {
+                if attempted.contains(*id) {
+                    return false;
+                }
+                let Some(record) = record_by_id.get(*id) else {
+                    return false;
+                };
+                if record.health.requires_relogin {
+                    return false;
+                }
+                if record
+                    .health
+                    .exhausted_until
+                    .is_some_and(|until| until > now)
+                {
+                    return false;
+                }
+                true
+            })
+        })
         .cloned()
 }
 

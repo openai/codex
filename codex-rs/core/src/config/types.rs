@@ -31,6 +31,9 @@ pub struct OAuthRotationConfig {
     /// Auth failure cooldown in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_failure_cooldown_ms: Option<u64>,
+    /// Payment required cooldown in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payment_required_cooldown_ms: Option<u64>,
     /// Network retry attempts per OAuth credential before failing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_retry_attempts: Option<u32>,
