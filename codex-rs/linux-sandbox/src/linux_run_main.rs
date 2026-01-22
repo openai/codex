@@ -1,23 +1,30 @@
 use clap::Parser;
 use std::ffi::CString;
+use std::io::Write;
 use std::path::PathBuf;
 
 use crate::landlock::SandboxSetupError;
 use crate::landlock::apply_sandbox_policy_to_current_thread;
+use crate::mounts::BindMountProbeStatus;
+use crate::mounts::probe_bind_mounts;
 
 #[derive(Debug, Parser)]
 pub struct LandlockCommand {
     /// It is possible that the cwd used in the context of the sandbox policy
     /// is different from the cwd of the process to spawn.
     #[arg(long = "sandbox-policy-cwd")]
-    pub sandbox_policy_cwd: PathBuf,
+    pub sandbox_policy_cwd: Option<PathBuf>,
 
     #[arg(long = "sandbox-policy")]
-    pub sandbox_policy: codex_core::protocol::SandboxPolicy,
+    pub sandbox_policy: Option<codex_core::protocol::SandboxPolicy>,
 
     /// Enable experimental bind-mount protections for read-only subpaths.
     #[arg(long = "enable-bind-mounts")]
     pub enable_bind_mounts: bool,
+
+    /// Probe whether bind-mount protections are supported on this host.
+    #[arg(long = "probe-bind-mounts")]
+    pub probe_bind_mounts: bool,
 
     /// Full command args to run under landlock.
     #[arg(trailing_var_arg = true)]
@@ -29,8 +36,36 @@ pub fn run_main() -> ! {
         sandbox_policy_cwd,
         sandbox_policy,
         enable_bind_mounts,
+        probe_bind_mounts: probe_bind_mounts_flag,
         command,
     } = LandlockCommand::parse();
+
+    if probe_bind_mounts_flag {
+        let status = probe_bind_mounts();
+        match status {
+            BindMountProbeStatus::Supported => {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "codex-linux-sandbox: bind-mount probe supported"
+                );
+                std::process::exit(0);
+            }
+            BindMountProbeStatus::Unsupported { reason } => {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "codex-linux-sandbox: bind-mount probe unsupported: {reason}"
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
+    let sandbox_policy_cwd = sandbox_policy_cwd.unwrap_or_else(|| {
+        panic!("--sandbox-policy-cwd is required unless --probe-bind-mounts is set")
+    });
+    let sandbox_policy = sandbox_policy.unwrap_or_else(|| {
+        panic!("--sandbox-policy is required unless --probe-bind-mounts is set")
+    });
 
     if let Err(e) = apply_sandbox_policy_to_current_thread(
         &sandbox_policy,

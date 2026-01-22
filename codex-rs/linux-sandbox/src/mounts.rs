@@ -2,10 +2,13 @@ use std::error::Error;
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::Mutex;
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use codex_core::error::CodexErr;
 use codex_core::error::Result;
@@ -88,13 +91,112 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
         }
     }
     let should_drop_caps = used_userns || running_as_root;
+    match apply_read_only_bind_mounts(&mount_targets, should_drop_caps)? {
+        BindMountAttempt::Applied => Ok(()),
+        BindMountAttempt::PermissionDenied(err) => {
+            log_namespace_fallback(&err);
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BindMountProbeStatus {
+    Supported,
+    Unsupported { reason: String },
+}
+
+#[derive(Debug)]
+enum BindMountAttempt {
+    Applied,
+    PermissionDenied(CodexErr),
+}
+
+/// Returns whether this host supports the namespace + mount operations needed
+/// to apply bind-mount-based read-only protections.
+pub(crate) fn probe_bind_mounts() -> BindMountProbeStatus {
+    let probe_dir = match create_probe_dir() {
+        Ok(dir) => dir,
+        Err(err) => {
+            return BindMountProbeStatus::Unsupported {
+                reason: format!("create probe dir failed: {err}"),
+            };
+        }
+    };
+    let protected = probe_dir.join("protected");
+    let status = loop {
+        if let Err(err) = std::fs::create_dir_all(&protected) {
+            break BindMountProbeStatus::Unsupported {
+                reason: format!("create probe path failed: {err}"),
+            };
+        }
+        let protected_abs = match AbsolutePathBuf::try_from(protected.as_path()) {
+            Ok(path) => path,
+            Err(err) => {
+                break BindMountProbeStatus::Unsupported {
+                    reason: format!("resolve probe path failed: {err}"),
+                };
+            }
+        };
+
+        let original_euid = unsafe { libc::geteuid() };
+        let original_egid = unsafe { libc::getegid() };
+
+        if let Err(err) = unshare_user_and_mount_namespaces() {
+            break probe_unsupported("unshare user+mount namespaces", err);
+        }
+        if let Err(err) = write_user_namespace_maps(original_euid, original_egid) {
+            break probe_unsupported("write user namespace maps", err);
+        }
+        let targets = [protected_abs];
+        match apply_read_only_bind_mounts(&targets, true) {
+            Ok(BindMountAttempt::Applied) => {}
+            Ok(BindMountAttempt::PermissionDenied(err)) => {
+                break probe_unsupported("apply bind mounts", err);
+            }
+            Err(err) => {
+                break probe_unsupported("apply bind mounts", err);
+            }
+        }
+
+        break BindMountProbeStatus::Supported;
+    };
+
+    let _ = std::fs::remove_dir_all(&probe_dir);
+    status
+}
+
+fn probe_unsupported(step: &str, err: CodexErr) -> BindMountProbeStatus {
+    let reason = if is_permission_denied(&err) {
+        format!("{step} permission denied: {err}")
+    } else {
+        format!("{step} failed: {err}")
+    };
+    BindMountProbeStatus::Unsupported { reason }
+}
+
+fn create_probe_dir() -> Result<PathBuf> {
+    let pid = std::process::id();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("codex-linux-sandbox-probe-{pid}-{nanos}"));
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+fn apply_read_only_bind_mounts(
+    mount_targets: &[AbsolutePathBuf],
+    should_drop_caps: bool,
+) -> Result<BindMountAttempt> {
     if let Err(err) = make_mounts_private() {
         if is_permission_denied(&err) {
-            log_namespace_fallback(&err);
             if should_drop_caps {
                 drop_caps()?;
             }
-            return Ok(());
+            return Ok(BindMountAttempt::PermissionDenied(err));
         }
         return Err(err);
     }
@@ -103,11 +205,10 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
         // Bind and remount read-only works for both files and directories.
         if let Err(err) = bind_mount_read_only(target.as_path()) {
             if is_permission_denied(&err) {
-                log_namespace_fallback(&err);
                 if should_drop_caps {
                     drop_caps()?;
                 }
-                return Ok(());
+                return Ok(BindMountAttempt::PermissionDenied(err));
             }
             return Err(err);
         }
@@ -119,7 +220,7 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
         drop_caps()?;
     }
 
-    Ok(())
+    Ok(BindMountAttempt::Applied)
 }
 
 /// Collect read-only mount targets, resolving worktree `.git` pointer files.
@@ -196,8 +297,10 @@ fn resolve_gitdir_from_file(dot_git: &AbsolutePathBuf) -> Result<AbsolutePathBuf
 /// Unshare the mount namespace so mount changes are isolated to the sandboxed process.
 fn unshare_mount_namespace() -> Result<()> {
     #[cfg(test)]
-    if FORCE_UNSHARE_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+    {
+        if FORCE_UNSHARE_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+        }
     }
     let result = unsafe { libc::unshare(libc::CLONE_NEWNS) };
     if result != 0 {
@@ -226,8 +329,10 @@ fn unshare_user_and_mount_namespaces() -> Result<()> {
 
 fn is_running_as_root() -> bool {
     #[cfg(test)]
-    if FORCE_RUNNING_AS_ROOT.load(std::sync::atomic::Ordering::SeqCst) {
-        return true;
+    {
+        if FORCE_RUNNING_AS_ROOT.load(std::sync::atomic::Ordering::SeqCst) {
+            return true;
+        }
     }
     unsafe { libc::geteuid() == 0 }
 }
@@ -267,6 +372,8 @@ static FORCE_MAKE_MOUNTS_PRIVATE_SUCCESS: AtomicBool = AtomicBool::new(false);
 #[cfg(test)]
 static FORCE_MAKE_MOUNTS_PRIVATE_PERMISSION_DENIED: AtomicBool = AtomicBool::new(false);
 #[cfg(test)]
+static FORCE_BIND_MOUNT_SUCCESS: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
 static FORCE_BIND_MOUNT_PERMISSION_DENIED: AtomicBool = AtomicBool::new(false);
 #[cfg(test)]
 static FORCE_DROP_CAPS_SUCCESS: AtomicBool = AtomicBool::new(false);
@@ -287,6 +394,7 @@ fn reset_force_flags() {
         .store(false, std::sync::atomic::Ordering::SeqCst);
     FORCE_MAKE_MOUNTS_PRIVATE_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
     FORCE_MAKE_MOUNTS_PRIVATE_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
+    FORCE_BIND_MOUNT_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
     FORCE_BIND_MOUNT_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
     FORCE_DROP_CAPS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
 }
@@ -332,12 +440,15 @@ const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 /// Map the provided uid/gid to root inside the user namespace.
 fn write_user_namespace_maps(uid: libc::uid_t, gid: libc::gid_t) -> Result<()> {
     #[cfg(test)]
-    if FORCE_WRITE_USER_NAMESPACE_MAPS_SUCCESS.load(std::sync::atomic::Ordering::SeqCst) {
-        return Ok(());
-    }
-    #[cfg(test)]
-    if FORCE_WRITE_USER_NAMESPACE_MAPS_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+    {
+        if FORCE_WRITE_USER_NAMESPACE_MAPS_SUCCESS.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        if FORCE_WRITE_USER_NAMESPACE_MAPS_PERMISSION_DENIED
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+        }
     }
     write_proc_file("/proc/self/setgroups", "deny\n")?;
 
@@ -349,8 +460,10 @@ fn write_user_namespace_maps(uid: libc::uid_t, gid: libc::gid_t) -> Result<()> {
 /// Drop all capabilities in the current user namespace.
 fn drop_caps() -> Result<()> {
     #[cfg(test)]
-    if FORCE_DROP_CAPS_SUCCESS.load(std::sync::atomic::Ordering::SeqCst) {
-        return Ok(());
+    {
+        if FORCE_DROP_CAPS_SUCCESS.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
     }
     let mut header = CapUserHeader {
         version: LINUX_CAPABILITY_VERSION_3,
@@ -386,12 +499,13 @@ fn write_proc_file(path: &str, contents: impl AsRef<[u8]>) -> Result<()> {
 /// Ensure mounts are private so remounting does not propagate outside the namespace.
 fn make_mounts_private() -> Result<()> {
     #[cfg(test)]
-    if FORCE_MAKE_MOUNTS_PRIVATE_SUCCESS.load(std::sync::atomic::Ordering::SeqCst) {
-        return Ok(());
-    }
-    #[cfg(test)]
-    if FORCE_MAKE_MOUNTS_PRIVATE_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+    {
+        if FORCE_MAKE_MOUNTS_PRIVATE_SUCCESS.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        if FORCE_MAKE_MOUNTS_PRIVATE_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+        }
     }
     let root = CString::new("/").map_err(|_| {
         CodexErr::UnsupportedOperation("Sandbox mount path contains NUL byte: /".to_string())
@@ -414,8 +528,13 @@ fn make_mounts_private() -> Result<()> {
 /// Bind-mount a path onto itself and remount read-only.
 fn bind_mount_read_only(path: &Path) -> Result<()> {
     #[cfg(test)]
-    if FORCE_BIND_MOUNT_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+    {
+        if FORCE_BIND_MOUNT_SUCCESS.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        if FORCE_BIND_MOUNT_PERMISSION_DENIED.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(std::io::Error::from_raw_os_error(libc::EPERM).into());
+        }
     }
     let c_path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
         CodexErr::UnsupportedOperation(format!(
@@ -551,6 +670,36 @@ mod tests {
     fn is_permission_denied_returns_false_for_other_errors() {
         let err = CodexErr::UnsupportedOperation("nope".to_string());
         assert!(!is_permission_denied(&err));
+    }
+
+    #[test]
+    fn probe_bind_mounts_reports_supported_when_forced_success() {
+        let _guard = force_flags_guard();
+        FORCE_UNSHARE_USERNS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
+        FORCE_WRITE_USER_NAMESPACE_MAPS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
+        FORCE_MAKE_MOUNTS_PRIVATE_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
+        FORCE_BIND_MOUNT_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
+        FORCE_DROP_CAPS_SUCCESS.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let status = probe_bind_mounts();
+
+        assert_eq!(status, BindMountProbeStatus::Supported);
+    }
+
+    #[test]
+    fn probe_bind_mounts_reports_unsupported_on_permission_denied() {
+        let _guard = force_flags_guard();
+        FORCE_UNSHARE_PERMISSION_DENIED.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let status = probe_bind_mounts();
+
+        let BindMountProbeStatus::Unsupported { reason } = status else {
+            panic!("expected probe to report unsupported");
+        };
+        assert!(
+            reason.contains("permission denied"),
+            "expected permission denied reason, got: {reason}"
+        );
     }
 
     #[test]

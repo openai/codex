@@ -145,6 +145,7 @@ use codex_core::exec_env::create_env;
 use codex_core::features::Feature;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
+use codex_core::landlock::resolve_use_linux_sandbox_bind_mounts;
 use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
 use codex_core::parse_cursor;
@@ -1264,10 +1265,10 @@ impl CodexMessageProcessor {
         let outgoing = self.outgoing.clone();
         let req_id = request_id;
         let sandbox_cwd = self.config.cwd.clone();
-        let use_linux_sandbox_bind_mounts = self
-            .config
-            .features
-            .enabled(Feature::LinuxSandboxBindMounts);
+        let use_linux_sandbox_bind_mounts = resolve_use_linux_sandbox_bind_mounts(
+            &self.config.features,
+            self.config.codex_linux_sandbox_exe.as_ref(),
+        );
 
         tokio::spawn(async move {
             match codex_core::exec::process_exec_tool_call(

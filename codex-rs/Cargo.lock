@@ -1529,6 +1529,7 @@ dependencies = [
  "seccompiler",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
