@@ -610,6 +610,7 @@ impl App {
             model: Some(self.chat_widget.current_model().to_string()),
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             otel_manager: self.otel_manager.clone(),
+            immortality_enable_after_first_turn: false,
         }
     }
 
@@ -930,6 +931,7 @@ impl App {
         active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
+        immortal: bool,
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
@@ -1030,6 +1032,7 @@ impl App {
                     model: Some(model.clone()),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
+                    immortality_enable_after_first_turn: immortal,
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
@@ -1060,6 +1063,7 @@ impl App {
                     model: config.model.clone(),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
+                    immortality_enable_after_first_turn: immortal,
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
@@ -1091,6 +1095,7 @@ impl App {
                     model: config.model.clone(),
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     otel_manager: otel_manager.clone(),
+                    immortality_enable_after_first_turn: immortal,
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
@@ -1332,6 +1337,7 @@ impl App {
                     model: Some(model),
                     status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
                     otel_manager: self.otel_manager.clone(),
+                    immortality_enable_after_first_turn: false,
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 self.reset_thread_event_state();

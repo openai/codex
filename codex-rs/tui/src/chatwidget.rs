@@ -147,7 +147,7 @@ use tokio::task::JoinHandle;
 use tracing::debug;
 use tracing::warn;
 
-const IMMORTALITY_FOLLOWUP_PROMPT: &str = "Write the next user message to keep the conversation going. Speak as the user in first person. Be concise and specific. Output only the user message with no quotes or extra commentary.";
+const IMMORTALITY_FOLLOWUP_PROMPT: &str = "Please keep going. Work as autonomously as possible. Ask the user for clarification, but don't block on their response. Worst case, if you have nothing useful to do, poll every 30s for a response from the user for 5 minutes and then end your current turn.";
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
@@ -419,6 +419,7 @@ pub(crate) struct ChatWidgetInit {
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
     pub(crate) otel_manager: OtelManager,
+    pub(crate) immortality_enable_after_first_turn: bool,
 }
 
 #[derive(Default)]
@@ -581,10 +582,10 @@ pub(crate) struct ChatWidget {
     is_review_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
-    /// Auto-continue by submitting "Keep going" after each completed turn.
+    /// Auto-continue by submitting a follow-up after each completed turn.
     immortality_mode: bool,
-    /// True when the auto-followup generation turn is in-flight.
-    immortality_generation_inflight: bool,
+    /// Enable immortality after the next completed turn (used by --immortal).
+    immortality_enable_after_first_turn: bool,
     // Whether the next streamed assistant content should be preceded by a final message separator.
     //
     // This is set whenever we insert a visible history cell that conceptually belongs to a turn.
@@ -1370,9 +1371,20 @@ impl ChatWidget {
         if !from_replay {
             self.saw_plan_item_this_turn = false;
         }
+
+        if self.immortality_enable_after_first_turn && !self.is_review_mode {
+            self.immortality_enable_after_first_turn = false;
+            if !self.immortality_mode {
+                self.immortality_mode = true;
+                self.add_info_message(
+                    "Immortality mode enabled (from --immortal).".to_string(),
+                    Some("Press Ctrl+C to interrupt.".to_string()),
+                );
+            }
+        }
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
-        self.handle_immortality_followup(last_agent_message.as_deref());
+        self.maybe_send_immortality_prompt();
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
@@ -1701,7 +1713,7 @@ impl ChatWidget {
 
         if reason == TurnAbortReason::Interrupted && self.immortality_mode {
             self.immortality_mode = false;
-            self.immortality_generation_inflight = false;
+            self.immortality_enable_after_first_turn = false;
             self.add_info_message(
                 "Immortality mode disabled after interrupt.".to_string(),
                 None,
@@ -2567,6 +2579,7 @@ impl ChatWidget {
             model,
             status_line_invalid_items_warned,
             otel_manager,
+            immortality_enable_after_first_turn,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -2830,7 +2843,7 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             immortality_mode: false,
-            immortality_generation_inflight: false,
+            immortality_enable_after_first_turn,
             needs_final_message_separator: false,
             had_work_activity: false,
             last_separator_elapsed_secs: None,
@@ -2887,6 +2900,8 @@ impl ChatWidget {
             model,
             status_line_invalid_items_warned,
             otel_manager,
+            immortality_enable_after_first_turn,
+            ..
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut rng = rand::rng();
@@ -2981,7 +2996,7 @@ impl ChatWidget {
             is_review_mode: false,
             pre_review_token_info: None,
             immortality_mode: false,
-            immortality_generation_inflight: false,
+            immortality_enable_after_first_turn,
             needs_final_message_separator: false,
             had_work_activity: false,
             saw_plan_update_this_turn: false,
@@ -3419,9 +3434,6 @@ impl ChatWidget {
             }
             SlashCommand::Immortality => {
                 self.immortality_mode = !self.immortality_mode;
-                if !self.immortality_mode {
-                    self.immortality_generation_inflight = false;
-                }
                 let status = if self.immortality_mode {
                     "enabled"
                 } else {
@@ -3429,7 +3441,7 @@ impl ChatWidget {
                 };
                 self.add_info_message(
                     format!(
-                        "Immortality mode {status}. I will ask the model to generate the next user followup after each turn until interrupted.",
+                        "Immortality mode {status}. I will keep the agent running after each turn until interrupted.",
                     ),
                     Some("Press Ctrl+C to interrupt.".to_string()),
                 );
@@ -4235,35 +4247,14 @@ impl ChatWidget {
         self.refresh_queued_user_messages();
     }
 
-    fn handle_immortality_followup(&mut self, last_agent_message: Option<&str>) {
+    fn maybe_send_immortality_prompt(&mut self) {
         if !self.immortality_mode || self.is_review_mode {
             return;
         }
         if self.bottom_pane.is_task_running() || !self.queued_user_messages.is_empty() {
             return;
         }
-        if self.immortality_generation_inflight {
-            self.immortality_generation_inflight = false;
-            let followup = last_agent_message.unwrap_or_default().trim();
-            if followup.is_empty() {
-                self.add_info_message(
-                    "Immortality mode: model returned an empty followup; retrying.".to_string(),
-                    None,
-                );
-                self.maybe_send_immortality_prompt();
-                return;
-            }
-            self.submit_user_message(UserMessage::from(followup));
-            return;
-        }
-        self.maybe_send_immortality_prompt();
-    }
-
-    fn maybe_send_immortality_prompt(&mut self) {
-        if self.immortality_mode && !self.immortality_generation_inflight {
-            self.immortality_generation_inflight = true;
-            self.submit_user_message(UserMessage::from(IMMORTALITY_FOLLOWUP_PROMPT));
-        }
+        self.submit_user_message(UserMessage::from(IMMORTALITY_FOLLOWUP_PROMPT));
     }
 
     /// Rebuild and update the queued user messages from the current queue.

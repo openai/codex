@@ -998,6 +998,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     if subcommand_cli.full_auto {
         interactive.full_auto = true;
     }
+    if subcommand_cli.immortal {
+        interactive.immortal = true;
+    }
     if subcommand_cli.dangerously_bypass_approvals_and_sandbox {
         interactive.dangerously_bypass_approvals_and_sandbox = true;
     }

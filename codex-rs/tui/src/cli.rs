@@ -110,6 +110,10 @@ pub struct Cli {
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 
+    /// Enable immortality mode after the first user turn.
+    #[arg(long = "immortal", default_value_t = false)]
+    pub immortal: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
