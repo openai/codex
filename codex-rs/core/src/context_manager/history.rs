@@ -278,7 +278,7 @@ impl ContextManager {
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
-                        content: truncated,
+                        content: truncated.into_owned(),
                         content_items: truncated_items,
                         success: output.success,
                     },
@@ -288,7 +288,7 @@ impl ContextManager {
                 let truncated = truncate_text(output, policy_with_serialization_budget);
                 ResponseItem::CustomToolCallOutput {
                     call_id: call_id.clone(),
-                    output: truncated,
+                    output: truncated.into_owned(),
                 }
             }
             ResponseItem::Message { .. }

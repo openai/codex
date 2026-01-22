@@ -567,6 +567,7 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
         &message,
         TruncationPolicy::Bytes(ERROR_MESSAGE_UI_MAX_BYTES),
     )
+    .into_owned()
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::TruncationPolicy as ProtocolTruncationPolicy;
+use std::borrow::Cow;
 
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 
@@ -82,7 +83,7 @@ pub(crate) fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -
     format!("Total output lines: {total_lines}\n\n{result}")
 }
 
-pub(crate) fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
+pub(crate) fn truncate_text<'a>(content: &'a str, policy: TruncationPolicy) -> Cow<'a, str> {
     match policy {
         TruncationPolicy::Bytes(_) => truncate_with_byte_estimate(content, policy),
         TruncationPolicy::Tokens(_) => {
@@ -98,7 +99,7 @@ pub(crate) fn truncate_function_output_items_with_policy(
     items: &[FunctionCallOutputContentItem],
     policy: TruncationPolicy,
 ) -> Vec<FunctionCallOutputContentItem> {
-    let mut out: Vec<FunctionCallOutputContentItem> = Vec::with_capacity(items.len());
+    let mut out = Vec::with_capacity(items.len());
     let mut remaining_budget = match policy {
         TruncationPolicy::Bytes(_) => policy.byte_budget(),
         TruncationPolicy::Tokens(_) => policy.token_budget(),
@@ -126,11 +127,15 @@ pub(crate) fn truncate_function_output_items_with_policy(
                         TruncationPolicy::Bytes(_) => TruncationPolicy::Bytes(remaining_budget),
                         TruncationPolicy::Tokens(_) => TruncationPolicy::Tokens(remaining_budget),
                     };
-                    let snippet = truncate_text(text, snippet_policy);
-                    if snippet.is_empty() {
+
+                    let snippet = truncate_with_byte_estimate(text, snippet_policy);
+
+                    if snippet.is_empty() && remaining_budget > 0 {
                         omitted_text_items += 1;
                     } else {
-                        out.push(FunctionCallOutputContentItem::InputText { text: snippet });
+                        out.push(FunctionCallOutputContentItem::InputText {
+                            text: snippet.into_owned(),
+                        });
                     }
                     remaining_budget = 0;
                 }
@@ -148,7 +153,6 @@ pub(crate) fn truncate_function_output_items_with_policy(
             text: format!("[omitted {omitted_text_items} text items ...]"),
         });
     }
-
     out
 }
 
@@ -156,21 +160,28 @@ pub(crate) fn truncate_function_output_items_with_policy(
 /// preserving the beginning and the end. Returns the possibly truncated string
 /// and `Some(original_token_count)` if truncation occurred; otherwise returns
 /// the original string and `None`.
-fn truncate_with_token_budget(s: &str, policy: TruncationPolicy) -> (String, Option<u64>) {
+fn truncate_with_token_budget<'a>(
+    s: &'a str,
+    policy: TruncationPolicy,
+) -> (Cow<'a, str>, Option<u64>) {
     if s.is_empty() {
-        return (String::new(), None);
+        return (Cow::Borrowed(""), None);
     }
     let max_tokens = policy.token_budget();
-
     let byte_len = s.len();
+
+    // If it fits the budget, we return Borrowed
     if max_tokens > 0 && byte_len <= approx_bytes_for_tokens(max_tokens) {
-        return (s.to_string(), None);
+        return (Cow::Borrowed(s), None);
     }
 
     let truncated = truncate_with_byte_estimate(s, policy);
     let approx_total_usize = approx_token_count(s);
     let approx_total = u64::try_from(approx_total_usize).unwrap_or(u64::MAX);
-    if truncated == s {
+
+    // If truncate_with_byte_estimate returned the original string,
+    // no truncation were applied.
+    if matches!(truncated, Cow::Borrowed(orig) if orig == s) {
         (truncated, None)
     } else {
         (truncated, Some(approx_total))
@@ -180,39 +191,33 @@ fn truncate_with_token_budget(s: &str, policy: TruncationPolicy) -> (String, Opt
 /// Truncate a string using a byte budget derived from the token budget, without
 /// performing any real tokenization. This keeps the logic purely byte-based and
 /// uses a bytes placeholder in the truncated output.
-fn truncate_with_byte_estimate(s: &str, policy: TruncationPolicy) -> String {
+fn truncate_with_byte_estimate<'a>(s: &'a str, policy: TruncationPolicy) -> Cow<'a, str> {
     if s.is_empty() {
-        return String::new();
+        return Cow::Borrowed("");
     }
 
-    let total_chars = s.chars().count();
     let max_bytes = policy.byte_budget();
 
+    if s.len() <= max_bytes {
+        return Cow::Borrowed(s);
+    }
+
     if max_bytes == 0 {
-        // No budget to show content; just report that everything was truncated.
-        let marker = format_truncation_marker(
+        let total_chars = s.chars().count();
+        return Cow::Owned(format_truncation_marker(
             policy,
             removed_units_for_source(policy, s.len(), total_chars),
-        );
-        return marker;
+        ));
     }
-
-    if s.len() <= max_bytes {
-        return s.to_string();
-    }
-
-    let total_bytes = s.len();
 
     let (left_budget, right_budget) = split_budget(max_bytes);
-
     let (removed_chars, left, right) = split_string(s, left_budget, right_budget);
-
     let marker = format_truncation_marker(
         policy,
-        removed_units_for_source(policy, total_bytes.saturating_sub(max_bytes), removed_chars),
+        removed_units_for_source(policy, s.len().saturating_sub(max_bytes), removed_chars),
     );
 
-    assemble_truncated_output(left, right, &marker)
+    Cow::Owned(assemble_truncated_output(left, right, &marker))
 }
 
 fn split_string(s: &str, beginning_bytes: usize, end_bytes: usize) -> (usize, &str, &str) {

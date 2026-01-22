@@ -79,7 +79,7 @@ fn reasoning_with_encrypted_content(len: usize) -> ResponseItem {
 }
 
 fn truncate_exec_output(content: &str) -> String {
-    truncate::truncate_text(content, TruncationPolicy::Tokens(EXEC_FORMAT_MAX_TOKENS))
+    truncate::truncate_text(content, TruncationPolicy::Tokens(EXEC_FORMAT_MAX_TOKENS)).into_owned()
 }
 
 #[test]

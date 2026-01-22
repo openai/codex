@@ -291,7 +291,7 @@ fn build_compacted_history_with_limit(
                 remaining = remaining.saturating_sub(tokens);
             } else {
                 let truncated = truncate_text(message, TruncationPolicy::Tokens(remaining));
-                selected_messages.push(truncated);
+                selected_messages.push(truncated.into_owned());
                 break;
             }
         }

@@ -85,7 +85,7 @@ pub fn format_exec_output_for_model_freeform(
     }
 
     sections.push("Output:".to_string());
-    sections.push(formatted_output);
+    sections.push(formatted_output.into_owned());
 
     sections.join("\n")
 }
