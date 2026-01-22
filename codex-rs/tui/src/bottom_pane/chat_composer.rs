@@ -98,6 +98,8 @@ use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
+use super::footer::footer_hint_items_width;
+use super::footer::footer_line_width;
 use super::footer::inset_footer_hint_area;
 use super::footer::render_footer;
 use super::footer::render_footer_hint_items;
@@ -2521,16 +2523,25 @@ impl Renderable for ChatComposer {
                 } else {
                     popup_rect
                 };
+                let mut left_content_width = None;
                 if self.footer_flash_visible() {
                     if let Some(flash) = self.footer_flash.as_ref() {
                         flash.line.render(inset_footer_hint_area(hint_rect), buf);
+                        left_content_width = Some(flash.line.width() as u16);
                     }
                 } else if let Some(items) = self.footer_hint_override.as_ref() {
                     render_footer_hint_items(hint_rect, buf, items);
+                    left_content_width = Some(footer_hint_items_width(items));
                 } else {
                     render_footer(hint_rect, buf, footer_props);
+                    left_content_width = Some(footer_line_width(footer_props));
                 }
-                render_mode_indicator(hint_rect, buf, self.collaboration_mode_indicator);
+                render_mode_indicator(
+                    hint_rect,
+                    buf,
+                    self.collaboration_mode_indicator,
+                    left_content_width,
+                );
             }
         }
         let style = user_message_style();
