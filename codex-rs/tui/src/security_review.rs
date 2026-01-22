@@ -7843,6 +7843,82 @@ fn log_model_reasoning(
     }
 }
 
+struct ReasoningAccumulator {
+    buffer: String,
+}
+
+impl ReasoningAccumulator {
+    fn new() -> Self {
+        Self {
+            buffer: String::new(),
+        }
+    }
+
+    fn push_delta(
+        &mut self,
+        delta: &str,
+        progress_sender: &Option<AppEventSender>,
+        log_sink: &Option<Arc<SecurityReviewLogSink>>,
+        logs: &mut Vec<String>,
+    ) {
+        if delta.is_empty() {
+            return;
+        }
+
+        self.buffer.push_str(delta);
+        self.flush_complete_lines(progress_sender, log_sink, logs);
+        if self.buffer.len() >= MODEL_REASONING_LOG_MAX_GRAPHEMES {
+            self.flush_remaining(progress_sender, log_sink, logs);
+        }
+    }
+
+    fn push_full(
+        &mut self,
+        reasoning: &str,
+        progress_sender: &Option<AppEventSender>,
+        log_sink: &Option<Arc<SecurityReviewLogSink>>,
+        logs: &mut Vec<String>,
+    ) {
+        self.flush_remaining(progress_sender, log_sink, logs);
+        log_model_reasoning(reasoning, progress_sender, log_sink, logs);
+    }
+
+    fn flush_complete_lines(
+        &mut self,
+        progress_sender: &Option<AppEventSender>,
+        log_sink: &Option<Arc<SecurityReviewLogSink>>,
+        logs: &mut Vec<String>,
+    ) {
+        if !self.buffer.contains('\n') {
+            return;
+        }
+
+        let mut parts: Vec<&str> = self.buffer.split('\n').collect();
+        let remainder = parts.pop().unwrap_or_default();
+        for part in parts {
+            if part.trim().is_empty() {
+                continue;
+            }
+            log_model_reasoning(part, progress_sender, log_sink, logs);
+        }
+        self.buffer = remainder.to_string();
+    }
+
+    fn flush_remaining(
+        &mut self,
+        progress_sender: &Option<AppEventSender>,
+        log_sink: &Option<Arc<SecurityReviewLogSink>>,
+        logs: &mut Vec<String>,
+    ) {
+        if self.buffer.trim().is_empty() {
+            self.buffer.clear();
+            return;
+        }
+        log_model_reasoning(self.buffer.as_str(), progress_sender, log_sink, logs);
+        self.buffer.clear();
+    }
+}
+
 fn log_dedupe_decision_reasons(
     decisions: &[BugDedupeDecision],
     log_prefix: &str,
@@ -21544,6 +21620,7 @@ async fn run_validation_target_prep_agent(
     let mut next_prompt = prompt;
     let mut final_text: Option<String> = None;
     let mut last_tool_log: Option<String> = None;
+    let mut reasoning_accumulator = ReasoningAccumulator::new();
 
     for turn in 0..VALIDATION_TARGET_PREP_MAX_TURNS {
         if turn > 0 {
@@ -21596,7 +21673,20 @@ async fn run_validation_target_prep_agent(
                 }
                 EventMsg::AgentMessage(msg) => last_agent_message = Some(msg.message.clone()),
                 EventMsg::AgentReasoning(reason) => {
-                    log_model_reasoning(&reason.text, &progress_sender, &log_sink, &mut logs);
+                    reasoning_accumulator.push_full(
+                        &reason.text,
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                    );
+                }
+                EventMsg::AgentReasoningDelta(delta) => {
+                    reasoning_accumulator.push_delta(
+                        &delta.delta,
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                    );
                 }
                 EventMsg::McpToolCallBegin(begin) => {
                     let tool = begin.invocation.tool.clone();
@@ -21688,6 +21778,7 @@ async fn run_validation_target_prep_agent(
             }
         }
 
+        reasoning_accumulator.flush_remaining(&progress_sender, &log_sink, &mut logs);
         let Some(text) = last_agent_message
             .as_deref()
             .map(str::trim)
@@ -21771,6 +21862,7 @@ async fn run_validation_plan_agent(
     let deadline = start + Duration::from_secs(VALIDATION_AGENT_TIMEOUT_SECS);
     let remaining = || deadline.saturating_duration_since(Instant::now());
     let command_emitter = CommandStatusEmitter::new(progress_sender.clone(), metrics.clone());
+    let mut reasoning_accumulator = ReasoningAccumulator::new();
     let mut last_tool_log: Option<String> = None;
     push_progress_log(
         &progress_sender,
@@ -21887,7 +21979,10 @@ async fn run_validation_plan_agent(
                 last_agent_message = Some(msg.message.clone());
             }
             EventMsg::AgentReasoning(reason) => {
-                log_model_reasoning(&reason.text, &progress_sender, &None, &mut logs);
+                reasoning_accumulator.push_full(&reason.text, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::AgentReasoningDelta(delta) => {
+                reasoning_accumulator.push_delta(&delta.delta, &progress_sender, &None, &mut logs);
             }
             EventMsg::McpToolCallBegin(begin) => {
                 let tool = begin.invocation.tool.clone();
@@ -21971,6 +22066,7 @@ async fn run_validation_plan_agent(
         }
     }
 
+    reasoning_accumulator.flush_remaining(&progress_sender, &None, &mut logs);
     let text = match last_agent_message.and_then(|s| {
         let trimmed = s.trim();
         if trimmed.is_empty() {
@@ -22052,6 +22148,7 @@ async fn run_validation_refine_agent(
     let deadline = start + Duration::from_secs(VALIDATION_AGENT_TIMEOUT_SECS);
     let remaining = || deadline.saturating_duration_since(Instant::now());
     let command_emitter = CommandStatusEmitter::new(progress_sender.clone(), metrics.clone());
+    let mut reasoning_accumulator = ReasoningAccumulator::new();
     let mut last_tool_log: Option<String> = None;
     push_progress_log(
         &progress_sender,
@@ -22167,7 +22264,10 @@ async fn run_validation_refine_agent(
                 last_agent_message = Some(msg.message.clone());
             }
             EventMsg::AgentReasoning(reason) => {
-                log_model_reasoning(&reason.text, &progress_sender, &None, &mut logs);
+                reasoning_accumulator.push_full(&reason.text, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::AgentReasoningDelta(delta) => {
+                reasoning_accumulator.push_delta(&delta.delta, &progress_sender, &None, &mut logs);
             }
             EventMsg::McpToolCallBegin(begin) => {
                 let tool = begin.invocation.tool.clone();
@@ -22254,6 +22354,7 @@ async fn run_validation_refine_agent(
         }
     }
 
+    reasoning_accumulator.flush_remaining(&progress_sender, &None, &mut logs);
     let text = match last_agent_message.and_then(|s| {
         let trimmed = s.trim();
         if trimmed.is_empty() {
