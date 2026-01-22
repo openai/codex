@@ -114,6 +114,56 @@
         }
       ]
     },
+    "CollaborationModeOverrideToml": {
+      "additionalProperties": false,
+      "description": "Overrides for a collaboration mode preset loaded from config.toml.",
+      "properties": {
+        "developer_instructions": {
+          "description": "Optional inline developer instructions for this mode.",
+          "type": "string"
+        },
+        "developer_instructions_file": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Optional path to a file containing developer instructions for this mode."
+        },
+        "model": {
+          "description": "Optional model override.",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Optional reasoning effort override."
+        }
+      },
+      "type": "object"
+    },
+    "CollaborationModesToml": {
+      "additionalProperties": false,
+      "description": "Optional collaboration mode presets loaded from config.toml.",
+      "properties": {
+        "custom": {
+          "$ref": "#/definitions/CollaborationModeOverrideToml"
+        },
+        "execute": {
+          "$ref": "#/definitions/CollaborationModeOverrideToml"
+        },
+        "pair_programming": {
+          "$ref": "#/definitions/CollaborationModeOverrideToml"
+        },
+        "plan": {
+          "$ref": "#/definitions/CollaborationModeOverrideToml"
+        }
+      },
+      "type": "object"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -128,7 +178,12 @@
           "type": "string"
         },
         "collaboration_modes": {
-          "$ref": "#/definitions/CollaborationModesToml"
+          "allOf": [
+            {
+              "$ref": "#/definitions/CollaborationModesToml"
+            }
+          ],
+          "description": "Optional collaboration mode preset overrides."
         },
         "experimental_compact_prompt_file": {
           "$ref": "#/definitions/AbsolutePathBuf"
@@ -263,42 +318,6 @@
         },
         "web_search": {
           "$ref": "#/definitions/WebSearchMode"
-        }
-      },
-      "type": "object"
-    },
-    "CollaborationModeOverrideToml": {
-      "additionalProperties": false,
-      "properties": {
-        "developer_instructions": {
-          "type": "string"
-        },
-        "developer_instructions_file": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        },
-        "model": {
-          "type": "string"
-        },
-        "reasoning_effort": {
-          "$ref": "#/definitions/ReasoningEffort"
-        }
-      },
-      "type": "object"
-    },
-    "CollaborationModesToml": {
-      "additionalProperties": false,
-      "properties": {
-        "custom": {
-          "$ref": "#/definitions/CollaborationModeOverrideToml"
-        },
-        "execute": {
-          "$ref": "#/definitions/CollaborationModeOverrideToml"
-        },
-        "pair_programming": {
-          "$ref": "#/definitions/CollaborationModeOverrideToml"
-        },
-        "plan": {
-          "$ref": "#/definitions/CollaborationModeOverrideToml"
         }
       },
       "type": "object"
@@ -1135,6 +1154,14 @@
       "default": null,
       "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
     },
+    "collaboration_modes": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CollaborationModesToml"
+        }
+      ],
+      "description": "Optional collaboration mode preset overrides."
+    },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",
       "type": "string"
@@ -1511,14 +1538,6 @@
         }
       ],
       "description": "Collection of settings that are specific to the TUI."
-    },
-    "collaboration_modes": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/CollaborationModesToml"
-        }
-      ],
-      "description": "Optional collaboration mode preset overrides."
     },
     "web_search": {
       "allOf": [

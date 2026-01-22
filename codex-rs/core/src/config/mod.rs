@@ -313,6 +313,9 @@ pub struct Config {
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
 
+    /// Optional collaboration mode preset overrides loaded from config.toml.
+    pub collaboration_modes: Option<CollaborationModesConfig>,
+
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
@@ -890,9 +893,6 @@ pub struct ConfigToml {
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
 
-    /// Optional collaboration mode preset overrides loaded from config.toml.
-    pub collaboration_modes: Option<CollaborationModesConfig>,
-
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
 
@@ -1372,6 +1372,8 @@ impl Config {
             None => ConfigProfile::default(),
         };
 
+        let collaboration_modes = resolve_collaboration_modes(&cfg, &config_profile)?;
+
         let feature_overrides = FeatureOverrides {
             include_apply_patch_tool: include_apply_patch_tool_override,
             web_search_request: override_tools_web_search_request,
@@ -1531,7 +1533,6 @@ impl Config {
         let forced_login_method = cfg.forced_login_method;
 
         let model = model.or(config_profile.model).or(cfg.model);
-        let collaboration_modes = resolve_collaboration_modes(&cfg, &config_profile)?;
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();
