@@ -146,6 +146,7 @@ use crate::skills::SkillInjections;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
+use crate::slack::SlackThreadManager;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -337,7 +338,11 @@ impl Codex {
         let thread_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(session, config, rx_sub));
+        let session_for_loop = Arc::clone(&session);
+        tokio::spawn(submission_loop(session_for_loop, config, rx_sub));
+        if let Some(slack) = session.services.slack.clone() {
+            slack.start(Arc::clone(&session), tx_sub.clone());
+        }
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -744,6 +749,19 @@ impl Session {
             );
         }
         let state = SessionState::new(session_configuration.clone());
+        let slack_manager = match SlackThreadManager::from_env(
+            &config,
+            conversation_id,
+            session_configuration.cwd.clone(),
+        )
+        .await
+        {
+            Ok(manager) => manager,
+            Err(err) => {
+                warn!("failed to initialize Slack integration: {err:#}");
+                None
+            }
+        };
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -753,6 +771,7 @@ impl Session {
             rollout: Mutex::new(Some(rollout_recorder)),
             user_shell: Arc::new(default_shell),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            slack: slack_manager,
             exec_policy,
             auth_manager: Arc::clone(&auth_manager),
             otel_manager,
@@ -2617,6 +2636,9 @@ mod handlers {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
+        if let Some(slack) = &sess.services.slack {
+            slack.shutdown();
+        }
         info!("Shutting down Codex instance");
         let history = sess.clone_history().await;
         let turn_count = history
@@ -4170,6 +4192,7 @@ mod tests {
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            slack: None,
             exec_policy,
             auth_manager: auth_manager.clone(),
             otel_manager: otel_manager.clone(),
@@ -4275,6 +4298,7 @@ mod tests {
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            slack: None,
             exec_policy,
             auth_manager: Arc::clone(&auth_manager),
             otel_manager: otel_manager.clone(),

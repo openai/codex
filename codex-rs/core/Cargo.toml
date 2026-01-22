@@ -86,6 +86,7 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "signal",
 ] }
+tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 toml = { workspace = true }
 toml_edit = { workspace = true }

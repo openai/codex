@@ -617,6 +617,28 @@ fn create_request_user_input_tool() -> ToolSpec {
     })
 }
 
+fn create_notify_user_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "message".to_string(),
+        JsonSchema::String {
+            description: Some("Message to post into the current Codex Slack thread.".to_string()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "notify_user".to_string(),
+        description: "Post a message to the Slack thread associated with this Codex session."
+            .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["message".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_close_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -1228,6 +1250,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
+    use crate::tools::handlers::SlackNotifyHandler;
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
@@ -1244,6 +1267,7 @@ pub(crate) fn build_specs(
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
+    let slack_notify_handler = Arc::new(SlackNotifyHandler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1354,6 +1378,8 @@ pub(crate) fn build_specs(
 
     builder.push_spec_with_parallel_support(create_view_image_tool(), true);
     builder.register_handler("view_image", view_image_handler);
+    builder.push_spec(create_notify_user_tool());
+    builder.register_handler("notify_user", slack_notify_handler);
 
     if config.collab_tools {
         let collab_handler = Arc::new(CollabHandler);
@@ -1529,6 +1555,7 @@ mod tests {
                 external_web_access: Some(true),
             },
             create_view_image_tool(),
+            create_notify_user_tool(),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
@@ -1674,6 +1701,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "notify_user",
             ],
         );
     }
@@ -1696,6 +1724,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "notify_user",
             ],
         );
     }
@@ -1720,6 +1749,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "notify_user",
             ],
         );
     }
@@ -1744,6 +1774,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "notify_user",
             ],
         );
     }
@@ -1765,6 +1796,7 @@ mod tests {
                 "request_user_input",
                 "web_search",
                 "view_image",
+                "notify_user",
             ],
         );
     }
@@ -1787,6 +1819,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "notify_user",
             ],
         );
     }
@@ -1808,6 +1841,7 @@ mod tests {
                 "request_user_input",
                 "web_search",
                 "view_image",
+                "notify_user",
             ],
         );
     }
@@ -1830,6 +1864,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "notify_user",
             ],
         );
     }
@@ -1853,6 +1888,7 @@ mod tests {
                 "apply_patch",
                 "web_search",
                 "view_image",
+                "notify_user",
             ],
         );
     }
@@ -1876,6 +1912,7 @@ mod tests {
                 "request_user_input",
                 "web_search",
                 "view_image",
+                "notify_user",
             ],
         );
     }

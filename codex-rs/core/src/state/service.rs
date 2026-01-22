@@ -7,6 +7,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
 use crate::skills::SkillsManager;
+use crate::slack::SlackThreadManager;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::user_notification::UserNotifier;
@@ -23,6 +24,7 @@ pub(crate) struct SessionServices {
     pub(crate) rollout: Mutex<Option<RolloutRecorder>>,
     pub(crate) user_shell: Arc<crate::shell::Shell>,
     pub(crate) show_raw_agent_reasoning: bool,
+    pub(crate) slack: Option<Arc<SlackThreadManager>>,
     pub(crate) exec_policy: ExecPolicyManager,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
