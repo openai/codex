@@ -8,6 +8,7 @@ use serde::Serialize;
 use strum::IntoEnumIterator;
 use strum_macros::Display;
 use strum_macros::EnumIter;
+use tracing::warn;
 use ts_rs::TS;
 
 use crate::config_types::Personality;
@@ -223,6 +224,13 @@ impl ModelInfo {
             template
                 .template
                 .replace(PERSONALITY_PLACEHOLDER, personality_message.as_str())
+        } else if let Some(personality) = personality {
+            warn!(
+                model = %self.slug,
+                %personality,
+                "Model personality requested but model_instructions_template is invalid, falling back to base instructions."
+            );
+            self.base_instructions.clone()
         } else {
             self.base_instructions.clone()
         }
@@ -247,70 +255,6 @@ impl ModelInstructionsTemplate {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, TS, JsonSchema)]
 #[serde(transparent)]
 pub struct PersonalityMessages(pub BTreeMap<Personality, String>);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    fn test_model(template: Option<ModelInstructionsTemplate>) -> ModelInfo {
-        ModelInfo {
-            slug: "test-model".to_string(),
-            display_name: "Test Model".to_string(),
-            description: None,
-            default_reasoning_level: None,
-            supported_reasoning_levels: vec![],
-            shell_type: ConfigShellToolType::ShellCommand,
-            visibility: ModelVisibility::List,
-            supported_in_api: true,
-            priority: 1,
-            upgrade: None,
-            base_instructions: "base".to_string(),
-            model_instructions_template: template,
-            supports_reasoning_summaries: false,
-            support_verbosity: false,
-            default_verbosity: None,
-            apply_patch_tool_type: None,
-            truncation_policy: TruncationPolicyConfig::bytes(10_000),
-            supports_parallel_tool_calls: false,
-            context_window: None,
-            auto_compact_token_limit: None,
-            effective_context_window_percent: 95,
-            experimental_supported_tools: vec![],
-        }
-    }
-
-    fn personality_messages() -> PersonalityMessages {
-        PersonalityMessages(BTreeMap::from([(
-            Personality::Friendly,
-            "friendly".to_string(),
-        )]))
-    }
-
-    #[test]
-    fn get_model_instructions_uses_template_when_placeholder_present() {
-        let model = test_model(Some(ModelInstructionsTemplate {
-            template: "Hello {{ personality_message }}".to_string(),
-            personality_messages: Some(personality_messages()),
-        }));
-
-        let instructions = model.get_model_instructions(Some(Personality::Friendly));
-
-        assert_eq!(instructions, "Hello friendly");
-    }
-
-    #[test]
-    fn get_model_instructions_falls_back_when_placeholder_missing() {
-        let model = test_model(Some(ModelInstructionsTemplate {
-            template: "Hello there".to_string(),
-            personality_messages: Some(personality_messages()),
-        }));
-
-        let instructions = model.get_model_instructions(Some(Personality::Friendly));
-
-        assert_eq!(instructions, "base");
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelInfoUpgrade {
@@ -438,4 +382,68 @@ fn nearest_effort(target: ReasoningEffort, supported: &[ReasoningEffort]) -> Rea
         .copied()
         .min_by_key(|candidate| (effort_rank(*candidate) - target_rank).abs())
         .unwrap_or(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn test_model(template: Option<ModelInstructionsTemplate>) -> ModelInfo {
+        ModelInfo {
+            slug: "test-model".to_string(),
+            display_name: "Test Model".to_string(),
+            description: None,
+            default_reasoning_level: None,
+            supported_reasoning_levels: vec![],
+            shell_type: ConfigShellToolType::ShellCommand,
+            visibility: ModelVisibility::List,
+            supported_in_api: true,
+            priority: 1,
+            upgrade: None,
+            base_instructions: "base".to_string(),
+            model_instructions_template: template,
+            supports_reasoning_summaries: false,
+            support_verbosity: false,
+            default_verbosity: None,
+            apply_patch_tool_type: None,
+            truncation_policy: TruncationPolicyConfig::bytes(10_000),
+            supports_parallel_tool_calls: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            effective_context_window_percent: 95,
+            experimental_supported_tools: vec![],
+        }
+    }
+
+    fn personality_messages() -> PersonalityMessages {
+        PersonalityMessages(BTreeMap::from([(
+            Personality::Friendly,
+            "friendly".to_string(),
+        )]))
+    }
+
+    #[test]
+    fn get_model_instructions_uses_template_when_placeholder_present() {
+        let model = test_model(Some(ModelInstructionsTemplate {
+            template: "Hello {{ personality_message }}".to_string(),
+            personality_messages: Some(personality_messages()),
+        }));
+
+        let instructions = model.get_model_instructions(Some(Personality::Friendly));
+
+        assert_eq!(instructions, "Hello friendly");
+    }
+
+    #[test]
+    fn get_model_instructions_falls_back_when_placeholder_missing() {
+        let model = test_model(Some(ModelInstructionsTemplate {
+            template: "Hello there".to_string(),
+            personality_messages: Some(personality_messages()),
+        }));
+
+        let instructions = model.get_model_instructions(Some(Personality::Friendly));
+
+        assert_eq!(instructions, "base");
+    }
 }
