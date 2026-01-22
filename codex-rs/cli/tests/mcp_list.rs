@@ -30,6 +30,59 @@ fn list_shows_empty_state() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn list_warns_when_project_local_mcp_config_is_untrusted() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project_dir = TempDir::new()?;
+    std::fs::create_dir_all(project_dir.path().join(".codex"))?;
+    std::fs::write(
+        project_dir.path().join(".codex").join("config.toml"),
+        r#"[mcp_servers.example]
+command = "echo"
+"#,
+    )?;
+
+    let mut cmd = codex_command(codex_home.path())?;
+    cmd.current_dir(project_dir.path());
+    cmd.args(["mcp", "list"])
+        .assert()
+        .success()
+        .stdout(contains("project-local MCP configuration").and(contains("codex trust")));
+
+    Ok(())
+}
+
+#[test]
+fn trust_command_enables_project_local_mcp_servers() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let project_dir = TempDir::new()?;
+    std::fs::create_dir_all(project_dir.path().join(".codex"))?;
+    std::fs::write(
+        project_dir.path().join(".codex").join("config.toml"),
+        r#"[mcp_servers.example]
+command = "echo"
+"#,
+    )?;
+
+    let mut trust_cmd = codex_command(codex_home.path())?;
+    trust_cmd.current_dir(project_dir.path());
+    trust_cmd
+        .args(["trust"])
+        .assert()
+        .success()
+        .stdout(contains("trusted"));
+
+    let mut list_cmd = codex_command(codex_home.path())?;
+    list_cmd.current_dir(project_dir.path());
+    let output = list_cmd.args(["mcp", "list"]).output()?;
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("example"));
+    assert!(stdout.contains("echo"));
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn list_and_get_render_expected_output() -> Result<()> {
     let codex_home = TempDir::new()?;

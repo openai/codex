@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -468,6 +470,9 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     }
 
     if entries.is_empty() {
+        if maybe_print_project_mcp_not_loaded_hint(&config) {
+            return Ok(());
+        }
         println!("No MCP servers configured yet. Try `codex mcp add my-tool -- my-command`.");
         return Ok(());
     }
@@ -640,6 +645,55 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     }
 
     Ok(())
+}
+
+fn maybe_print_project_mcp_not_loaded_hint(config: &Config) -> bool {
+    if config.active_project.is_trusted() {
+        return false;
+    }
+
+    let Some(project_config_toml) = find_project_dot_codex_config_toml(&config.cwd) else {
+        return false;
+    };
+
+    if !project_config_mentions_mcp_servers(&project_config_toml) {
+        return false;
+    }
+
+    let trust = match config.active_project.trust_level {
+        Some(level) => level.to_string(),
+        None => "unknown".to_string(),
+    };
+
+    println!("No MCP servers configured yet.");
+    println!();
+    println!(
+        "Found project-local MCP configuration at {}, but this project is not trusted ({trust}), so it was ignored.",
+        project_config_toml.display()
+    );
+    println!(
+        "Run `codex trust` to trust this project, or move `[mcp_servers]` into {}.",
+        config.codex_home.join("config.toml").display()
+    );
+    true
+}
+
+fn find_project_dot_codex_config_toml(cwd: &Path) -> Option<PathBuf> {
+    cwd.ancestors().find_map(|dir| {
+        let candidate = dir.join(".codex").join("config.toml");
+        candidate.is_file().then_some(candidate)
+    })
+}
+
+fn project_config_mentions_mcp_servers(config_toml: &Path) -> bool {
+    let Ok(contents) = std::fs::read_to_string(config_toml) else {
+        return false;
+    };
+
+    match toml::from_str::<toml::Value>(&contents) {
+        Ok(value) => value.get("mcp_servers").is_some(),
+        Err(_) => contents.contains("[mcp_servers") || contents.contains("mcp_servers."),
+    }
 }
 
 async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<()> {

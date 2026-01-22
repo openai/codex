@@ -8,7 +8,11 @@ For a full configuration reference, see [this documentation](https://developers.
 
 ## Connecting to MCP servers
 
-Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the configuration reference for the latest MCP server options:
+Codex can connect to MCP servers configured in `~/.codex/config.toml` (global config) and `.codex/config.toml` (project-local config).
+
+For security, project-local config is only loaded for trusted projects. You can trust the current directory via the TUI prompt, or by running `codex trust`.
+
+See the configuration reference for the latest MCP server options:
 
 - https://developers.openai.com/codex/config-reference
 

@@ -39,8 +39,12 @@ use crate::mcp_cmd::McpCli;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::find_codex_home;
+use codex_core::config::set_project_trust_level;
 use codex_core::features::is_known_feature_key;
+use codex_core::git_info::resolve_root_git_project_for_trust;
 use codex_core::terminal::TerminalName;
+use codex_protocol::config_types::TrustLevel;
 
 /// Codex CLI
 ///
@@ -130,6 +134,9 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+
+    /// Mark a project directory as trusted (or untrusted).
+    Trust(TrustCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -181,6 +188,17 @@ struct ForkCommand {
 struct SandboxArgs {
     #[command(subcommand)]
     cmd: SandboxCommand,
+}
+
+#[derive(Debug, Parser)]
+struct TrustCommand {
+    /// Path to mark (defaults to the current working directory).
+    #[arg(value_name = "PATH")]
+    path: Option<PathBuf>,
+
+    /// Mark the directory as untrusted instead of trusted.
+    #[arg(long)]
+    untrusted: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -704,7 +722,33 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 }
             }
         },
+        Some(Subcommand::Trust(cmd)) => {
+            run_trust_command(cmd)?;
+        }
     }
+
+    Ok(())
+}
+
+fn run_trust_command(cmd: TrustCommand) -> anyhow::Result<()> {
+    let TrustCommand { path, untrusted } = cmd;
+
+    let codex_home = find_codex_home()?;
+    let path = path.unwrap_or(std::env::current_dir()?);
+    let target = resolve_root_git_project_for_trust(&path).unwrap_or(path);
+    let trust_level = if untrusted {
+        TrustLevel::Untrusted
+    } else {
+        TrustLevel::Trusted
+    };
+
+    set_project_trust_level(&codex_home, &target, trust_level)?;
+
+    println!(
+        "Marked {} as {trust_level} (saved to {}).",
+        target.display(),
+        codex_home.join("config.toml").display()
+    );
 
     Ok(())
 }

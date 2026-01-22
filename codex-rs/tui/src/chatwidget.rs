@@ -4529,10 +4529,65 @@ impl ChatWidget {
 
     pub(crate) fn add_mcp_output(&mut self) {
         if self.config.mcp_servers.is_empty() {
-            self.add_to_history(history_cell::empty_mcp_output());
+            if let Some(lines) = self.untrusted_project_mcp_not_loaded_lines() {
+                self.add_plain_history_lines(lines);
+            } else {
+                self.add_to_history(history_cell::empty_mcp_output());
+            }
         } else {
             self.submit_op(Op::ListMcpTools);
         }
+    }
+
+    fn untrusted_project_mcp_not_loaded_lines(&self) -> Option<Vec<Line<'static>>> {
+        if self.config.active_project.is_trusted() {
+            return None;
+        }
+
+        let project_config_toml = self.config.cwd.ancestors().find_map(|dir| {
+            let candidate = dir.join(".codex").join("config.toml");
+            candidate.is_file().then_some(candidate)
+        })?;
+
+        fn project_config_mentions_mcp_servers(config_toml: &PathBuf) -> bool {
+            let Ok(contents) = std::fs::read_to_string(config_toml) else {
+                return false;
+            };
+
+            match toml::from_str::<toml::Value>(&contents) {
+                Ok(value) => value.get("mcp_servers").is_some(),
+                Err(_) => contents.contains("[mcp_servers") || contents.contains("mcp_servers."),
+            }
+        }
+
+        if !project_config_mentions_mcp_servers(&project_config_toml) {
+            return None;
+        }
+
+        let trust = self
+            .config
+            .active_project
+            .trust_level
+            .map(|level| level.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        Some(vec![
+            "/mcp".magenta().into(),
+            "".into(),
+            vec!["🔌  ".into(), "MCP Tools".bold()].into(),
+            "".into(),
+            "  • No MCP servers loaded.".italic().into(),
+            "".into(),
+            format!(
+                "    Found project-local MCP configuration at {} but this project is not trusted ({trust}), so it was ignored.",
+                project_config_toml.display()
+            )
+            .dim()
+            .into(),
+            "    Run `codex trust` to trust this project and load `.codex/config.toml`."
+                .dim()
+                .into(),
+        ])
     }
 
     /// Forward file-search results to the bottom pane.
