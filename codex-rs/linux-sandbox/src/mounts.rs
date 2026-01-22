@@ -274,6 +274,7 @@ static FORCE_DROP_CAPS_SUCCESS: AtomicBool = AtomicBool::new(false);
 static FORCE_FLAGS_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
+// Tests mutate global FORCE_* flags; serialize them and reset to avoid cross-test races.
 fn reset_force_flags() {
     FORCE_UNSHARE_PERMISSION_DENIED.store(false, std::sync::atomic::Ordering::SeqCst);
     FORCE_UNSHARE_USERNS_SUCCESS.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -575,7 +576,10 @@ mod tests {
 
         let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
 
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "expected fallback to Landlock-only when unshare is denied"
+        );
     }
 
     #[test]
@@ -596,7 +600,10 @@ mod tests {
 
         let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
 
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "expected root path to fall back to Landlock-only when mountns unshare is denied"
+        );
     }
 
     #[test]
@@ -643,7 +650,10 @@ mod tests {
 
         let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
 
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "expected Landlock-only fallback when making mounts private is denied"
+        );
     }
 
     #[test]
@@ -667,6 +677,9 @@ mod tests {
 
         let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
 
-        assert!(result.is_ok());
+        assert!(
+            result.is_ok(),
+            "expected Landlock-only fallback when bind mount is denied"
+        );
     }
 }
