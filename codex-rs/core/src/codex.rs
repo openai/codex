@@ -1180,7 +1180,7 @@ impl Session {
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
         if let Err(e) = self.tx_event.send(event).await {
-            error!("failed to send tool call event: {e}");
+            debug!("dropping event because channel is closed: {e}");
         }
     }
 
@@ -1198,7 +1198,7 @@ impl Session {
             .await;
         self.flush_rollout().await;
         if let Err(e) = self.tx_event.send(event).await {
-            error!("failed to send tool call event: {e}");
+            debug!("dropping event because channel is closed: {e}");
         }
     }
 
