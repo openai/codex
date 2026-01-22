@@ -5,16 +5,33 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::LazyLock;
 
+use crate::powershell::extract_powershell_command;
+
 const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
 
 /// On Windows, we conservatively allow only clearly read-only PowerShell invocations
 /// that match a small safelist. Anything else (including direct CMD commands) is unsafe.
 pub fn is_safe_command_windows(command: &[String]) -> bool {
+    is_safe_powershell_invocation(command)
+}
+
+/// Tests whether a command is a safe PowerShell invocation.
+///
+/// `command` must be the _exact_ proposed list of arguments that will be sent
+/// to `execvp(3)`, so `command[0]` must satisfy [`is_powershell_executable`]
+/// for this function to return true.
+pub fn is_safe_powershell_invocation(command: &[String]) -> bool {
     if let Some(commands) = try_parse_powershell_command_sequence(command) {
         commands
             .iter()
             .all(|cmd| is_safe_powershell_command(cmd.as_slice()))
     } else {
+        if let Some((_, script)) = extract_powershell_command(command)
+            && let Some(words) = split_simple_powershell_words(script)
+            && is_safe_powershell_command(&words)
+        {
+            return true;
+        }
         // Only PowerShell invocations are allowed on Windows for now; anything else is unsafe.
         false
     }
@@ -108,7 +125,7 @@ fn parse_powershell_script(executable: &str, script: &str) -> Option<Vec<Vec<Str
 }
 
 /// Returns true when the executable name is one of the supported PowerShell binaries.
-fn is_powershell_executable(exe: &str) -> bool {
+pub fn is_powershell_executable(exe: &str) -> bool {
     let executable_name = Path::new(exe)
         .file_name()
         .and_then(|osstr| osstr.to_str())
@@ -218,6 +235,38 @@ fn quote_argument(arg: &str) -> String {
     }
 
     format!("'{}'", arg.replace('\'', "''"))
+}
+
+fn split_simple_powershell_words(script: &str) -> Option<Vec<String>> {
+    if script.is_empty()
+        || script.chars().any(|ch| {
+            matches!(
+                ch,
+                '&' | '|'
+                    | ';'
+                    | '<'
+                    | '>'
+                    | '$'
+                    | '`'
+                    | '('
+                    | ')'
+                    | '{'
+                    | '}'
+                    | '['
+                    | ']'
+                    | '\\'
+                    | '\n'
+                    | '\r'
+                    | '"'
+                    | '\''
+            )
+        })
+    {
+        return None;
+    }
+
+    let words: Vec<String> = script.split_whitespace().map(str::to_string).collect();
+    if words.is_empty() { None } else { Some(words) }
 }
 
 /// Validates that a parsed PowerShell command stays within our read-only safelist.

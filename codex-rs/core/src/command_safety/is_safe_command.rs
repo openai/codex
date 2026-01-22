@@ -1,23 +1,29 @@
+use crate::bash::extract_bash_command;
 use crate::bash::parse_shell_lc_plain_commands;
-use crate::command_safety::windows_safe_commands::is_safe_command_windows;
+use crate::command_safety::windows_safe_commands::is_powershell_executable;
+use crate::command_safety::windows_safe_commands::is_safe_powershell_invocation;
 
+/// `command` must be the _exact_ proposed list of arguments that will be sent
+/// to `execvp(3)`. That is:
+/// - If the command is to be run via a shell, then the first argument MUST be
+///   the shell executable (e.g. "bash", "zsh", "pwsh", "powershell").
+/// - The first argument will be resolved against the `PATH` environment
+///   variable, so it can be either a bare command name (e.g. "ls") or a full
+///   path.
+/// - If the first argument is NOT a shell executable, then the command MUST be
+///   discoverable in the system `PATH` and MUST NOT rely on shell features
+///   (e.g. shell built-ins, operators, or syntax).
 pub fn is_known_safe_command(command: &[String]) -> bool {
-    let command: Vec<String> = command
-        .iter()
-        .map(|s| {
-            if s == "zsh" {
-                "bash".to_string()
-            } else {
-                s.clone()
-            }
-        })
-        .collect();
-
-    if is_safe_command_windows(&command) {
-        return true;
+    if command.is_empty() {
+        return false;
     }
 
-    if is_safe_to_call_with_exec(&command) {
+    let exe = &command[0];
+    if is_powershell_executable(exe) {
+        return is_safe_powershell_invocation(command);
+    }
+
+    if is_safe_to_call_with_exec(command) {
         return true;
     }
 
@@ -27,11 +33,17 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
     // introduce side effects ( "&&", "||", ";", and "|" ). If every
     // individual command in the script is itself a known‑safe command, then
     // the composite expression is considered safe.
-    if let Some(all_commands) = parse_shell_lc_plain_commands(&command)
+    if let Some(all_commands) = parse_shell_lc_plain_commands(command)
         && !all_commands.is_empty()
         && all_commands
             .iter()
             .all(|cmd| is_safe_to_call_with_exec(cmd))
+    {
+        return true;
+    }
+    if let Some((_, script)) = extract_bash_command(command)
+        && let Some(words) = split_simple_shell_words(script)
+        && is_safe_to_call_with_exec(&words)
     {
         return true;
     }
@@ -153,6 +165,38 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         // ── anything else ─────────────────────────────────────────────────
         _ => false,
     }
+}
+
+fn split_simple_shell_words(script: &str) -> Option<Vec<String>> {
+    if script.is_empty()
+        || script.chars().any(|ch| {
+            matches!(
+                ch,
+                '&' | '|'
+                    | ';'
+                    | '<'
+                    | '>'
+                    | '$'
+                    | '`'
+                    | '('
+                    | ')'
+                    | '{'
+                    | '}'
+                    | '['
+                    | ']'
+                    | '\\'
+                    | '\n'
+                    | '\r'
+                    | '"'
+                    | '\''
+            )
+        })
+    {
+        return None;
+    }
+
+    let words: Vec<String> = script.split_whitespace().map(str::to_string).collect();
+    if words.is_empty() { None } else { Some(words) }
 }
 
 // (bash parsing helpers implemented in crate::bash)
