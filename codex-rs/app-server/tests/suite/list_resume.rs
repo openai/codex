@@ -307,6 +307,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         content: vec![ContentItem::InputText {
             text: fork_history_text.to_string(),
         }],
+        end_turn: None,
     }];
     let resume_with_history_req_id = mcp
         .send_resume_conversation_request(ResumeConversationParams {
