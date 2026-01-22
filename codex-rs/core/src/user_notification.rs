@@ -58,6 +58,9 @@ pub(crate) enum UserNotification {
 
         /// The last message sent by the assistant in the turn.
         last_assistant_message: Option<String>,
+
+        /// Time elapsed since the turn started, in milliseconds.
+        elapsed_ms: u64,
     },
 }
 
@@ -76,11 +79,12 @@ mod tests {
             last_assistant_message: Some(
                 "Rename complete and verified `cargo build` succeeds.".to_string(),
             ),
+            elapsed_ms: 15432,
         };
         let serialized = serde_json::to_string(&notification)?;
         assert_eq!(
             serialized,
-            r#"{"type":"agent-turn-complete","thread-id":"b5f6c1c2-1111-2222-3333-444455556666","turn-id":"12345","cwd":"/Users/example/project","input-messages":["Rename `foo` to `bar` and update the callsites."],"last-assistant-message":"Rename complete and verified `cargo build` succeeds."}"#
+            r#"{"type":"agent-turn-complete","thread-id":"b5f6c1c2-1111-2222-3333-444455556666","turn-id":"12345","cwd":"/Users/example/project","input-messages":["Rename `foo` to `bar` and update the callsites."],"last-assistant-message":"Rename complete and verified `cargo build` succeeds.","elapsed-ms":15432}"#
         );
         Ok(())
     }

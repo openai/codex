@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -2798,6 +2799,8 @@ pub(crate) async fn run_turn(
         return None;
     }
 
+    let turn_start = Instant::now();
+
     let model_info = turn_context.client.get_model_info();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
     let total_usage_tokens = sess.get_total_token_usage().await;
@@ -2905,6 +2908,7 @@ pub(crate) async fn run_turn(
                             cwd: turn_context.cwd.display().to_string(),
                             input_messages: sampling_request_input_messages,
                             last_assistant_message: last_agent_message.clone(),
+                            elapsed_ms: turn_start.elapsed().as_millis() as u64,
                         });
                     break;
                 }
