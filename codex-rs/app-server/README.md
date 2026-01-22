@@ -113,6 +113,7 @@ Start a fresh thread when you need a new Codex conversation.
     "cwd": "/Users/me/project",
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
+    "personality": "friendly"
 } }
 { "id": 10, "result": {
     "thread": {
@@ -230,6 +231,7 @@ You can optionally specify config overrides on the new turn. If specified, these
     "model": "gpt-5.1-codex",
     "effort": "medium",
     "summary": "concise",
+    "personality": "friendly",
     // Optional JSON Schema to constrain the final assistant message for this turn.
     "outputSchema": {
         "type": "object",

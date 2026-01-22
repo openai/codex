@@ -165,6 +165,7 @@ use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::Personality;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
@@ -1398,6 +1399,7 @@ impl CodexMessageProcessor {
             params.sandbox,
             params.base_instructions,
             params.developer_instructions,
+            params.personality,
         );
 
         let config =
@@ -1511,6 +1513,7 @@ impl CodexMessageProcessor {
         sandbox: Option<SandboxMode>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
+        personality: Option<Personality>,
     ) -> ConfigOverrides {
         ConfigOverrides {
             model,
@@ -1522,6 +1525,7 @@ impl CodexMessageProcessor {
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             base_instructions,
             developer_instructions,
+            model_personality: personality,
             ..Default::default()
         }
     }
@@ -1914,6 +1918,7 @@ impl CodexMessageProcessor {
             sandbox,
             base_instructions,
             developer_instructions,
+            None,
         );
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
@@ -2098,6 +2103,7 @@ impl CodexMessageProcessor {
             sandbox,
             base_instructions,
             developer_instructions,
+            None,
         );
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let config = match derive_config_for_cwd(
@@ -3512,7 +3518,8 @@ impl CodexMessageProcessor {
             || params.model.is_some()
             || params.effort.is_some()
             || params.summary.is_some()
-            || params.collaboration_mode.is_some();
+            || params.collaboration_mode.is_some()
+            || params.personality.is_some();
 
         // If any overrides are provided, update the session turn context first.
         if has_any_overrides {
@@ -3525,7 +3532,7 @@ impl CodexMessageProcessor {
                     effort: params.effort.map(Some),
                     summary: params.summary,
                     collaboration_mode: params.collaboration_mode,
-                    personality: None,
+                    personality: params.personality,
                 })
                 .await;
         }

@@ -36,6 +36,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::responses;
@@ -375,6 +376,75 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
     let request = response_mock.single_request();
     let payload = request.body_json();
     assert_eq!(payload["model"].as_str(), Some("mock-model-collab"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_accepts_personality_override_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_assistant_message("msg-1", "Done"),
+        responses::ev_completed("resp-1"),
+    ]);
+    let response_mock = responses::mount_sse_once(&server, body).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            personality: Some(Personality::Friendly),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request = response_mock.single_request();
+    let developer_texts = request.message_input_texts("developer");
+    if developer_texts.is_empty() {
+        eprintln!("request body: {}", request.body_json());
+    }
+    assert!(
+        developer_texts
+            .iter()
+            .any(|text| text.contains("<personality_spec>")),
+        "expected personality update message in developer input, got {developer_texts:?}"
+    );
 
     Ok(())
 }
@@ -776,6 +846,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
+            personality: None,
             output_schema: None,
             collaboration_mode: None,
         })
@@ -806,6 +877,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
             summary: Some(ReasoningSummary::Auto),
+            personality: None,
             output_schema: None,
             collaboration_mode: None,
         })
