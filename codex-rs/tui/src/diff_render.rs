@@ -126,9 +126,9 @@ fn collect_rows(changes: &HashMap<PathBuf, FileChange>) -> Vec<Row> {
 fn render_line_count_summary(added: usize, removed: usize) -> Vec<RtSpan<'static>> {
     let mut spans = Vec::new();
     spans.push("(".into());
-    spans.push(format!("+{added}").green());
+    spans.push(format!("+{added}").light_green());
     spans.push(" ".into());
-    spans.push(format!("-{removed}").red());
+    spans.push(format!("-{removed}").light_red());
     spans.push(")".into());
     spans
 }
@@ -420,11 +420,11 @@ fn style_context() -> Style {
 }
 
 fn style_add() -> Style {
-    Style::default().fg(Color::Green)
+    Style::default().fg(Color::LightGreen)
 }
 
 fn style_del() -> Style {
-    Style::default().fg(Color::Red)
+    Style::default().fg(Color::LightRed)
 }
 
 #[cfg(test)]
