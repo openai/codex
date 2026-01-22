@@ -56,7 +56,11 @@ pub const DEFAULT_OAUTH_NAMESPACE: &str = "default";
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub(crate) struct AuthStore {
     pub version: u8,
-    #[serde(rename = "OPENAI_API_KEY", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "OPENAI_API_KEY",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub openai_api_key: Option<String>,
     #[serde(default)]
     pub providers: HashMap<String, AuthProviderEntry>,
@@ -79,7 +83,7 @@ pub(crate) enum AuthProviderEntry {
     Api { key: String },
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
 pub(crate) struct OAuthProvider {
     #[serde(default)]
     pub active: HashMap<String, String>,
@@ -87,16 +91,6 @@ pub(crate) struct OAuthProvider {
     pub order: HashMap<String, Vec<String>>,
     #[serde(default)]
     pub records: Vec<OAuthRecord>,
-}
-
-impl Default for OAuthProvider {
-    fn default() -> Self {
-        Self {
-            active: HashMap::new(),
-            order: HashMap::new(),
-            records: Vec::new(),
-        }
-    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
@@ -133,6 +127,7 @@ pub(crate) struct OAuthHealth {
     pub failure_count: u64,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -174,8 +169,10 @@ pub(crate) fn parse_auth_store(contents: &str) -> std::io::Result<AuthStore> {
 }
 
 pub(crate) fn auth_store_from_legacy(auth: AuthDotJson) -> AuthStore {
-    let mut store = AuthStore::default();
-    store.openai_api_key = auth.openai_api_key;
+    let mut store = AuthStore {
+        openai_api_key: auth.openai_api_key,
+        ..Default::default()
+    };
 
     if let Some(tokens) = auth.tokens {
         let record_id = Uuid::new_v4().to_string();
@@ -201,9 +198,10 @@ pub(crate) fn auth_store_from_legacy(auth: AuthDotJson) -> AuthStore {
         provider
             .order
             .insert(DEFAULT_OAUTH_NAMESPACE.to_string(), vec![record_id]);
-        store
-            .providers
-            .insert(DEFAULT_OAUTH_PROVIDER_ID.to_string(), AuthProviderEntry::Oauth(provider));
+        store.providers.insert(
+            DEFAULT_OAUTH_PROVIDER_ID.to_string(),
+            AuthProviderEntry::Oauth(provider),
+        );
     }
 
     store
@@ -220,11 +218,12 @@ pub(crate) fn auth_dot_json_from_store(
         _ => return None,
     };
     let namespace = normalize_oauth_namespace(namespace);
-    let record_id = provider
-        .active
-        .get(&namespace)
-        .cloned()
-        .or_else(|| provider.order.get(&namespace).and_then(|order| order.first().cloned()))?;
+    let record_id = provider.active.get(&namespace).cloned().or_else(|| {
+        provider
+            .order
+            .get(&namespace)
+            .and_then(|order| order.first().cloned())
+    })?;
     let record = provider
         .records
         .iter()
@@ -343,9 +342,11 @@ impl KeyringAuthStorage {
 
     fn load_from_keyring(&self, key: &str) -> std::io::Result<Option<AuthStore>> {
         match self.keyring_store.load(KEYRING_SERVICE, key) {
-            Ok(Some(serialized)) => parse_auth_store(&serialized)
-                .map(Some)
-                .map_err(|err| std::io::Error::other(format!("failed to deserialize CLI auth from keyring: {err}"))),
+            Ok(Some(serialized)) => parse_auth_store(&serialized).map(Some).map_err(|err| {
+                std::io::Error::other(format!(
+                    "failed to deserialize CLI auth from keyring: {err}"
+                ))
+            }),
             Ok(None) => Ok(None),
             Err(error) => Err(std::io::Error::other(format!(
                 "failed to load CLI auth from keyring: {}",

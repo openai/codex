@@ -951,6 +951,12 @@
           "format": "uint32",
           "minimum": 0.0
         },
+        "payment_required_cooldown_ms": {
+          "description": "Payment required cooldown in milliseconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "rate_limit_cooldown_ms": {
           "description": "Rate limit cooldown in milliseconds.",
           "type": "integer",

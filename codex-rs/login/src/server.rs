@@ -559,7 +559,13 @@ pub(crate) async fn persist_tokens_async(
             tokens.account_id = Some(acc.to_string());
         }
         let last_refresh = Some(Utc::now());
-        add_oauth_account(&codex_home, auth_credentials_store_mode, tokens, last_refresh, None)?;
+        add_oauth_account(
+            &codex_home,
+            auth_credentials_store_mode,
+            tokens,
+            last_refresh,
+            None,
+        )?;
         set_openai_api_key(&codex_home, auth_credentials_store_mode, api_key)
     })
     .await

@@ -271,19 +271,29 @@ fn record_ids_for_namespace(provider: &OAuthProvider, namespace: &str) -> Vec<St
 }
 
 fn active_record_id(provider: &OAuthProvider, namespace: &str) -> Option<String> {
-    provider
-        .active
-        .get(namespace)
-        .cloned()
-        .or_else(|| provider.order.get(namespace).and_then(|order| order.first().cloned()))
+    provider.active.get(namespace).cloned().or_else(|| {
+        provider
+            .order
+            .get(namespace)
+            .and_then(|order| order.first().cloned())
+    })
 }
 
-fn find_record_mut<'a>(provider: &'a mut OAuthProvider, record_id: &str) -> Option<&'a mut OAuthRecord> {
-    provider.records.iter_mut().find(|record| record.id == record_id)
+fn find_record_mut<'a>(
+    provider: &'a mut OAuthProvider,
+    record_id: &str,
+) -> Option<&'a mut OAuthRecord> {
+    provider
+        .records
+        .iter_mut()
+        .find(|record| record.id == record_id)
 }
 
 fn find_record<'a>(provider: &'a OAuthProvider, record_id: &str) -> Option<&'a OAuthRecord> {
-    provider.records.iter().find(|record| record.id == record_id)
+    provider
+        .records
+        .iter()
+        .find(|record| record.id == record_id)
 }
 
 impl CodexAuth {
@@ -462,7 +472,8 @@ pub fn load_auth_dot_json(
         return Ok(None);
     };
 
-    let oauth_view = auth_dot_json_from_store(&store, DEFAULT_OAUTH_PROVIDER_ID, DEFAULT_OAUTH_NAMESPACE);
+    let oauth_view =
+        auth_dot_json_from_store(&store, DEFAULT_OAUTH_PROVIDER_ID, DEFAULT_OAUTH_NAMESPACE);
     let (tokens, last_refresh) = match oauth_view {
         Some(view) => (view.tokens, view.last_refresh),
         None => (None, None),
@@ -585,7 +596,9 @@ pub fn add_oauth_account(
         let existing_id = provider
             .records
             .iter()
-            .find(|record| record.namespace == namespace && record.tokens.refresh_token == tokens.refresh_token)
+            .find(|record| {
+                record.namespace == namespace && record.tokens.refresh_token == tokens.refresh_token
+            })
             .map(|record| record.id.clone());
         let existing_id = existing_id
             .or_else(|| {
@@ -645,10 +658,23 @@ pub fn set_openai_api_key(
     api_key: Option<String>,
 ) -> std::io::Result<()> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    update_auth_store(codex_home, &storage, default_lock_options(), |store| {
+    with_store_lock(codex_home, default_lock_options(), || {
+        let mut force_save = false;
+        let mut store = match storage.load() {
+            Ok(Some(store)) => store,
+            Ok(None) => AuthStore::default(),
+            Err(err) => {
+                tracing::warn!("Failed to load auth store while setting API key: {err}");
+                force_save = true;
+                AuthStore::default()
+            }
+        };
         let changed = store.openai_api_key != api_key;
         store.openai_api_key = api_key;
-        Ok(((), changed))
+        if changed || force_save {
+            storage.save(&store)?;
+        }
+        Ok(())
     })
 }
 
@@ -717,7 +743,7 @@ pub fn remove_oauth_account(
                     .order
                     .keys()
                     .chain(provider.active.keys())
-                    .map(|ns| ns.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect();
                 namespaces.sort();
                 namespaces.dedup();
@@ -924,23 +950,23 @@ async fn update_tokens(
         let (tokens, last_refresh) = {
             let provider = ensure_oauth_provider(store, DEFAULT_OAUTH_PROVIDER_ID);
             let namespace = DEFAULT_OAUTH_NAMESPACE;
-            let mut target_id = record_id.map(|id| id.to_string());
-            if let Some(ref id) = target_id {
-                if !provider.records.iter().any(|record| record.id == *id) {
-                    target_id = None;
-                }
+            let mut target_id = record_id.map(std::string::ToString::to_string);
+            if let Some(ref id) = target_id
+                && !provider.records.iter().any(|record| record.id == *id)
+            {
+                target_id = None;
             }
 
-            if target_id.is_none() {
-                if let Some(refresh) = refresh_token.as_deref() {
-                    target_id = provider
-                        .records
-                        .iter()
-                        .find(|record| {
-                            record.namespace == namespace && record.tokens.refresh_token == refresh
-                        })
-                        .map(|record| record.id.clone());
-                }
+            if target_id.is_none()
+                && let Some(refresh) = refresh_token.as_deref()
+            {
+                target_id = provider
+                    .records
+                    .iter()
+                    .find(|record| {
+                        record.namespace == namespace && record.tokens.refresh_token == refresh
+                    })
+                    .map(|record| record.id.clone());
             }
 
             if target_id.is_none() {
@@ -953,7 +979,8 @@ async fn update_tokens(
                 .ok_or_else(|| std::io::Error::other("Token data is not available."))?;
 
             if let Some(id_token) = id_token {
-                record.tokens.id_token = parse_id_token(&id_token).map_err(std::io::Error::other)?;
+                record.tokens.id_token =
+                    parse_id_token(&id_token).map_err(std::io::Error::other)?;
             }
             if let Some(access_token) = access_token {
                 record.tokens.access_token = access_token;
@@ -1311,7 +1338,10 @@ impl AuthManager {
                 health: record.health.clone(),
             })
             .collect();
-        Ok(OAuthPoolSnapshot { records, ordered_ids })
+        Ok(OAuthPoolSnapshot {
+            records,
+            ordered_ids,
+        })
     }
 
     pub fn oauth_rotation_summary(&self) -> std::io::Result<Option<OAuthRotationSummary>> {
@@ -1344,15 +1374,9 @@ impl AuthManager {
             let health = &record.health;
             if health.requires_relogin {
                 summary.requires_relogin += 1;
-            } else if health
-                .exhausted_until
-                .is_some_and(|until| until > now)
-            {
+            } else if health.exhausted_until.is_some_and(|until| until > now) {
                 summary.exhausted += 1;
-            } else if health
-                .cooldown_until
-                .is_some_and(|until| until > now)
-            {
+            } else if health.cooldown_until.is_some_and(|until| until > now) {
                 summary.cooldown += 1;
             } else {
                 summary.ready += 1;
@@ -1362,7 +1386,11 @@ impl AuthManager {
         Ok(Some(summary))
     }
 
-    pub(crate) fn oauth_move_to_back(&self, namespace: &str, record_id: &str) -> std::io::Result<()> {
+    pub(crate) fn oauth_move_to_back(
+        &self,
+        namespace: &str,
+        record_id: &str,
+    ) -> std::io::Result<()> {
         let storage = self.auth_storage();
         let namespace = normalize_oauth_namespace(namespace);
         update_auth_store_best_effort(&self.codex_home, &storage, |store| {
@@ -1519,13 +1547,15 @@ impl AuthManager {
         let store = storage
             .load()
             .map_err(RefreshTokenError::Transient)?
-            .ok_or_else(|| RefreshTokenError::Transient(std::io::Error::other("Token data is not available.")))?;
+            .ok_or_else(|| {
+                RefreshTokenError::Transient(std::io::Error::other("Token data is not available."))
+            })?;
         let provider = match store.providers.get(DEFAULT_OAUTH_PROVIDER_ID) {
             Some(AuthProviderEntry::Oauth(provider)) => provider,
             _ => {
                 return Err(RefreshTokenError::Transient(std::io::Error::other(
                     "Token data is not available.",
-                )))
+                )));
             }
         };
         let record = find_record(provider, record_id).ok_or_else(|| {

@@ -3,8 +3,8 @@ use codex_common::CliConfigOverrides;
 use codex_core::CodexAuth;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
-use codex_core::auth::login_with_api_key;
 use codex_core::auth::list_oauth_accounts;
+use codex_core::auth::login_with_api_key;
 use codex_core::auth::logout;
 use codex_core::auth::remove_all_oauth_accounts;
 use codex_core::auth::remove_oauth_account;
@@ -330,9 +330,7 @@ pub async fn run_logout(
         }
 
         if matches.len() > 1 {
-            eprintln!(
-                "Multiple ChatGPT accounts match '{selector}'. Use the record id instead."
-            );
+            eprintln!("Multiple ChatGPT accounts match '{selector}'. Use the record id instead.");
             std::process::exit(1);
         }
 
@@ -386,10 +384,8 @@ pub async fn run_logout(
                 }
             };
         let count = accounts.len();
-        match remove_all_oauth_accounts(
-            &config.codex_home,
-            config.cli_auth_credentials_store_mode,
-        ) {
+        match remove_all_oauth_accounts(&config.codex_home, config.cli_auth_credentials_store_mode)
+        {
             Ok(true) => {
                 eprintln!("Logged out {count} ChatGPT account(s).");
                 std::process::exit(0);
