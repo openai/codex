@@ -18,6 +18,7 @@ use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -44,6 +45,36 @@ pub(crate) struct FooterProps {
     pub(crate) quit_shortcut_key: KeyBinding,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CollaborationModeIndicator {
+    Plan,
+    PairProgramming,
+    Execute,
+}
+
+const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
+
+impl CollaborationModeIndicator {
+    fn label(self) -> String {
+        match self {
+            CollaborationModeIndicator::Plan => format!("Plan mode ({MODE_CYCLE_HINT})"),
+            CollaborationModeIndicator::PairProgramming => {
+                format!("Pair Programming mode ({MODE_CYCLE_HINT})")
+            }
+            CollaborationModeIndicator::Execute => format!("Execute mode ({MODE_CYCLE_HINT})"),
+        }
+    }
+
+    fn styled_span(self) -> Span<'static> {
+        let label = self.label();
+        match self {
+            CollaborationModeIndicator::Plan => Span::from(label).fg(Color::Rgb(0xD7, 0x2E, 0xE1)),
+            CollaborationModeIndicator::PairProgramming => Span::from(label).cyan(),
+            CollaborationModeIndicator::Execute => Span::from(label).dim(),
+        }
+    }
 }
 
 /// Selects which footer content is rendered.
@@ -102,6 +133,33 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
         " ".repeat(FOOTER_INDENT_COLS).into(),
     ))
     .render(area, buf);
+}
+
+pub(crate) fn render_mode_indicator(
+    area: Rect,
+    buf: &mut Buffer,
+    indicator: Option<CollaborationModeIndicator>,
+) {
+    let Some(indicator) = indicator else {
+        return;
+    };
+    if area.is_empty() {
+        return;
+    }
+
+    let span = indicator.styled_span();
+    let label_width = span.width() as u16;
+    if label_width == 0 || label_width > area.width {
+        return;
+    }
+
+    let x = area
+        .x
+        .saturating_add(area.width)
+        .saturating_sub(label_width)
+        .saturating_sub(FOOTER_INDENT_COLS as u16);
+    let y = area.y + area.height.saturating_sub(1);
+    buf.set_span(x, y, &span, label_width);
 }
 
 pub(crate) fn inset_footer_hint_area(mut area: Rect) -> Rect {
