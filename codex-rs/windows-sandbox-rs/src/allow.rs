@@ -52,9 +52,9 @@ pub fn compute_allow_paths(
                 let canonical = canonicalize(&candidate).unwrap_or(candidate);
                 add_allow(canonical.clone());
 
-                let git_dir = canonical.join(".git");
-                if git_dir.is_dir() {
-                    add_deny(git_dir);
+                let git_entry = canonical.join(".git");
+                if git_entry.exists() {
+                    add_deny(git_entry);
                 }
             };
 
@@ -68,7 +68,7 @@ pub fn compute_allow_paths(
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
             for root in writable_roots {
                 add_writable_root(
-                    root.clone(),
+                    root.clone().into(),
                     policy_cwd,
                     &mut add_allow_path,
                     &mut add_deny_path,
@@ -92,12 +92,10 @@ pub fn compute_allow_paths(
 
 #[cfg(test)]
 mod tests {
-    use super::compute_allow_paths;
+    use super::*;
     use codex_protocol::protocol::SandboxPolicy;
-    use std::collections::HashMap;
-    use std::collections::HashSet;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use std::fs;
-    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
@@ -109,7 +107,7 @@ mod tests {
         let _ = fs::create_dir_all(&extra_root);
 
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![extra_root.clone()],
+            writable_roots: vec![AbsolutePathBuf::try_from(extra_root.as_path()).unwrap()],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -173,6 +171,33 @@ mod tests {
             .into_iter()
             .collect();
         let expected_deny: HashSet<PathBuf> = [dunce::canonicalize(&git_dir).unwrap()]
+            .into_iter()
+            .collect();
+
+        assert_eq!(expected_allow, paths.allow);
+        assert_eq!(expected_deny, paths.deny);
+    }
+
+    #[test]
+    fn denies_git_file_inside_writable_root() {
+        let tmp = TempDir::new().expect("tempdir");
+        let command_cwd = tmp.path().join("workspace");
+        let git_file = command_cwd.join(".git");
+        let _ = fs::create_dir_all(&command_cwd);
+        let _ = fs::write(&git_file, "gitdir: .git/worktrees/example");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: false,
+        };
+
+        let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
+        let expected_allow: HashSet<PathBuf> = [dunce::canonicalize(&command_cwd).unwrap()]
+            .into_iter()
+            .collect();
+        let expected_deny: HashSet<PathBuf> = [dunce::canonicalize(&git_file).unwrap()]
             .into_iter()
             .collect();
 

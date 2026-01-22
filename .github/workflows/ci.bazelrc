@@ -1,0 +1,20 @@
+common --remote_download_minimal
+common --nobuild_runfile_links
+common --keep_going
+
+# We prefer to run the build actions entirely remotely so we can dial up the concurrency.
+# We have platform-specific tests, so we want to execute the tests on all platforms using the strongest sandboxing available on each platform.
+
+# On linux, we can do a full remote build/test, by targeting the right (x86/arm) runners, so we have coverage of both.
+# Linux crossbuilds don't work until we untangle the libc constraint mess.
+common:linux --config=remote
+common:linux --strategy=remote
+common:linux --platforms=//:rbe
+
+# On mac, we can run all the build actions remotely but test actions locally.
+common:macos --config=remote
+common:macos --strategy=remote
+common:macos --strategy=TestRunner=darwin-sandbox,local
+
+common:windows --strategy=TestRunner=local
+

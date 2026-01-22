@@ -3,7 +3,12 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 
-import { SandboxMode, ModelReasoningEffort, ApprovalMode } from "./threadOptions";
+import {
+  SandboxMode,
+  ModelReasoningEffort,
+  ApprovalMode,
+  WebSearchMode,
+} from "./threadOptions";
 
 export type CodexExecArgs = {
   input: string;
@@ -30,7 +35,9 @@ export type CodexExecArgs = {
   signal?: AbortSignal;
   // --config sandbox_workspace_write.network_access
   networkAccessEnabled?: boolean;
-  // --config features.web_search_request
+  // --config web_search
+  webSearchMode?: WebSearchMode;
+  // legacy --config features.web_search_request
   webSearchEnabled?: boolean;
   // --config approval_policy
   approvalPolicy?: ApprovalMode;
@@ -88,8 +95,12 @@ export class CodexExec {
       );
     }
 
-    if (args.webSearchEnabled !== undefined) {
-      commandArgs.push("--config", `features.web_search_request=${args.webSearchEnabled}`);
+    if (args.webSearchMode) {
+      commandArgs.push("--config", `web_search="${args.webSearchMode}"`);
+    } else if (args.webSearchEnabled === true) {
+      commandArgs.push("--config", `web_search="live"`);
+    } else if (args.webSearchEnabled === false) {
+      commandArgs.push("--config", `web_search="disabled"`);
     }
 
     if (args.approvalPolicy) {
@@ -153,6 +164,14 @@ export class CodexExec {
       });
     }
 
+    const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve) => {
+        child.once("exit", (code, signal) => {
+          resolve({ code, signal });
+        });
+      },
+    );
+
     const rl = readline.createInterface({
       input: child.stdout,
       crlfDelay: Infinity,
@@ -164,21 +183,13 @@ export class CodexExec {
         yield line as string;
       }
 
-      const exitCode = new Promise((resolve, reject) => {
-        child.once("exit", (code) => {
-          if (code === 0) {
-            resolve(code);
-          } else {
-            const stderrBuffer = Buffer.concat(stderrChunks);
-            reject(
-              new Error(`Codex Exec exited with code ${code}: ${stderrBuffer.toString("utf8")}`),
-            );
-          }
-        });
-      });
-
       if (spawnError) throw spawnError;
-      await exitCode;
+      const { code, signal } = await exitPromise;
+      if (code !== 0 || signal) {
+        const stderrBuffer = Buffer.concat(stderrChunks);
+        const detail = signal ? `signal ${signal}` : `code ${code ?? 1}`;
+        throw new Error(`Codex Exec exited with ${detail}: ${stderrBuffer.toString("utf8")}`);
+      }
     } finally {
       rl.close();
       child.removeAllListeners();

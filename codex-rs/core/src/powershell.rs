@@ -1,12 +1,36 @@
 use std::path::PathBuf;
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::shell::ShellType;
 use crate::shell::detect_shell_type;
 
 const POWERSHELL_FLAGS: &[&str] = &["-nologo", "-noprofile", "-command", "-c"];
+
+/// Prefixed command for powershell shell calls to force UTF-8 console output.
+pub(crate) const UTF8_OUTPUT_PREFIX: &str =
+    "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\n";
+
+pub(crate) fn prefix_powershell_script_with_utf8(command: &[String]) -> Vec<String> {
+    let Some((_, script)) = extract_powershell_command(command) else {
+        return command.to_vec();
+    };
+
+    let trimmed = script.trim_start();
+    let script = if trimmed.starts_with(UTF8_OUTPUT_PREFIX) {
+        script.to_string()
+    } else {
+        format!("{UTF8_OUTPUT_PREFIX}{script}")
+    };
+
+    let mut command: Vec<String> = command[..(command.len() - 1)]
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
+    command.push(script);
+    command
+}
 
 /// Extract the PowerShell script body from an invocation such as:
 ///
@@ -22,7 +46,10 @@ pub fn extract_powershell_command(command: &[String]) -> Option<(&str, &str)> {
     }
 
     let shell = &command[0];
-    if detect_shell_type(&PathBuf::from(shell)) != Some(ShellType::PowerShell) {
+    if !matches!(
+        detect_shell_type(&PathBuf::from(shell)),
+        Some(ShellType::PowerShell)
+    ) {
         return None;
     }
 
@@ -36,7 +63,7 @@ pub fn extract_powershell_command(command: &[String]) -> Option<(&str, &str)> {
         }
         if flag.eq_ignore_ascii_case("-Command") || flag.eq_ignore_ascii_case("-c") {
             let script = &command[i + 1];
-            return Some((shell, script.as_str()));
+            return Some((shell, script));
         }
         i += 1;
     }
@@ -57,7 +84,7 @@ pub(crate) fn try_find_powershellish_executable_blocking() -> Option<AbsolutePat
 }
 
 /// This function attempts to find a powershell.exe executable on the system.
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 pub(crate) fn try_find_powershell_executable_blocking() -> Option<AbsolutePathBuf> {
     try_find_powershellish_executable_in_path(&["powershell.exe"])
 }
@@ -72,7 +99,7 @@ pub(crate) fn try_find_powershell_executable_blocking() -> Option<AbsolutePathBu
 /// pwsh.exe must be installed separately by the user. And even when the user
 /// has installed pwsh.exe, it may not be available in the system PATH, in which
 /// case we attempt to locate it via other means.
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 pub(crate) fn try_find_pwsh_executable_blocking() -> Option<AbsolutePathBuf> {
     if let Some(ps_home) = std::process::Command::new("cmd")
         .args(["/C", "pwsh", "-NoProfile", "-Command", "$PSHOME"])
@@ -99,7 +126,7 @@ pub(crate) fn try_find_pwsh_executable_blocking() -> Option<AbsolutePathBuf> {
     try_find_powershellish_executable_in_path(&["pwsh.exe"])
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn try_find_powershellish_executable_in_path(candidates: &[&str]) -> Option<AbsolutePathBuf> {
     for candidate in candidates {
         let Ok(resolved_path) = which::which(candidate) else {
@@ -120,7 +147,7 @@ fn try_find_powershellish_executable_in_path(candidates: &[&str]) -> Option<Abso
     None
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn is_powershellish_executable_available(powershell_or_pwsh_exe: &std::path::Path) -> bool {
     // This test works for both powershell.exe and pwsh.exe.
     std::process::Command::new(powershell_or_pwsh_exe)

@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ffi::c_void;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
@@ -25,7 +26,7 @@ use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 
-pub const SETUP_VERSION: u32 = 2;
+pub const SETUP_VERSION: u32 = 4;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
@@ -51,26 +52,34 @@ pub fn run_setup_refresh(
     codex_home: &Path,
 ) -> Result<()> {
     // Skip in danger-full-access.
-    if matches!(policy, SandboxPolicy::DangerFullAccess) {
+    if matches!(
+        policy,
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+    ) {
         return Ok(());
     }
+    let (read_roots, write_roots) = build_payload_roots(
+        policy,
+        policy_cwd,
+        command_cwd,
+        env_map,
+        codex_home,
+        None,
+        None,
+    );
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
         online_username: ONLINE_USERNAME.to_string(),
         codex_home: codex_home.to_path_buf(),
-        read_roots: gather_read_roots(command_cwd, policy, policy_cwd),
-        write_roots: gather_write_roots(policy, policy_cwd, command_cwd, env_map),
+        read_roots,
+        write_roots,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         refresh_only: true,
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
     let exe = find_setup_exe();
-    log_note(
-        &format!("setup refresh: invoking {}", exe.display()),
-        Some(&sandbox_dir(codex_home)),
-    );
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
@@ -183,12 +192,13 @@ fn canonical_existing(paths: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
-pub(crate) fn gather_read_roots(
-    command_cwd: &Path,
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
-) -> Vec<PathBuf> {
+pub(crate) fn gather_read_roots(command_cwd: &Path, policy: &SandboxPolicy) -> Vec<PathBuf> {
     let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.to_path_buf());
+        }
+    }
     for p in [
         PathBuf::from(r"C:\Windows"),
         PathBuf::from(r"C:\Program Files"),
@@ -203,12 +213,7 @@ pub(crate) fn gather_read_roots(
     roots.push(command_cwd.to_path_buf());
     if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = policy {
         for root in writable_roots {
-            let candidate = if root.is_absolute() {
-                root.clone()
-            } else {
-                policy_cwd.join(root)
-            };
-            roots.push(candidate);
+            roots.push(root.to_path_buf());
         }
     }
     canonical_existing(&roots)
@@ -228,7 +233,14 @@ pub(crate) fn gather_write_roots(
     let AllowDenyPaths { allow, .. } =
         compute_allow_paths(policy, policy_cwd, command_cwd, env_map);
     roots.extend(allow);
-    canonical_existing(&roots)
+    let mut dedup: HashSet<PathBuf> = HashSet::new();
+    let mut out: Vec<PathBuf> = Vec::new();
+    for r in canonical_existing(&roots) {
+        if dedup.insert(r.clone()) {
+            out.push(r);
+        }
+    }
+    out
 }
 
 #[derive(Serialize)]
@@ -364,19 +376,15 @@ pub fn run_elevated_setup(
     // Ensure the shared sandbox directory exists before we send it to the elevated helper.
     let sbx_dir = sandbox_dir(codex_home);
     std::fs::create_dir_all(&sbx_dir)?;
-    let mut write_roots = if let Some(roots) = write_roots_override {
-        roots
-    } else {
-        gather_write_roots(policy, policy_cwd, command_cwd, env_map)
-    };
-    if !write_roots.contains(&sbx_dir) {
-        write_roots.push(sbx_dir.clone());
-    }
-    let read_roots = if let Some(roots) = read_roots_override {
-        roots
-    } else {
-        gather_read_roots(command_cwd, policy, policy_cwd)
-    };
+    let (read_roots, write_roots) = build_payload_roots(
+        policy,
+        policy_cwd,
+        command_cwd,
+        env_map,
+        codex_home,
+        read_roots_override,
+        write_roots_override,
+    );
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
@@ -389,4 +397,43 @@ pub fn run_elevated_setup(
     };
     let needs_elevation = !is_elevated()?;
     run_setup_exe(&payload, needs_elevation)
+}
+
+fn build_payload_roots(
+    policy: &SandboxPolicy,
+    policy_cwd: &Path,
+    command_cwd: &Path,
+    env_map: &HashMap<String, String>,
+    codex_home: &Path,
+    read_roots_override: Option<Vec<PathBuf>>,
+    write_roots_override: Option<Vec<PathBuf>>,
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let write_roots = if let Some(roots) = write_roots_override {
+        canonical_existing(&roots)
+    } else {
+        gather_write_roots(policy, policy_cwd, command_cwd, env_map)
+    };
+    let write_roots = filter_sensitive_write_roots(write_roots, codex_home);
+    let mut read_roots = if let Some(roots) = read_roots_override {
+        canonical_existing(&roots)
+    } else {
+        gather_read_roots(command_cwd, policy)
+    };
+    let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
+    read_roots.retain(|root| !write_root_set.contains(root));
+    (read_roots, write_roots)
+}
+
+fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> Vec<PathBuf> {
+    // Never grant capability write access to CODEX_HOME or anything under CODEX_HOME/.sandbox.
+    // These locations contain sandbox control/state and must remain tamper-resistant.
+    let codex_home_key = crate::audit::normalize_path_key(codex_home);
+    let sbx_dir_key = crate::audit::normalize_path_key(&sandbox_dir(codex_home));
+    let sbx_dir_prefix = format!("{}/", sbx_dir_key.trim_end_matches('/'));
+
+    roots.retain(|root| {
+        let key = crate::audit::normalize_path_key(root);
+        key != codex_home_key && key != sbx_dir_key && !key.starts_with(&sbx_dir_prefix)
+    });
+    roots
 }

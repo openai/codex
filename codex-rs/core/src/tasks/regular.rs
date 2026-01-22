@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use tokio_util::sync::CancellationToken;
-
 use crate::codex::TurnContext;
-use crate::codex::run_task;
+use crate::codex::run_turn;
 use crate::state::TaskKind;
+use async_trait::async_trait;
 use codex_protocol::user_input::UserInput;
+use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
+use tracing::trace_span;
 
 use super::SessionTask;
 use super::SessionTaskContext;
@@ -28,6 +29,13 @@ impl SessionTask for RegularTask {
         cancellation_token: CancellationToken,
     ) -> Option<String> {
         let sess = session.clone_session();
-        run_task(sess, ctx, input, cancellation_token).await
+        let run_turn_span = trace_span!("run_turn");
+        sess.set_server_reasoning_included(false).await;
+        sess.services
+            .otel_manager
+            .apply_traceparent_parent(&run_turn_span);
+        run_turn(sess, ctx, input, cancellation_token)
+            .instrument(run_turn_span)
+            .await
     }
 }

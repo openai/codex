@@ -227,11 +227,14 @@ fn check_start_and_end_lines_strict(
     first_line: Option<&&str>,
     last_line: Option<&&str>,
 ) -> Result<(), ParseError> {
+    let first_line = first_line.map(|line| line.trim());
+    let last_line = last_line.map(|line| line.trim());
+
     match (first_line, last_line) {
-        (Some(&first), Some(&last)) if first == BEGIN_PATCH_MARKER && last == END_PATCH_MARKER => {
+        (Some(first), Some(last)) if first == BEGIN_PATCH_MARKER && last == END_PATCH_MARKER => {
             Ok(())
         }
-        (Some(&first), _) if first != BEGIN_PATCH_MARKER => Err(InvalidPatchError(String::from(
+        (Some(first), _) if first != BEGIN_PATCH_MARKER => Err(InvalidPatchError(String::from(
             "The first line of the patch must be '*** Begin Patch'",
         ))),
         _ => Err(InvalidPatchError(String::from(
@@ -443,6 +446,25 @@ fn test_parse_patch() {
         Err(InvalidPatchError(
             "The last line of the patch must be '*** End Patch'".to_string()
         ))
+    );
+
+    assert_eq!(
+        parse_patch_text(
+            concat!(
+                "*** Begin Patch",
+                " ",
+                "\n*** Add File: foo\n+hi\n",
+                " ",
+                "*** End Patch"
+            ),
+            ParseMode::Strict
+        )
+        .unwrap()
+        .hunks,
+        vec![AddFile {
+            path: PathBuf::from("foo"),
+            contents: "hi\n".to_string()
+        }]
     );
     assert_eq!(
         parse_patch_text(

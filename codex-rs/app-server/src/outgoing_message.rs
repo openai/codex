@@ -162,6 +162,7 @@ mod tests {
     use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
     use codex_app_server_protocol::AccountUpdatedNotification;
     use codex_app_server_protocol::AuthMode;
+    use codex_app_server_protocol::ConfigWarningNotification;
     use codex_app_server_protocol::LoginChatGptCompleteNotification;
     use codex_app_server_protocol::RateLimitSnapshot;
     use codex_app_server_protocol::RateLimitWindow;
@@ -272,6 +273,28 @@ mod tests {
                 "method": "account/updated",
                 "params": {
                     "authMode": "apikey"
+                },
+            }),
+            serde_json::to_value(jsonrpc_notification)
+                .expect("ensure the notification serializes correctly"),
+            "ensure the notification serializes correctly"
+        );
+    }
+
+    #[test]
+    fn verify_config_warning_notification_serialization() {
+        let notification = ServerNotification::ConfigWarning(ConfigWarningNotification {
+            summary: "Config error: using defaults".to_string(),
+            details: Some("error loading config: bad config".to_string()),
+        });
+
+        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
+        assert_eq!(
+            json!( {
+                "method": "configWarning",
+                "params": {
+                    "summary": "Config error: using defaults",
+                    "details": "error loading config: bad config",
                 },
             }),
             serde_json::to_value(jsonrpc_notification)

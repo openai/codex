@@ -11,10 +11,11 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
-use codex_core::openai_models::models_manager::ModelsManager;
-use codex_otel::otel_event_manager::OtelEventManager;
-use codex_protocol::ConversationId;
+use codex_core::models_manager::manager::ModelsManager;
+use codex_otel::OtelManager;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::protocol::SessionSource;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
 use futures::StreamExt;
@@ -63,7 +64,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         Ok(dir) => dir,
         Err(e) => panic!("failed to create TempDir: {e}"),
     };
-    let mut config = load_default_config_for_test(&codex_home);
+    let mut config = load_default_config_for_test(&codex_home).await;
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
     config.show_raw_agent_reasoning = true;
@@ -71,33 +72,35 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
     let summary = config.model_reasoning_summary;
     let config = Arc::new(config);
 
-    let conversation_id = ConversationId::new();
+    let conversation_id = ThreadId::new();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let auth_mode = auth_manager.get_auth_mode();
     let model = ModelsManager::get_model_offline(config.model.as_deref());
-    let model_family = ModelsManager::construct_model_family_offline(model.as_str(), &config);
-    let otel_event_manager = OtelEventManager::new(
+    let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
+    let otel_manager = OtelManager::new(
         conversation_id,
         model.as_str(),
-        model_family.slug.as_str(),
+        model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
         auth_mode,
         false,
         "test".to_string(),
+        SessionSource::Exec,
     );
 
-    let client = ModelClient::new(
+    let mut client = ModelClient::new(
         Arc::clone(&config),
         None,
-        model_family,
-        otel_event_manager,
+        model_info,
+        otel_manager,
         provider,
         effort,
         summary,
         conversation_id,
-        codex_protocol::protocol::SessionSource::Exec,
-    );
+        SessionSource::Exec,
+    )
+    .new_session();
 
     let mut prompt = Prompt::default();
     prompt.input = vec![ResponseItem::Message {
@@ -106,6 +109,7 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
         content: vec![ContentItem::InputText {
             text: "hello".to_string(),
         }],
+        end_turn: None,
     }];
 
     let mut stream = match client.stream(&prompt).await {

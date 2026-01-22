@@ -46,6 +46,7 @@ impl Policy {
                     .into(),
             },
             decision,
+            justification: None,
         });
 
         self.rules_by_program.insert(first_token.clone(), rule);
@@ -60,6 +61,7 @@ impl Policy {
         Evaluation::from_matches(matched_rules)
     }
 
+    /// Checks multiple commands and aggregates the results.
     pub fn check_multiple<Commands, F>(
         &self,
         commands: Commands,
@@ -80,12 +82,19 @@ impl Policy {
         Evaluation::from_matches(matched_rules)
     }
 
+    /// Returns matching rules for the given command. If no rules match and
+    /// `heuristics_fallback` is provided, returns a single
+    /// `HeuristicsRuleMatch` with the decision rendered by
+    /// `heuristics_fallback`.
+    ///
+    /// If `heuristics_fallback.is_some()`, then the returned vector is
+    /// guaranteed to be non-empty.
     pub fn matches_for_command(
         &self,
         cmd: &[String],
         heuristics_fallback: HeuristicsFallback<'_>,
     ) -> Vec<RuleMatch> {
-        let mut matched_rules: Vec<RuleMatch> = match cmd.first() {
+        let matched_rules: Vec<RuleMatch> = match cmd.first() {
             Some(first) => self
                 .rules_by_program
                 .get_vec(first)
@@ -94,14 +103,16 @@ impl Policy {
             None => Vec::new(),
         };
 
-        if let (true, Some(heuristics_fallback)) = (matched_rules.is_empty(), heuristics_fallback) {
-            matched_rules.push(RuleMatch::HeuristicsRuleMatch {
+        if matched_rules.is_empty()
+            && let Some(heuristics_fallback) = heuristics_fallback
+        {
+            vec![RuleMatch::HeuristicsRuleMatch {
                 command: cmd.to_vec(),
                 decision: heuristics_fallback(cmd),
-            });
+            }]
+        } else {
+            matched_rules
         }
-
-        matched_rules
     }
 }
 
@@ -120,12 +131,11 @@ impl Evaluation {
             .any(|rule_match| !matches!(rule_match, RuleMatch::HeuristicsRuleMatch { .. }))
     }
 
+    /// Caller is responsible for ensuring that `matched_rules` is non-empty.
     fn from_matches(matched_rules: Vec<RuleMatch>) -> Self {
-        let decision = matched_rules
-            .iter()
-            .map(RuleMatch::decision)
-            .max()
-            .unwrap_or(Decision::Allow);
+        let decision = matched_rules.iter().map(RuleMatch::decision).max();
+        #[expect(clippy::expect_used)]
+        let decision = decision.expect("invariant failed: matched_rules must be non-empty");
 
         Self {
             decision,

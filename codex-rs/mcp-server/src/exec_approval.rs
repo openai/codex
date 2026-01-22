@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_core::CodexConversation;
+use codex_core::CodexThread;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_protocol::ThreadId;
 use codex_protocol::parse_command::ParsedCommand;
 use mcp_types::ElicitRequest;
 use mcp_types::ElicitRequestParamsRequestedSchema;
@@ -30,6 +31,8 @@ pub struct ExecApprovalElicitRequestParams {
 
     // These are additional fields the client can use to
     // correlate the request with the codex tool call.
+    #[serde(rename = "threadId")]
+    pub thread_id: ThreadId,
     pub codex_elicitation: String,
     pub codex_mcp_tool_call_id: String,
     pub codex_event_id: String,
@@ -53,12 +56,13 @@ pub(crate) async fn handle_exec_approval_request(
     command: Vec<String>,
     cwd: PathBuf,
     outgoing: Arc<crate::outgoing_message::OutgoingMessageSender>,
-    codex: Arc<CodexConversation>,
+    codex: Arc<CodexThread>,
     request_id: RequestId,
     tool_call_id: String,
     event_id: String,
     call_id: String,
     codex_parsed_cmd: Vec<ParsedCommand>,
+    thread_id: ThreadId,
 ) {
     let escaped_command =
         shlex::try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "));
@@ -74,6 +78,7 @@ pub(crate) async fn handle_exec_approval_request(
             properties: json!({}),
             required: None,
         },
+        thread_id,
         codex_elicitation: "exec-approval".to_string(),
         codex_mcp_tool_call_id: tool_call_id.clone(),
         codex_event_id: event_id.clone(),
@@ -120,7 +125,7 @@ pub(crate) async fn handle_exec_approval_request(
 async fn on_exec_approval_response(
     event_id: String,
     receiver: tokio::sync::oneshot::Receiver<mcp_types::Result>,
-    codex: Arc<CodexConversation>,
+    codex: Arc<CodexThread>,
 ) {
     let response = receiver.await;
     let value = match response {

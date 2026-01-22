@@ -30,10 +30,16 @@ pub trait ToolHandler: Send + Sync {
         )
     }
 
+    /// Returns `true` if the [ToolInvocation] *might* mutate the environment of the
+    /// user (through file system, OS operations, ...).
+    /// This function must remains defensive and return `true` if a doubt exist on the
+    /// exact effect of a ToolInvocation.
     async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         false
     }
 
+    /// Perform the actual [ToolInvocation] and returns a [ToolOutput] containing
+    /// the final output to return to the model.
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError>;
 }
 
@@ -64,7 +70,7 @@ impl ToolRegistry {
     ) -> Result<ResponseInputItem, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
         let call_id_owned = invocation.call_id.clone();
-        let otel = invocation.turn.client.get_otel_event_manager();
+        let otel = invocation.turn.client.get_otel_manager();
         let payload_for_response = invocation.payload.clone();
         let log_payload = payload_for_response.log_payload();
 

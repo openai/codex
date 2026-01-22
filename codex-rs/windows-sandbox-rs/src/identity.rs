@@ -1,13 +1,14 @@
 use crate::dpapi;
 use crate::logging::debug_log;
 use crate::policy::SandboxPolicy;
+use crate::setup::gather_read_roots;
+use crate::setup::gather_write_roots;
 use crate::setup::run_elevated_setup;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
 use crate::setup::SandboxUserRecord;
 use crate::setup::SandboxUsersFile;
 use crate::setup::SetupMarker;
-use crate::setup::{gather_read_roots, gather_write_roots};
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
@@ -27,6 +28,18 @@ struct SandboxIdentity {
 pub struct SandboxCreds {
     pub username: String,
     pub password: String,
+}
+
+/// Returns true when the on-disk setup artifacts exist and match the current
+/// setup version.
+///
+/// This reuses the same marker/users validation used by `require_logon_sandbox_creds`.
+pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
+    let marker_ok = matches!(load_marker(codex_home), Ok(Some(marker)) if marker.version_matches());
+    if !marker_ok {
+        return false;
+    }
+    matches!(load_users(codex_home), Ok(Some(users)) if users.version_matches())
 }
 
 fn load_marker(codex_home: &Path) -> Result<Option<SetupMarker>> {
@@ -117,10 +130,11 @@ pub fn require_logon_sandbox_creds(
     codex_home: &Path,
 ) -> Result<SandboxCreds> {
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
-    let needed_read = gather_read_roots(command_cwd, policy, policy_cwd);
-    let mut needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
-    // Ensure the sandbox directory itself is writable by sandbox users.
-    needed_write.push(sandbox_dir.clone());
+    let needed_read = gather_read_roots(command_cwd, policy);
+    let needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
+    // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
+    // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
+    // granting the sandbox group access to this directory without granting the capability SID.
     let mut setup_reason: Option<String> = None;
     let mut _existing_marker: Option<SetupMarker> = None;
 
@@ -142,7 +156,10 @@ pub fn require_logon_sandbox_creds(
 
     if identity.is_none() {
         if let Some(reason) = &setup_reason {
-            crate::logging::log_note(&format!("sandbox setup required: {reason}"), Some(&sandbox_dir));
+            crate::logging::log_note(
+                &format!("sandbox setup required: {reason}"),
+                Some(&sandbox_dir),
+            );
         } else {
             crate::logging::log_note("sandbox setup required", Some(&sandbox_dir));
         }

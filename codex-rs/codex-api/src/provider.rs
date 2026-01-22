@@ -1,10 +1,12 @@
 use codex_client::Request;
+use codex_client::RequestCompression;
 use codex_client::RetryOn;
 use codex_client::RetryPolicy;
 use http::Method;
 use http::header::HeaderMap;
 use std::collections::HashMap;
 use std::time::Duration;
+use url::Url;
 
 /// Wire-level APIs supported by a `Provider`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +89,7 @@ impl Provider {
             url: self.url_for_path(path),
             headers: self.headers.clone(),
             body: None,
+            compression: RequestCompression::None,
             timeout: None,
         }
     }
@@ -102,6 +105,19 @@ impl Provider {
 
         self.base_url.to_ascii_lowercase().contains("openai.azure.")
             || matches_azure_responses_base_url(&self.base_url)
+    }
+
+    pub fn websocket_url_for_path(&self, path: &str) -> Result<Url, url::ParseError> {
+        let mut url = Url::parse(&self.url_for_path(path))?;
+
+        let scheme = match url.scheme() {
+            "http" => "ws",
+            "https" => "wss",
+            "ws" | "wss" => return Ok(url),
+            _ => return Ok(url),
+        };
+        let _ = url.set_scheme(scheme);
+        Ok(url)
     }
 }
 

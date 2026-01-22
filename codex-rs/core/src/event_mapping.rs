@@ -9,19 +9,18 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::models::is_image_close_tag_text;
+use codex_protocol::models::is_image_open_tag_text;
+use codex_protocol::models::is_local_image_close_tag_text;
+use codex_protocol::models::is_local_image_open_tag_text;
 use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::user_instructions::SkillInstructions;
-use crate::user_instructions::UserInstructions;
+use crate::instructions::SkillInstructions;
+use crate::instructions::UserInstructions;
+use crate::session_prefix::is_session_prefix;
 use crate::user_shell_command::is_user_shell_command_text;
-
-fn is_session_prefix(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with("<environment_context>")
-}
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
     if UserInstructions::is_user_instructions(message)
@@ -32,13 +31,25 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
 
     let mut content: Vec<UserInput> = Vec::new();
 
-    for content_item in message.iter() {
+    for (idx, content_item) in message.iter().enumerate() {
         match content_item {
             ContentItem::InputText { text } => {
+                if (is_local_image_open_tag_text(text) || is_image_open_tag_text(text))
+                    && (matches!(message.get(idx + 1), Some(ContentItem::InputImage { .. })))
+                    || (idx > 0
+                        && (is_local_image_close_tag_text(text) || is_image_close_tag_text(text))
+                        && matches!(message.get(idx - 1), Some(ContentItem::InputImage { .. })))
+                {
+                    continue;
+                }
                 if is_session_prefix(text) || is_user_shell_command_text(text) {
                     return None;
                 }
-                content.push(UserInput::Text { text: text.clone() });
+                content.push(UserInput::Text {
+                    text: text.clone(),
+                    // Model input content does not carry UI element ranges.
+                    text_elements: Vec::new(),
+                });
             }
             ContentItem::InputImage { image_url } => {
                 content.push(UserInput::Image {
@@ -78,7 +89,9 @@ fn parse_agent_message(id: Option<&String>, message: &[ContentItem]) -> AgentMes
 
 pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
     match item {
-        ResponseItem::Message { role, content, id } => match role.as_str() {
+        ResponseItem::Message {
+            role, content, id, ..
+        } => match role.as_str() {
             "user" => parse_user_message(content).map(TurnItem::UserMessage),
             "assistant" => Some(TurnItem::AgentMessage(parse_agent_message(
                 id.as_ref(),
@@ -158,6 +171,7 @@ mod tests {
                     image_url: img2.clone(),
                 },
             ],
+            end_turn: None,
         };
 
         let turn_item = parse_turn_item(&item).expect("expected user message turn item");
@@ -167,9 +181,92 @@ mod tests {
                 let expected_content = vec![
                     UserInput::Text {
                         text: "Hello world".to_string(),
+                        text_elements: Vec::new(),
                     },
                     UserInput::Image { image_url: img1 },
                     UserInput::Image { image_url: img2 },
+                ];
+                assert_eq!(user.content, expected_content);
+            }
+            other => panic!("expected TurnItem::UserMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skips_local_image_label_text() {
+        let image_url = "data:image/png;base64,abc".to_string();
+        let label = codex_protocol::models::local_image_open_tag_text(1);
+        let user_text = "Please review this image.".to_string();
+
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText { text: label },
+                ContentItem::InputImage {
+                    image_url: image_url.clone(),
+                },
+                ContentItem::InputText {
+                    text: "</image>".to_string(),
+                },
+                ContentItem::InputText {
+                    text: user_text.clone(),
+                },
+            ],
+            end_turn: None,
+        };
+
+        let turn_item = parse_turn_item(&item).expect("expected user message turn item");
+
+        match turn_item {
+            TurnItem::UserMessage(user) => {
+                let expected_content = vec![
+                    UserInput::Image { image_url },
+                    UserInput::Text {
+                        text: user_text,
+                        text_elements: Vec::new(),
+                    },
+                ];
+                assert_eq!(user.content, expected_content);
+            }
+            other => panic!("expected TurnItem::UserMessage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skips_unnamed_image_label_text() {
+        let image_url = "data:image/png;base64,abc".to_string();
+        let label = codex_protocol::models::image_open_tag_text();
+        let user_text = "Please review this image.".to_string();
+
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText { text: label },
+                ContentItem::InputImage {
+                    image_url: image_url.clone(),
+                },
+                ContentItem::InputText {
+                    text: codex_protocol::models::image_close_tag_text(),
+                },
+                ContentItem::InputText {
+                    text: user_text.clone(),
+                },
+            ],
+            end_turn: None,
+        };
+
+        let turn_item = parse_turn_item(&item).expect("expected user message turn item");
+
+        match turn_item {
+            TurnItem::UserMessage(user) => {
+                let expected_content = vec![
+                    UserInput::Image { image_url },
+                    UserInput::Text {
+                        text: user_text,
+                        text_elements: Vec::new(),
+                    },
                 ];
                 assert_eq!(user.content, expected_content);
             }
@@ -186,6 +283,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "<user_instructions>test_text</user_instructions>".to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -193,6 +291,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "<environment_context>test_text</environment_context>".to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -200,6 +299,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -208,6 +308,7 @@ mod tests {
                     text: "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
                         .to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -215,6 +316,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "<user_shell_command>echo 42</user_shell_command>".to_string(),
                 }],
+                end_turn: None,
             },
         ];
 
@@ -232,6 +334,7 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: "Hello from Codex".to_string(),
             }],
+            end_turn: None,
         };
 
         let turn_item = parse_turn_item(&item).expect("expected agent message turn item");

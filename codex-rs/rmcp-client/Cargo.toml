@@ -36,6 +36,7 @@ rmcp = { workspace = true, default-features = false, features = [
     "transport-streamable-http-client-reqwest",
     "transport-streamable-http-server",
 ] }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -55,7 +56,7 @@ webbrowser = { workspace = true }
 which = { workspace = true }
 
 [dev-dependencies]
-escargot = { workspace = true }
+codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }

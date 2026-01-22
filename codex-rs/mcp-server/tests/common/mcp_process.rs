@@ -10,7 +10,6 @@ use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
 
 use anyhow::Context;
-use assert_cmd::prelude::*;
 use codex_mcp_server::CodexToolCallParam;
 
 use mcp_types::CallToolRequestParams;
@@ -27,7 +26,6 @@ use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::process::Command as StdCommand;
 use tokio::process::Command;
 
 pub struct McpProcess {
@@ -55,12 +53,8 @@ impl McpProcess {
         codex_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
     ) -> anyhow::Result<Self> {
-        // Use assert_cmd to locate the binary path and then switch to tokio::process::Command
-        let std_cmd = StdCommand::cargo_bin("codex-mcp-server")
+        let program = codex_utils_cargo_bin::cargo_bin("codex-mcp-server")
             .context("should find binary for codex-mcp-server")?;
-
-        let program = std_cmd.get_program().to_owned();
-
         let mut cmd = Command::new(program);
 
         cmd.stdin(Stdio::piped());
@@ -143,8 +137,10 @@ impl McpProcess {
 
         let initialized = self.read_jsonrpc_message().await?;
         let os_info = os_info::get();
+        let build_version = env!("CARGO_PKG_VERSION");
+        let originator = codex_core::default_client::originator().value;
         let user_agent = format!(
-            "codex_cli_rs/0.0.0 ({} {}; {}) {} (elicitation test; 0.0.0)",
+            "{originator}/{build_version} ({} {}; {}) {} (elicitation test; 0.0.0)",
             os_info.os_type(),
             os_info.version(),
             os_info.architecture().unwrap_or("unknown"),
@@ -297,7 +293,7 @@ impl McpProcess {
         }
     }
 
-    /// Reads notifications until a legacy TaskComplete event is observed:
+    /// Reads notifications until a legacy TurnComplete event is observed:
     /// Method "codex/event" with params.msg.type == "task_complete".
     pub async fn read_stream_until_legacy_task_complete_notification(
         &mut self,

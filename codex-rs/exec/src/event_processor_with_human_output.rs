@@ -18,8 +18,8 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TurnAbortReason;
+use codex_core::protocol::TurnCompleteEvent;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchEndEvent;
@@ -222,10 +222,18 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 ts_msg!(self, "{}", message.style(self.dimmed));
             }
-            EventMsg::StreamError(StreamErrorEvent { message, .. }) => {
+            EventMsg::StreamError(StreamErrorEvent {
+                message,
+                additional_details,
+                ..
+            }) => {
+                let message = match additional_details {
+                    Some(details) if !details.trim().is_empty() => format!("{message} ({details})"),
+                    _ => message,
+                };
                 ts_msg!(self, "{}", message.style(self.dimmed));
             }
-            EventMsg::TaskStarted(_) => {
+            EventMsg::TurnStarted(_) => {
                 // Ignore.
             }
             EventMsg::ElicitationRequest(ev) => {
@@ -241,7 +249,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     "auto-cancelling (not supported in exec mode)".style(self.dimmed)
                 );
             }
-            EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
+            EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
                 let last_message = last_agent_message.as_deref();
                 if let Some(output_file) = self.last_message_path.as_deref() {
                     handle_last_message(last_message, output_file);
@@ -563,6 +571,16 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::ContextCompacted(_) => {
                 ts_msg!(self, "context compacted");
             }
+            EventMsg::CollabAgentSpawnBegin(_)
+            | EventMsg::CollabAgentSpawnEnd(_)
+            | EventMsg::CollabAgentInteractionBegin(_)
+            | EventMsg::CollabAgentInteractionEnd(_)
+            | EventMsg::CollabWaitingBegin(_)
+            | EventMsg::CollabWaitingEnd(_)
+            | EventMsg::CollabCloseBegin(_)
+            | EventMsg::CollabCloseEnd(_) => {
+                // TODO(jif) handle collab tools.
+            }
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::WebSearchBegin(_)
             | EventMsg::ExecApprovalRequest(_)
@@ -572,6 +590,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::GetHistoryEntryResponse(_)
             | EventMsg::McpListToolsResponse(_)
             | EventMsg::ListCustomPromptsResponse(_)
+            | EventMsg::ListSkillsResponse(_)
             | EventMsg::RawResponseItem(_)
             | EventMsg::UserMessage(_)
             | EventMsg::EnteredReviewMode(_)
@@ -584,8 +603,11 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::SkillsUpdateAvailable
             | EventMsg::UndoCompleted(_)
-            | EventMsg::UndoStarted(_) => {}
+            | EventMsg::UndoStarted(_)
+            | EventMsg::ThreadRolledBack(_)
+            | EventMsg::RequestUserInput(_) => {}
         }
         CodexStatus::Running
     }

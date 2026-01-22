@@ -1,0 +1,8 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "app-server",
+    crate_name = "codex_app_server",
+    integration_deps_extra = ["//codex-rs/app-server/tests/common:common"],
+    test_tags = ["no-sandbox"],
+)

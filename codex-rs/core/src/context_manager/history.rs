@@ -1,10 +1,14 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
+use crate::instructions::SkillInstructions;
+use crate::instructions::UserInstructions;
+use crate::session_prefix::is_session_prefix;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
+use crate::user_shell_command::is_user_shell_command_text;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -13,7 +17,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use std::ops::Deref;
 
-/// Transcript of conversation history
+/// Transcript of thread history
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
@@ -64,26 +68,29 @@ impl ContextManager {
         }
     }
 
-    pub(crate) fn get_history(&mut self) -> Vec<ResponseItem> {
+    /// Returns the history prepared for sending to the model. This applies a proper
+    /// normalization and drop un-suited items.
+    pub(crate) fn for_prompt(mut self) -> Vec<ResponseItem> {
         self.normalize_history();
-        self.contents()
+        self.items
+            .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
+        self.items
     }
 
-    // Returns the history prepared for sending to the model.
-    // With extra response items filtered out and GhostCommits removed.
-    pub(crate) fn get_history_for_prompt(&mut self) -> Vec<ResponseItem> {
-        let mut history = self.get_history();
-        Self::remove_ghost_snapshots(&mut history);
-        history
+    /// Returns raw items in the history.
+    pub(crate) fn raw_items(&self) -> &[ResponseItem] {
+        &self.items
     }
 
     // Estimate token usage using byte-based heuristics from the truncation helpers.
     // This is a coarse lower bound, not a tokenizer-accurate count.
     pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
-        let model_family = turn_context.client.get_model_family();
-        let base_tokens =
-            i64::try_from(approx_token_count(model_family.base_instructions.as_str()))
-                .unwrap_or(i64::MAX);
+        let model_info = turn_context.client.get_model_info();
+        let personality = turn_context
+            .personality
+            .or(turn_context.client.config().model_personality);
+        let base_instructions = model_info.get_model_instructions(personality);
+        let base_tokens = i64::try_from(approx_token_count(&base_instructions)).unwrap_or(i64::MAX);
 
         let items_tokens = self.items.iter().fold(0i64, |acc, item| {
             acc + match item {
@@ -94,7 +101,11 @@ impl ContextManager {
                 }
                 | ResponseItem::Compaction {
                     encrypted_content: content,
-                } => estimate_reasoning_length(content.len()) as i64,
+                } => {
+                    let reasoning_bytes = estimate_reasoning_length(content.len());
+                    i64::try_from(approx_tokens_from_byte_count(reasoning_bytes))
+                        .unwrap_or(i64::MAX)
+                }
                 item => {
                     let serialized = serde_json::to_string(item).unwrap_or_default();
                     i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX)
@@ -121,35 +132,67 @@ impl ContextManager {
         self.items = items;
     }
 
-    pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) {
-        let Some(last_item) = self.items.last_mut() else {
-            return;
+    /// Replace image content in the last turn if it originated from a tool output.
+    /// Returns true when a tool image was replaced, false otherwise.
+    pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) -> bool {
+        let Some(index) = self.items.iter().rposition(|item| {
+            matches!(item, ResponseItem::FunctionCallOutput { .. })
+                || matches!(item, ResponseItem::Message { role, .. } if role == "user")
+        }) else {
+            return false;
         };
 
-        match last_item {
-            ResponseItem::Message { role, content, .. } if role == "user" => {
-                for item in content.iter_mut() {
-                    if matches!(item, ContentItem::InputImage { .. }) {
-                        *item = ContentItem::InputText {
-                            text: placeholder.to_string(),
-                        };
-                    }
-                }
-            }
+        match &mut self.items[index] {
             ResponseItem::FunctionCallOutput { output, .. } => {
                 let Some(content_items) = output.content_items.as_mut() else {
-                    return;
+                    return false;
                 };
+                let mut replaced = false;
+                let placeholder = placeholder.to_string();
                 for item in content_items.iter_mut() {
                     if matches!(item, FunctionCallOutputContentItem::InputImage { .. }) {
                         *item = FunctionCallOutputContentItem::InputText {
-                            text: placeholder.to_string(),
+                            text: placeholder.clone(),
                         };
+                        replaced = true;
                     }
                 }
+                replaced
             }
-            _ => {}
+            ResponseItem::Message { role, .. } if role == "user" => false,
+            _ => false,
         }
+    }
+
+    /// Drop the last `num_turns` user turns from this history.
+    ///
+    /// "User turns" are identified as `ResponseItem::Message` entries whose role is `"user"`.
+    ///
+    /// This mirrors thread-rollback semantics:
+    /// - `num_turns == 0` is a no-op
+    /// - if there are no user turns, this is a no-op
+    /// - if `num_turns` exceeds the number of user turns, all user turns are dropped while
+    ///   preserving any items that occurred before the first user message.
+    pub(crate) fn drop_last_n_user_turns(&mut self, num_turns: u32) {
+        if num_turns == 0 {
+            return;
+        }
+
+        let snapshot = self.items.clone();
+        let user_positions = user_message_positions(&snapshot);
+        let Some(&first_user_idx) = user_positions.first() else {
+            self.replace(snapshot);
+            return;
+        };
+
+        let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
+        let cut_idx = if n_from_end >= user_positions.len() {
+            first_user_idx
+        } else {
+            user_positions[user_positions.len() - n_from_end]
+        };
+
+        self.replace(snapshot[..cut_idx].to_vec());
     }
 
     pub(crate) fn update_token_info(
@@ -196,12 +239,19 @@ impl ContextManager {
         token_estimate as usize
     }
 
-    pub(crate) fn get_total_token_usage(&self) -> i64 {
-        self.token_info
+    /// When true, the server already accounted for past reasoning tokens and
+    /// the client should not re-estimate them.
+    pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {
+        let last_tokens = self
+            .token_info
             .as_ref()
             .map(|info| info.last_token_usage.total_tokens)
-            .unwrap_or(0)
-            .saturating_add(self.get_non_last_reasoning_items_tokens() as i64)
+            .unwrap_or(0);
+        if server_reasoning_included {
+            last_tokens
+        } else {
+            last_tokens.saturating_add(self.get_non_last_reasoning_items_tokens() as i64)
+        }
     }
 
     /// This function enforces a couple of invariants on the in-memory history:
@@ -213,15 +263,6 @@ impl ContextManager {
 
         // all outputs must have a corresponding function/tool call
         normalize::remove_orphan_outputs(&mut self.items);
-    }
-
-    /// Returns a clone of the contents in the transcript.
-    fn contents(&self) -> Vec<ResponseItem> {
-        self.items.clone()
-    }
-
-    fn remove_ghost_snapshots(items: &mut Vec<ResponseItem>) {
-        items.retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
     }
 
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
@@ -289,6 +330,50 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
         .checked_div(4)
         .unwrap_or(0)
         .saturating_sub(650)
+}
+
+pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return false;
+    };
+
+    if role != "user" {
+        return false;
+    }
+
+    if UserInstructions::is_user_instructions(content)
+        || SkillInstructions::is_skill_instructions(content)
+    {
+        return false;
+    }
+
+    for content_item in content {
+        match content_item {
+            ContentItem::InputText { text } => {
+                if is_session_prefix(text) || is_user_shell_command_text(text) {
+                    return false;
+                }
+            }
+            ContentItem::OutputText { text } => {
+                if is_session_prefix(text) {
+                    return false;
+                }
+            }
+            ContentItem::InputImage { .. } => {}
+        }
+    }
+
+    true
+}
+
+fn user_message_positions(items: &[ResponseItem]) -> Vec<usize> {
+    let mut positions = Vec::new();
+    for (idx, item) in items.iter().enumerate() {
+        if is_user_turn_boundary(item) {
+            positions.push(idx);
+        }
+    }
+    positions
 }
 
 #[cfg(test)]
