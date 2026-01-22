@@ -45,6 +45,7 @@ use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::external_events::ExternalEvent;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
@@ -166,6 +167,51 @@ pub(crate) struct UserHistoryCell {
     pub text_elements: Vec<TextElement>,
     #[allow(dead_code)]
     pub local_image_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ExternalEventHistoryCell {
+    event: ExternalEvent,
+}
+
+impl HistoryCell for ExternalEventHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+
+        let wrap_width = width
+            .saturating_sub(
+                LIVE_PREFIX_COLS + 1, /* keep a one-column right margin for wrapping */
+            )
+            .max(1);
+
+        let style = user_message_style();
+
+        let ty = crate::external_events::sanitize_inline(&self.event.ty);
+        let title = crate::external_events::sanitize_inline(&self.event.title);
+        let summary = crate::external_events::sanitize_inline(&self.event.summary);
+
+        let header = Line::from(vec![
+            "External event".cyan().bold(),
+            ": ".into(),
+            ty.magenta(),
+            " ".into(),
+            format!("[{}]", self.event.severity.as_label()).cyan().dim(),
+        ])
+        .style(style);
+
+        let body = Line::from(vec![title.bold(), " — ".dim(), summary.into()]).style(style);
+
+        let wrapped = word_wrap_lines(
+            vec![header, body],
+            RtOptions::new(usize::from(wrap_width))
+                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+        );
+
+        lines.push(Line::from("").style(style));
+        lines.extend(prefix_lines(wrapped, "› ".cyan().bold(), "  ".into()));
+        lines.push(Line::from("").style(style));
+        lines
+    }
 }
 
 /// Build logical lines for a user message with styled text elements.
@@ -994,6 +1040,10 @@ pub(crate) fn new_user_prompt(
         text_elements,
         local_image_paths,
     }
+}
+
+pub(crate) fn new_external_event(event: ExternalEvent) -> ExternalEventHistoryCell {
+    ExternalEventHistoryCell { event }
 }
 
 #[derive(Debug)]

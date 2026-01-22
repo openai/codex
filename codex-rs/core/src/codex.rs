@@ -2055,6 +2055,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::AddToHistory { text } => {
                 handlers::add_to_history(&sess, &config, text).await;
             }
+            Op::ExternalEvent { event } => {
+                handlers::external_event(&sess, sub.id.clone(), event).await;
+            }
             Op::GetHistoryEntryRequest { offset, log_id } => {
                 handlers::get_history_entry_request(&sess, &config, sub.id.clone(), offset, log_id)
                     .await;
@@ -2127,6 +2130,8 @@ mod handlers {
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
+    use codex_protocol::external_events::ExternalEvent;
+    use codex_protocol::external_events::ExternalEventEvent;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -2386,6 +2391,14 @@ mod handlers {
                 warn!("failed to append to message history: {e}");
             }
         });
+    }
+
+    pub async fn external_event(sess: &Arc<Session>, sub_id: String, event: ExternalEvent) {
+        sess.send_event_raw(Event {
+            id: sub_id,
+            msg: EventMsg::ExternalEvent(ExternalEventEvent { event }),
+        })
+        .await;
     }
 
     pub async fn get_history_entry_request(

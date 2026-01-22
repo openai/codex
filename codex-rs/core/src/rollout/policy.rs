@@ -41,6 +41,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::AgentMessage(_)
         | EventMsg::AgentReasoning(_)
         | EventMsg::AgentReasoningRawContent(_)
+        | EventMsg::ExternalEvent(_)
         | EventMsg::TokenCount(_)
         | EventMsg::ContextCompacted(_)
         | EventMsg::EnteredReviewMode(_)

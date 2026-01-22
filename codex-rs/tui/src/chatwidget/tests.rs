@@ -845,6 +845,10 @@ async fn make_chatwidget_manual(
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
+        external_events_inbox_tailer: None,
+        pending_external_events: VecDeque::new(),
+        external_event_ids_seen: HashSet::new(),
+        external_event_ids_seen_order: VecDeque::new(),
     };
     (widget, rx, op_rx)
 }

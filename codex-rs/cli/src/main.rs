@@ -31,10 +31,12 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
 
+mod events_cmd;
 mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
+use crate::events_cmd::EventsCli;
 use crate::mcp_cmd::McpCli;
 
 use codex_core::config::Config;
@@ -130,6 +132,9 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+
+    /// Send and inspect external events for a session.
+    Events(EventsCli),
 }
 
 #[derive(Debug, Parser)]
@@ -704,6 +709,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 }
             }
         },
+        Some(Subcommand::Events(events_cli)) => {
+            crate::events_cmd::run_events(events_cli).await?;
+        }
     }
 
     Ok(())

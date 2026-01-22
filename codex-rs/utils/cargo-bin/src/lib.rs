@@ -1,5 +1,8 @@
 use std::ffi::OsString;
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 
 pub use path_absolutize;
 
@@ -39,24 +42,31 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
         }
     }
 
-    match assert_cmd::Command::cargo_bin(name) {
+    let assert_cmd_fallback = match assert_cmd::Command::cargo_bin(name) {
         Ok(cmd) => {
             let abs = absolutize_from_buck_or_cwd(PathBuf::from(cmd.get_program()))?;
             if abs.exists() {
-                Ok(abs)
-            } else {
-                Err(CargoBinError::ResolvedPathDoesNotExist {
-                    key: "assert_cmd::Command::cargo_bin".to_owned(),
-                    path: abs,
-                })
+                return Ok(abs);
             }
+            format!("assert_cmd resolved to {abs:?} but it does not exist")
         }
-        Err(err) => Err(CargoBinError::NotFound {
-            name: name.to_owned(),
-            env_keys,
-            fallback: format!("assert_cmd fallback failed: {err}"),
-        }),
+        Err(err) => format!("assert_cmd fallback failed: {err}"),
+    };
+
+    // Under Bazel/Buck, the `CARGO_BIN_EXE_*` paths should be provided by the test runner.
+    // Running `cargo build` as a fallback is a Cargo-only escape hatch for tests that want to
+    // spawn a workspace binary from a different package (e.g. `codex-tui` tests spawning `codex`).
+    if std::env::var_os("RUNFILES_DIR").is_none() {
+        if let Ok(path) = cargo_build_fallback(name) {
+            return Ok(path);
+        }
     }
+
+    Err(CargoBinError::NotFound {
+        name: name.to_owned(),
+        env_keys,
+        fallback: assert_cmd_fallback,
+    })
 }
 
 fn cargo_bin_env_keys(name: &str) -> Vec<String> {
@@ -177,4 +187,85 @@ pub fn buck_project_root() -> Result<Option<PathBuf>, std::io::Error> {
     }
 
     Ok(None)
+}
+
+fn cargo_build_fallback(name: &str) -> Result<PathBuf, CargoBinError> {
+    static BUILD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = BUILD_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("build lock poisoned");
+
+    let Some(workspace_root) = cargo_workspace_root() else {
+        return Err(CargoBinError::NotFound {
+            name: name.to_owned(),
+            env_keys: cargo_bin_env_keys(name),
+            fallback: "cargo build fallback disabled: could not locate workspace root".to_owned(),
+        });
+    };
+
+    let target_dir = cargo_target_dir(&workspace_root);
+    let bin_path = target_dir
+        .join("debug")
+        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    if bin_path.exists() {
+        return Ok(bin_path);
+    }
+
+    let mut cmd = std::process::Command::new("cargo");
+    cmd.current_dir(&workspace_root)
+        .args(["build", "--quiet", "--bin", name]);
+    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
+        cmd.env("CARGO_TARGET_DIR", target_dir);
+    }
+
+    let output = cmd.output().map_err(|err| CargoBinError::NotFound {
+        name: name.to_owned(),
+        env_keys: cargo_bin_env_keys(name),
+        fallback: format!("cargo build fallback failed to run cargo: {err}"),
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CargoBinError::NotFound {
+            name: name.to_owned(),
+            env_keys: cargo_bin_env_keys(name),
+            fallback: format!("cargo build fallback failed: {stderr}"),
+        });
+    }
+
+    if bin_path.exists() {
+        Ok(bin_path)
+    } else {
+        Err(CargoBinError::NotFound {
+            name: name.to_owned(),
+            env_keys: cargo_bin_env_keys(name),
+            fallback: format!("cargo build succeeded but {bin_path:?} does not exist"),
+        })
+    }
+}
+
+fn cargo_workspace_root() -> Option<PathBuf> {
+    static ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        let start = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        start
+            .ancestors()
+            .find(|ancestor| ancestor.join("Cargo.lock").exists())
+            .map(PathBuf::from)
+    })
+    .clone()
+}
+
+fn cargo_target_dir(workspace_root: &Path) -> PathBuf {
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(dir) => {
+            let dir = PathBuf::from(dir);
+            if dir.is_absolute() {
+                dir
+            } else {
+                workspace_root.join(dir)
+            }
+        }
+        None => workspace_root.join("target"),
+    }
 }

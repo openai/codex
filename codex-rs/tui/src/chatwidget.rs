@@ -114,9 +114,13 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncSeekExt;
+use tokio::io::BufReader;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
+use tracing::warn;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 
@@ -150,6 +154,12 @@ use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::external_events::ExternalEvent;
+use crate::external_events::compact_for_context;
+use crate::external_events::external_events_inbox_path;
+use crate::external_events::format_context_block;
+use crate::external_events::format_event_message;
+use crate::external_events::parse_external_event_line;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
@@ -460,6 +470,10 @@ pub(crate) struct ChatWidget {
     retry_status_header: Option<String>,
     thread_id: Option<ThreadId>,
     forked_from: Option<ThreadId>,
+    external_events_inbox_tailer: Option<JoinHandle<()>>,
+    pending_external_events: VecDeque<ExternalEvent>,
+    external_event_ids_seen: HashSet<String>,
+    external_event_ids_seen_order: VecDeque<String>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -721,6 +735,7 @@ impl ChatWidget {
         self.thread_id = Some(event.session_id);
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = Some(event.rollout_path.clone());
+        self.start_external_events_inbox_tailer(event.session_id);
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -759,6 +774,150 @@ impl ChatWidget {
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
         }
+    }
+
+    pub(crate) fn on_external_event_received(&mut self, event: ExternalEvent) {
+        if self.thread_id.is_none() {
+            return;
+        }
+
+        if event.schema_version != 1 {
+            return;
+        }
+
+        if event.event_id.trim().is_empty() {
+            return;
+        }
+
+        if self.external_event_ids_seen.contains(&event.event_id) {
+            return;
+        }
+
+        self.submit_op(Op::ExternalEvent {
+            event: event.clone(),
+        });
+
+        self.external_event_ids_seen_order
+            .push_back(event.event_id.clone());
+        self.external_event_ids_seen.insert(event.event_id.clone());
+        if self.external_event_ids_seen_order.len() > crate::external_events::MAX_SEEN_EVENT_IDS {
+            if let Some(old) = self.external_event_ids_seen_order.pop_front() {
+                self.external_event_ids_seen.remove(&old);
+            }
+        }
+
+        if self.config.features.enabled(Feature::Steer) && self.is_session_configured() {
+            self.submit_external_event_as_turn(event);
+            return;
+        }
+
+        self.pending_external_events.push_back(event);
+    }
+
+    fn submit_external_event_as_turn(&mut self, event: ExternalEvent) {
+        let text = format_event_message(&event);
+        let items = vec![UserInput::Text {
+            text,
+            text_elements: Vec::new(),
+        }];
+        let op = Op::UserTurn {
+            items,
+            cwd: self.config.cwd.clone(),
+            approval_policy: self.config.approval_policy.value(),
+            sandbox_policy: self.config.sandbox_policy.get().clone(),
+            model: self.stored_collaboration_mode.model().to_string(),
+            effort: self.stored_collaboration_mode.reasoning_effort(),
+            summary: self.config.model_reasoning_summary,
+            final_output_json_schema: None,
+            collaboration_mode: self
+                .collaboration_modes_enabled()
+                .then(|| self.stored_collaboration_mode.clone()),
+        };
+        self.codex_op_tx.send(op).unwrap_or_else(|err| {
+            warn!("failed to send external event op: {err}");
+        });
+    }
+
+    fn start_external_events_inbox_tailer(&mut self, thread_id: ThreadId) {
+        if let Some(handle) = self.external_events_inbox_tailer.take() {
+            handle.abort();
+        }
+
+        let codex_home = self.config.codex_home.clone();
+        let inbox_path = external_events_inbox_path(&codex_home, &thread_id);
+        let app_event_tx = self.app_event_tx.clone();
+
+        self.external_events_inbox_tailer = Some(tokio::spawn(async move {
+            let Some(parent) = inbox_path.parent() else {
+                return;
+            };
+            if let Err(err) = tokio::fs::create_dir_all(parent).await {
+                warn!("failed to create external events dir: {err}");
+                return;
+            }
+
+            if tokio::fs::metadata(&inbox_path).await.is_err()
+                && tokio::fs::File::create(&inbox_path).await.is_err()
+            {
+                warn!("failed to create external events inbox file");
+                return;
+            }
+
+            let file = match tokio::fs::OpenOptions::new()
+                .read(true)
+                .open(&inbox_path)
+                .await
+            {
+                Ok(file) => file,
+                Err(err) => {
+                    warn!("failed to open external events inbox: {err}");
+                    return;
+                }
+            };
+            let mut file = file;
+            if let Err(err) = file.seek(std::io::SeekFrom::End(0)).await {
+                warn!("failed to seek external events inbox: {err}");
+                return;
+            }
+            let mut reader = BufReader::new(file);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) => {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                    Ok(_) => {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        match parse_external_event_line(trimmed) {
+                            Ok(event) => {
+                                app_event_tx.send(AppEvent::ExternalEventReceived(event));
+                            }
+                            Err(err) => {
+                                warn!("failed to parse external event line: {err}");
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        warn!("failed to read external events inbox: {err}");
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                }
+            }
+        }));
+    }
+
+    fn drain_external_events_context_block(&mut self) -> Option<String> {
+        if self.pending_external_events.is_empty() {
+            return None;
+        }
+
+        let mut events: Vec<ExternalEvent> = self.pending_external_events.drain(..).collect();
+        compact_for_context(&mut events);
+        Some(format_context_block(&events))
     }
 
     fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
@@ -1914,6 +2073,10 @@ impl ChatWidget {
             retry_status_header: None,
             thread_id: None,
             forked_from: None,
+            external_events_inbox_tailer: None,
+            pending_external_events: VecDeque::new(),
+            external_event_ids_seen: HashSet::new(),
+            external_event_ids_seen_order: VecDeque::new(),
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
@@ -2033,6 +2196,10 @@ impl ChatWidget {
             retry_status_header: None,
             thread_id: None,
             forked_from: None,
+            external_events_inbox_tailer: None,
+            pending_external_events: VecDeque::new(),
+            external_event_ids_seen: HashSet::new(),
+            external_event_ids_seen_order: VecDeque::new(),
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
@@ -2557,6 +2724,12 @@ impl ChatWidget {
         }
 
         let mut items: Vec<UserInput> = Vec::new();
+        if let Some(external_events) = self.drain_external_events_context_block() {
+            items.push(UserInput::Text {
+                text: external_events,
+                text_elements: Vec::new(),
+            });
+        }
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
         if let Some(stripped) = text.strip_prefix('!') {
@@ -2760,6 +2933,7 @@ impl ChatWidget {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 self.on_background_event(message)
             }
+            EventMsg::ExternalEvent(ev) => self.on_external_event_event(ev),
             EventMsg::UndoStarted(ev) => self.on_undo_started(ev),
             EventMsg::UndoCompleted(ev) => self.on_undo_completed(ev),
             EventMsg::StreamError(StreamErrorEvent {
@@ -2795,6 +2969,11 @@ impl ChatWidget {
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_) => {}
         }
+    }
+
+    fn on_external_event_event(&mut self, ev: codex_protocol::external_events::ExternalEventEvent) {
+        self.add_to_history(history_cell::new_external_event(ev.event));
+        self.request_redraw();
     }
 
     fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
@@ -4943,6 +5122,9 @@ impl ChatWidget {
 impl Drop for ChatWidget {
     fn drop(&mut self) {
         self.stop_rate_limit_poller();
+        if let Some(handle) = self.external_events_inbox_tailer.take() {
+            handle.abort();
+        }
     }
 }
 

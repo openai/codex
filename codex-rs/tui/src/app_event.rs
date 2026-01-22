@@ -18,6 +18,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
+use crate::external_events::ExternalEvent;
 use crate::history_cell::HistoryCell;
 
 use codex_core::features::Feature;
@@ -47,6 +48,7 @@ pub(crate) enum AppEvent {
         thread_id: ThreadId,
         event: Event,
     },
+    ExternalEventReceived(ExternalEvent),
 
     /// Start a new session.
     NewSession,

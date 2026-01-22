@@ -56,6 +56,7 @@ mod diff_render;
 mod exec_cell;
 mod exec_command;
 mod external_editor;
+mod external_events;
 mod file_search;
 mod frames;
 mod get_git_diff;
