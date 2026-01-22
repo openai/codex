@@ -128,7 +128,11 @@ use codex_protocol::items::AgentMessageItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_utils_sleep_inhibitor::SleepInhibitor;
@@ -157,6 +161,11 @@ const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
+const SHARE_REQUEST_PREFIX: &str = "share:";
+const SHARE_SCOPE_QUESTION_ID: &str = "share_scope";
+const SHARE_EMAILS_QUESTION_ID: &str = "share_emails";
+const SHARE_SCOPE_EVERYONE_LABEL: &str = "Everyone using the same blob store";
+const SHARE_SCOPE_EMAIL_LABEL: &str = "Specific emails";
 
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
@@ -402,6 +411,95 @@ pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
     } else {
         "annual".to_string()
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ShareScope {
+    Everyone,
+    Emails,
+}
+
+impl ShareScope {
+    fn label(self) -> &'static str {
+        match self {
+            ShareScope::Everyone => SHARE_SCOPE_EVERYONE_LABEL,
+            ShareScope::Emails => SHARE_SCOPE_EMAIL_LABEL,
+        }
+    }
+}
+
+fn parse_share_scope(response: &RequestUserInputResponse) -> ShareScope {
+    response
+        .answers
+        .get(SHARE_SCOPE_QUESTION_ID)
+        .and_then(|answer| selected_label(answer))
+        .map(|label| {
+            if label == SHARE_SCOPE_EMAIL_LABEL {
+                ShareScope::Emails
+            } else {
+                ShareScope::Everyone
+            }
+        })
+        .unwrap_or(ShareScope::Everyone)
+}
+
+fn parse_share_emails(response: &RequestUserInputResponse) -> Vec<String> {
+    let note = response
+        .answers
+        .get(SHARE_EMAILS_QUESTION_ID)
+        .and_then(extract_user_note);
+    let Some(note) = note else {
+        return Vec::new();
+    };
+    note.split(',')
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn selected_label(answer: &RequestUserInputAnswer) -> Option<String> {
+    answer
+        .answers
+        .iter()
+        .find(|entry| !entry.starts_with("user_note: "))
+        .cloned()
+}
+
+fn extract_user_note(answer: &RequestUserInputAnswer) -> Option<String> {
+    answer
+        .answers
+        .iter()
+        .find_map(|entry| entry.strip_prefix("user_note: ").map(ToString::to_string))
+}
+
+fn share_success_lines(
+    remote_id: ThreadId,
+    scope: ShareScope,
+    emails: &[String],
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(vec!["• ".dim(), "Session shared.".into()].into());
+    lines.push(vec!["  ".into(), "Access: ".dim(), scope.label().into()].into());
+    if matches!(scope, ShareScope::Emails) {
+        let email_list = if emails.is_empty() {
+            "(none provided)".to_string()
+        } else {
+            emails.join(", ")
+        };
+        lines.push(vec!["  ".into(), "Emails: ".dim(), email_list.into()].into());
+    }
+    let fork_command = format!("codex fork {remote_id}");
+    lines.push(vec!["  ".into(), "Fork with: ".dim(), fork_command.cyan()].into());
+    lines.push(
+        vec![
+            "  ".into(),
+            "Remote session id: ".dim(),
+            remote_id.to_string().cyan(),
+        ]
+        .into(),
+    );
+    lines
 }
 
 /// Common initialization parameters shared by all `ChatWidget` constructors.
@@ -3262,6 +3360,9 @@ impl ChatWidget {
             SlashCommand::Fork => {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
+            SlashCommand::Share => {
+                self.start_share_flow();
+            }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
                 if init_target.exists() {
@@ -3630,6 +3731,115 @@ impl ChatWidget {
         );
 
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn start_share_flow(&mut self) {
+        let Some(thread_id) = self.thread_id else {
+            self.add_error_message("Current session is not ready to share yet.".to_string());
+            return;
+        };
+        if self.rollout_path().is_none() {
+            self.add_error_message("Current session is not ready to share yet.".to_string());
+            return;
+        }
+        if self.config.session_object_storage_url.is_none() {
+            self.add_error_message(
+                "Sharing requires `session_object_storage_url` in config.toml.".to_string(),
+            );
+            return;
+        }
+
+        let request_id = format!("{SHARE_REQUEST_PREFIX}{thread_id}");
+        let questions = vec![
+            RequestUserInputQuestion {
+                id: SHARE_SCOPE_QUESTION_ID.to_string(),
+                header: "Share".to_string(),
+                question: "Who should be able to open this shared session?".to_string(),
+                options: Some(vec![
+                    RequestUserInputQuestionOption {
+                        label: SHARE_SCOPE_EVERYONE_LABEL.to_string(),
+                        description: "Anyone with access to the same object store.".to_string(),
+                    },
+                    RequestUserInputQuestionOption {
+                        label: SHARE_SCOPE_EMAIL_LABEL.to_string(),
+                        description: "Restrict to a list of emails (not enforced yet).".to_string(),
+                    },
+                ]),
+            },
+            RequestUserInputQuestion {
+                id: SHARE_EMAILS_QUESTION_ID.to_string(),
+                header: "Emails".to_string(),
+                question: "If sharing with specific emails, list them (comma-separated)."
+                    .to_string(),
+                options: None,
+            },
+        ];
+        self.bottom_pane
+            .push_user_input_request(RequestUserInputEvent {
+                call_id: request_id.clone(),
+                turn_id: request_id,
+                questions,
+            });
+        self.request_redraw();
+    }
+
+    pub(crate) fn is_share_request_id(id: &str) -> bool {
+        id.starts_with(SHARE_REQUEST_PREFIX)
+    }
+
+    pub(crate) fn handle_share_response(&mut self, response: RequestUserInputResponse) {
+        let scope = parse_share_scope(&response);
+        let emails = parse_share_emails(&response);
+
+        // TODO: Enforce email-based access once we have a server-side auth check.
+
+        let Some(storage_url) = self.config.session_object_storage_url.clone() else {
+            self.add_error_message(
+                "Sharing requires `session_object_storage_url` in config.toml.".to_string(),
+            );
+            return;
+        };
+        let owner = self
+            .auth_manager
+            .auth_cached()
+            .and_then(|auth| auth.get_account_email());
+        let Some(owner) = owner else {
+            self.add_error_message(
+                "Sharing requires a signed-in ChatGPT account with an email.".to_string(),
+            );
+            return;
+        };
+        let Some(thread_id) = self.thread_id else {
+            self.add_error_message("Current session is not ready to share yet.".to_string());
+            return;
+        };
+        let Some(rollout_path) = self.rollout_path() else {
+            self.add_error_message("Current session is not ready to share yet.".to_string());
+            return;
+        };
+
+        self.add_info_message("Sharing current session…".to_string(), None);
+
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = codex_core::session_share::upload_rollout_with_owner(
+                &storage_url,
+                thread_id,
+                &owner,
+                &rollout_path,
+            )
+            .await;
+            let cell = match result {
+                Ok(result) => {
+                    let lines = share_success_lines(result.remote_id, scope, &emails);
+                    PlainHistoryCell::new(lines)
+                }
+                Err(err) => {
+                    history_cell::new_error_event(format!("Failed to share session: {err}"))
+                }
+            };
+            app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        });
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {

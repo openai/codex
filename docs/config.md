@@ -24,6 +24,38 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 - https://developers.openai.com/codex/config-reference
 
+## Session sharing (enterprise)
+
+To enable `/share` for enterprise or self-hosted storage, configure:
+
+```
+session_object_storage_url = "https://your-object-store.example.com/codex-sessions/"
+```
+
+You can also use AWS S3 with authenticated requests:
+
+```
+session_object_storage_url = "s3://your-bucket/codex-sessions"
+```
+
+For S3, Codex uses the default AWS credential chain (env vars, shared config, instance roles, etc.) and requires a region (e.g., `AWS_REGION` or a profile default).
+
+You can also use Azure Blob Storage with a SAS URL, either as a standard HTTPS URL or the shorthand `az://` form:
+
+```
+session_object_storage_url = "https://<account>.blob.core.windows.net/<container>/codex-sessions?<sas>"
+```
+
+```
+session_object_storage_url = "az://<account>/<container>/codex-sessions?<sas>"
+```
+
+For Azure, the SAS token must allow read and write access to blob objects under the prefix. Listing is not required.
+
+If you omit the SAS token, Codex will try Azure CLI authentication (`az login`) and request storage scope tokens for the blob API.
+
+For HTTP/HTTPS URLs, the endpoint should support `HEAD`/`PUT` for individual objects. Codex will upload the session rollout (`.jsonl`) under this prefix when sharing.
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

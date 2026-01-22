@@ -1685,6 +1685,10 @@
       ],
       "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`."
     },
+    "session_object_storage_url": {
+      "description": "Base URL for the object store used by /share (enterprise/self-hosted).",
+      "type": "string"
+    },
     "shell_environment_policy": {
       "allOf": [
         {
