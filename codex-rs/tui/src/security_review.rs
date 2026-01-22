@@ -102,6 +102,7 @@ const VALIDATION_PLAN_CONCURRENCY: usize = 8;
 const VALIDATION_REFINE_CONCURRENCY: usize = 8;
 const VALIDATION_EXEC_CONCURRENCY: usize = 8;
 const VALIDATION_AGENT_TIMEOUT_SECS: u64 = 60 * 60;
+const POST_VALIDATION_REFINE_WORKER_TIMEOUT_SECS: u64 = 30 * 60;
 const VALIDATION_EXEC_TIMEOUT_SECS: u64 = 30 * 60;
 const VALIDATION_PREFLIGHT_TIMEOUT_SECS: u64 = 30 * 60;
 const VALIDATION_CURL_TIMEOUT_SECS: u64 = 60;
@@ -22173,7 +22174,7 @@ async fn run_validation_refine_agent(
 ) -> Result<ValidationRefineAgentOutput, BugVerificationFailure> {
     let mut logs: Vec<String> = Vec::new();
     let start = Instant::now();
-    let deadline = start + Duration::from_secs(VALIDATION_AGENT_TIMEOUT_SECS);
+    let deadline = start + Duration::from_secs(POST_VALIDATION_REFINE_WORKER_TIMEOUT_SECS);
     let remaining = || deadline.saturating_duration_since(Instant::now());
     let command_emitter = CommandStatusEmitter::new(progress_sender.clone(), metrics.clone());
     let mut reasoning_accumulator = ReasoningAccumulator::new();
