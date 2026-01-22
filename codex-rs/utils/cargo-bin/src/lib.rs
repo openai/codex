@@ -54,7 +54,7 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
         }
         Err(err) => CargoBinError::NotFound {
             name: name.to_owned(),
-            env_keys: env_keys.clone(),
+            env_keys,
             fallback: format!("assert_cmd fallback failed: {err}"),
         },
     };
@@ -249,12 +249,11 @@ fn find_workspace_root() -> Option<PathBuf> {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     loop {
         let candidate = dir.join("Cargo.toml");
-        if candidate.exists() {
-            if let Ok(contents) = std::fs::read_to_string(&candidate) {
-                if contents.contains("[workspace]") {
-                    return Some(dir);
-                }
-            }
+        if candidate.exists()
+            && let Ok(contents) = std::fs::read_to_string(&candidate)
+            && contents.contains("[workspace]")
+        {
+            return Some(dir);
         }
         if !dir.pop() {
             break;
