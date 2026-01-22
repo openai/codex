@@ -1093,6 +1093,8 @@ async fn make_chatwidget_manual(
         quit_shortcut_key: None,
         is_review_mode: false,
         pre_review_token_info: None,
+        immortality_mode: false,
+        immortality_generation_inflight: false,
         needs_final_message_separator: false,
         had_work_activity: false,
         saw_plan_update_this_turn: false,
