@@ -922,6 +922,13 @@ impl ChatWidget {
             return;
         }
 
+        if matches!(
+            self.rate_limit_switch_prompt,
+            RateLimitSwitchPromptState::Pending
+        ) {
+            return;
+        }
+
         self.open_plan_implementation_prompt();
     }
 

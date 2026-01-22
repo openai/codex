@@ -1300,6 +1300,40 @@ async fn plan_implementation_popup_shows_on_plan_update_without_message() {
     );
 }
 
+#[tokio::test]
+async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.stored_collaboration_mode = CollaborationMode::Plan(Settings {
+        model: chat.current_model().to_string(),
+        reasoning_effort: None,
+        developer_instructions: None,
+    });
+
+    chat.on_task_started();
+    chat.on_plan_update(UpdatePlanArgs {
+        explanation: None,
+        plan: vec![PlanItemArg {
+            step: "First".to_string(),
+            status: StepStatus::Pending,
+        }],
+    });
+    chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
+    chat.on_task_complete(None, false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Approaching rate limits"),
+        "expected rate limit popup, got {popup:?}"
+    );
+    assert!(
+        !popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup to be skipped, got {popup:?}"
+    );
+}
+
 // (removed experimental resize snapshot test)
 
 #[tokio::test]
