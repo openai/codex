@@ -223,11 +223,13 @@ mod tests {
                 id: Some("m1".into()),
                 role: "assistant".into(),
                 content: Vec::new(),
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: None,
                 role: "assistant".into(),
                 content: Vec::new(),
+                end_turn: None,
             },
         ];
 
@@ -249,10 +251,6 @@ mod tests {
             .collect();
         assert_eq!(ids, vec![Some("m1".to_string()), None]);
 
-        assert_eq!(
-            request.headers.get("conversation_id"),
-            Some(&HeaderValue::from_static("conv-1"))
-        );
         assert_eq!(
             request.headers.get("session_id"),
             Some(&HeaderValue::from_static("conv-1"))

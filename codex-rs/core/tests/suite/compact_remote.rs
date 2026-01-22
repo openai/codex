@@ -58,6 +58,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
             content: vec![ContentItem::InputText {
                 text: "REMOTE_COMPACTED_SUMMARY".to_string(),
             }],
+            end_turn: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -73,6 +74,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello remote compact".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -86,6 +88,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "after compact".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -177,6 +180,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
             content: vec![ContentItem::InputText {
                 text: "REMOTE_COMPACTED_SUMMARY".to_string(),
             }],
+            end_turn: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -192,6 +196,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello remote compact".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })
@@ -243,6 +248,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             content: vec![ContentItem::InputText {
                 text: "COMPACTED_USER_SUMMARY".to_string(),
             }],
+            end_turn: None,
         },
         ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -253,6 +259,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             content: vec![ContentItem::OutputText {
                 text: "COMPACTED_ASSISTANT_NOTE".to_string(),
             }],
+            end_turn: None,
         },
     ];
     let compact_mock = responses::mount_compact_json_once(
@@ -265,6 +272,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "needs compaction".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })

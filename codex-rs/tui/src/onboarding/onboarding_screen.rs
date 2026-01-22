@@ -11,11 +11,11 @@ use ratatui::style::Color;
 use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 
-use codex_app_server_protocol::AuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 use crate::LoginStatus;
 use crate::onboarding::auth::AuthModeWidget;
+use crate::onboarding::auth::SignInOption;
 use crate::onboarding::auth::SignInState;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
@@ -92,8 +92,8 @@ impl OnboardingScreen {
         )));
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
-                Some(ForcedLoginMethod::Api) => AuthMode::ApiKey,
-                _ => AuthMode::ChatGPT,
+                Some(ForcedLoginMethod::Api) => SignInOption::ApiKey,
+                _ => SignInOption::ChatGpt,
             };
             steps.push(Step::Auth(AuthModeWidget {
                 request_frame: tui.frame_requester(),

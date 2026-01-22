@@ -86,8 +86,12 @@ Example (from OpenAI's official VSCode extension):
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `model/list` — list available models (with reasoning effort options).
+- `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
+- `skills/config/write` — write user-level skill config by path.
 - `mcpServer/oauth/login` — start an OAuth login for a configured MCP server; returns an `authorization_url` and later emits `mcpServer/oauthLogin/completed` once the browser flow finishes.
+- `tool/requestUserInput` — prompt the user with 1–3 short questions for a tool call and return their answers (experimental).
+- `config/mcpServer/reload` — reload MCP server config from disk and queue a refresh for loaded threads (applied on each thread's next active turn); returns `{}`. Use this after editing `config.toml` without restarting the server.
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs and conversation_id); returns the tracking thread id.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
@@ -137,10 +141,11 @@ To branch from a stored session, call `thread/fork` with the `thread.id`. This c
 
 ### Example: List threads (with pagination & filters)
 
-`thread/list` lets you render a history UI. Pass any combination of:
+`thread/list` lets you render a history UI. Results default to `createdAt` (newest first) descending. Pass any combination of:
 
 - `cursor` — opaque string from a prior response; omit for the first page.
 - `limit` — server defaults to a reasonable page size if unset.
+- `sortKey` — `created_at` (default) or `updated_at`.
 - `modelProviders` — restrict results to specific providers; unset, null, or an empty array will include all providers.
 
 Example:
@@ -149,11 +154,12 @@ Example:
 { "method": "thread/list", "id": 20, "params": {
     "cursor": null,
     "limit": 25,
+    "sortKey": "created_at"
 } }
 { "id": 20, "result": {
     "data": [
-        { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111 },
-        { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000 }
+        { "id": "thr_a", "preview": "Create a TUI", "modelProvider": "openai", "createdAt": 1730831111, "updatedAt": 1730831111 },
+        { "id": "thr_b", "preview": "Fix tests", "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000 }
     ],
     "nextCursor": "opaque-token-or-null"
 } }
@@ -374,6 +380,7 @@ Today both notifications carry an empty `items` array even when item events were
 - `commandExecution` — `{id, command, cwd, status, commandActions, aggregatedOutput?, exitCode?, durationMs?}` for sandboxed commands; `status` is `inProgress`, `completed`, `failed`, or `declined`.
 - `fileChange` — `{id, changes, status}` describing proposed edits; `changes` list `{path, kind, diff}` and `status` is `inProgress`, `completed`, `failed`, or `declined`.
 - `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?}` describing MCP calls; `status` is `inProgress`, `completed`, or `failed`.
+- `collabToolCall` — `{id, tool, status, senderThreadId, receiverThreadId?, newThreadId?, prompt?, agentStatus?}` describing collab tool calls (`spawn_agent`, `send_input`, `wait`, `close_agent`); `status` is `inProgress`, `completed`, or `failed`.
 - `webSearch` — `{id, query}` for a web search request issued by the agent.
 - `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
 - `enteredReviewMode` — `{id, review}` sent when the reviewer starts; `review` is a short user-facing label such as `"current changes"` or the requested target description.
@@ -438,7 +445,7 @@ Certain actions (shell commands or modifying files) may require explicit user ap
 Order of messages:
 
 1. `item/started` — shows the pending `commandExecution` item with `command`, `cwd`, and other fields so you can render the proposed action.
-2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `reason` or `risk`, plus `parsedCmd` for friendly display.
+2. `item/commandExecution/requestApproval` (request) — carries the same `itemId`, `threadId`, `turnId`, optionally `reason`, plus `command`, `cwd`, and `commandActions` for friendly display.
 3. Client response — `{ "decision": "accept", "acceptSettings": { "forSession": false } }` or `{ "decision": "decline" }`.
 4. `item/completed` — final `commandExecution` item with `status: "completed" | "failed" | "declined"` and execution output. Render this as the authoritative result.
 
@@ -464,8 +471,15 @@ Invoke a skill by including `$<skill-name>` in the text input. Add a `skill` inp
   "params": {
     "threadId": "thread-1",
     "input": [
-      { "type": "text", "text": "$skill-creator Add a new skill for triaging flaky CI." },
-      { "type": "skill", "name": "skill-creator", "path": "/Users/me/.codex/skills/skill-creator/SKILL.md" }
+      {
+        "type": "text",
+        "text": "$skill-creator Add a new skill for triaging flaky CI."
+      },
+      {
+        "type": "skill",
+        "name": "skill-creator",
+        "path": "/Users/me/.codex/skills/skill-creator/SKILL.md"
+      }
     ]
   }
 }
@@ -479,18 +493,47 @@ Example:
 $skill-creator Add a new skill for triaging flaky CI and include step-by-step usage.
 ```
 
-Use `skills/list` to fetch the available skills (optionally scoped by `cwd` and/or with `forceReload`).
+Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
 
 ```json
 { "method": "skills/list", "id": 25, "params": {
-    "cwd": "/Users/me/project",
+    "cwds": ["/Users/me/project"],
     "forceReload": false
 } }
 { "id": 25, "result": {
-    "skills": [
-        { "name": "skill-creator", "description": "Create or update a Codex skill" }
-    ]
+    "data": [{
+        "cwd": "/Users/me/project",
+        "skills": [
+            {
+              "name": "skill-creator",
+              "description": "Create or update a Codex skill",
+              "enabled": true,
+              "interface": {
+                "displayName": "Skill Creator",
+                "shortDescription": "Create or update a Codex skill",
+                "iconSmall": "icon.svg",
+                "iconLarge": "icon-large.svg",
+                "brandColor": "#111111",
+                "defaultPrompt": "Add a new skill for triaging flaky CI."
+              }
+            }
+        ],
+        "errors": []
+    }]
 } }
+```
+
+To enable or disable a skill by path:
+
+```json
+{
+  "method": "skills/config/write",
+  "id": 26,
+  "params": {
+    "path": "/Users/me/.codex/skills/skill-creator/SKILL.md",
+    "enabled": false
+  }
+}
 ```
 
 ## Auth endpoints

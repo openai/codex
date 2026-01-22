@@ -60,6 +60,7 @@ echo -n "${@: -1}" > $(dirname "${0}")/notify.txt"#,
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "hello world".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
         })

@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_core::features::Feature;
+use codex_protocol::config_types::WebSearchMode;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses;
 use core_test_support::responses::start_mock_server;
@@ -24,7 +25,7 @@ fn find_web_search_tool(body: &Value) -> &Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn web_search_cached_sets_external_web_access_false_in_request_body() {
+async fn web_search_mode_cached_sets_external_web_access_false_in_request_body() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
@@ -34,7 +35,7 @@ async fn web_search_cached_sets_external_web_access_false_in_request_body() {
     let mut builder = test_codex()
         .with_model("gpt-5-codex")
         .with_config(|config| {
-            config.features.enable(Feature::WebSearchCached);
+            config.web_search_mode = Some(WebSearchMode::Cached);
         });
     let test = builder
         .build(&server)
@@ -50,12 +51,12 @@ async fn web_search_cached_sets_external_web_access_false_in_request_body() {
     assert_eq!(
         tool.get("external_web_access").and_then(Value::as_bool),
         Some(false),
-        "web_search_cached should force external_web_access=false"
+        "web_search cached mode should force external_web_access=false"
     );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn web_search_cached_takes_precedence_over_web_search_request_in_request_body() {
+async fn web_search_mode_takes_precedence_over_legacy_flags_in_request_body() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
@@ -66,7 +67,7 @@ async fn web_search_cached_takes_precedence_over_web_search_request_in_request_b
         .with_model("gpt-5-codex")
         .with_config(|config| {
             config.features.enable(Feature::WebSearchRequest);
-            config.features.enable(Feature::WebSearchCached);
+            config.web_search_mode = Some(WebSearchMode::Cached);
         });
     let test = builder
         .build(&server)
@@ -82,6 +83,6 @@ async fn web_search_cached_takes_precedence_over_web_search_request_in_request_b
     assert_eq!(
         tool.get("external_web_access").and_then(Value::as_bool),
         Some(false),
-        "web_search_cached should win over web_search_request"
+        "web_search mode should win over legacy web_search_request"
     );
 }

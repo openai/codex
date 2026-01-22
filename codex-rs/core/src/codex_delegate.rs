@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -9,9 +10,12 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::request_user_input::RequestUserInputArgs;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -87,7 +91,7 @@ pub(crate) async fn run_codex_thread_interactive(
         next_id: AtomicU64::new(0),
         tx_sub: tx_ops,
         rx_event: rx_sub,
-        agent_status: Arc::clone(&codex.agent_status),
+        agent_status: codex.agent_status.clone(),
     })
 }
 
@@ -129,7 +133,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     // Bridge events so we can observe completion and shut down automatically.
     let (tx_bridge, rx_bridge) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let ops_tx = io.tx_sub.clone();
-    let agent_status = Arc::clone(&io.agent_status);
+    let agent_status = io.agent_status.clone();
     let io_for_bridge = io;
     tokio::spawn(async move {
         while let Ok(event) = io_for_bridge.next_event().await {
@@ -220,6 +224,20 @@ async fn forward_events(
                         msg: EventMsg::ApplyPatchApprovalRequest(event),
                     } => {
                         handle_patch_approval(
+                            &codex,
+                            id,
+                            &parent_session,
+                            &parent_ctx,
+                            event,
+                            &cancel_token,
+                        )
+                        .await;
+                    }
+                    Event {
+                        id,
+                        msg: EventMsg::RequestUserInput(event),
+                    } => {
+                        handle_request_user_input(
                             &codex,
                             id,
                             &parent_session,
@@ -334,6 +352,55 @@ async fn handle_patch_approval(
     let _ = codex.submit(Op::PatchApproval { id, decision }).await;
 }
 
+async fn handle_request_user_input(
+    codex: &Codex,
+    id: String,
+    parent_session: &Session,
+    parent_ctx: &TurnContext,
+    event: RequestUserInputEvent,
+    cancel_token: &CancellationToken,
+) {
+    let args = RequestUserInputArgs {
+        questions: event.questions,
+    };
+    let response_fut =
+        parent_session.request_user_input(parent_ctx, parent_ctx.sub_id.clone(), args);
+    let response = await_user_input_with_cancel(
+        response_fut,
+        parent_session,
+        &parent_ctx.sub_id,
+        cancel_token,
+    )
+    .await;
+    let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
+}
+
+async fn await_user_input_with_cancel<F>(
+    fut: F,
+    parent_session: &Session,
+    sub_id: &str,
+    cancel_token: &CancellationToken,
+) -> RequestUserInputResponse
+where
+    F: core::future::Future<Output = Option<RequestUserInputResponse>>,
+{
+    tokio::select! {
+        biased;
+        _ = cancel_token.cancelled() => {
+            let empty = RequestUserInputResponse {
+                answers: HashMap::new(),
+            };
+            parent_session
+                .notify_user_input_response(sub_id, empty.clone())
+                .await;
+            empty
+        }
+        response = fut => response.unwrap_or_else(|| RequestUserInputResponse {
+            answers: HashMap::new(),
+        }),
+    }
+}
+
 /// Await an approval decision, aborting on cancellation.
 async fn await_approval_with_cancel<F>(
     fut: F,
@@ -363,20 +430,23 @@ mod tests {
     use super::*;
     use async_channel::bounded;
     use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::AgentStatus;
     use codex_protocol::protocol::RawResponseItemEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use pretty_assertions::assert_eq;
+    use tokio::sync::watch;
 
     #[tokio::test]
     async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
         let (tx_events, rx_events) = bounded(1);
         let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+        let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
         let codex = Arc::new(Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event: rx_events,
-            agent_status: Default::default(),
+            agent_status,
         });
 
         let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;

@@ -77,6 +77,7 @@ async fn test_conversation_create_and_send_message_ok() -> Result<()> {
             conversation_id,
             items: vec![InputItem::Text {
                 text: "Hello".to_string(),
+                text_elements: Vec::new(),
             }],
         })
         .await?;

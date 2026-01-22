@@ -23,7 +23,6 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::time::error::Elapsed;
 use tracing::Span;
-use tracing::trace_span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 pub use crate::OtelEventMetadata;
@@ -41,14 +40,8 @@ impl OtelManager {
         auth_mode: Option<AuthMode>,
         log_user_prompts: bool,
         terminal_type: String,
-        session_source: SessionSource,
+        _session_source: SessionSource,
     ) -> OtelManager {
-        let session_span = trace_span!("new_session", conversation_id = %conversation_id, session_source = %session_source);
-
-        if let Some(context) = traceparent_context_from_env() {
-            let _ = session_span.set_parent(context);
-        }
-
         Self {
             metadata: OtelEventMetadata {
                 conversation_id,
@@ -61,14 +54,15 @@ impl OtelManager {
                 app_version: env!("CARGO_PKG_VERSION"),
                 terminal_type,
             },
-            session_span,
             metrics: crate::metrics::global(),
             metrics_use_metadata_tags: true,
         }
     }
 
-    pub fn current_span(&self) -> &Span {
-        &self.session_span
+    pub fn apply_traceparent_parent(&self, span: &Span) {
+        if let Some(context) = traceparent_context_from_env() {
+            let _ = span.set_parent(context);
+        }
     }
 
     pub fn record_responses(&self, handle_responses_span: &Span, event: &ResponseEvent) {
@@ -330,7 +324,7 @@ impl OtelManager {
         let prompt = items
             .iter()
             .flat_map(|item| match item {
-                UserInput::Text { text } => Some(text.as_str()),
+                UserInput::Text { text, .. } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<String>();
@@ -452,6 +446,11 @@ impl OtelManager {
             1,
             &[("tool", tool_name), ("success", success_str)],
         );
+        self.record_duration(
+            "codex.tool.call.duration_ms",
+            duration,
+            &[("tool", tool_name), ("success", success_str)],
+        );
         tracing::event!(
             tracing::Level::INFO,
             event.name = "codex.tool_result",
@@ -485,6 +484,7 @@ impl OtelManager {
             ResponseEvent::ReasoningSummaryPartAdded { .. } => {
                 "reasoning_summary_part_added".into()
             }
+            ResponseEvent::ServerReasoningIncluded(_) => "server_reasoning_included".into(),
             ResponseEvent::RateLimits(_) => "rate_limits".into(),
             ResponseEvent::ModelsEtag(_) => "models_etag".into(),
         }

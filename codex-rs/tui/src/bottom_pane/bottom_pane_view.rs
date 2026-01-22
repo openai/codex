@@ -1,5 +1,6 @@
 use crate::bottom_pane::ApprovalRequest;
 use crate::render::renderable::Renderable;
+use codex_protocol::request_user_input::RequestUserInputEvent;
 use crossterm::event::KeyEvent;
 
 use super::CancellationEvent;
@@ -32,6 +33,15 @@ pub(crate) trait BottomPaneView: Renderable {
         &mut self,
         request: ApprovalRequest,
     ) -> Option<ApprovalRequest> {
+        Some(request)
+    }
+
+    /// Try to handle request_user_input; return the original value if not
+    /// consumed.
+    fn try_consume_user_input_request(
+        &mut self,
+        request: RequestUserInputEvent,
+    ) -> Option<RequestUserInputEvent> {
         Some(request)
     }
 }

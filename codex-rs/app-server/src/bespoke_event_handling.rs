@@ -14,6 +14,9 @@ use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
+use codex_app_server_protocol::CollabAgentState as V2CollabAgentStatus;
+use codex_app_server_protocol::CollabAgentTool;
+use codex_app_server_protocol::CollabAgentToolCallStatus as V2CollabToolCallStatus;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
@@ -51,6 +54,10 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+use codex_app_server_protocol::ToolRequestUserInputOption;
+use codex_app_server_protocol::ToolRequestUserInputParams;
+use codex_app_server_protocol::ToolRequestUserInputQuestion;
+use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
@@ -80,6 +87,8 @@ use codex_core::review_prompts;
 use codex_protocol::ThreadId;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::path::PathBuf;
@@ -232,6 +241,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                     // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                     item_id: item_id.clone(),
                     reason,
+                    command: Some(command_string.clone()),
+                    cwd: Some(cwd.clone()),
+                    command_actions: Some(command_actions.clone()),
                     proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                 };
                 let rx = outgoing
@@ -255,6 +267,57 @@ pub(crate) async fn apply_bespoke_event_handling(
                 });
             }
         },
+        EventMsg::RequestUserInput(request) => {
+            if matches!(api_version, ApiVersion::V2) {
+                let questions = request
+                    .questions
+                    .into_iter()
+                    .map(|question| ToolRequestUserInputQuestion {
+                        id: question.id,
+                        header: question.header,
+                        question: question.question,
+                        options: question.options.map(|options| {
+                            options
+                                .into_iter()
+                                .map(|option| ToolRequestUserInputOption {
+                                    label: option.label,
+                                    description: option.description,
+                                })
+                                .collect()
+                        }),
+                    })
+                    .collect();
+                let params = ToolRequestUserInputParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: request.turn_id,
+                    item_id: request.call_id,
+                    questions,
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::ToolRequestUserInput(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_request_user_input_response(event_turn_id, rx, conversation).await;
+                });
+            } else {
+                error!(
+                    "request_user_input is only supported on api v2 (call_id: {})",
+                    request.call_id
+                );
+                let empty = CoreRequestUserInputResponse {
+                    answers: HashMap::new(),
+                };
+                if let Err(err) = conversation
+                    .submit(Op::UserInputAnswer {
+                        id: event_turn_id,
+                        response: empty,
+                    })
+                    .await
+                {
+                    error!("failed to submit UserInputAnswer: {err}");
+                }
+            }
+        }
         // TODO(celia): properly construct McpToolCall TurnItem in core.
         EventMsg::McpToolCallBegin(begin_event) => {
             let notification = construct_mcp_tool_call_notification(
@@ -274,6 +337,218 @@ pub(crate) async fn apply_bespoke_event_handling(
                 event_turn_id.clone(),
             )
             .await;
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
+        EventMsg::CollabAgentSpawnBegin(begin_event) => {
+            let item = ThreadItem::CollabAgentToolCall {
+                id: begin_event.call_id,
+                tool: CollabAgentTool::SpawnAgent,
+                status: V2CollabToolCallStatus::InProgress,
+                sender_thread_id: begin_event.sender_thread_id.to_string(),
+                receiver_thread_ids: Vec::new(),
+                prompt: Some(begin_event.prompt),
+                agents_states: HashMap::new(),
+            };
+            let notification = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
+        EventMsg::CollabAgentSpawnEnd(end_event) => {
+            let has_receiver = end_event.new_thread_id.is_some();
+            let status = match &end_event.status {
+                codex_protocol::protocol::AgentStatus::Errored(_)
+                | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
+                _ if has_receiver => V2CollabToolCallStatus::Completed,
+                _ => V2CollabToolCallStatus::Failed,
+            };
+            let (receiver_thread_ids, agents_states) = match end_event.new_thread_id {
+                Some(id) => {
+                    let receiver_id = id.to_string();
+                    let received_status = V2CollabAgentStatus::from(end_event.status.clone());
+                    (
+                        vec![receiver_id.clone()],
+                        [(receiver_id, received_status)].into_iter().collect(),
+                    )
+                }
+                None => (Vec::new(), HashMap::new()),
+            };
+            let item = ThreadItem::CollabAgentToolCall {
+                id: end_event.call_id,
+                tool: CollabAgentTool::SpawnAgent,
+                status,
+                sender_thread_id: end_event.sender_thread_id.to_string(),
+                receiver_thread_ids,
+                prompt: Some(end_event.prompt),
+                agents_states,
+            };
+            let notification = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
+        EventMsg::CollabAgentInteractionBegin(begin_event) => {
+            let receiver_thread_ids = vec![begin_event.receiver_thread_id.to_string()];
+            let item = ThreadItem::CollabAgentToolCall {
+                id: begin_event.call_id,
+                tool: CollabAgentTool::SendInput,
+                status: V2CollabToolCallStatus::InProgress,
+                sender_thread_id: begin_event.sender_thread_id.to_string(),
+                receiver_thread_ids,
+                prompt: Some(begin_event.prompt),
+                agents_states: HashMap::new(),
+            };
+            let notification = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
+        EventMsg::CollabAgentInteractionEnd(end_event) => {
+            let status = match &end_event.status {
+                codex_protocol::protocol::AgentStatus::Errored(_)
+                | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
+                _ => V2CollabToolCallStatus::Completed,
+            };
+            let receiver_id = end_event.receiver_thread_id.to_string();
+            let received_status = V2CollabAgentStatus::from(end_event.status);
+            let item = ThreadItem::CollabAgentToolCall {
+                id: end_event.call_id,
+                tool: CollabAgentTool::SendInput,
+                status,
+                sender_thread_id: end_event.sender_thread_id.to_string(),
+                receiver_thread_ids: vec![receiver_id.clone()],
+                prompt: Some(end_event.prompt),
+                agents_states: [(receiver_id, received_status)].into_iter().collect(),
+            };
+            let notification = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
+        EventMsg::CollabWaitingBegin(begin_event) => {
+            let receiver_thread_ids = begin_event
+                .receiver_thread_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            let item = ThreadItem::CollabAgentToolCall {
+                id: begin_event.call_id,
+                tool: CollabAgentTool::Wait,
+                status: V2CollabToolCallStatus::InProgress,
+                sender_thread_id: begin_event.sender_thread_id.to_string(),
+                receiver_thread_ids,
+                prompt: None,
+                agents_states: HashMap::new(),
+            };
+            let notification = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
+        EventMsg::CollabWaitingEnd(end_event) => {
+            let status = if end_event.statuses.values().any(|status| {
+                matches!(
+                    status,
+                    codex_protocol::protocol::AgentStatus::Errored(_)
+                        | codex_protocol::protocol::AgentStatus::NotFound
+                )
+            }) {
+                V2CollabToolCallStatus::Failed
+            } else {
+                V2CollabToolCallStatus::Completed
+            };
+            let receiver_thread_ids = end_event.statuses.keys().map(ToString::to_string).collect();
+            let agents_states = end_event
+                .statuses
+                .iter()
+                .map(|(id, status)| (id.to_string(), V2CollabAgentStatus::from(status.clone())))
+                .collect();
+            let item = ThreadItem::CollabAgentToolCall {
+                id: end_event.call_id,
+                tool: CollabAgentTool::Wait,
+                status,
+                sender_thread_id: end_event.sender_thread_id.to_string(),
+                receiver_thread_ids,
+                prompt: None,
+                agents_states,
+            };
+            let notification = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(notification))
+                .await;
+        }
+        EventMsg::CollabCloseBegin(begin_event) => {
+            let item = ThreadItem::CollabAgentToolCall {
+                id: begin_event.call_id,
+                tool: CollabAgentTool::CloseAgent,
+                status: V2CollabToolCallStatus::InProgress,
+                sender_thread_id: begin_event.sender_thread_id.to_string(),
+                receiver_thread_ids: vec![begin_event.receiver_thread_id.to_string()],
+                prompt: None,
+                agents_states: HashMap::new(),
+            };
+            let notification = ItemStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemStarted(notification))
+                .await;
+        }
+        EventMsg::CollabCloseEnd(end_event) => {
+            let status = match &end_event.status {
+                codex_protocol::protocol::AgentStatus::Errored(_)
+                | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
+                _ => V2CollabToolCallStatus::Completed,
+            };
+            let receiver_id = end_event.receiver_thread_id.to_string();
+            let agents_states = [(
+                receiver_id.clone(),
+                V2CollabAgentStatus::from(end_event.status),
+            )]
+            .into_iter()
+            .collect();
+            let item = ThreadItem::CollabAgentToolCall {
+                id: end_event.call_id,
+                tool: CollabAgentTool::CloseAgent,
+                status,
+                sender_thread_id: end_event.sender_thread_id.to_string(),
+                receiver_thread_ids: vec![receiver_id],
+                prompt: None,
+                agents_states,
+            };
+            let notification = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
@@ -1129,6 +1404,65 @@ async fn on_exec_approval_response(
         .await
     {
         error!("failed to submit ExecApproval: {err}");
+    }
+}
+
+async fn on_request_user_input_response(
+    event_turn_id: String,
+    receiver: oneshot::Receiver<JsonValue>,
+    conversation: Arc<CodexThread>,
+) {
+    let response = receiver.await;
+    let value = match response {
+        Ok(value) => value,
+        Err(err) => {
+            error!("request failed: {err:?}");
+            let empty = CoreRequestUserInputResponse {
+                answers: HashMap::new(),
+            };
+            if let Err(err) = conversation
+                .submit(Op::UserInputAnswer {
+                    id: event_turn_id,
+                    response: empty,
+                })
+                .await
+            {
+                error!("failed to submit UserInputAnswer: {err}");
+            }
+            return;
+        }
+    };
+
+    let response =
+        serde_json::from_value::<ToolRequestUserInputResponse>(value).unwrap_or_else(|err| {
+            error!("failed to deserialize ToolRequestUserInputResponse: {err}");
+            ToolRequestUserInputResponse {
+                answers: HashMap::new(),
+            }
+        });
+    let response = CoreRequestUserInputResponse {
+        answers: response
+            .answers
+            .into_iter()
+            .map(|(id, answer)| {
+                (
+                    id,
+                    CoreRequestUserInputAnswer {
+                        answers: answer.answers,
+                    },
+                )
+            })
+            .collect(),
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::UserInputAnswer {
+            id: event_turn_id,
+            response,
+        })
+        .await
+    {
+        error!("failed to submit UserInputAnswer: {err}");
     }
 }
 

@@ -20,11 +20,12 @@ use codex_rmcp_client::perform_oauth_login;
 use codex_rmcp_client::supports_oauth_login;
 
 /// Subcommands:
-/// - `serve`  — run the MCP server on stdio
 /// - `list`   — list configured servers (with `--json`)
 /// - `get`    — show a single server (with `--json`)
 /// - `add`    — add a server launcher entry to `~/.codex/config.toml`
 /// - `remove` — delete a server entry
+/// - `login`  — authenticate with MCP server using OAuth
+/// - `logout` — remove OAuth credentials for MCP server
 #[derive(Debug, clap::Parser)]
 pub struct McpCli {
     #[clap(flatten)]
@@ -241,6 +242,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     let new_entry = McpServerConfig {
         transport: transport.clone(),
         enabled: true,
+        disabled_reason: None,
         startup_timeout_sec: None,
         tool_timeout_sec: None,
         enabled_tools: None,
@@ -274,6 +276,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                     http_headers.clone(),
                     env_http_headers.clone(),
                     &Vec::new(),
+                    config.mcp_oauth_callback_port,
                 )
                 .await?;
                 println!("Successfully logged in.");
@@ -331,7 +334,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
 
     let LoginArgs { name, scopes } = login_args;
 
-    let Some(server) = config.mcp_servers.get(&name) else {
+    let Some(server) = config.mcp_servers.get().get(&name) else {
         bail!("No MCP server named '{name}' found.");
     };
 
@@ -352,6 +355,7 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         http_headers,
         env_http_headers,
         &scopes,
+        config.mcp_oauth_callback_port,
     )
     .await?;
     println!("Successfully logged in to MCP server '{name}'.");
@@ -370,6 +374,7 @@ async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutAr
 
     let server = config
         .mcp_servers
+        .get()
         .get(&name)
         .ok_or_else(|| anyhow!("No MCP server named '{name}' found in configuration."))?;
 
@@ -445,6 +450,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                 serde_json::json!({
                     "name": name,
                     "enabled": cfg.enabled,
+                    "disabled_reason": cfg.disabled_reason.as_ref().map(ToString::to_string),
                     "transport": transport,
                     "startup_timeout_sec": cfg
                         .startup_timeout_sec
@@ -489,11 +495,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     .map(|path| path.display().to_string())
                     .filter(|value| !value.is_empty())
                     .unwrap_or_else(|| "-".to_string());
-                let status = if cfg.enabled {
-                    "enabled".to_string()
-                } else {
-                    "disabled".to_string()
-                };
+                let status = format_mcp_status(cfg);
                 let auth_status = auth_statuses
                     .get(name.as_str())
                     .map(|entry| entry.auth_status)
@@ -514,11 +516,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                 bearer_token_env_var,
                 ..
             } => {
-                let status = if cfg.enabled {
-                    "enabled".to_string()
-                } else {
-                    "disabled".to_string()
-                };
+                let status = format_mcp_status(cfg);
                 let auth_status = auth_statuses
                     .get(name.as_str())
                     .map(|entry| entry.auth_status)
@@ -652,7 +650,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
         .await
         .context("failed to load configuration")?;
 
-    let Some(server) = config.mcp_servers.get(&get_args.name) else {
+    let Some(server) = config.mcp_servers.get().get(&get_args.name) else {
         bail!("No MCP server named '{name}' found.", name = get_args.name);
     };
 
@@ -688,6 +686,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
         let output = serde_json::to_string_pretty(&serde_json::json!({
             "name": get_args.name,
             "enabled": server.enabled,
+            "disabled_reason": server.disabled_reason.as_ref().map(ToString::to_string),
             "transport": transport,
             "enabled_tools": server.enabled_tools.clone(),
             "disabled_tools": server.disabled_tools.clone(),
@@ -703,7 +702,11 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
     }
 
     if !server.enabled {
-        println!("{} (disabled)", get_args.name);
+        if let Some(reason) = server.disabled_reason.as_ref() {
+            println!("{name} (disabled: {reason})", name = get_args.name);
+        } else {
+            println!("{name} (disabled)", name = get_args.name);
+        }
         return Ok(());
     }
 
@@ -823,5 +826,15 @@ fn validate_server_name(name: &str) -> Result<()> {
         Ok(())
     } else {
         bail!("invalid server name '{name}' (use letters, numbers, '-', '_')");
+    }
+}
+
+fn format_mcp_status(config: &McpServerConfig) -> String {
+    if config.enabled {
+        "enabled".to_string()
+    } else if let Some(reason) = config.disabled_reason.as_ref() {
+        format!("disabled: {reason}")
+    } else {
+        "disabled".to_string()
     }
 }

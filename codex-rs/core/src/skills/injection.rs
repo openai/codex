@@ -1,8 +1,10 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 
+use crate::instructions::SkillInstructions;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::SkillMetadata;
-use crate::user_instructions::SkillInstructions;
+use codex_otel::OtelManager;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use tokio::fs;
@@ -16,6 +18,7 @@ pub(crate) struct SkillInjections {
 pub(crate) async fn build_skill_injections(
     inputs: &[UserInput],
     skills: Option<&SkillLoadOutcome>,
+    otel: Option<&OtelManager>,
 ) -> SkillInjections {
     if inputs.is_empty() {
         return SkillInjections::default();
@@ -25,7 +28,8 @@ pub(crate) async fn build_skill_injections(
         return SkillInjections::default();
     };
 
-    let mentioned_skills = collect_explicit_skill_mentions(inputs, &outcome.skills);
+    let mentioned_skills =
+        collect_explicit_skill_mentions(inputs, &outcome.skills, &outcome.disabled_paths);
     if mentioned_skills.is_empty() {
         return SkillInjections::default();
     }
@@ -38,6 +42,7 @@ pub(crate) async fn build_skill_injections(
     for skill in mentioned_skills {
         match fs::read_to_string(&skill.path).await {
             Ok(contents) => {
+                emit_skill_injected_metric(otel, &skill, "ok");
                 result.items.push(ResponseItem::from(SkillInstructions {
                     name: skill.name,
                     path: skill.path.to_string_lossy().into_owned(),
@@ -45,10 +50,11 @@ pub(crate) async fn build_skill_injections(
                 }));
             }
             Err(err) => {
+                emit_skill_injected_metric(otel, &skill, "error");
                 let message = format!(
-                    "Failed to load skill {} at {}: {err:#}",
-                    skill.name,
-                    skill.path.display()
+                    "Failed to load skill {name} at {path}: {err:#}",
+                    name = skill.name,
+                    path = skill.path.display()
                 );
                 result.warnings.push(message);
             }
@@ -58,9 +64,22 @@ pub(crate) async fn build_skill_injections(
     result
 }
 
+fn emit_skill_injected_metric(otel: Option<&OtelManager>, skill: &SkillMetadata, status: &str) {
+    let Some(otel) = otel else {
+        return;
+    };
+
+    otel.counter(
+        "codex.skill.injected",
+        1,
+        &[("status", status), ("skill", skill.name.as_str())],
+    );
+}
+
 fn collect_explicit_skill_mentions(
     inputs: &[UserInput],
     skills: &[SkillMetadata],
+    disabled_paths: &HashSet<PathBuf>,
 ) -> Vec<SkillMetadata> {
     let mut selected: Vec<SkillMetadata> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -69,6 +88,7 @@ fn collect_explicit_skill_mentions(
         if let UserInput::Skill { name, path } = input
             && seen.insert(name.clone())
             && let Some(skill) = skills.iter().find(|s| s.name == *name && s.path == *path)
+            && !disabled_paths.contains(&skill.path)
         {
             selected.push(skill.clone());
         }

@@ -4,7 +4,7 @@ archive_override(
     module_name = "toolchains_llvm_bootstrapped",
     integrity = "sha256-4/2h4tYSUSptxFVI9G50yJxWGOwHSeTeOGBlaLQBV8g=",
     strip_prefix = "toolchains_llvm_bootstrapped-d20baf67e04d8e2887e3779022890d1dc5e6b948",
-    urls = ["https://github.com/cerisier/toolchains_llvm_bootstrapped/archive/d20baf67e04d8e2887e3779022890d1dc5e6b948/master.tar.gz"],
+    urls = ["https://github.com/cerisier/toolchains_llvm_bootstrapped/archive/d20baf67e04d8e2887e3779022890d1dc5e6b948.tar.gz"],
 )
 
 osx = use_extension("@toolchains_llvm_bootstrapped//toolchain/extension:osx.bzl", "osx")
@@ -91,7 +91,7 @@ crate.annotation(
     crate = "windows-link",
     patch_args = ["-p1"],
     patches = [
-        "//patches:windows-link.patch"
+        "//patches:windows-link.patch",
     ],
 )
 

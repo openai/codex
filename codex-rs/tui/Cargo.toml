@@ -39,6 +39,7 @@ codex-core = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
 codex-login = { workspace = true }
+codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 color-eyre = { workspace = true }
@@ -113,7 +114,10 @@ arboard = { workspace = true }
 
 
 [dev-dependencies]
+codex-cli = { workspace = true }
 codex-core = { workspace = true, features = ["test-support"] }
+codex-utils-cargo-bin = { workspace = true }
+codex-utils-pty = { workspace = true }
 assert_matches = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }

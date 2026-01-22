@@ -386,6 +386,7 @@ mod tests {
             content: vec![ContentItem::InputText {
                 text: "hi".to_string(),
             }],
+            end_turn: None,
         }];
         let req = ChatRequestBuilder::new("gpt-test", "inst", &prompt_input, &[])
             .conversation_id(Some("conv-1".into()))
@@ -393,10 +394,6 @@ mod tests {
             .build(&provider())
             .expect("request");
 
-        assert_eq!(
-            req.headers.get("conversation_id"),
-            Some(&HeaderValue::from_static("conv-1"))
-        );
         assert_eq!(
             req.headers.get("session_id"),
             Some(&HeaderValue::from_static("conv-1"))
@@ -416,6 +413,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "read these".to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::FunctionCall {
                 id: None,

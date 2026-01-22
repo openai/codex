@@ -30,10 +30,16 @@ pub trait ToolHandler: Send + Sync {
         )
     }
 
+    /// Returns `true` if the [ToolInvocation] *might* mutate the environment of the
+    /// user (through file system, OS operations, ...).
+    /// This function must remains defensive and return `true` if a doubt exist on the
+    /// exact effect of a ToolInvocation.
     async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         false
     }
 
+    /// Perform the actual [ToolInvocation] and returns a [ToolOutput] containing
+    /// the final output to return to the model.
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError>;
 }
 

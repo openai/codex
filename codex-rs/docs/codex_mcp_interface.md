@@ -20,6 +20,7 @@ At a glance:
 - Configuration and info
   - `getUserSavedConfig`, `setDefaultModel`, `getUserAgent`, `userInfo`
   - `model/list` → enumerate available models and reasoning options
+  - `collaborationMode/list` → enumerate collaboration mode presets (experimental)
 - Auth
   - `account/read`, `account/login/start`, `account/login/cancel`, `account/logout`, `account/rateLimits/read`
   - notifications: `account/login/completed`, `account/updated`, `account/rateLimits/updated`
@@ -96,6 +97,12 @@ Each response yields:
   - `isDefault` – whether the model is recommended for most users
 - `nextCursor` – pass into the next request to continue paging (optional)
 
+## Collaboration modes (experimental)
+
+Fetch the built-in collaboration mode presets with `collaborationMode/list`. This endpoint does not accept pagination and returns the full list in one response:
+
+- `data` – ordered list of collaboration mode presets
+
 ## Event stream
 
 While a conversation runs, the server sends notifications:
@@ -104,6 +111,24 @@ While a conversation runs, the server sends notifications:
 - Auth notifications via method names `loginChatGptComplete` and `authStatusChange`.
 
 Clients should render events and, when present, surface approval requests (see next section).
+
+## Tool responses
+
+The `codex` and `codex-reply` tools return standard MCP `CallToolResult` payloads. For
+compatibility with MCP clients that prefer `structuredContent`, Codex mirrors the
+content blocks inside `structuredContent` alongside the `threadId`.
+
+Example:
+
+```json
+{
+  "content": [{ "type": "text", "text": "Hello from Codex" }],
+  "structuredContent": {
+    "threadId": "019bbed6-1e9e-7f31-984c-a05b65045719",
+    "content": "Hello from Codex"
+  }
+}
+```
 
 ## Approvals (server → client)
 

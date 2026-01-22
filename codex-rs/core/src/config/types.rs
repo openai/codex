@@ -3,20 +3,43 @@
 // Note this file should generally be restricted to simple struct/enum
 // definitions that do not contain business logic.
 
+use crate::config_loader::RequirementSource;
 pub use codex_protocol::config_types::AltScreenMode;
+pub use codex_protocol::config_types::ModeKind;
+pub use codex_protocol::config_types::Personality;
+pub use codex_protocol::config_types::WebSearchMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 use wildmatch::WildMatchPattern;
 
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpServerDisabledReason {
+    Unknown,
+    Requirements { source: RequirementSource },
+}
+
+impl fmt::Display for McpServerDisabledReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            McpServerDisabledReason::Unknown => write!(f, "unknown"),
+            McpServerDisabledReason::Requirements { source } => {
+                write!(f, "requirements ({source})")
+            }
+        }
+    }
+}
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
@@ -26,6 +49,10 @@ pub struct McpServerConfig {
     /// When `false`, Codex skips initializing this MCP server.
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+
+    /// Reason this server was disabled after applying requirements.
+    #[serde(skip)]
+    pub disabled_reason: Option<McpServerDisabledReason>,
 
     /// Startup timeout in seconds for initializing MCP server & initially listing tools.
     #[serde(
@@ -48,47 +75,51 @@ pub struct McpServerConfig {
     pub disabled_tools: Option<Vec<String>>,
 }
 
+// Raw MCP config shape used for deserialization and JSON Schema generation.
+// Keep this in sync with the validation logic in `McpServerConfig`.
+#[derive(Deserialize, Clone, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(crate) struct RawMcpServerConfig {
+    // stdio
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub env_vars: Option<Vec<String>>,
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
+    pub http_headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub env_http_headers: Option<HashMap<String, String>>,
+
+    // streamable_http
+    pub url: Option<String>,
+    pub bearer_token: Option<String>,
+    pub bearer_token_env_var: Option<String>,
+
+    // shared
+    #[serde(default)]
+    pub startup_timeout_sec: Option<f64>,
+    #[serde(default)]
+    pub startup_timeout_ms: Option<u64>,
+    #[serde(default, with = "option_duration_secs")]
+    #[schemars(with = "Option<f64>")]
+    pub tool_timeout_sec: Option<Duration>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub enabled_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub disabled_tools: Option<Vec<String>>,
+}
+
 impl<'de> Deserialize<'de> for McpServerConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize, Clone)]
-        struct RawMcpServerConfig {
-            // stdio
-            command: Option<String>,
-            #[serde(default)]
-            args: Option<Vec<String>>,
-            #[serde(default)]
-            env: Option<HashMap<String, String>>,
-            #[serde(default)]
-            env_vars: Option<Vec<String>>,
-            #[serde(default)]
-            cwd: Option<PathBuf>,
-            http_headers: Option<HashMap<String, String>>,
-            #[serde(default)]
-            env_http_headers: Option<HashMap<String, String>>,
-
-            // streamable_http
-            url: Option<String>,
-            bearer_token: Option<String>,
-            bearer_token_env_var: Option<String>,
-
-            // shared
-            #[serde(default)]
-            startup_timeout_sec: Option<f64>,
-            #[serde(default)]
-            startup_timeout_ms: Option<u64>,
-            #[serde(default, with = "option_duration_secs")]
-            tool_timeout_sec: Option<Duration>,
-            #[serde(default)]
-            enabled: Option<bool>,
-            #[serde(default)]
-            enabled_tools: Option<Vec<String>>,
-            #[serde(default)]
-            disabled_tools: Option<Vec<String>>,
-        }
-
         let mut raw = RawMcpServerConfig::deserialize(deserializer)?;
 
         let startup_timeout_sec = match (raw.startup_timeout_sec, raw.startup_timeout_ms) {
@@ -154,6 +185,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             startup_timeout_sec,
             tool_timeout_sec,
             enabled,
+            disabled_reason: None,
             enabled_tools,
             disabled_tools,
         })
@@ -164,7 +196,7 @@ const fn default_enabled() -> bool {
     true
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged, deny_unknown_fields, rename_all = "snake_case")]
 pub enum McpServerTransportConfig {
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio
@@ -222,7 +254,7 @@ mod option_duration_secs {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, JsonSchema)]
 pub enum UriBasedFileOpener {
     #[serde(rename = "vscode")]
     VsCode,
@@ -254,7 +286,8 @@ impl UriBasedFileOpener {
 }
 
 /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct History {
     /// If true, history entries will not be written to disk.
     pub persistence: HistoryPersistence,
@@ -264,7 +297,7 @@ pub struct History {
     pub max_bytes: Option<usize>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Default, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum HistoryPersistence {
     /// Save all history entries to disk.
@@ -277,13 +310,15 @@ pub enum HistoryPersistence {
 // ===== Analytics configuration =====
 
 /// Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct AnalyticsConfigToml {
     /// When `false`, disables analytics across Codex product surfaces in this profile.
     pub enabled: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct FeedbackConfigToml {
     /// When `false`, disables the feedback flow across Codex product surfaces.
     pub enabled: Option<bool>,
@@ -291,7 +326,7 @@ pub struct FeedbackConfigToml {
 
 // ===== OTEL configuration =====
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum OtelHttpProtocol {
     /// Binary payload
@@ -300,7 +335,8 @@ pub enum OtelHttpProtocol {
     Json,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub struct OtelTlsConfig {
     pub ca_certificate: Option<AbsolutePathBuf>,
@@ -309,7 +345,8 @@ pub struct OtelTlsConfig {
 }
 
 /// Which OTEL exporter to use.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 #[serde(rename_all = "kebab-case")]
 pub enum OtelExporterKind {
     None,
@@ -332,7 +369,8 @@ pub enum OtelExporterKind {
 }
 
 /// OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct OtelConfigToml {
     /// Log user prompt in traces
     pub log_user_prompt: Option<bool>,
@@ -369,7 +407,7 @@ impl Default for OtelConfig {
     }
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Notifications {
     Enabled(bool),
@@ -382,30 +420,9 @@ impl Default for Notifications {
     }
 }
 
-/// How TUI2 should interpret mouse scroll events.
-///
-/// Terminals generally encode both mouse wheels and trackpads as the same "scroll up/down" mouse
-/// button events, without a magnitude. This setting controls whether Codex uses a heuristic to
-/// infer wheel vs trackpad per stream, or forces a specific behavior.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ScrollInputMode {
-    /// Infer wheel vs trackpad behavior per scroll stream.
-    Auto,
-    /// Always treat scroll events as mouse-wheel input (fixed lines per tick).
-    Wheel,
-    /// Always treat scroll events as trackpad input (fractional accumulation).
-    Trackpad,
-}
-
-impl Default for ScrollInputMode {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
-
 /// Collection of settings that are specific to the TUI.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct Tui {
     /// Enable desktop notifications from the TUI when the terminal is unfocused.
     /// Defaults to `true`.
@@ -422,108 +439,10 @@ pub struct Tui {
     #[serde(default = "default_true")]
     pub show_tooltips: bool,
 
-    /// Override the *wheel* event density used to normalize TUI2 scrolling.
-    ///
-    /// Terminals generally deliver both mouse wheels and trackpads as discrete `scroll up/down`
-    /// mouse events with direction but no magnitude. Unfortunately, the *number* of raw events
-    /// per physical wheel notch varies by terminal (commonly 1, 3, or 9+). TUI2 uses this value
-    /// to normalize that raw event density into consistent "wheel tick" behavior.
-    ///
-    /// Wheel math (conceptually):
-    ///
-    /// - A single event contributes `1 / scroll_events_per_tick` tick-equivalents.
-    /// - Wheel-like streams then scale that by `scroll_wheel_lines` so one physical notch scrolls
-    ///   a fixed number of lines.
-    ///
-    /// Trackpad math is intentionally *not* fully tied to this value: in trackpad-like mode, TUI2
-    /// uses `min(scroll_events_per_tick, 3)` as the divisor so terminals with dense wheel ticks
-    /// (e.g. 9 events per notch) do not make trackpads feel artificially slow.
-    ///
-    /// Defaults are derived per terminal from [`crate::terminal::TerminalInfo`] when TUI2 starts.
-    /// See `codex-rs/tui2/docs/scroll_input_model.md` for the probe data and rationale.
-    pub scroll_events_per_tick: Option<u16>,
-
-    /// Override how many transcript lines one physical *wheel notch* should scroll in TUI2.
-    ///
-    /// This is the "classic feel" knob. Defaults to 3.
-    ///
-    /// Wheel-like per-event contribution is `scroll_wheel_lines / scroll_events_per_tick`. For
-    /// example, in a terminal that emits 9 events per notch, the default `3 / 9` yields 1/3 of a
-    /// line per event and totals 3 lines once the full notch burst arrives.
-    ///
-    /// See `codex-rs/tui2/docs/scroll_input_model.md` for details on the stream model and the
-    /// wheel/trackpad heuristic.
-    pub scroll_wheel_lines: Option<u16>,
-
-    /// Override baseline trackpad scroll sensitivity in TUI2.
-    ///
-    /// Trackpads do not have discrete notches, but terminals still emit discrete `scroll up/down`
-    /// events. In trackpad-like mode, TUI2 accumulates fractional scroll and only applies whole
-    /// lines to the viewport.
-    ///
-    /// Trackpad per-event contribution is:
-    ///
-    /// - `scroll_trackpad_lines / min(scroll_events_per_tick, 3)`
-    ///
-    /// (plus optional bounded acceleration; see `scroll_trackpad_accel_*`). The `min(..., 3)`
-    /// divisor is deliberate: `scroll_events_per_tick` is calibrated from *wheel* behavior and
-    /// can be much larger than trackpad event density, which would otherwise make trackpads feel
-    /// too slow in dense-wheel terminals.
-    ///
-    /// Defaults to 1, meaning one tick-equivalent maps to one transcript line.
-    pub scroll_trackpad_lines: Option<u16>,
-
-    /// Trackpad acceleration: approximate number of events required to gain +1x speed in TUI2.
-    ///
-    /// This keeps small swipes precise while allowing large/faster swipes to cover more content.
-    /// Defaults are chosen to address terminals where trackpad event density is comparatively low.
-    ///
-    /// Concretely, TUI2 computes an acceleration multiplier for trackpad-like streams:
-    ///
-    /// - `multiplier = clamp(1 + abs(events) / scroll_trackpad_accel_events, 1..scroll_trackpad_accel_max)`
-    ///
-    /// The multiplier is applied to the stream’s computed line delta (including any carried
-    /// fractional remainder).
-    pub scroll_trackpad_accel_events: Option<u16>,
-
-    /// Trackpad acceleration: maximum multiplier applied to trackpad-like streams.
-    ///
-    /// Set to 1 to effectively disable trackpad acceleration.
-    ///
-    /// See [`Tui::scroll_trackpad_accel_events`] for the exact multiplier formula.
-    pub scroll_trackpad_accel_max: Option<u16>,
-
-    /// Select how TUI2 interprets mouse scroll input.
-    ///
-    /// - `auto` (default): infer wheel vs trackpad per scroll stream.
-    /// - `wheel`: always use wheel behavior (fixed lines per wheel notch).
-    /// - `trackpad`: always use trackpad behavior (fractional accumulation; wheel may feel slow).
+    /// Start the TUI in the specified collaboration mode (plan/execute/etc.).
+    /// Defaults to unset.
     #[serde(default)]
-    pub scroll_mode: ScrollInputMode,
-
-    /// Auto-mode threshold: maximum time (ms) for the first tick-worth of events to arrive.
-    ///
-    /// In `scroll_mode = "auto"`, TUI2 starts a stream as trackpad-like (to avoid overshoot) and
-    /// promotes it to wheel-like if `scroll_events_per_tick` events arrive "quickly enough". This
-    /// threshold controls what "quickly enough" means.
-    ///
-    /// Most users should leave this unset; it is primarily for terminals that emit wheel ticks
-    /// batched over longer time spans.
-    pub scroll_wheel_tick_detect_max_ms: Option<u64>,
-
-    /// Auto-mode fallback: maximum duration (ms) that a very small stream is still treated as wheel-like.
-    ///
-    /// This is only used when `scroll_events_per_tick` is effectively 1 (one event per wheel
-    /// notch). In that case, we cannot observe a "tick completion time", so TUI2 treats a
-    /// short-lived, small stream (<= 2 events) as wheel-like to preserve classic wheel behavior.
-    pub scroll_wheel_like_max_duration_ms: Option<u64>,
-
-    /// Invert mouse scroll direction in TUI2.
-    ///
-    /// This flips the scroll sign after terminal detection. It is applied consistently to both
-    /// wheel and trackpad input.
-    #[serde(default)]
-    pub scroll_invert: bool,
+    pub experimental_mode: Option<ModeKind>,
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
@@ -544,7 +463,8 @@ const fn default_true() -> bool {
 /// Settings for notices we display to users via the tui and app-server clients
 /// (primarily the Codex IDE extension). NOTE: these are different from
 /// notifications - notices are warnings, NUX screens, acknowledgements, etc.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct Notice {
     /// Tracks whether the user has acknowledged the full access warning prompt.
     pub hide_full_access_warning: Option<bool>,
@@ -567,7 +487,22 @@ impl Notice {
     pub(crate) const TABLE_KEY: &'static str = "notice";
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SkillConfig {
+    pub path: AbsolutePathBuf,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SkillsConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config: Vec<SkillConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]
     pub writable_roots: Vec<AbsolutePathBuf>,
@@ -590,7 +525,7 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellEnvironmentPolicyInherit {
     /// "Core" environment variables for the platform. On UNIX, this would
@@ -607,7 +542,8 @@ pub enum ShellEnvironmentPolicyInherit {
 
 /// Policy for building the `env` when spawning a process via either the
 /// `shell` or `local_shell` tool.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct ShellEnvironmentPolicyToml {
     pub inherit: Option<ShellEnvironmentPolicyInherit>,
 

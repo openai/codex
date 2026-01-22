@@ -9,7 +9,7 @@ use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::metrics::MetricsError;
 use crate::metrics::Result as MetricsResult;
-use crate::metrics::timer::Timer;
+pub use crate::metrics::timer::Timer;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use crate::otel_provider::OtelProvider;
@@ -17,7 +17,6 @@ use codex_protocol::ThreadId;
 use serde::Serialize;
 use std::time::Duration;
 use strum_macros::Display;
-use tracing::Span;
 
 #[derive(Debug, Clone, Serialize, Display)]
 #[serde(rename_all = "snake_case")]
@@ -42,7 +41,6 @@ pub struct OtelEventMetadata {
 #[derive(Debug, Clone)]
 pub struct OtelManager {
     pub(crate) metadata: OtelEventMetadata,
-    pub(crate) session_span: Span,
     pub(crate) metrics: Option<MetricsClient>,
     pub(crate) metrics_use_metadata_tags: bool,
 }
@@ -171,4 +169,12 @@ impl OtelManager {
         tags.push((key, value));
         Ok(())
     }
+}
+
+/// Start a metrics timer using the globally installed metrics client.
+pub fn start_global_timer(name: &str, tags: &[(&str, &str)]) -> MetricsResult<Timer> {
+    let Some(metrics) = crate::metrics::global() else {
+        return Err(MetricsError::ExporterDisabled);
+    };
+    metrics.start_timer(name, tags)
 }

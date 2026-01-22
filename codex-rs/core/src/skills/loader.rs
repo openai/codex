@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::config_loader::ConfigLayerStack;
 use crate::skills::model::SkillError;
+use crate::skills::model::SkillInterface;
 use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
 use crate::skills::system::system_cache_root_dir;
@@ -13,6 +14,7 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
 use std::fs;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::error;
@@ -31,11 +33,29 @@ struct SkillFrontmatterMetadata {
     short_description: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct SkillToml {
+    #[serde(default)]
+    interface: Option<Interface>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Interface {
+    display_name: Option<String>,
+    short_description: Option<String>,
+    icon_small: Option<PathBuf>,
+    icon_large: Option<PathBuf>,
+    brand_color: Option<String>,
+    default_prompt: Option<String>,
+}
+
 const SKILLS_FILENAME: &str = "SKILL.md";
+const SKILLS_TOML_FILENAME: &str = "SKILL.toml";
 const SKILLS_DIR_NAME: &str = "skills";
 const MAX_NAME_LEN: usize = 64;
 const MAX_DESCRIPTION_LEN: usize = 1024;
 const MAX_SHORT_DESCRIPTION_LEN: usize = MAX_DESCRIPTION_LEN;
+const MAX_DEFAULT_PROMPT_LEN: usize = MAX_DESCRIPTION_LEN;
 // Traversal depth from the skills root.
 const MAX_SCAN_DEPTH: usize = 6;
 const MAX_SKILLS_DIRS_PER_ROOT: usize = 2000;
@@ -85,13 +105,13 @@ where
         discover_skills_under_root(&root.path, root.scope, &mut outcome);
     }
 
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
     outcome
         .skills
-        .retain(|skill| seen.insert(skill.name.clone()));
+        .retain(|skill| seen.insert(skill.path.clone()));
 
     fn scope_rank(scope: SkillScope) -> u8 {
-        // Higher-priority scopes first (matches dedupe priority order).
+        // Higher-priority scopes first (matches root scan order for dedupe).
         match scope {
             SkillScope::Repo => 0,
             SkillScope::User => 1,
@@ -195,7 +215,7 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
         }
     }
 
-    // Follow symlinks for user, admin, and repo skills. System skills are written by Codex itself.
+    // Follow symlinked directories for user, admin, and repo skills. System skills are written by Codex itself.
     let follow_symlinks = matches!(
         scope,
         SkillScope::Repo | SkillScope::User | SkillScope::Admin
@@ -262,20 +282,6 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
                     continue;
                 }
 
-                if metadata.is_file() && file_name == SKILLS_FILENAME {
-                    match parse_skill_file(&path, scope) {
-                        Ok(skill) => outcome.skills.push(skill),
-                        Err(err) => {
-                            if scope != SkillScope::System {
-                                outcome.errors.push(SkillError {
-                                    path,
-                                    message: err.to_string(),
-                                });
-                            }
-                        }
-                    }
-                }
-
                 continue;
             }
 
@@ -336,11 +342,12 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         .as_deref()
         .map(sanitize_single_line)
         .filter(|value| !value.is_empty());
+    let interface = load_skill_interface(path);
 
-    validate_field(&name, MAX_NAME_LEN, "name")?;
-    validate_field(&description, MAX_DESCRIPTION_LEN, "description")?;
+    validate_len(&name, MAX_NAME_LEN, "name")?;
+    validate_len(&description, MAX_DESCRIPTION_LEN, "description")?;
     if let Some(short_description) = short_description.as_deref() {
-        validate_field(
+        validate_len(
             short_description,
             MAX_SHORT_DESCRIPTION_LEN,
             "metadata.short-description",
@@ -353,16 +360,124 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         name,
         description,
         short_description,
+        interface,
         path: resolved_path,
         scope,
     })
+}
+
+fn load_skill_interface(skill_path: &Path) -> Option<SkillInterface> {
+    // Fail open: optional SKILL.toml metadata should not block loading SKILL.md.
+    let skill_dir = skill_path.parent()?;
+    let interface_path = skill_dir.join(SKILLS_TOML_FILENAME);
+    if !interface_path.exists() {
+        return None;
+    }
+
+    let contents = match fs::read_to_string(&interface_path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            tracing::warn!(
+                "ignoring {path}: failed to read SKILL.toml: {error}",
+                path = interface_path.display()
+            );
+            return None;
+        }
+    };
+    let parsed: SkillToml = match toml::from_str(&contents) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            tracing::warn!(
+                "ignoring {path}: invalid TOML: {error}",
+                path = interface_path.display()
+            );
+            return None;
+        }
+    };
+    let interface = parsed.interface?;
+
+    let interface = SkillInterface {
+        display_name: resolve_str(
+            interface.display_name,
+            MAX_NAME_LEN,
+            "interface.display_name",
+        ),
+        short_description: resolve_str(
+            interface.short_description,
+            MAX_SHORT_DESCRIPTION_LEN,
+            "interface.short_description",
+        ),
+        icon_small: resolve_asset_path(skill_dir, "interface.icon_small", interface.icon_small),
+        icon_large: resolve_asset_path(skill_dir, "interface.icon_large", interface.icon_large),
+        brand_color: resolve_color_str(interface.brand_color, "interface.brand_color"),
+        default_prompt: resolve_str(
+            interface.default_prompt,
+            MAX_DEFAULT_PROMPT_LEN,
+            "interface.default_prompt",
+        ),
+    };
+    let has_fields = interface.display_name.is_some()
+        || interface.short_description.is_some()
+        || interface.icon_small.is_some()
+        || interface.icon_large.is_some()
+        || interface.brand_color.is_some()
+        || interface.default_prompt.is_some();
+    if has_fields { Some(interface) } else { None }
+}
+
+fn resolve_asset_path(
+    skill_dir: &Path,
+    field: &'static str,
+    path: Option<PathBuf>,
+) -> Option<PathBuf> {
+    // Icons must be relative paths under the skill's assets/ directory; otherwise return None.
+    let path = path?;
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+
+    let assets_dir = skill_dir.join("assets");
+    if path.is_absolute() {
+        tracing::warn!(
+            "ignoring {field}: icon must be a relative assets path (not {})",
+            assets_dir.display()
+        );
+        return None;
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(component) => normalized.push(component),
+            Component::ParentDir => {
+                tracing::warn!("ignoring {field}: icon path must not contain '..'");
+                return None;
+            }
+            _ => {
+                tracing::warn!("ignoring {field}: icon path must be under assets/");
+                return None;
+            }
+        }
+    }
+
+    let mut components = normalized.components();
+    match components.next() {
+        Some(Component::Normal(component)) if component == "assets" => {}
+        _ => {
+            tracing::warn!("ignoring {field}: icon path must be under assets/");
+            return None;
+        }
+    }
+
+    Some(skill_dir.join(normalized))
 }
 
 fn sanitize_single_line(raw: &str) -> String {
     raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn validate_field(
+fn validate_len(
     value: &str,
     max_len: usize,
     field_name: &'static str,
@@ -377,6 +492,36 @@ fn validate_field(
         });
     }
     Ok(())
+}
+
+fn resolve_str(value: Option<String>, max_len: usize, field: &'static str) -> Option<String> {
+    let value = value?;
+    let value = sanitize_single_line(&value);
+    if value.is_empty() {
+        tracing::warn!("ignoring {field}: value is empty");
+        return None;
+    }
+    if value.chars().count() > max_len {
+        tracing::warn!("ignoring {field}: exceeds maximum length of {max_len} characters");
+        return None;
+    }
+    Some(value)
+}
+
+fn resolve_color_str(value: Option<String>, field: &'static str) -> Option<String> {
+    let value = value?;
+    let value = value.trim();
+    if value.is_empty() {
+        tracing::warn!("ignoring {field}: value is empty");
+        return None;
+    }
+    let mut chars = value.chars();
+    if value.len() == 7 && chars.next() == Some('#') && chars.all(|c| c.is_ascii_hexdigit()) {
+        Some(value.to_string())
+    } else {
+        tracing::warn!("ignoring {field}: expected #RRGGBB, got {value}");
+        None
+    }
 }
 
 fn extract_frontmatter(contents: &str) -> Option<String> {
@@ -405,15 +550,20 @@ fn extract_frontmatter(contents: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CONFIG_TOML_FILE;
     use crate::config::ConfigBuilder;
     use crate::config::ConfigOverrides;
+    use crate::config::ConfigToml;
+    use crate::config::ProjectConfig;
     use crate::config_loader::ConfigLayerEntry;
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
     use crate::config_loader::ConfigRequirementsToml;
+    use codex_protocol::config_types::TrustLevel;
     use codex_protocol::protocol::SkillScope;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
     use std::path::Path;
     use tempfile::TempDir;
     use toml::Value as TomlValue;
@@ -425,6 +575,21 @@ mod tests {
     }
 
     async fn make_config_for_cwd(codex_home: &TempDir, cwd: PathBuf) -> Config {
+        fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            toml::to_string(&ConfigToml {
+                projects: Some(HashMap::from([(
+                    cwd.to_string_lossy().to_string(),
+                    ProjectConfig {
+                        trust_level: Some(TrustLevel::Trusted),
+                    },
+                )])),
+                ..Default::default()
+            })
+            .expect("serialize config"),
+        )
+        .unwrap();
+
         let harness_overrides = ConfigOverrides {
             cwd: Some(cwd),
             ..Default::default()
@@ -528,6 +693,224 @@ mod tests {
         path
     }
 
+    fn write_skill_interface_at(skill_dir: &Path, contents: &str) -> PathBuf {
+        let path = skill_dir.join(SKILLS_TOML_FILENAME);
+        fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn loads_skill_interface_metadata_happy_path() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from toml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+        let normalized_skill_dir = normalized(skill_dir);
+
+        write_skill_interface_at(
+            skill_dir,
+            r##"
+[interface]
+display_name = "UI Skill"
+short_description = "  short    desc   "
+icon_small = "./assets/small-400px.png"
+icon_large = "./assets/large-logo.svg"
+brand_color = "#3B82F6"
+default_prompt = "  default   prompt   "
+"##,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "ui-skill".to_string(),
+                description: "from toml".to_string(),
+                short_description: None,
+                interface: Some(SkillInterface {
+                    display_name: Some("UI Skill".to_string()),
+                    short_description: Some("short desc".to_string()),
+                    icon_small: Some(normalized_skill_dir.join("assets/small-400px.png")),
+                    icon_large: Some(normalized_skill_dir.join("assets/large-logo.svg")),
+                    brand_color: Some("#3B82F6".to_string()),
+                    default_prompt: Some("default prompt".to_string()),
+                }),
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn accepts_icon_paths_under_assets_dir() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from toml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+        let normalized_skill_dir = normalized(skill_dir);
+
+        write_skill_interface_at(
+            skill_dir,
+            r#"
+[interface]
+display_name = "UI Skill"
+icon_small = "assets/icon.png"
+icon_large = "./assets/logo.svg"
+"#,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "ui-skill".to_string(),
+                description: "from toml".to_string(),
+                short_description: None,
+                interface: Some(SkillInterface {
+                    display_name: Some("UI Skill".to_string()),
+                    short_description: None,
+                    icon_small: Some(normalized_skill_dir.join("assets/icon.png")),
+                    icon_large: Some(normalized_skill_dir.join("assets/logo.svg")),
+                    brand_color: None,
+                    default_prompt: None,
+                }),
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn ignores_invalid_brand_color() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from toml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+
+        write_skill_interface_at(
+            skill_dir,
+            r#"
+[interface]
+brand_color = "blue"
+"#,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "ui-skill".to_string(),
+                description: "from toml".to_string(),
+                short_description: None,
+                interface: None,
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn ignores_default_prompt_over_max_length() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from toml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+        let normalized_skill_dir = normalized(skill_dir);
+        let too_long = "x".repeat(MAX_DEFAULT_PROMPT_LEN + 1);
+
+        write_skill_interface_at(
+            skill_dir,
+            &format!(
+                r##"
+[interface]
+display_name = "UI Skill"
+icon_small = "./assets/small-400px.png"
+default_prompt = "{too_long}"
+"##
+            ),
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "ui-skill".to_string(),
+                description: "from toml".to_string(),
+                short_description: None,
+                interface: Some(SkillInterface {
+                    display_name: Some("UI Skill".to_string()),
+                    short_description: None,
+                    icon_small: Some(normalized_skill_dir.join("assets/small-400px.png")),
+                    icon_large: None,
+                    brand_color: None,
+                    default_prompt: None,
+                }),
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn drops_interface_when_icons_are_invalid() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from toml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+
+        write_skill_interface_at(
+            skill_dir,
+            r#"
+[interface]
+icon_small = "icon.png"
+icon_large = "./assets/../logo.svg"
+"#,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "ui-skill".to_string(),
+                description: "from toml".to_string(),
+                short_description: None,
+                interface: None,
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
     #[cfg(unix)]
     fn symlink_dir(target: &Path, link: &Path) {
         std::os::unix::fs::symlink(target, link).unwrap();
@@ -563,6 +946,7 @@ mod tests {
                 name: "linked-skill".to_string(),
                 description: "from link".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&shared_skill_path),
                 scope: SkillScope::User,
             }]
@@ -571,7 +955,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(unix)]
-    async fn loads_skills_via_symlinked_skill_file_for_user_scope() {
+    async fn ignores_symlinked_skill_file_for_user_scope() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let shared = tempfile::tempdir().expect("tempdir");
 
@@ -590,16 +974,7 @@ mod tests {
             "unexpected errors: {:?}",
             outcome.errors
         );
-        assert_eq!(
-            outcome.skills,
-            vec![SkillMetadata {
-                name: "linked-file-skill".to_string(),
-                description: "from link".to_string(),
-                short_description: None,
-                path: normalized(&shared_skill_path),
-                scope: SkillScope::User,
-            }]
-        );
+        assert_eq!(outcome.skills, Vec::new());
     }
 
     #[tokio::test]
@@ -629,6 +1004,7 @@ mod tests {
                 name: "cycle-skill".to_string(),
                 description: "still loads".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -662,6 +1038,7 @@ mod tests {
                 name: "admin-linked-skill".to_string(),
                 description: "from link".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&shared_skill_path),
                 scope: SkillScope::Admin,
             }]
@@ -699,6 +1076,7 @@ mod tests {
                 name: "repo-linked-skill".to_string(),
                 description: "from link".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&linked_skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -759,6 +1137,7 @@ mod tests {
                 name: "within-depth-skill".to_string(),
                 description: "loads".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&within_depth_path),
                 scope: SkillScope::User,
             }]
@@ -783,6 +1162,7 @@ mod tests {
                 name: "demo-skill".to_string(),
                 description: "does things carefully".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -811,6 +1191,7 @@ mod tests {
                 name: "demo-skill".to_string(),
                 description: "long description".to_string(),
                 short_description: Some("short summary".to_string()),
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -920,6 +1301,7 @@ mod tests {
                 name: "repo-skill".to_string(),
                 description: "from repo".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -970,6 +1352,7 @@ mod tests {
                     name: "nested-skill".to_string(),
                     description: "from nested".to_string(),
                     short_description: None,
+                    interface: None,
                     path: normalized(&nested_skill_path),
                     scope: SkillScope::Repo,
                 },
@@ -977,6 +1360,7 @@ mod tests {
                     name: "root-skill".to_string(),
                     description: "from root".to_string(),
                     short_description: None,
+                    interface: None,
                     path: normalized(&root_skill_path),
                     scope: SkillScope::Repo,
                 },
@@ -1013,6 +1397,7 @@ mod tests {
                 name: "local-skill".to_string(),
                 description: "from cwd".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -1020,12 +1405,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deduplicates_by_name_preferring_repo_over_user() {
+    async fn deduplicates_by_path_preferring_first_root() {
+        let root = tempfile::tempdir().expect("tempdir");
+
+        let skill_path = write_skill_at(root.path(), "dupe", "dupe-skill", "from repo");
+
+        let outcome = load_skills_from_roots([
+            SkillRoot {
+                path: root.path().to_path_buf(),
+                scope: SkillScope::Repo,
+            },
+            SkillRoot {
+                path: root.path().to_path_buf(),
+                scope: SkillScope::User,
+            },
+        ]);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "dupe-skill".to_string(),
+                description: "from repo".to_string(),
+                short_description: None,
+                interface: None,
+                path: normalized(&skill_path),
+                scope: SkillScope::Repo,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn keeps_duplicate_names_from_repo_and_user() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let repo_dir = tempfile::tempdir().expect("tempdir");
         mark_as_git_repo(repo_dir.path());
 
-        let _user_skill_path = write_skill(&codex_home, "user", "dupe-skill", "from user");
+        let user_skill_path = write_skill(&codex_home, "user", "dupe-skill", "from user");
         let repo_skill_path = write_skill_at(
             &repo_dir
                 .path()
@@ -1046,40 +1466,94 @@ mod tests {
         );
         assert_eq!(
             outcome.skills,
-            vec![SkillMetadata {
-                name: "dupe-skill".to_string(),
-                description: "from repo".to_string(),
-                short_description: None,
-                path: normalized(&repo_skill_path),
-                scope: SkillScope::Repo,
-            }]
+            vec![
+                SkillMetadata {
+                    name: "dupe-skill".to_string(),
+                    description: "from repo".to_string(),
+                    short_description: None,
+                    interface: None,
+                    path: normalized(&repo_skill_path),
+                    scope: SkillScope::Repo,
+                },
+                SkillMetadata {
+                    name: "dupe-skill".to_string(),
+                    description: "from user".to_string(),
+                    short_description: None,
+                    interface: None,
+                    path: normalized(&user_skill_path),
+                    scope: SkillScope::User,
+                },
+            ]
         );
     }
 
     #[tokio::test]
-    async fn loads_system_skills_when_present() {
+    async fn keeps_duplicate_names_from_nested_codex_dirs() {
         let codex_home = tempfile::tempdir().expect("tempdir");
+        let repo_dir = tempfile::tempdir().expect("tempdir");
+        mark_as_git_repo(repo_dir.path());
 
-        let _system_skill_path =
-            write_system_skill(&codex_home, "system", "dupe-skill", "from system");
-        let user_skill_path = write_skill(&codex_home, "user", "dupe-skill", "from user");
+        let nested_dir = repo_dir.path().join("nested/inner");
+        fs::create_dir_all(&nested_dir).unwrap();
 
-        let cfg = make_config(&codex_home).await;
+        let root_skill_path = write_skill_at(
+            &repo_dir
+                .path()
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
+            "root",
+            "dupe-skill",
+            "from root",
+        );
+        let nested_skill_path = write_skill_at(
+            &repo_dir
+                .path()
+                .join("nested")
+                .join(REPO_ROOT_CONFIG_DIR_NAME)
+                .join(SKILLS_DIR_NAME),
+            "nested",
+            "dupe-skill",
+            "from nested",
+        );
+
+        let cfg = make_config_for_cwd(&codex_home, nested_dir).await;
         let outcome = load_skills(&cfg);
+
         assert!(
             outcome.errors.is_empty(),
             "unexpected errors: {:?}",
             outcome.errors
         );
+        let root_path =
+            canonicalize_path(&root_skill_path).unwrap_or_else(|_| root_skill_path.clone());
+        let nested_path =
+            canonicalize_path(&nested_skill_path).unwrap_or_else(|_| nested_skill_path.clone());
+        let (first_path, second_path, first_description, second_description) =
+            if root_path <= nested_path {
+                (root_path, nested_path, "from root", "from nested")
+            } else {
+                (nested_path, root_path, "from nested", "from root")
+            };
         assert_eq!(
             outcome.skills,
-            vec![SkillMetadata {
-                name: "dupe-skill".to_string(),
-                description: "from user".to_string(),
-                short_description: None,
-                path: normalized(&user_skill_path),
-                scope: SkillScope::User,
-            }]
+            vec![
+                SkillMetadata {
+                    name: "dupe-skill".to_string(),
+                    description: first_description.to_string(),
+                    short_description: None,
+                    interface: None,
+                    path: first_path,
+                    scope: SkillScope::Repo,
+                },
+                SkillMetadata {
+                    name: "dupe-skill".to_string(),
+                    description: second_description.to_string(),
+                    short_description: None,
+                    interface: None,
+                    path: second_path,
+                    scope: SkillScope::Repo,
+                },
+            ]
         );
     }
 
@@ -1090,7 +1564,7 @@ mod tests {
         let repo_dir = outer_dir.path().join("repo");
         fs::create_dir_all(&repo_dir).unwrap();
 
-        write_skill_at(
+        let _skill_path = write_skill_at(
             &outer_dir
                 .path()
                 .join(REPO_ROOT_CONFIG_DIR_NAME)
@@ -1099,7 +1573,6 @@ mod tests {
             "outer-skill",
             "from outer",
         );
-
         mark_as_git_repo(&repo_dir);
 
         let cfg = make_config_for_cwd(&codex_home, repo_dir).await;
@@ -1145,6 +1618,7 @@ mod tests {
                 name: "repo-skill".to_string(),
                 description: "from repo".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -1200,6 +1674,7 @@ mod tests {
                 name: "system-skill".to_string(),
                 description: "from system".to_string(),
                 short_description: None,
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::System,
             }]
@@ -1220,161 +1695,5 @@ mod tests {
             expected.push(SkillScope::Admin);
         }
         assert_eq!(scopes, expected);
-    }
-
-    #[tokio::test]
-    async fn deduplicates_by_name_preferring_system_over_admin() {
-        let system_dir = tempfile::tempdir().expect("tempdir");
-        let admin_dir = tempfile::tempdir().expect("tempdir");
-
-        let system_skill_path =
-            write_skill_at(system_dir.path(), "system", "dupe-skill", "from system");
-        let _admin_skill_path =
-            write_skill_at(admin_dir.path(), "admin", "dupe-skill", "from admin");
-
-        let outcome = load_skills_from_roots([
-            SkillRoot {
-                path: system_dir.path().to_path_buf(),
-                scope: SkillScope::System,
-            },
-            SkillRoot {
-                path: admin_dir.path().to_path_buf(),
-                scope: SkillScope::Admin,
-            },
-        ]);
-
-        assert!(
-            outcome.errors.is_empty(),
-            "unexpected errors: {:?}",
-            outcome.errors
-        );
-        assert_eq!(
-            outcome.skills,
-            vec![SkillMetadata {
-                name: "dupe-skill".to_string(),
-                description: "from system".to_string(),
-                short_description: None,
-                path: normalized(&system_skill_path),
-                scope: SkillScope::System,
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn deduplicates_by_name_preferring_user_over_system() {
-        let codex_home = tempfile::tempdir().expect("tempdir");
-        let work_dir = tempfile::tempdir().expect("tempdir");
-
-        let user_skill_path = write_skill(&codex_home, "user", "dupe-skill", "from user");
-        let _system_skill_path =
-            write_system_skill(&codex_home, "system", "dupe-skill", "from system");
-
-        let cfg = make_config_for_cwd(&codex_home, work_dir.path().to_path_buf()).await;
-
-        let outcome = load_skills(&cfg);
-        assert!(
-            outcome.errors.is_empty(),
-            "unexpected errors: {:?}",
-            outcome.errors
-        );
-        assert_eq!(
-            outcome.skills,
-            vec![SkillMetadata {
-                name: "dupe-skill".to_string(),
-                description: "from user".to_string(),
-                short_description: None,
-                path: normalized(&user_skill_path),
-                scope: SkillScope::User,
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn deduplicates_by_name_preferring_repo_over_system() {
-        let codex_home = tempfile::tempdir().expect("tempdir");
-        let repo_dir = tempfile::tempdir().expect("tempdir");
-        mark_as_git_repo(repo_dir.path());
-
-        let repo_skill_path = write_skill_at(
-            &repo_dir
-                .path()
-                .join(REPO_ROOT_CONFIG_DIR_NAME)
-                .join(SKILLS_DIR_NAME),
-            "repo",
-            "dupe-skill",
-            "from repo",
-        );
-        let _system_skill_path =
-            write_system_skill(&codex_home, "system", "dupe-skill", "from system");
-
-        let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
-
-        let outcome = load_skills(&cfg);
-        assert!(
-            outcome.errors.is_empty(),
-            "unexpected errors: {:?}",
-            outcome.errors
-        );
-        assert_eq!(
-            outcome.skills,
-            vec![SkillMetadata {
-                name: "dupe-skill".to_string(),
-                description: "from repo".to_string(),
-                short_description: None,
-                path: normalized(&repo_skill_path),
-                scope: SkillScope::Repo,
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn deduplicates_by_name_preferring_nearest_project_codex_dir() {
-        let codex_home = tempfile::tempdir().expect("tempdir");
-        let repo_dir = tempfile::tempdir().expect("tempdir");
-        mark_as_git_repo(repo_dir.path());
-
-        let nested_dir = repo_dir.path().join("nested/inner");
-        fs::create_dir_all(&nested_dir).unwrap();
-
-        let _root_skill_path = write_skill_at(
-            &repo_dir
-                .path()
-                .join(REPO_ROOT_CONFIG_DIR_NAME)
-                .join(SKILLS_DIR_NAME),
-            "root",
-            "dupe-skill",
-            "from root",
-        );
-        let nested_skill_path = write_skill_at(
-            &repo_dir
-                .path()
-                .join("nested")
-                .join(REPO_ROOT_CONFIG_DIR_NAME)
-                .join(SKILLS_DIR_NAME),
-            "nested",
-            "dupe-skill",
-            "from nested",
-        );
-
-        let cfg = make_config_for_cwd(&codex_home, nested_dir).await;
-        let outcome = load_skills(&cfg);
-
-        assert!(
-            outcome.errors.is_empty(),
-            "unexpected errors: {:?}",
-            outcome.errors
-        );
-        let expected_path =
-            canonicalize_path(&nested_skill_path).unwrap_or_else(|_| nested_skill_path.clone());
-        assert_eq!(
-            vec![SkillMetadata {
-                name: "dupe-skill".to_string(),
-                description: "from nested".to_string(),
-                short_description: None,
-                path: expected_path,
-                scope: SkillScope::Repo,
-            }],
-            outcome.skills
-        );
     }
 }

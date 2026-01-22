@@ -11,6 +11,8 @@ use futures::Stream;
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -21,7 +23,8 @@ use tracing::trace;
 pub(crate) fn spawn_chat_stream(
     stream_response: StreamResponse,
     idle_timeout: Duration,
-    telemetry: Option<std::sync::Arc<dyn SseTelemetry>>,
+    telemetry: Option<Arc<dyn SseTelemetry>>,
+    _turn_state: Option<Arc<OnceLock<String>>>,
 ) -> ResponseStream {
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(async move {
@@ -327,6 +330,7 @@ async fn append_assistant_text(
             id: None,
             role: "assistant".to_string(),
             content: vec![],
+            end_turn: None,
         };
         *assistant_item = Some(item.clone());
         let _ = tx_event

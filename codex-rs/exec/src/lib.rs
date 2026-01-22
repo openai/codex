@@ -15,9 +15,11 @@ pub use cli::Command;
 pub use cli::ReviewArgs;
 use codex_common::oss::ensure_oss_provider_ready;
 use codex_common::oss::get_default_model_for_oss_provider;
+use codex_common::oss::ollama_chat_deprecation_notice;
 use codex_core::AuthManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::NewThread;
+use codex_core::OLLAMA_CHAT_PROVIDER_ID;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::ThreadManager;
 use codex_core::auth::enforce_login_restrictions;
@@ -27,6 +29,7 @@ use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::git_info::get_git_repo_root;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -176,7 +179,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             Some(provider)
         } else {
             return Err(anyhow::anyhow!(
-                "No default OSS provider configured. Use --local-provider=provider or set oss_provider to either {LMSTUDIO_OSS_PROVIDER_ID} or {OLLAMA_OSS_PROVIDER_ID} in config.toml"
+                "No default OSS provider configured. Use --local-provider=provider or set oss_provider to one of: {LMSTUDIO_OSS_PROVIDER_ID}, {OLLAMA_OSS_PROVIDER_ID}, {OLLAMA_CHAT_PROVIDER_ID} in config.toml"
             ));
         }
     } else {
@@ -223,15 +226,25 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         std::process::exit(1);
     }
 
-    let otel =
-        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false);
+    let ollama_chat_support_notice = match ollama_chat_deprecation_notice(&config).await {
+        Ok(notice) => notice,
+        Err(err) => {
+            tracing::warn!(?err, "Failed to detect Ollama wire API");
+            None
+        }
+    };
 
-    #[allow(clippy::print_stderr)]
-    let otel = match otel {
-        Ok(otel) => otel,
-        Err(e) => {
+    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, false)
+    })) {
+        Ok(Ok(otel)) => otel,
+        Ok(Err(e)) => {
             eprintln!("Could not create otel exporter: {e}");
-            std::process::exit(1);
+            None
+        }
+        Err(_) => {
+            eprintln!("Could not create otel exporter: panicked during initialization");
+            None
         }
     };
 
@@ -253,6 +266,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             last_message_file.clone(),
         )),
     };
+    if let Some(notice) = ollama_chat_support_notice {
+        event_processor.process_event(Event {
+            id: String::new(),
+            msg: EventMsg::DeprecationNotice(notice),
+        });
+    }
 
     if oss {
         // We're in the oss section, so provider_id should be Some
@@ -294,7 +313,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     );
     let default_model = thread_manager
         .get_models_manager()
-        .get_model(&config.model, &config)
+        .get_default_model(&config.model, &config, RefreshStrategy::OnlineIfUncached)
         .await;
 
     // Handle resume subcommand by resolving a rollout path and using explicit resume API.
@@ -341,6 +360,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 .collect();
             items.push(UserInput::Text {
                 text: prompt_text.clone(),
+                // CLI input doesn't track UI element ranges, so none are available here.
+                text_elements: Vec::new(),
             });
             let output_schema = load_output_schema(output_schema_path.clone());
             (
@@ -359,6 +380,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 .collect();
             items.push(UserInput::Text {
                 text: prompt_text.clone(),
+                // CLI input doesn't track UI element ranges, so none are available here.
+                text_elements: Vec::new(),
             });
             let output_schema = load_output_schema(output_schema_path);
             (
@@ -431,6 +454,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     effort: default_effort,
                     summary: default_summary,
                     final_output_json_schema: output_schema,
+                    collaboration_mode: None,
                 })
                 .await?;
             info!("Sent prompt with event ID: {task_id}");
@@ -486,17 +510,24 @@ async fn resolve_resume_path(
 ) -> anyhow::Result<Option<PathBuf>> {
     if args.last {
         let default_provider_filter = vec![config.model_provider_id.clone()];
-        match codex_core::RolloutRecorder::list_threads(
+        let filter_cwd = if args.all {
+            None
+        } else {
+            Some(config.cwd.as_path())
+        };
+        match codex_core::RolloutRecorder::find_latest_thread_path(
             &config.codex_home,
             1,
             None,
+            codex_core::ThreadSortKey::UpdatedAt,
             &[],
             Some(default_provider_filter.as_slice()),
             &config.model_provider_id,
+            filter_cwd,
         )
         .await
         {
-            Ok(page) => Ok(page.items.first().map(|it| it.path.clone())),
+            Ok(path) => Ok(path),
             Err(e) => {
                 error!("Error listing threads: {e}");
                 Ok(None)
@@ -536,6 +567,79 @@ fn load_output_schema(path: Option<PathBuf>) -> Option<Value> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PromptDecodeError {
+    InvalidUtf8 { valid_up_to: usize },
+    InvalidUtf16 { encoding: &'static str },
+    UnsupportedBom { encoding: &'static str },
+}
+
+impl std::fmt::Display for PromptDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PromptDecodeError::InvalidUtf8 { valid_up_to } => write!(
+                f,
+                "input is not valid UTF-8 (invalid byte at offset {valid_up_to}). Convert it to UTF-8 and retry (e.g., `iconv -f <ENC> -t UTF-8 prompt.txt`)."
+            ),
+            PromptDecodeError::InvalidUtf16 { encoding } => write!(
+                f,
+                "input looked like {encoding} but could not be decoded. Convert it to UTF-8 and retry."
+            ),
+            PromptDecodeError::UnsupportedBom { encoding } => write!(
+                f,
+                "input appears to be {encoding}. Convert it to UTF-8 and retry."
+            ),
+        }
+    }
+}
+
+fn decode_prompt_bytes(input: &[u8]) -> Result<String, PromptDecodeError> {
+    let input = input.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(input);
+
+    if input.starts_with(&[0xFF, 0xFE, 0x00, 0x00]) {
+        return Err(PromptDecodeError::UnsupportedBom {
+            encoding: "UTF-32LE",
+        });
+    }
+
+    if input.starts_with(&[0x00, 0x00, 0xFE, 0xFF]) {
+        return Err(PromptDecodeError::UnsupportedBom {
+            encoding: "UTF-32BE",
+        });
+    }
+
+    if let Some(rest) = input.strip_prefix(&[0xFF, 0xFE]) {
+        return decode_utf16(rest, "UTF-16LE", u16::from_le_bytes);
+    }
+
+    if let Some(rest) = input.strip_prefix(&[0xFE, 0xFF]) {
+        return decode_utf16(rest, "UTF-16BE", u16::from_be_bytes);
+    }
+
+    std::str::from_utf8(input)
+        .map(str::to_string)
+        .map_err(|e| PromptDecodeError::InvalidUtf8 {
+            valid_up_to: e.valid_up_to(),
+        })
+}
+
+fn decode_utf16(
+    input: &[u8],
+    encoding: &'static str,
+    decode_unit: fn([u8; 2]) -> u16,
+) -> Result<String, PromptDecodeError> {
+    if !input.len().is_multiple_of(2) {
+        return Err(PromptDecodeError::InvalidUtf16 { encoding });
+    }
+
+    let units: Vec<u16> = input
+        .chunks_exact(2)
+        .map(|chunk| decode_unit([chunk[0], chunk[1]]))
+        .collect();
+
+    String::from_utf16(&units).map_err(|_| PromptDecodeError::InvalidUtf16 { encoding })
+}
+
 fn resolve_prompt(prompt_arg: Option<String>) -> String {
     match prompt_arg {
         Some(p) if p != "-" => p,
@@ -552,11 +656,22 @@ fn resolve_prompt(prompt_arg: Option<String>) -> String {
             if !force_stdin {
                 eprintln!("Reading prompt from stdin...");
             }
-            let mut buffer = String::new();
-            if let Err(e) = std::io::stdin().read_to_string(&mut buffer) {
+
+            let mut bytes = Vec::new();
+            if let Err(e) = std::io::stdin().read_to_end(&mut bytes) {
                 eprintln!("Failed to read prompt from stdin: {e}");
                 std::process::exit(1);
-            } else if buffer.trim().is_empty() {
+            }
+
+            let buffer = match decode_prompt_bytes(&bytes) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to read prompt from stdin: {e}");
+                    std::process::exit(1);
+                }
+            };
+
+            if buffer.trim().is_empty() {
                 eprintln!("No prompt provided via stdin.");
                 std::process::exit(1);
             }
@@ -660,5 +775,80 @@ mod tests {
         };
 
         assert_eq!(request, expected);
+    }
+
+    #[test]
+    fn decode_prompt_bytes_strips_utf8_bom() {
+        let input = [0xEF, 0xBB, 0xBF, b'h', b'i', b'\n'];
+
+        let out = decode_prompt_bytes(&input).expect("decode utf-8 with BOM");
+
+        assert_eq!(out, "hi\n");
+    }
+
+    #[test]
+    fn decode_prompt_bytes_decodes_utf16le_bom() {
+        // UTF-16LE BOM + "hi\n"
+        let input = [0xFF, 0xFE, b'h', 0x00, b'i', 0x00, b'\n', 0x00];
+
+        let out = decode_prompt_bytes(&input).expect("decode utf-16le with BOM");
+
+        assert_eq!(out, "hi\n");
+    }
+
+    #[test]
+    fn decode_prompt_bytes_decodes_utf16be_bom() {
+        // UTF-16BE BOM + "hi\n"
+        let input = [0xFE, 0xFF, 0x00, b'h', 0x00, b'i', 0x00, b'\n'];
+
+        let out = decode_prompt_bytes(&input).expect("decode utf-16be with BOM");
+
+        assert_eq!(out, "hi\n");
+    }
+
+    #[test]
+    fn decode_prompt_bytes_rejects_utf32le_bom() {
+        // UTF-32LE BOM + "hi\n"
+        let input = [
+            0xFF, 0xFE, 0x00, 0x00, b'h', 0x00, 0x00, 0x00, b'i', 0x00, 0x00, 0x00, b'\n', 0x00,
+            0x00, 0x00,
+        ];
+
+        let err = decode_prompt_bytes(&input).expect_err("utf-32le should be rejected");
+
+        assert_eq!(
+            err,
+            PromptDecodeError::UnsupportedBom {
+                encoding: "UTF-32LE"
+            }
+        );
+    }
+
+    #[test]
+    fn decode_prompt_bytes_rejects_utf32be_bom() {
+        // UTF-32BE BOM + "hi\n"
+        let input = [
+            0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, b'h', 0x00, 0x00, 0x00, b'i', 0x00, 0x00,
+            0x00, b'\n',
+        ];
+
+        let err = decode_prompt_bytes(&input).expect_err("utf-32be should be rejected");
+
+        assert_eq!(
+            err,
+            PromptDecodeError::UnsupportedBom {
+                encoding: "UTF-32BE"
+            }
+        );
+    }
+
+    #[test]
+    fn decode_prompt_bytes_rejects_invalid_utf8() {
+        // Invalid UTF-8 sequence: 0xC3 0x28
+        let input = [0xC3, 0x28];
+
+        let err = decode_prompt_bytes(&input).expect_err("invalid utf-8 should fail");
+
+        assert_eq!(err, PromptDecodeError::InvalidUtf8 { valid_up_to: 0 });
     }
 }

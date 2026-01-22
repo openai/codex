@@ -1,4 +1,6 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -6,9 +8,13 @@ use serde::Serialize;
 use strum::IntoEnumIterator;
 use strum_macros::Display;
 use strum_macros::EnumIter;
+use tracing::warn;
 use ts_rs::TS;
 
+use crate::config_types::Personality;
 use crate::config_types::Verbosity;
+
+const PERSONALITY_PLACEHOLDER: &str = "{{ personality_message }}";
 
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
 #[derive(
@@ -54,6 +60,7 @@ pub struct ModelUpgrade {
     pub migration_config_key: String,
     pub model_link: Option<String>,
     pub upgrade_copy: Option<String>,
+    pub migration_markdown: Option<String>,
 }
 
 /// Metadata describing a Codex-supported model.
@@ -176,8 +183,10 @@ pub struct ModelInfo {
     pub visibility: ModelVisibility,
     pub supported_in_api: bool,
     pub priority: i32,
-    pub upgrade: Option<String>,
+    pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_instructions_template: Option<ModelInstructionsTemplate>,
     pub supports_reasoning_summaries: bool,
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
@@ -204,6 +213,62 @@ impl ModelInfo {
                 .map(|context_window| (context_window * 9) / 10)
         })
     }
+
+    pub fn get_model_instructions(&self, personality: Option<Personality>) -> String {
+        if let Some(personality) = personality
+            && let Some(template) = &self.model_instructions_template
+            && template.has_personality_placeholder()
+            && let Some(personality_messages) = &template.personality_messages
+            && let Some(personality_message) = personality_messages.0.get(&personality)
+        {
+            template
+                .template
+                .replace(PERSONALITY_PLACEHOLDER, personality_message.as_str())
+        } else if let Some(personality) = personality {
+            warn!(
+                model = %self.slug,
+                %personality,
+                "Model personality requested but model_instructions_template is invalid, falling back to base instructions."
+            );
+            self.base_instructions.clone()
+        } else {
+            self.base_instructions.clone()
+        }
+    }
+}
+
+/// A strongly-typed template for assembling model instructions. If populated and valid, will override
+/// base_instructions.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct ModelInstructionsTemplate {
+    pub template: String,
+    pub personality_messages: Option<PersonalityMessages>,
+}
+
+impl ModelInstructionsTemplate {
+    fn has_personality_placeholder(&self) -> bool {
+        self.template.contains(PERSONALITY_PLACEHOLDER)
+    }
+}
+
+// serializes as a dictionary from personality to message
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, TS, JsonSchema)]
+#[serde(transparent)]
+pub struct PersonalityMessages(pub BTreeMap<Personality, String>);
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
+pub struct ModelInfoUpgrade {
+    pub model: String,
+    pub migration_markdown: String,
+}
+
+impl From<&ModelUpgrade> for ModelInfoUpgrade {
+    fn from(upgrade: &ModelUpgrade) -> Self {
+        ModelInfoUpgrade {
+            model: upgrade.id.clone(),
+            migration_markdown: upgrade.migration_markdown.clone().unwrap_or_default(),
+        }
+    }
 }
 
 /// Response wrapper for `/models`.
@@ -225,8 +290,8 @@ impl From<ModelInfo> for ModelPreset {
                 .unwrap_or(ReasoningEffort::None),
             supported_reasoning_efforts: info.supported_reasoning_levels.clone(),
             is_default: false, // default is the highest priority available model
-            upgrade: info.upgrade.as_ref().map(|upgrade_slug| ModelUpgrade {
-                id: upgrade_slug.clone(),
+            upgrade: info.upgrade.as_ref().map(|upgrade| ModelUpgrade {
+                id: upgrade.model.clone(),
                 reasoning_effort_mapping: reasoning_effort_mapping_from_presets(
                     &info.supported_reasoning_levels,
                 ),
@@ -234,10 +299,51 @@ impl From<ModelInfo> for ModelPreset {
                 // todo(aibrahim): add the model link here.
                 model_link: None,
                 upgrade_copy: None,
+                migration_markdown: Some(upgrade.migration_markdown.clone()),
             }),
             show_in_picker: info.visibility == ModelVisibility::List,
             supported_in_api: info.supported_in_api,
         }
+    }
+}
+
+impl ModelPreset {
+    /// Filter models based on authentication mode.
+    ///
+    /// In ChatGPT mode, all models are visible. Otherwise, only API-supported models are shown.
+    pub fn filter_by_auth(models: Vec<ModelPreset>, chatgpt_mode: bool) -> Vec<ModelPreset> {
+        models
+            .into_iter()
+            .filter(|model| chatgpt_mode || model.supported_in_api)
+            .collect()
+    }
+
+    /// Merge remote presets with existing presets, preferring remote when slugs match.
+    ///
+    /// Remote presets take precedence. Existing presets not in remote are appended with `is_default` set to false.
+    pub fn merge(
+        remote_presets: Vec<ModelPreset>,
+        existing_presets: Vec<ModelPreset>,
+    ) -> Vec<ModelPreset> {
+        if remote_presets.is_empty() {
+            return existing_presets;
+        }
+
+        let remote_slugs: HashSet<&str> = remote_presets
+            .iter()
+            .map(|preset| preset.model.as_str())
+            .collect();
+
+        let mut merged_presets = remote_presets.clone();
+        for mut preset in existing_presets {
+            if remote_slugs.contains(preset.model.as_str()) {
+                continue;
+            }
+            preset.is_default = false;
+            merged_presets.push(preset);
+        }
+
+        merged_presets
     }
 }
 
@@ -276,4 +382,68 @@ fn nearest_effort(target: ReasoningEffort, supported: &[ReasoningEffort]) -> Rea
         .copied()
         .min_by_key(|candidate| (effort_rank(*candidate) - target_rank).abs())
         .unwrap_or(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn test_model(template: Option<ModelInstructionsTemplate>) -> ModelInfo {
+        ModelInfo {
+            slug: "test-model".to_string(),
+            display_name: "Test Model".to_string(),
+            description: None,
+            default_reasoning_level: None,
+            supported_reasoning_levels: vec![],
+            shell_type: ConfigShellToolType::ShellCommand,
+            visibility: ModelVisibility::List,
+            supported_in_api: true,
+            priority: 1,
+            upgrade: None,
+            base_instructions: "base".to_string(),
+            model_instructions_template: template,
+            supports_reasoning_summaries: false,
+            support_verbosity: false,
+            default_verbosity: None,
+            apply_patch_tool_type: None,
+            truncation_policy: TruncationPolicyConfig::bytes(10_000),
+            supports_parallel_tool_calls: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            effective_context_window_percent: 95,
+            experimental_supported_tools: vec![],
+        }
+    }
+
+    fn personality_messages() -> PersonalityMessages {
+        PersonalityMessages(BTreeMap::from([(
+            Personality::Friendly,
+            "friendly".to_string(),
+        )]))
+    }
+
+    #[test]
+    fn get_model_instructions_uses_template_when_placeholder_present() {
+        let model = test_model(Some(ModelInstructionsTemplate {
+            template: "Hello {{ personality_message }}".to_string(),
+            personality_messages: Some(personality_messages()),
+        }));
+
+        let instructions = model.get_model_instructions(Some(Personality::Friendly));
+
+        assert_eq!(instructions, "Hello friendly");
+    }
+
+    #[test]
+    fn get_model_instructions_falls_back_when_placeholder_missing() {
+        let model = test_model(Some(ModelInstructionsTemplate {
+            template: "Hello there".to_string(),
+            personality_messages: Some(personality_messages()),
+        }));
+
+        let instructions = model.get_model_instructions(Some(Personality::Friendly));
+
+        assert_eq!(instructions, "base");
+    }
 }

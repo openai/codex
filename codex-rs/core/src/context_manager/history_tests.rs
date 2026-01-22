@@ -3,6 +3,7 @@ use crate::truncate;
 use crate::truncate::TruncationPolicy;
 use codex_git::GhostCommit;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
@@ -22,6 +23,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
+        end_turn: None,
     }
 }
 
@@ -40,6 +42,7 @@ fn user_msg(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
+        end_turn: None,
     }
 }
 
@@ -50,6 +53,7 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
+        end_turn: None,
     }
 }
 
@@ -92,6 +96,7 @@ fn filters_non_api_messages() {
         content: vec![ContentItem::OutputText {
             text: "ignored".to_string(),
         }],
+        end_turn: None,
     };
     let reasoning = reasoning_msg("thinking...");
     h.record_items([&system, &reasoning, &ResponseItem::Other], policy);
@@ -120,14 +125,16 @@ fn filters_non_api_messages() {
                 role: "user".to_string(),
                 content: vec![ContentItem::OutputText {
                     text: "hi".to_string()
-                }]
+                }],
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: None,
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
                     text: "hello".to_string()
-                }]
+                }],
+                end_turn: None,
             }
         ]
     );
@@ -207,6 +214,59 @@ fn remove_first_item_removes_matching_call_for_output() {
     let mut h = create_history_with_items(items);
     h.remove_first_item();
     assert_eq!(h.raw_items(), vec![]);
+}
+
+#[test]
+fn replace_last_turn_images_replaces_tool_output_images() {
+    let items = vec![
+        user_input_text_msg("hi"),
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload {
+                content: "ok".to_string(),
+                content_items: Some(vec![FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/png;base64,AAA".to_string(),
+                }]),
+                success: Some(true),
+            },
+        },
+    ];
+    let mut history = create_history_with_items(items);
+
+    assert!(history.replace_last_turn_images("Invalid image"));
+
+    assert_eq!(
+        history.raw_items(),
+        vec![
+            user_input_text_msg("hi"),
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: "ok".to_string(),
+                    content_items: Some(vec![FunctionCallOutputContentItem::InputText {
+                        text: "Invalid image".to_string(),
+                    }]),
+                    success: Some(true),
+                },
+            },
+        ]
+    );
+}
+
+#[test]
+fn replace_last_turn_images_does_not_touch_user_images() {
+    let items = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputImage {
+            image_url: "data:image/png;base64,AAA".to_string(),
+        }],
+        end_turn: None,
+    }];
+    let mut history = create_history_with_items(items.clone());
+
+    assert!(!history.replace_last_turn_images("Invalid image"));
+    assert_eq!(history.raw_items(), items);
 }
 
 #[test]

@@ -38,6 +38,7 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: prompt.into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
@@ -46,6 +47,7 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
@@ -67,9 +69,9 @@ async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Re
 }
 
 fn assert_parallel_duration(actual: Duration) {
-    // Allow headroom for runtime overhead while still differentiating from serial execution.
+    // Allow headroom for slow CI scheduling; barrier synchronization already enforces overlap.
     assert!(
-        actual < Duration::from_millis(750),
+        actual < Duration::from_millis(1_200),
         "expected parallel execution to finish quickly, got {actual:?}"
     );
 }
@@ -306,7 +308,7 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
     let args = json!({
         "command": command,
         "login": false,
-        "timeout_ms": 1_000,
+        "timeout_ms": 5_000,
     });
 
     let first_chunk = sse(vec![
@@ -353,6 +355,7 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "stream delayed completion".into(),
+                text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
@@ -361,13 +364,14 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
         })
         .await?;
 
     let _ = first_gate_tx.send(());
     let _ = follow_up_gate_tx.send(());
 
-    let timestamps = tokio::time::timeout(Duration::from_secs(1), async {
+    let timestamps = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let contents = fs::read_to_string(output_path)?;
             let timestamps = contents

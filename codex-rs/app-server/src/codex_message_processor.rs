@@ -6,6 +6,7 @@ use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
 use chrono::DateTime;
+use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
@@ -22,6 +23,8 @@ use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::CancelLoginChatGptResponse;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CollaborationModeListParams;
+use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
@@ -60,6 +63,7 @@ use codex_app_server_protocol::LogoutChatGptResponse;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
+use codex_app_server_protocol::McpServerRefreshResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
@@ -83,6 +87,8 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SessionConfiguredNotification;
 use codex_app_server_protocol::SetDefaultModelParams;
 use codex_app_server_protocol::SetDefaultModelResponse;
+use codex_app_server_protocol::SkillsConfigWriteParams;
+use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
@@ -98,6 +104,7 @@ use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
+use codex_app_server_protocol::ThreadSortKey;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -122,11 +129,13 @@ use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::ThreadManager;
+use codex_core::ThreadSortKey as CoreThreadSortKey;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigService;
+use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::default_client::get_codex_user_agent;
@@ -146,6 +155,7 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget as CoreReviewTarget;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::read_head_for_summary;
+use codex_core::read_session_meta_line;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -157,6 +167,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
+use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
@@ -176,6 +187,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::Mutex;
+use tokio::sync::broadcast;
 use tokio::sync::oneshot;
 use toml::Value as TomlValue;
 use tracing::error;
@@ -227,6 +239,7 @@ pub(crate) struct CodexMessageProcessor {
     config: Arc<Config>,
     cli_overrides: Vec<(String, TomlValue)>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
+    listener_thread_ids_by_subscription: HashMap<Uuid, ThreadId>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
     pending_interrupts: PendingInterrupts,
@@ -284,6 +297,7 @@ impl CodexMessageProcessor {
             config,
             cli_overrides,
             conversation_listeners: HashMap::new(),
+            listener_thread_ids_by_subscription: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
             pending_rollbacks: Arc::new(Mutex::new(HashMap::new())),
@@ -392,6 +406,9 @@ impl CodexMessageProcessor {
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
             }
+            ClientRequest::SkillsConfigWrite { request_id, params } => {
+                self.skills_config_write(request_id, params).await;
+            }
             ClientRequest::TurnStart { request_id, params } => {
                 self.turn_start(request_id, params).await;
             }
@@ -422,8 +439,20 @@ impl CodexMessageProcessor {
                     Self::list_models(outgoing, thread_manager, config, request_id, params).await;
                 });
             }
+            ClientRequest::CollaborationModeList { request_id, params } => {
+                let outgoing = self.outgoing.clone();
+                let thread_manager = self.thread_manager.clone();
+
+                tokio::spawn(async move {
+                    Self::list_collaboration_modes(outgoing, thread_manager, request_id, params)
+                        .await;
+                });
+            }
             ClientRequest::McpServerOauthLogin { request_id, params } => {
                 self.mcp_server_oauth_login(request_id, params).await;
+            }
+            ClientRequest::McpServerRefresh { request_id, params } => {
+                self.mcp_server_refresh(request_id, params).await;
             }
             ClientRequest::McpServerStatusList { request_id, params } => {
                 self.list_mcp_server_status(request_id, params).await;
@@ -970,7 +999,7 @@ impl CodexMessageProcessor {
 
     async fn refresh_token_if_requested(&self, do_refresh: bool) {
         if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
-            tracing::warn!("failed to refresh token whilte getting account: {err}");
+            tracing::warn!("failed to refresh token while getting account: {err}");
         }
     }
 
@@ -1266,7 +1295,11 @@ impl CodexMessageProcessor {
         });
     }
 
-    async fn process_new_conversation(&self, request_id: RequestId, params: NewConversationParams) {
+    async fn process_new_conversation(
+        &mut self,
+        request_id: RequestId,
+        params: NewConversationParams,
+    ) {
         let NewConversationParams {
             model,
             model_provider,
@@ -1586,6 +1619,7 @@ impl CodexMessageProcessor {
         let ThreadListParams {
             cursor,
             limit,
+            sort_key,
             model_providers,
         } = params;
 
@@ -1593,8 +1627,12 @@ impl CodexMessageProcessor {
             .map(|value| value as usize)
             .unwrap_or(THREAD_LIST_DEFAULT_LIMIT)
             .clamp(1, THREAD_LIST_MAX_LIMIT);
+        let core_sort_key = match sort_key.unwrap_or(ThreadSortKey::CreatedAt) {
+            ThreadSortKey::CreatedAt => CoreThreadSortKey::CreatedAt,
+            ThreadSortKey::UpdatedAt => CoreThreadSortKey::UpdatedAt,
+        };
         let (summaries, next_cursor) = match self
-            .list_threads_common(requested_page_size, cursor, model_providers)
+            .list_threads_common(requested_page_size, cursor, model_providers, core_sort_key)
             .await
         {
             Ok(r) => r,
@@ -1664,6 +1702,31 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
+        self.thread_manager.subscribe_thread_created()
+    }
+
+    /// Best-effort: attach a listener for thread_id if missing.
+    pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {
+        if self
+            .listener_thread_ids_by_subscription
+            .values()
+            .any(|entry| *entry == thread_id)
+        {
+            return;
+        }
+
+        if let Err(err) = self
+            .attach_conversation_listener(thread_id, false, ApiVersion::V2)
+            .await
+        {
+            warn!(
+                "failed to attach listener for thread {thread_id}: {message}",
+                message = err.message
+            );
+        }
+    }
+
     async fn thread_resume(&mut self, request_id: RequestId, params: ThreadResumeParams) {
         let ThreadResumeParams {
             thread_id,
@@ -1678,47 +1741,6 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
         } = params;
-
-        let overrides_requested = model.is_some()
-            || model_provider.is_some()
-            || cwd.is_some()
-            || approval_policy.is_some()
-            || sandbox.is_some()
-            || request_overrides.is_some()
-            || base_instructions.is_some()
-            || developer_instructions.is_some();
-
-        let config = if overrides_requested {
-            let typesafe_overrides = self.build_thread_config_overrides(
-                model,
-                model_provider,
-                cwd,
-                approval_policy,
-                sandbox,
-                base_instructions,
-                developer_instructions,
-            );
-            match derive_config_from_params(
-                &self.cli_overrides,
-                request_overrides,
-                typesafe_overrides,
-            )
-            .await
-            {
-                Ok(config) => config,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("error deriving config: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            }
-        } else {
-            self.config.as_ref().clone()
-        };
 
         let thread_history = if let Some(history) = history {
             if history.is_empty() {
@@ -1791,6 +1813,38 @@ impl CodexMessageProcessor {
                     .await;
                     return;
                 }
+            }
+        };
+
+        let history_cwd = thread_history.session_cwd();
+        let typesafe_overrides = self.build_thread_config_overrides(
+            model,
+            model_provider,
+            cwd,
+            approval_policy,
+            sandbox,
+            base_instructions,
+            developer_instructions,
+        );
+
+        // Derive a Config using the same logic as new conversation, honoring overrides if provided.
+        let config = match derive_config_for_cwd(
+            &self.cli_overrides,
+            request_overrides,
+            typesafe_overrides,
+            history_cwd,
+        )
+        .await
+        {
+            Ok(config) => config,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("error deriving config: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
             }
         };
 
@@ -1883,53 +1937,6 @@ impl CodexMessageProcessor {
             developer_instructions,
         } = params;
 
-        let overrides_requested = model.is_some()
-            || model_provider.is_some()
-            || cwd.is_some()
-            || approval_policy.is_some()
-            || sandbox.is_some()
-            || cli_overrides.is_some()
-            || base_instructions.is_some()
-            || developer_instructions.is_some();
-
-        let config = if overrides_requested {
-            let overrides = self.build_thread_config_overrides(
-                model,
-                model_provider,
-                cwd,
-                approval_policy,
-                sandbox,
-                base_instructions,
-                developer_instructions,
-            );
-
-            // Persist windows sandbox feature.
-            let mut cli_overrides = cli_overrides.unwrap_or_default();
-            if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
-                cli_overrides.insert(
-                    "features.experimental_windows_sandbox".to_string(),
-                    serde_json::json!(true),
-                );
-            }
-
-            match derive_config_from_params(&self.cli_overrides, Some(cli_overrides), overrides)
-                .await
-            {
-                Ok(config) => config,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("error deriving config: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            }
-        } else {
-            self.config.as_ref().clone()
-        };
-
         let rollout_path = if let Some(path) = path {
             path
         } else {
@@ -1969,6 +1976,58 @@ impl CodexMessageProcessor {
                     .await;
                     return;
                 }
+            }
+        };
+
+        let history_cwd = match read_session_meta_line(&rollout_path).await {
+            Ok(meta_line) => Some(meta_line.meta.cwd),
+            Err(err) => {
+                let rollout_path = rollout_path.display();
+                warn!("failed to read session metadata from rollout {rollout_path}: {err}");
+                None
+            }
+        };
+
+        // Persist windows sandbox feature.
+        let mut cli_overrides = cli_overrides.unwrap_or_default();
+        if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
+            cli_overrides.insert(
+                "features.experimental_windows_sandbox".to_string(),
+                serde_json::json!(true),
+            );
+        }
+        let request_overrides = if cli_overrides.is_empty() {
+            None
+        } else {
+            Some(cli_overrides)
+        };
+        let typesafe_overrides = self.build_thread_config_overrides(
+            model,
+            model_provider,
+            cwd,
+            approval_policy,
+            sandbox,
+            base_instructions,
+            developer_instructions,
+        );
+        // Derive a Config using the same logic as new conversation, honoring overrides if provided.
+        let config = match derive_config_for_cwd(
+            &self.cli_overrides,
+            request_overrides,
+            typesafe_overrides,
+            history_cwd,
+        )
+        .await
+        {
+            Ok(config) => config,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("error deriving config: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
             }
         };
 
@@ -2134,7 +2193,12 @@ impl CodexMessageProcessor {
             .clamp(1, THREAD_LIST_MAX_LIMIT);
 
         match self
-            .list_threads_common(requested_page_size, cursor, model_providers)
+            .list_threads_common(
+                requested_page_size,
+                cursor,
+                model_providers,
+                CoreThreadSortKey::UpdatedAt,
+            )
             .await
         {
             Ok((items, next_cursor)) => {
@@ -2152,8 +2216,18 @@ impl CodexMessageProcessor {
         requested_page_size: usize,
         cursor: Option<String>,
         model_providers: Option<Vec<String>>,
+        sort_key: CoreThreadSortKey,
     ) -> Result<(Vec<ConversationSummary>, Option<String>), JSONRPCErrorError> {
-        let mut cursor_obj: Option<RolloutCursor> = cursor.as_ref().and_then(|s| parse_cursor(s));
+        let mut cursor_obj: Option<RolloutCursor> = match cursor.as_ref() {
+            Some(cursor_str) => {
+                Some(parse_cursor(cursor_str).ok_or_else(|| JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid cursor: {cursor_str}"),
+                    data: None,
+                })?)
+            }
+            None => None,
+        };
         let mut last_cursor = cursor_obj.clone();
         let mut remaining = requested_page_size;
         let mut items = Vec::with_capacity(requested_page_size);
@@ -2177,6 +2251,7 @@ impl CodexMessageProcessor {
                 &self.config.codex_home,
                 page_size,
                 cursor_obj.as_ref(),
+                sort_key,
                 INTERACTIVE_SESSION_SOURCES,
                 model_provider_filter.as_deref(),
                 fallback_provider.as_str(),
@@ -2192,6 +2267,7 @@ impl CodexMessageProcessor {
                 .items
                 .into_iter()
                 .filter_map(|it| {
+                    let updated_at = it.updated_at.clone();
                     let session_meta_line = it.head.first().and_then(|first| {
                         serde_json::from_value::<SessionMetaLine>(first.clone()).ok()
                     })?;
@@ -2201,6 +2277,7 @@ impl CodexMessageProcessor {
                         &session_meta_line.meta,
                         session_meta_line.git.as_ref(),
                         fallback_provider.as_str(),
+                        updated_at,
                     )
                 })
                 .collect::<Vec<_>>();
@@ -2302,6 +2379,69 @@ impl CodexMessageProcessor {
         outgoing.send_response(request_id, response).await;
     }
 
+    async fn list_collaboration_modes(
+        outgoing: Arc<OutgoingMessageSender>,
+        thread_manager: Arc<ThreadManager>,
+        request_id: RequestId,
+        params: CollaborationModeListParams,
+    ) {
+        let CollaborationModeListParams {} = params;
+        let items = thread_manager.list_collaboration_modes();
+        let response = CollaborationModeListResponse { data: items };
+        outgoing.send_response(request_id, response).await;
+    }
+
+    async fn mcp_server_refresh(&self, request_id: RequestId, _params: Option<()>) {
+        let config = match self.load_latest_config().await {
+            Ok(config) => config,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let mcp_servers = match serde_json::to_value(config.mcp_servers.get()) {
+            Ok(value) => value,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to serialize MCP servers: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let mcp_oauth_credentials_store_mode =
+            match serde_json::to_value(config.mcp_oauth_credentials_store_mode) {
+                Ok(value) => value,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!(
+                            "failed to serialize MCP OAuth credentials store mode: {err}"
+                        ),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+        let refresh_config = McpServerRefreshConfig {
+            mcp_servers,
+            mcp_oauth_credentials_store_mode,
+        };
+
+        // Refresh requests are queued per thread; each thread rebuilds MCP connections on its next
+        // active turn to avoid work for threads that never resume.
+        let thread_manager = Arc::clone(&self.thread_manager);
+        thread_manager.refresh_mcp_servers(refresh_config).await;
+        let response = McpServerRefreshResponse {};
+        self.outgoing.send_response(request_id, response).await;
+    }
+
     async fn mcp_server_oauth_login(
         &self,
         request_id: RequestId,
@@ -2321,7 +2461,7 @@ impl CodexMessageProcessor {
             timeout_secs,
         } = params;
 
-        let Some(server) = config.mcp_servers.get(&name) else {
+        let Some(server) = config.mcp_servers.get().get(&name) else {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: format!("No MCP server named '{name}' found."),
@@ -2358,6 +2498,7 @@ impl CodexMessageProcessor {
             env_http_headers,
             scopes.as_deref().unwrap_or_default(),
             timeout_secs,
+            config.mcp_oauth_callback_port,
         )
         .await
         {
@@ -2510,68 +2651,6 @@ impl CodexMessageProcessor {
             overrides,
         } = params;
 
-        // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = match overrides {
-            Some(overrides) => {
-                let NewConversationParams {
-                    model,
-                    model_provider,
-                    profile,
-                    cwd,
-                    approval_policy,
-                    sandbox: sandbox_mode,
-                    config: request_overrides,
-                    base_instructions,
-                    developer_instructions,
-                    compact_prompt,
-                    include_apply_patch_tool,
-                } = overrides;
-
-                // Persist windows sandbox feature.
-                let mut request_overrides = request_overrides.unwrap_or_default();
-                if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
-                    request_overrides.insert(
-                        "features.experimental_windows_sandbox".to_string(),
-                        serde_json::json!(true),
-                    );
-                }
-
-                let typesafe_overrides = ConfigOverrides {
-                    model,
-                    config_profile: profile,
-                    cwd: cwd.map(PathBuf::from),
-                    approval_policy,
-                    sandbox_mode,
-                    model_provider,
-                    codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
-                    base_instructions,
-                    developer_instructions,
-                    compact_prompt,
-                    include_apply_patch_tool,
-                    ..Default::default()
-                };
-
-                derive_config_from_params(
-                    &self.cli_overrides,
-                    Some(request_overrides),
-                    typesafe_overrides,
-                )
-                .await
-            }
-            None => Ok(self.config.as_ref().clone()),
-        };
-        let config = match config {
-            Ok(cfg) => cfg,
-            Err(err) => {
-                self.send_invalid_request_error(
-                    request_id,
-                    format!("error deriving config: {err}"),
-                )
-                .await;
-                return;
-            }
-        };
-
         let thread_history = if let Some(path) = path {
             match RolloutRecorder::get_rollout_history(&path).await {
                 Ok(initial_history) => initial_history,
@@ -2637,6 +2716,76 @@ impl CodexMessageProcessor {
             }
         };
 
+        let history_cwd = thread_history.session_cwd();
+        let (typesafe_overrides, request_overrides) = match overrides {
+            Some(overrides) => {
+                let NewConversationParams {
+                    model,
+                    model_provider,
+                    profile,
+                    cwd,
+                    approval_policy,
+                    sandbox: sandbox_mode,
+                    config: request_overrides,
+                    base_instructions,
+                    developer_instructions,
+                    compact_prompt,
+                    include_apply_patch_tool,
+                } = overrides;
+
+                // Persist windows sandbox feature.
+                let mut request_overrides = request_overrides.unwrap_or_default();
+                if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
+                    request_overrides.insert(
+                        "features.experimental_windows_sandbox".to_string(),
+                        serde_json::json!(true),
+                    );
+                }
+
+                let typesafe_overrides = ConfigOverrides {
+                    model,
+                    config_profile: profile,
+                    cwd: cwd.map(PathBuf::from),
+                    approval_policy,
+                    sandbox_mode,
+                    model_provider,
+                    codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+                    base_instructions,
+                    developer_instructions,
+                    compact_prompt,
+                    include_apply_patch_tool,
+                    ..Default::default()
+                };
+                (typesafe_overrides, Some(request_overrides))
+            }
+            None => (
+                ConfigOverrides {
+                    codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+                    ..Default::default()
+                },
+                None,
+            ),
+        };
+
+        let config = match derive_config_for_cwd(
+            &self.cli_overrides,
+            request_overrides,
+            typesafe_overrides,
+            history_cwd,
+        )
+        .await
+        {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("error deriving config: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
+
         match self
             .thread_manager
             .resume_thread_with_history(config, thread_history, self.auth_manager.clone())
@@ -2696,62 +2845,6 @@ impl CodexMessageProcessor {
         } = params;
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = match overrides {
-            Some(overrides) => {
-                let NewConversationParams {
-                    model,
-                    model_provider,
-                    profile,
-                    cwd,
-                    approval_policy,
-                    sandbox: sandbox_mode,
-                    config: cli_overrides,
-                    base_instructions,
-                    developer_instructions,
-                    compact_prompt,
-                    include_apply_patch_tool,
-                } = overrides;
-
-                // Persist windows sandbox feature.
-                let mut cli_overrides = cli_overrides.unwrap_or_default();
-                if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
-                    cli_overrides.insert(
-                        "features.experimental_windows_sandbox".to_string(),
-                        serde_json::json!(true),
-                    );
-                }
-
-                let overrides = ConfigOverrides {
-                    model,
-                    config_profile: profile,
-                    cwd: cwd.map(PathBuf::from),
-                    approval_policy,
-                    sandbox_mode,
-                    model_provider,
-                    codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
-                    base_instructions,
-                    developer_instructions,
-                    compact_prompt,
-                    include_apply_patch_tool,
-                    ..Default::default()
-                };
-
-                derive_config_from_params(&self.cli_overrides, Some(cli_overrides), overrides).await
-            }
-            None => Ok(self.config.as_ref().clone()),
-        };
-        let config = match config {
-            Ok(cfg) => cfg,
-            Err(err) => {
-                self.send_invalid_request_error(
-                    request_id,
-                    format!("error deriving config: {err}"),
-                )
-                .await;
-                return;
-            }
-        };
-
         let rollout_path = if let Some(path) = path {
             path
         } else if let Some(conversation_id) = conversation_id {
@@ -2783,6 +2876,90 @@ impl CodexMessageProcessor {
             )
             .await;
             return;
+        };
+
+        let history_cwd = match read_session_meta_line(&rollout_path).await {
+            Ok(meta_line) => Some(meta_line.meta.cwd),
+            Err(err) => {
+                let rollout_path = rollout_path.display();
+                warn!("failed to read session metadata from rollout {rollout_path}: {err}");
+                None
+            }
+        };
+
+        let (typesafe_overrides, request_overrides) = match overrides {
+            Some(overrides) => {
+                let NewConversationParams {
+                    model,
+                    model_provider,
+                    profile,
+                    cwd,
+                    approval_policy,
+                    sandbox: sandbox_mode,
+                    config: cli_overrides,
+                    base_instructions,
+                    developer_instructions,
+                    compact_prompt,
+                    include_apply_patch_tool,
+                } = overrides;
+
+                // Persist windows sandbox feature.
+                let mut cli_overrides = cli_overrides.unwrap_or_default();
+                if cfg!(windows) && self.config.features.enabled(Feature::WindowsSandbox) {
+                    cli_overrides.insert(
+                        "features.experimental_windows_sandbox".to_string(),
+                        serde_json::json!(true),
+                    );
+                }
+                let request_overrides = if cli_overrides.is_empty() {
+                    None
+                } else {
+                    Some(cli_overrides)
+                };
+
+                let overrides = ConfigOverrides {
+                    model,
+                    config_profile: profile,
+                    cwd: cwd.map(PathBuf::from),
+                    approval_policy,
+                    sandbox_mode,
+                    model_provider,
+                    codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+                    base_instructions,
+                    developer_instructions,
+                    compact_prompt,
+                    include_apply_patch_tool,
+                    ..Default::default()
+                };
+
+                (overrides, request_overrides)
+            }
+            None => (
+                ConfigOverrides {
+                    codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+                    ..Default::default()
+                },
+                None,
+            ),
+        };
+
+        let config = match derive_config_for_cwd(
+            &self.cli_overrides,
+            request_overrides,
+            typesafe_overrides,
+            history_cwd,
+        )
+        .await
+        {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("error deriving config: {err}"),
+                )
+                .await;
+                return;
+            }
         };
 
         let NewThread {
@@ -3036,7 +3213,13 @@ impl CodexMessageProcessor {
         let mapped_items: Vec<CoreInputItem> = items
             .into_iter()
             .map(|item| match item {
-                WireInputItem::Text { text } => CoreInputItem::Text { text },
+                WireInputItem::Text {
+                    text,
+                    text_elements,
+                } => CoreInputItem::Text {
+                    text,
+                    text_elements: text_elements.into_iter().map(Into::into).collect(),
+                },
                 WireInputItem::Image { image_url } => CoreInputItem::Image { image_url },
                 WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
             })
@@ -3082,7 +3265,13 @@ impl CodexMessageProcessor {
         let mapped_items: Vec<CoreInputItem> = items
             .into_iter()
             .map(|item| match item {
-                WireInputItem::Text { text } => CoreInputItem::Text { text },
+                WireInputItem::Text {
+                    text,
+                    text_elements,
+                } => CoreInputItem::Text {
+                    text,
+                    text_elements: text_elements.into_iter().map(Into::into).collect(),
+                },
                 WireInputItem::Image { image_url } => CoreInputItem::Image { image_url },
                 WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
             })
@@ -3098,6 +3287,7 @@ impl CodexMessageProcessor {
                 effort,
                 summary,
                 final_output_json_schema: output_schema,
+                collaboration_mode: None,
             })
             .await;
 
@@ -3119,7 +3309,7 @@ impl CodexMessageProcessor {
         for cwd in cwds {
             let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
             let errors = errors_to_info(&outcome.errors);
-            let skills = skills_to_info(&outcome.skills);
+            let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
             data.push(codex_app_server_protocol::SkillsListEntry {
                 cwd,
                 skills,
@@ -3129,6 +3319,37 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_response(request_id, SkillsListResponse { data })
             .await;
+    }
+
+    async fn skills_config_write(&self, request_id: RequestId, params: SkillsConfigWriteParams) {
+        let SkillsConfigWriteParams { path, enabled } = params;
+        let edits = vec![ConfigEdit::SetSkillConfig { path, enabled }];
+        let result = ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_edits(edits)
+            .apply()
+            .await;
+
+        match result {
+            Ok(()) => {
+                self.thread_manager.skills_manager().clear_cache();
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        SkillsConfigWriteResponse {
+                            effective_enabled: enabled,
+                        },
+                    )
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to update skill settings: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
     }
 
     async fn interrupt_conversation(
@@ -3180,7 +3401,8 @@ impl CodexMessageProcessor {
             || params.sandbox_policy.is_some()
             || params.model.is_some()
             || params.effort.is_some()
-            || params.summary.is_some();
+            || params.summary.is_some()
+            || params.collaboration_mode.is_some();
 
         // If any overrides are provided, update the session turn context first.
         if has_any_overrides {
@@ -3192,6 +3414,7 @@ impl CodexMessageProcessor {
                     model: params.model,
                     effort: params.effort.map(Some),
                     summary: params.summary,
+                    collaboration_mode: params.collaboration_mode,
                 })
                 .await;
         }
@@ -3244,6 +3467,8 @@ impl CodexMessageProcessor {
                 id: turn_id.clone(),
                 content: vec![V2UserInput::Text {
                     text: display_text.to_string(),
+                    // Review prompt display text is synthesized; no UI element ranges to preserve.
+                    text_elements: Vec::new(),
                 }],
             }]
         };
@@ -3332,7 +3557,9 @@ impl CodexMessageProcessor {
                 })?;
 
         let mut config = self.config.as_ref().clone();
-        config.model = Some(self.config.review_model.clone());
+        if let Some(review_model) = &config.review_model {
+            config.model = Some(review_model.clone());
+        }
 
         let NewThread {
             thread_id,
@@ -3506,6 +3733,12 @@ impl CodexMessageProcessor {
             Some(sender) => {
                 // Signal the spawned task to exit and acknowledge.
                 let _ = sender.send(());
+                if let Some(thread_id) = self
+                    .listener_thread_ids_by_subscription
+                    .remove(&subscription_id)
+                {
+                    info!("removed listener for thread {thread_id}");
+                }
                 let response = RemoveConversationSubscriptionResponse {};
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -3541,6 +3774,8 @@ impl CodexMessageProcessor {
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
         self.conversation_listeners
             .insert(subscription_id, cancel_tx);
+        self.listener_thread_ids_by_subscription
+            .insert(subscription_id, conversation_id);
 
         let outgoing_for_task = self.outgoing.clone();
         let pending_interrupts = self.pending_interrupts.clone();
@@ -3779,15 +4014,30 @@ impl CodexMessageProcessor {
 
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
+    disabled_paths: &std::collections::HashSet<PathBuf>,
 ) -> Vec<codex_app_server_protocol::SkillMetadata> {
     skills
         .iter()
-        .map(|skill| codex_app_server_protocol::SkillMetadata {
-            name: skill.name.clone(),
-            description: skill.description.clone(),
-            short_description: skill.short_description.clone(),
-            path: skill.path.clone(),
-            scope: skill.scope.into(),
+        .map(|skill| {
+            let enabled = !disabled_paths.contains(&skill.path);
+            codex_app_server_protocol::SkillMetadata {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                short_description: skill.short_description.clone(),
+                interface: skill.interface.clone().map(|interface| {
+                    codex_app_server_protocol::SkillInterface {
+                        display_name: interface.display_name,
+                        short_description: interface.short_description,
+                        icon_small: interface.icon_small,
+                        icon_large: interface.icon_large,
+                        brand_color: interface.brand_color,
+                        default_prompt: interface.default_prompt,
+                    }
+                }),
+                path: skill.path.clone(),
+                scope: skill.scope.into(),
+                enabled,
+            }
         })
         .collect()
 }
@@ -3834,6 +4084,31 @@ async fn derive_config_from_params(
         .await
 }
 
+async fn derive_config_for_cwd(
+    cli_overrides: &[(String, TomlValue)],
+    request_overrides: Option<HashMap<String, serde_json::Value>>,
+    typesafe_overrides: ConfigOverrides,
+    cwd: Option<PathBuf>,
+) -> std::io::Result<Config> {
+    let merged_cli_overrides = cli_overrides
+        .iter()
+        .cloned()
+        .chain(
+            request_overrides
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(k, v)| (k, json_to_toml(v))),
+        )
+        .collect::<Vec<_>>();
+
+    codex_core::config::ConfigBuilder::default()
+        .cli_overrides(merged_cli_overrides)
+        .harness_overrides(typesafe_overrides)
+        .fallback_cwd(cwd)
+        .build()
+        .await
+}
+
 pub(crate) async fn read_summary_from_rollout(
     path: &Path,
     fallback_provider: &str,
@@ -3859,12 +4134,19 @@ pub(crate) async fn read_summary_from_rollout(
         git,
     } = session_meta_line;
 
+    let created_at = if session_meta.timestamp.is_empty() {
+        None
+    } else {
+        Some(session_meta.timestamp.as_str())
+    };
+    let updated_at = read_updated_at(path, created_at).await;
     if let Some(summary) = extract_conversation_summary(
         path.to_path_buf(),
         &head,
         &session_meta,
         git.as_ref(),
         fallback_provider,
+        updated_at.clone(),
     ) {
         return Ok(summary);
     }
@@ -3879,10 +4161,12 @@ pub(crate) async fn read_summary_from_rollout(
         .clone()
         .unwrap_or_else(|| fallback_provider.to_string());
     let git_info = git.as_ref().map(map_git_info);
+    let updated_at = updated_at.or_else(|| timestamp.clone());
 
     Ok(ConversationSummary {
         conversation_id: session_meta.id,
         timestamp,
+        updated_at,
         path: path.to_path_buf(),
         preview: String::new(),
         model_provider,
@@ -3917,6 +4201,7 @@ fn extract_conversation_summary(
     session_meta: &SessionMeta,
     git: Option<&CoreGitInfo>,
     fallback_provider: &str,
+    updated_at: Option<String>,
 ) -> Option<ConversationSummary> {
     let preview = head
         .iter()
@@ -3942,10 +4227,12 @@ fn extract_conversation_summary(
         .clone()
         .unwrap_or_else(|| fallback_provider.to_string());
     let git_info = git.map(map_git_info);
+    let updated_at = updated_at.or_else(|| timestamp.clone());
 
     Some(ConversationSummary {
         conversation_id,
         timestamp,
+        updated_at,
         path,
         preview: preview.to_string(),
         model_provider,
@@ -3972,12 +4259,25 @@ fn parse_datetime(timestamp: Option<&str>) -> Option<DateTime<Utc>> {
     })
 }
 
+async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String> {
+    let updated_at = tokio::fs::metadata(path)
+        .await
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .map(|modified| {
+            let updated_at: DateTime<Utc> = modified.into();
+            updated_at.to_rfc3339_opts(SecondsFormat::Secs, true)
+        });
+    updated_at.or_else(|| created_at.map(str::to_string))
+}
+
 pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
     let ConversationSummary {
         conversation_id,
         path,
         preview,
         timestamp,
+        updated_at,
         model_provider,
         cwd,
         cli_version,
@@ -3986,6 +4286,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
     } = summary;
 
     let created_at = parse_datetime(timestamp.as_deref());
+    let updated_at = parse_datetime(updated_at.as_deref()).or(created_at);
     let git_info = git_info.map(|info| ApiGitInfo {
         sha: info.sha,
         branch: info.branch,
@@ -3997,6 +4298,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         preview,
         model_provider,
         created_at: created_at.map(|dt| dt.timestamp()).unwrap_or(0),
+        updated_at: updated_at.map(|dt| dt.timestamp()).unwrap_or(0),
         path,
         cwd,
         cli_version,
@@ -4028,7 +4330,6 @@ mod tests {
                 "cwd": "/",
                 "originator": "codex",
                 "cli_version": "0.0.0",
-                "instructions": null,
                 "model_provider": "test-provider"
             }),
             json!({
@@ -4051,13 +4352,20 @@ mod tests {
 
         let session_meta = serde_json::from_value::<SessionMeta>(head[0].clone())?;
 
-        let summary =
-            extract_conversation_summary(path.clone(), &head, &session_meta, None, "test-provider")
-                .expect("summary");
+        let summary = extract_conversation_summary(
+            path.clone(),
+            &head,
+            &session_meta,
+            None,
+            "test-provider",
+            timestamp.clone(),
+        )
+        .expect("summary");
 
         let expected = ConversationSummary {
             conversation_id,
-            timestamp,
+            timestamp: timestamp.clone(),
+            updated_at: timestamp,
             path,
             preview: "Count to 5".to_string(),
             model_provider: "test-provider".to_string(),
@@ -4077,6 +4385,7 @@ mod tests {
         use codex_protocol::protocol::RolloutLine;
         use codex_protocol::protocol::SessionMetaLine;
         use std::fs;
+        use std::fs::FileTimes;
 
         let temp_dir = TempDir::new()?;
         let path = temp_dir.path().join("rollout.jsonl");
@@ -4100,12 +4409,19 @@ mod tests {
         };
 
         fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;
+        let parsed = chrono::DateTime::parse_from_rfc3339(&timestamp)?.with_timezone(&Utc);
+        let times = FileTimes::new().set_modified(parsed.into());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)?
+            .set_times(times)?;
 
         let summary = read_summary_from_rollout(path.as_path(), "fallback").await?;
 
         let expected = ConversationSummary {
             conversation_id,
-            timestamp: Some(timestamp),
+            timestamp: Some(timestamp.clone()),
+            updated_at: Some("2025-09-05T16:53:11Z".to_string()),
             path: path.clone(),
             preview: String::new(),
             model_provider: "fallback".to_string(),
