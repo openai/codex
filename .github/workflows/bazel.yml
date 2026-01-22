@@ -47,21 +47,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install CMake (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          if ! command -v cmake >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y cmake
-          fi
-
-      - name: Install CMake (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          if ! command -v cmake >/dev/null; then
-            brew install cmake
-          fi
-
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
       - name: Install DotSlash
@@ -79,19 +64,6 @@ jobs:
       # Install Bazel via Bazelisk
       - name: Set up Bazel
         uses: bazelbuild/setup-bazelisk@v3
-
-      - name: Install libclang (Ubuntu)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang llvm libclang-dev
-          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
-
-      - name: Install libclang (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install llvm
-          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
 
       # TODO(mbolin): Bring this back once we have caching working. Currently,
       # we never seem to get a cache hit but we still end up paying the cost of
