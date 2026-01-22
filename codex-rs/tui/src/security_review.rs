@@ -101,6 +101,7 @@ const VALIDATION_MAX_FINDINGS: usize = 8;
 const VALIDATION_PLAN_CONCURRENCY: usize = 8;
 const VALIDATION_REFINE_CONCURRENCY: usize = 8;
 const VALIDATION_EXEC_CONCURRENCY: usize = 8;
+const VALIDATION_AGENT_TIMEOUT_SECS: u64 = 10 * 60;
 const VALIDATION_EXEC_TIMEOUT_SECS: u64 = 30 * 60;
 const VALIDATION_PREFLIGHT_TIMEOUT_SECS: u64 = 30 * 60;
 const VALIDATION_CURL_TIMEOUT_SECS: u64 = 60;
@@ -823,20 +824,189 @@ fn validation_target_prep_progress_path(output_root: &Path) -> PathBuf {
         .join("validation_target_prep.json")
 }
 
-fn validation_target_prep_complete(output_root: &Path, repo_root: &Path) -> bool {
+fn validation_target_prep_matches_repo(
+    progress: &ValidationTargetPrepProgress,
+    repo_root: &Path,
+) -> bool {
+    if progress.repo_root == repo_root.display().to_string() {
+        return true;
+    }
+
+    let Ok(repo_root) = repo_root.canonicalize() else {
+        return false;
+    };
+    let Ok(progress_root) = PathBuf::from(progress.repo_root.as_str()).canonicalize() else {
+        return false;
+    };
+
+    progress_root == repo_root
+}
+
+fn validation_target_prep_marker(
+    output_root: &Path,
+    repo_root: &Path,
+) -> Option<ValidationTargetPrepProgress> {
     let path = validation_target_prep_progress_path(output_root);
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(_) => return false,
-    };
-    let progress = match serde_json::from_slice::<ValidationTargetPrepProgress>(&bytes) {
-        Ok(progress) => progress,
-        Err(_) => return false,
-    };
-    progress.version == 3
-        && progress.repo_root == repo_root.display().to_string()
-        && progress.local_build_ok
-        && progress.local_run_ok
+    let bytes = fs::read(path).ok()?;
+    let progress = serde_json::from_slice::<ValidationTargetPrepProgress>(&bytes).ok()?;
+    validation_target_prep_matches_repo(&progress, repo_root).then_some(progress)
+}
+
+fn validation_target_prep_complete(output_root: &Path, repo_root: &Path) -> bool {
+    validation_target_prep_marker(output_root, repo_root).is_some_and(|progress| {
+        progress.version == 3 && progress.local_build_ok && progress.local_run_ok
+    })
+}
+
+fn reconcile_validation_target_prep_resume_state(
+    output_root: &Path,
+    repo_root: &Path,
+    plan_tracker: &mut SecurityReviewPlanTracker,
+    progress_sender: &Option<AppEventSender>,
+    log_sink: &Option<Arc<SecurityReviewLogSink>>,
+    logs: &mut Vec<String>,
+) -> bool {
+    let validation_prep_marker = validation_target_prep_marker(output_root, repo_root);
+    let validation_prep_complete = validation_prep_marker.as_ref().is_some_and(|progress| {
+        progress.version == 3 && progress.local_build_ok && progress.local_run_ok
+    });
+
+    if validation_prep_marker.is_some() {
+        if validation_prep_complete {
+            push_progress_log(
+                progress_sender,
+                log_sink,
+                logs,
+                format!(
+                    "Prepare runnable validation targets: existing prep marker found at {}; skipping.",
+                    validation_target_prep_progress_path(output_root).display()
+                ),
+            );
+        }
+        plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
+    } else if matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+        Some(StepStatus::InProgress)
+    ) {
+        push_progress_log(
+            progress_sender,
+            log_sink,
+            logs,
+            "Prepare runnable validation targets: checkpoint marked this step in progress, but no prep marker was found; rerunning."
+                .to_string(),
+        );
+        plan_tracker.reset_step(SecurityReviewPlanStep::PrepareValidationTargets);
+    }
+
+    validation_prep_complete
+}
+
+#[cfg(test)]
+mod validation_target_prep_resume_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use tempfile::tempdir;
+
+    fn write_validation_target_prep_progress(
+        output_root: &Path,
+        progress: &ValidationTargetPrepProgress,
+    ) {
+        let path = validation_target_prep_progress_path(output_root);
+        fs::create_dir_all(path.parent().expect("progress parent")).expect("create dir");
+        let bytes = serde_json::to_vec_pretty(progress).expect("serialize progress");
+        fs::write(&path, bytes).expect("write progress");
+    }
+
+    fn new_plan_tracker(repo_root: &Path) -> SecurityReviewPlanTracker {
+        let include_paths: Vec<PathBuf> = Vec::new();
+        SecurityReviewPlanTracker::new(
+            SecurityReviewMode::Bugs,
+            &include_paths,
+            repo_root,
+            HashMap::new(),
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn does_not_reset_completed_prepare_validation_targets_when_marker_exists_but_not_ready() {
+        let repo_dir = tempdir().expect("repo dir");
+        let output_dir = tempdir().expect("output dir");
+        let repo_root = repo_dir.path();
+        let output_root = output_dir.path();
+
+        let progress = ValidationTargetPrepProgress {
+            version: 3,
+            repo_root: repo_root.display().to_string(),
+            summary: None,
+            local_build_ok: false,
+            local_run_ok: false,
+            docker_build_ok: false,
+            docker_run_ok: false,
+            local_entrypoint: None,
+            local_build_command: None,
+            local_smoke_command: None,
+            dockerfile_path: None,
+            docker_image_tag: None,
+            docker_build_command: None,
+            docker_smoke_command: None,
+        };
+        write_validation_target_prep_progress(output_root, &progress);
+
+        let mut plan_tracker = new_plan_tracker(repo_root);
+        plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
+
+        let mut logs = Vec::new();
+        let complete = reconcile_validation_target_prep_resume_state(
+            output_root,
+            repo_root,
+            &mut plan_tracker,
+            &None,
+            &None,
+            &mut logs,
+        );
+
+        assert_eq!(complete, false);
+        assert!(
+            matches!(
+                plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+                Some(StepStatus::Completed)
+            ),
+            "PrepareValidationTargets should remain completed"
+        );
+    }
+
+    #[test]
+    fn resets_in_progress_prepare_validation_targets_when_marker_missing() {
+        let repo_dir = tempdir().expect("repo dir");
+        let output_dir = tempdir().expect("output dir");
+        let repo_root = repo_dir.path();
+        let output_root = output_dir.path();
+
+        let mut plan_tracker = new_plan_tracker(repo_root);
+        plan_tracker.start_step(SecurityReviewPlanStep::PrepareValidationTargets);
+
+        let mut logs = Vec::new();
+        let complete = reconcile_validation_target_prep_resume_state(
+            output_root,
+            repo_root,
+            &mut plan_tracker,
+            &None,
+            &None,
+            &mut logs,
+        );
+
+        assert_eq!(complete, false);
+        assert!(
+            matches!(
+                plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
+                Some(StepStatus::Pending)
+            ),
+            "PrepareValidationTargets should be reset to pending"
+        );
+        assert_eq!(logs.len(), 1);
+    }
 }
 
 pub fn running_review_candidates(repo_path: &Path) -> Vec<RunningSecurityReviewCandidate> {
@@ -4805,32 +4975,14 @@ pub async fn run_security_review(
         plan_tracker.mark_complete(SecurityReviewPlanStep::DirTriage);
         plan_tracker.mark_complete(SecurityReviewPlanStep::FileTriage);
     }
-    let validation_prep_complete =
-        validation_target_prep_complete(&request.output_root, &repo_path);
-    if validation_prep_complete {
-        push_progress_log(
-            &progress_sender,
-            &log_sink,
-            &mut logs,
-            format!(
-                "Prepare runnable validation targets: existing prep marker found at {}; skipping.",
-                validation_target_prep_progress_path(&request.output_root).display()
-            ),
-        );
-        plan_tracker.mark_complete(SecurityReviewPlanStep::PrepareValidationTargets);
-    } else if matches!(
-        plan_tracker.status_for(SecurityReviewPlanStep::PrepareValidationTargets),
-        Some(StepStatus::Completed | StepStatus::InProgress)
-    ) {
-        push_progress_log(
-            &progress_sender,
-            &log_sink,
-            &mut logs,
-            "Prepare runnable validation targets: checkpoint marked this step complete, but no valid prep marker was found; rerunning."
-                .to_string(),
-        );
-        plan_tracker.reset_step(SecurityReviewPlanStep::PrepareValidationTargets);
-    }
+    let validation_prep_complete = reconcile_validation_target_prep_resume_state(
+        &request.output_root,
+        &repo_path,
+        &mut plan_tracker,
+        &progress_sender,
+        &log_sink,
+        &mut logs,
+    );
     if !validation_prep_complete
         && matches!(
             plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
@@ -5650,9 +5802,13 @@ pub async fn run_security_review(
                         ),
                     );
 
+                    let polish_completed = matches!(
+                        plan_tracker.status_for(SecurityReviewPlanStep::PolishFindings),
+                        Some(StepStatus::Completed)
+                    );
                     let mut removed = 0usize;
                     let mut filtered_low = 0usize;
-                    if loaded.bugs.len() > 1 {
+                    if loaded.bugs.len() > 1 && !polish_completed {
                         let dedupe_model = if request.spec_model.trim().is_empty() {
                             SPEC_GENERATION_MODEL
                         } else {
@@ -5710,6 +5866,12 @@ pub async fn run_security_review(
                                 count_files_with_findings_from_snapshots(&loaded.bugs),
                             );
                         }
+                    } else if loaded.bugs.len() > 1 && polish_completed {
+                        record(
+                            &mut logs,
+                            "Polish findings already completed; skipping resume dedupe."
+                                .to_string(),
+                        );
                     }
                     if removed > 0 {
                         record(
@@ -21216,6 +21378,9 @@ async fn run_validation_plan_agent(
     label: &str,
 ) -> Result<ValidationPlanAgentOutput, BugVerificationFailure> {
     let mut logs: Vec<String> = Vec::new();
+    let start = Instant::now();
+    let deadline = start + Duration::from_secs(VALIDATION_AGENT_TIMEOUT_SECS);
+    let remaining = || deadline.saturating_duration_since(Instant::now());
     push_progress_log(
         &progress_sender,
         &None,
@@ -21241,34 +21406,79 @@ async fn run_validation_plan_agent(
         )),
     );
 
-    let conversation = match manager.new_conversation(validation_config).await {
-        Ok(new_conversation) => new_conversation.conversation,
-        Err(err) => {
+    let conversation = match tokio::time::timeout(
+        remaining(),
+        manager.new_conversation(validation_config),
+    )
+    .await
+    {
+        Ok(Ok(new_conversation)) => new_conversation.conversation,
+        Ok(Err(err)) => {
             let message = format!("Failed to start validation agent for {label}: {err}");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(BugVerificationFailure { message, logs });
+        }
+        Err(_) => {
+            let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+            let message = format!("Validation planning timed out after {elapsed} for {label}.");
             push_progress_log(&progress_sender, &None, &mut logs, message.clone());
             return Err(BugVerificationFailure { message, logs });
         }
     };
 
-    if let Err(err) = conversation
-        .submit(Op::UserInput {
+    match tokio::time::timeout(
+        remaining(),
+        conversation.submit(Op::UserInput {
             items: vec![UserInput::Text { text: prompt }],
-        })
-        .await
+        }),
+    )
+    .await
     {
-        let message = format!("Failed to submit validation prompt for {label}: {err}");
-        push_progress_log(&progress_sender, &None, &mut logs, message.clone());
-        return Err(BugVerificationFailure { message, logs });
-    }
+        Ok(Ok(_)) => {}
+        Ok(Err(err)) => {
+            let message = format!("Failed to submit validation prompt for {label}: {err}");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(BugVerificationFailure { message, logs });
+        }
+        Err(_) => {
+            let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+            let message = format!(
+                "Validation planning timed out submitting the prompt after {elapsed} for {label}."
+            );
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            let _ = tokio::time::timeout(Duration::from_secs(1), conversation.submit(Op::Shutdown))
+                .await;
+            return Err(BugVerificationFailure { message, logs });
+        }
+    };
 
     let mut last_agent_message: Option<String> = None;
     loop {
-        let event = match conversation.next_event().await {
-            Ok(event) => event,
-            Err(err) => {
+        let remaining = remaining();
+        if remaining.is_zero() {
+            let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+            let message = format!("Validation planning timed out after {elapsed} for {label}.");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            let _ = tokio::time::timeout(Duration::from_secs(1), conversation.submit(Op::Shutdown))
+                .await;
+            return Err(BugVerificationFailure { message, logs });
+        }
+
+        let event = match tokio::time::timeout(remaining, conversation.next_event()).await {
+            Ok(Ok(event)) => event,
+            Ok(Err(err)) => {
                 let message =
                     format!("Validation agent terminated unexpectedly for {label}: {err}");
                 push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+            Err(_) => {
+                let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+                let message = format!("Validation planning timed out after {elapsed} for {label}.");
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(1), conversation.submit(Op::Shutdown))
+                        .await;
                 return Err(BugVerificationFailure { message, logs });
             }
         };
@@ -21388,6 +21598,9 @@ async fn run_validation_refine_agent(
     label: &str,
 ) -> Result<ValidationRefineAgentOutput, BugVerificationFailure> {
     let mut logs: Vec<String> = Vec::new();
+    let start = Instant::now();
+    let deadline = start + Duration::from_secs(VALIDATION_AGENT_TIMEOUT_SECS);
+    let remaining = || deadline.saturating_duration_since(Instant::now());
     push_progress_log(
         &progress_sender,
         &None,
@@ -21413,34 +21626,78 @@ async fn run_validation_refine_agent(
         )),
     );
 
-    let conversation = match manager.new_conversation(refine_config).await {
-        Ok(new_conversation) => new_conversation.conversation,
-        Err(err) => {
-            let message = format!("Failed to start validation refine agent for {label}: {err}");
+    let conversation =
+        match tokio::time::timeout(remaining(), manager.new_conversation(refine_config)).await {
+            Ok(Ok(new_conversation)) => new_conversation.conversation,
+            Ok(Err(err)) => {
+                let message = format!("Failed to start validation refine agent for {label}: {err}");
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+            Err(_) => {
+                let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+                let message =
+                    format!("Validation PoC refinement timed out after {elapsed} for {label}.");
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+        };
+
+    match tokio::time::timeout(
+        remaining(),
+        conversation.submit(Op::UserInput {
+            items: vec![UserInput::Text { text: prompt }],
+        }),
+    )
+    .await
+    {
+        Ok(Ok(_)) => {}
+        Ok(Err(err)) => {
+            let message = format!("Failed to submit validation refine prompt for {label}: {err}");
             push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            return Err(BugVerificationFailure { message, logs });
+        }
+        Err(_) => {
+            let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+            let message = format!(
+                "Validation PoC refinement timed out submitting the prompt after {elapsed} for {label}."
+            );
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            let _ = tokio::time::timeout(Duration::from_secs(1), conversation.submit(Op::Shutdown))
+                .await;
             return Err(BugVerificationFailure { message, logs });
         }
     };
 
-    if let Err(err) = conversation
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text { text: prompt }],
-        })
-        .await
-    {
-        let message = format!("Failed to submit validation refine prompt for {label}: {err}");
-        push_progress_log(&progress_sender, &None, &mut logs, message.clone());
-        return Err(BugVerificationFailure { message, logs });
-    }
-
     let mut last_agent_message: Option<String> = None;
     loop {
-        let event = match conversation.next_event().await {
-            Ok(event) => event,
-            Err(err) => {
+        let remaining = remaining();
+        if remaining.is_zero() {
+            let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+            let message =
+                format!("Validation PoC refinement timed out after {elapsed} for {label}.");
+            push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+            let _ = tokio::time::timeout(Duration::from_secs(1), conversation.submit(Op::Shutdown))
+                .await;
+            return Err(BugVerificationFailure { message, logs });
+        }
+
+        let event = match tokio::time::timeout(remaining, conversation.next_event()).await {
+            Ok(Ok(event)) => event,
+            Ok(Err(err)) => {
                 let message =
                     format!("Validation refine agent terminated unexpectedly for {label}: {err}");
                 push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                return Err(BugVerificationFailure { message, logs });
+            }
+            Err(_) => {
+                let elapsed = fmt_elapsed_compact(start.elapsed().as_secs());
+                let message =
+                    format!("Validation PoC refinement timed out after {elapsed} for {label}.");
+                push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                let _ =
+                    tokio::time::timeout(Duration::from_secs(1), conversation.submit(Op::Shutdown))
+                        .await;
                 return Err(BugVerificationFailure { message, logs });
             }
         };
