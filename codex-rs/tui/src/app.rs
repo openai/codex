@@ -68,6 +68,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
@@ -186,6 +187,7 @@ struct ThreadEventSnapshot {
 struct ThreadEventStore {
     session_configured: Option<Event>,
     buffer: VecDeque<Event>,
+    user_message_ids: HashSet<String>,
     capacity: usize,
     active: bool,
 }
@@ -195,6 +197,7 @@ impl ThreadEventStore {
         Self {
             session_configured: None,
             buffer: VecDeque::new(),
+            user_message_ids: HashSet::new(),
             capacity,
             active: false,
         }
@@ -208,6 +211,9 @@ impl ThreadEventStore {
             }
             EventMsg::ItemCompleted(completed) => {
                 if let TurnItem::UserMessage(item) = &completed.item {
+                    if !event.id.is_empty() && self.user_message_ids.contains(&event.id) {
+                        return;
+                    }
                     let legacy = Event {
                         id: event.id,
                         msg: item.as_legacy_event(),
@@ -223,9 +229,19 @@ impl ThreadEventStore {
     }
 
     fn push_legacy_event(&mut self, event: Event) {
+        if let EventMsg::UserMessage(_) = &event.msg
+            && !event.id.is_empty()
+            && !self.user_message_ids.insert(event.id.clone())
+        {
+            return;
+        }
         self.buffer.push_back(event);
-        if self.buffer.len() > self.capacity {
-            self.buffer.pop_front();
+        if self.buffer.len() > self.capacity
+            && let Some(removed) = self.buffer.pop_front()
+            && matches!(removed.msg, EventMsg::UserMessage(_))
+            && !removed.id.is_empty()
+        {
+            self.user_message_ids.remove(&removed.id);
         }
     }
 
@@ -573,10 +589,8 @@ impl App {
             guard.active
         };
 
-        if should_send {
-            if let Err(err) = sender.send(event).await {
-                tracing::warn!("thread {thread_id} event channel closed: {err}");
-            }
+        if should_send && let Err(err) = sender.send(event).await {
+            tracing::warn!("thread {thread_id} event channel closed: {err}");
         }
         Ok(())
     }
@@ -621,12 +635,12 @@ impl App {
                 if self.active_thread_id == Some(*thread_id) {
                     initial_selected_idx = Some(idx);
                 }
-                let id = thread_id.clone();
+                let id = *thread_id;
                 SelectionItem {
                     name: thread_id.to_string(),
                     is_current: self.active_thread_id == Some(*thread_id),
                     actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::SelectAgentThread(id.clone()));
+                        tx.send(AppEvent::SelectAgentThread(id));
                     })],
                     dismiss_on_select: true,
                     search_value: Some(thread_id.to_string()),
@@ -1907,11 +1921,9 @@ impl App {
                     guard.push_event(event.clone());
                     guard.active
                 };
-                if should_send {
-                    if let Err(err) = sender.send(event).await {
-                        tracing::debug!("external thread {thread_id} channel closed: {err}");
-                        break;
-                    }
+                if should_send && let Err(err) = sender.send(event).await {
+                    tracing::debug!("external thread {thread_id} channel closed: {err}");
+                    break;
                 }
             }
         });
