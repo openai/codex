@@ -844,6 +844,8 @@ async fn make_chatwidget_manual(
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
+        current_model_info: None,
+        pending_personality_popup_model: None,
     };
     (widget, rx, op_rx)
 }
@@ -2421,6 +2423,10 @@ async fn collab_mode_enabling_keeps_custom_until_selected() {
 async fn user_turn_includes_personality_from_config() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
+    chat.set_model("gpt-5.2-codex");
+    let model_info =
+        ModelsManager::construct_model_info_offline("gpt-5.2-codex", chat.config_ref());
+    chat.update_model_info("gpt-5.2-codex".to_string(), model_info);
     chat.set_personality(Personality::Friendly);
 
     chat.bottom_pane
@@ -2977,6 +2983,32 @@ async fn model_selection_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("model_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn personality_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let model_info =
+        ModelsManager::construct_model_info_offline("gpt-5.2-codex", chat.config_ref());
+    chat.update_model_info("gpt-5.2-codex".to_string(), model_info);
+    chat.open_personality_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("personality_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn personality_selection_popup_disabled_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let model_info =
+        ModelsManager::construct_model_info_offline("gpt-5.1-codex-max", chat.config_ref());
+    chat.update_model_info("gpt-5.1-codex-max".to_string(), model_info);
+    chat.open_personality_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("personality_selection_popup_disabled", popup);
 }
 
 #[tokio::test]

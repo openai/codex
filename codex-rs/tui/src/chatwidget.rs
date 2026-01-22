@@ -98,6 +98,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::local_image_label_text;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
@@ -514,6 +515,8 @@ pub(crate) struct ChatWidget {
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
+    current_model_info: Option<ModelInfo>,
+    pending_personality_popup_model: Option<String>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -2015,6 +2018,8 @@ impl ChatWidget {
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            current_model_info: None,
+            pending_personality_popup_model: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2264,6 +2269,8 @@ impl ChatWidget {
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            current_model_info: None,
+            pending_personality_popup_model: None,
         };
 
         widget.prefetch_rate_limits();
@@ -2834,6 +2841,10 @@ impl ChatWidget {
         } else {
             None
         };
+        let personality = self
+            .config
+            .model_personality
+            .filter(|_| self.current_model_supports_personality());
         let op = Op::UserTurn {
             items,
             cwd: self.config.cwd.clone(),
@@ -2844,7 +2855,7 @@ impl ChatWidget {
             summary: self.config.model_reasoning_summary,
             final_output_json_schema: None,
             collaboration_mode,
-            personality: self.config.model_personality,
+            personality,
         };
 
         self.codex_op_tx.send(op).unwrap_or_else(|e| {
@@ -3395,8 +3406,25 @@ impl ChatWidget {
             return;
         }
 
+        let model = self.current_model().to_string();
+        if let Some(model_info) = self.current_model_info.clone() {
+            self.open_personality_popup_with_model_info(&model_info);
+            return;
+        }
+        self.pending_personality_popup_model = Some(model.clone());
+        self.refresh_model_info(model);
+    }
+
+    fn open_personality_popup_with_model_info(&mut self, model_info: &ModelInfo) {
         let current_personality = self.config.model_personality;
         let personalities = [Personality::Friendly, Personality::Pragmatic];
+        let supports_personality = model_info.supports_personality();
+        let disabled_message = (!supports_personality).then(|| {
+            format!(
+                "Current model ({}) doesn't support personalities. Try /model to switch to a newer model.",
+                self.current_model()
+            )
+        });
 
         let items: Vec<SelectionItem> = personalities
             .into_iter()
@@ -3421,6 +3449,7 @@ impl ChatWidget {
                     name,
                     description,
                     is_current: current_personality == Some(personality),
+                    is_disabled: !supports_personality,
                     actions,
                     dismiss_on_select: true,
                     ..Default::default()
@@ -3428,13 +3457,28 @@ impl ChatWidget {
             })
             .collect();
 
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Select Personality".to_string()),
-            subtitle: Some("Choose a communication style for future responses.".to_string()),
-            footer_hint: Some(standard_popup_hint_line()),
-            items,
-            ..Default::default()
-        });
+        if let Some(message) = disabled_message {
+            let mut header = ColumnRenderable::new();
+            header.push(Line::from("Select Personality".bold()));
+            header.push(Line::from(
+                "Choose a communication style for future responses.".dim(),
+            ));
+            header.push(Line::from(message.red()));
+            self.bottom_pane.show_selection_view(SelectionViewParams {
+                header: Box::new(header),
+                footer_hint: Some(standard_popup_hint_line()),
+                items,
+                ..Default::default()
+            });
+        } else {
+            self.bottom_pane.show_selection_view(SelectionViewParams {
+                title: Some("Select Personality".to_string()),
+                subtitle: Some("Choose a communication style for future responses.".to_string()),
+                footer_hint: Some(standard_popup_hint_line()),
+                items,
+                ..Default::default()
+            });
+        }
     }
 
     fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
@@ -4688,6 +4732,40 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.as_deref())
             .unwrap_or_else(|| self.current_collaboration_mode.model())
+    }
+
+    pub(crate) fn update_model_info(&mut self, model: String, info: ModelInfo) {
+        if self.current_model() == model {
+            self.current_model_info = Some(info);
+        }
+        if self
+            .pending_personality_popup_model
+            .as_ref()
+            .is_some_and(|pending| pending == &model)
+        {
+            self.pending_personality_popup_model = None;
+            if let Some(model_info) = self.current_model_info.clone() {
+                self.open_personality_popup_with_model_info(&model_info);
+            }
+        } else if self.pending_personality_popup_model.as_ref() == Some(&model) {
+            self.pending_personality_popup_model = None;
+        }
+    }
+
+    fn current_model_supports_personality(&self) -> bool {
+        self.current_model_info
+            .as_ref()
+            .is_some_and(ModelInfo::supports_personality)
+    }
+
+    fn refresh_model_info(&self, model: String) {
+        let config = self.config.clone();
+        let models_manager = self.models_manager.clone();
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let info = models_manager.get_model_info(&model, &config).await;
+            tx.send(AppEvent::ModelInfoFetched { model, info });
+        });
     }
 
     #[allow(dead_code)] // Used in tests

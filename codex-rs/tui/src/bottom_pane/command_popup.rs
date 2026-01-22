@@ -216,6 +216,7 @@ impl CommandPopup {
                     display_shortcut: None,
                     description: Some(description),
                     wrap_indent: None,
+                    is_disabled: false,
                     disabled_reason: None,
                 }
             })

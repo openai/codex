@@ -214,6 +214,12 @@ impl ModelInfo {
         })
     }
 
+    pub fn supports_personality(&self) -> bool {
+        self.model_instructions_template
+            .as_ref()
+            .is_some_and(ModelInstructionsTemplate::supports_personality)
+    }
+
     pub fn get_model_instructions(&self, personality: Option<Personality>) -> String {
         if let Some(personality) = personality
             && let Some(template) = &self.model_instructions_template
@@ -248,6 +254,13 @@ pub struct ModelInstructionsTemplate {
 impl ModelInstructionsTemplate {
     fn has_personality_placeholder(&self) -> bool {
         self.template.contains(PERSONALITY_PLACEHOLDER)
+    }
+
+    fn supports_personality(&self) -> bool {
+        self.has_personality_placeholder()
+            && self.personality_messages.as_ref().is_some_and(|messages| {
+                Personality::iter().all(|personality| messages.0.contains_key(&personality))
+            })
     }
 }
 
