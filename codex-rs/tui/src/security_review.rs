@@ -97,10 +97,10 @@ use url::Url;
 const VALIDATION_SUMMARY_GRAPHEMES: usize = 96;
 const VALIDATION_OUTPUT_GRAPHEMES: usize = 480;
 const VALIDATION_REPORT_OUTPUT_MAX_BYTES: usize = 512 * 1024;
-const VALIDATION_MAX_FINDINGS: usize = 8;
-const VALIDATION_PLAN_CONCURRENCY: usize = 8;
-const VALIDATION_REFINE_CONCURRENCY: usize = 8;
-const VALIDATION_EXEC_CONCURRENCY: usize = 8;
+const VALIDATION_WORKER_MAX_CONCURRENCY: usize = 8;
+const VALIDATION_PLAN_CONCURRENCY: usize = VALIDATION_WORKER_MAX_CONCURRENCY;
+const VALIDATION_REFINE_CONCURRENCY: usize = VALIDATION_WORKER_MAX_CONCURRENCY;
+const VALIDATION_EXEC_CONCURRENCY: usize = VALIDATION_WORKER_MAX_CONCURRENCY;
 const VALIDATION_AGENT_TIMEOUT_SECS: u64 = 60 * 60;
 const POST_VALIDATION_REFINE_WORKER_TIMEOUT_SECS: u64 = 30 * 60;
 const VALIDATION_EXEC_TIMEOUT_SECS: u64 = 30 * 60;
@@ -6858,13 +6858,13 @@ pub async fn run_security_review(
         if validation_targets.ids.is_empty() {
             record(
                 &mut logs,
-                "No high-risk findings selected for validation; skipping.".to_string(),
+                "No findings selected for validation; skipping.".to_string(),
             );
         } else {
             record(
                 &mut logs,
                 format!(
-                    "Validating high-risk findings... (model: {model}, reasoning: {validation_reasoning_label}).",
+                    "Validating findings... (model: {model}, reasoning: {validation_reasoning_label}).",
                     model = request.validation_model.as_str(),
                     validation_reasoning_label =
                         reasoning_effort_label(normalize_reasoning_effort_for_model(
@@ -10607,7 +10607,7 @@ mod validation_target_selection_tests {
     }
 
     #[test]
-    fn excludes_web_browser_findings_from_validation_targets() {
+    fn includes_web_browser_findings_in_validation_targets_even_when_disabled() {
         let snapshot = SecurityReviewSnapshot {
             generated_at: OffsetDateTime::now_utc(),
             findings_summary: String::new(),
@@ -10625,11 +10625,14 @@ mod validation_target_selection_tests {
         };
 
         let targets = build_validation_findings_context(&snapshot, false);
-        assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(2)]);
+        assert_eq!(
+            targets.ids,
+            vec![BugIdentifier::RiskRank(1), BugIdentifier::RiskRank(2)]
+        );
     }
 
     #[test]
-    fn empty_when_only_web_browser_findings_present() {
+    fn includes_only_web_browser_findings_when_present() {
         let snapshot = SecurityReviewSnapshot {
             generated_at: OffsetDateTime::now_utc(),
             findings_summary: String::new(),
@@ -10644,7 +10647,7 @@ mod validation_target_selection_tests {
         };
 
         let targets = build_validation_findings_context(&snapshot, false);
-        assert_eq!(targets.ids, Vec::<BugIdentifier>::new());
+        assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(1)]);
     }
 
     #[test]
@@ -10673,7 +10676,7 @@ mod validation_target_selection_tests {
     }
 
     #[test]
-    fn includes_crash_poc_release_and_excludes_crash_poc_func() {
+    fn includes_crash_poc_release_and_crash_poc_func() {
         let snapshot = SecurityReviewSnapshot {
             generated_at: OffsetDateTime::now_utc(),
             findings_summary: String::new(),
@@ -10697,7 +10700,10 @@ mod validation_target_selection_tests {
         };
 
         let targets = build_validation_findings_context(&snapshot, true);
-        assert_eq!(targets.ids, vec![BugIdentifier::RiskRank(2)]);
+        assert_eq!(
+            targets.ids,
+            vec![BugIdentifier::RiskRank(1), BugIdentifier::RiskRank(2)]
+        );
     }
 
     #[test]
@@ -21343,66 +21349,12 @@ fn build_validation_findings_context(
     snapshot: &SecurityReviewSnapshot,
     include_web_browser: bool,
 ) -> ValidationFindingsContext {
-    let mut required: Vec<&BugSnapshot> = snapshot
-        .bugs
-        .iter()
-        .filter(|b| {
-            if !include_web_browser && has_verification_type(&b.bug, "web_browser") {
-                return false;
-            }
-            let sev = b.bug.severity.to_ascii_lowercase();
-            let is_high = sev.contains("critical") || sev.contains("high");
-            if !is_high {
-                return false;
-            }
-            if has_verification_type(&b.bug, "rce_bin")
-                || has_verification_type(&b.bug, "ssrf")
-                || has_verification_type(&b.bug, "crypto")
-            {
-                return true;
-            }
-            match crash_poc_category(&b.bug) {
-                Some("crash_poc_func") => return false,
-                Some("crash_poc_release") => return true,
-                _ => {}
-            }
-            let tag = b.bug.vulnerability_tag.clone().or_else(|| {
-                extract_vulnerability_tag_from_bug_markdown(b.original_markdown.as_str())
-            });
-            tag.as_deref().is_some_and(is_priority_validation_vuln_tag)
-        })
-        .collect();
-    required.sort_by_key(|b| b.bug.risk_rank.unwrap_or(usize::MAX));
-
-    let mut selected: Vec<&BugSnapshot> = Vec::new();
-    let mut seen: HashSet<usize> = HashSet::new();
-    for item in &required {
-        if selected.len() >= VALIDATION_MAX_FINDINGS {
-            break;
-        }
-        if seen.insert(item.bug.summary_id) {
-            selected.push(*item);
-        }
-    }
-
-    let mut high_risk: Vec<&BugSnapshot> = snapshot
-        .bugs
-        .iter()
-        .filter(|b| {
-            is_high_risk(&b.bug)
-                && crash_poc_category(&b.bug) != Some("crash_poc_func")
-                && (include_web_browser || !has_verification_type(&b.bug, "web_browser"))
-        })
-        .collect();
-    high_risk.sort_by_key(|b| b.bug.risk_rank.unwrap_or(usize::MAX));
-    for item in high_risk {
-        if selected.len() >= VALIDATION_MAX_FINDINGS {
-            break;
-        }
-        if seen.insert(item.bug.summary_id) {
-            selected.push(item);
-        }
-    }
+    let mut selected: Vec<&BugSnapshot> = snapshot.bugs.iter().collect();
+    selected.sort_by(|left, right| {
+        let left_rank = left.bug.risk_rank.unwrap_or(usize::MAX);
+        let right_rank = right.bug.risk_rank.unwrap_or(usize::MAX);
+        (left_rank, left.bug.summary_id).cmp(&(right_rank, right.bug.summary_id))
+    });
 
     let mut findings: Vec<ValidationFinding> = Vec::new();
     let mut ids: Vec<BugIdentifier> = Vec::new();
@@ -21434,6 +21386,11 @@ fn build_validation_findings_context(
         let crash_poc_category_line = crash_poc_category(&item.bug)
             .map(|category| format!("\n  crash_poc_category: {category}"))
             .unwrap_or_default();
+        let web_validation_enabled_line = if has_verification_type(&item.bug, "web_browser") {
+            format!("\n  web_validation_enabled: {include_web_browser}")
+        } else {
+            String::new()
+        };
         let (id_kind, id_value, identifier) = if let Some(risk_rank) = item.bug.risk_rank {
             ("risk_rank", risk_rank, BugIdentifier::RiskRank(risk_rank))
         } else {
@@ -21446,11 +21403,12 @@ fn build_validation_findings_context(
         ids.push(identifier);
         // Include the original markdown so the model can infer concrete targets
         let context = format!(
-            "- id_kind: {id_kind}\n  id_value: {id_value}\n  risk_rank: {rank}\n  title: {title}\n  severity: {severity}\n  vuln_tag: {vuln_tag}\n  verification_types: {types}{crash_poc_category_line}\n  details:\n{details}\n---\n",
+            "- id_kind: {id_kind}\n  id_value: {id_value}\n  risk_rank: {rank}\n  title: {title}\n  severity: {severity}\n  vuln_tag: {vuln_tag}\n  verification_types: {types}{crash_poc_category_line}{web_validation_enabled_line}\n  details:\n{details}\n---\n",
             title = item.bug.title,
             severity = item.bug.severity,
             types = types,
             crash_poc_category_line = crash_poc_category_line,
+            web_validation_enabled_line = web_validation_enabled_line,
             details = indent_block(&item.original_markdown, 2)
         );
         findings.push(ValidationFinding {
@@ -22740,7 +22698,7 @@ async fn run_asan_validation(
     ));
     if let Some(tx) = progress_sender.as_ref() {
         tx.send(AppEvent::SecurityReviewLog(format!(
-            "Planning validation for high-risk findings... (model: {model}, reasoning: {reasoning_label}).",
+            "Planning validation for findings... (model: {model}, reasoning: {reasoning_label}).",
             model = model.as_str()
         )));
     }
