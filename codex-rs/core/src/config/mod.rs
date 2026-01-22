@@ -1,6 +1,8 @@
 use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::config::types::CollaborationModeOverrideToml;
+use crate::config::types::CollaborationModesToml;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -92,6 +94,30 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CollaborationModeOverride {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub developer_instructions: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CollaborationModesConfig {
+    pub plan: Option<CollaborationModeOverride>,
+    pub pair_programming: Option<CollaborationModeOverride>,
+    pub execute: Option<CollaborationModeOverride>,
+    pub custom: Option<CollaborationModeOverride>,
+}
+
+impl CollaborationModesConfig {
+    fn is_empty(&self) -> bool {
+        self.plan.is_none()
+            && self.pair_programming.is_none()
+            && self.execute.is_none()
+            && self.custom.is_none()
+    }
+}
 
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {
@@ -848,6 +874,9 @@ pub struct ConfigToml {
     /// Collection of settings that are specific to the TUI.
     pub tui: Option<Tui>,
 
+    /// Optional collaboration mode preset overrides.
+    pub collaboration_modes: Option<CollaborationModesToml>,
+
     /// When set to `true`, `AgentReasoning` events will be hidden from the
     /// UI/output. Defaults to `false`.
     pub hide_agent_reasoning: Option<bool>,
@@ -860,6 +889,9 @@ pub struct ConfigToml {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
+
+    /// Optional collaboration mode preset overrides loaded from config.toml.
+    pub collaboration_modes: Option<CollaborationModesConfig>,
 
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
@@ -1195,6 +1227,93 @@ fn resolve_web_search_mode(
     None
 }
 
+fn resolve_collaboration_modes(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+) -> std::io::Result<Option<CollaborationModesConfig>> {
+    let base = config_toml.collaboration_modes.as_ref();
+    let profile = config_profile.collaboration_modes.as_ref();
+
+    let plan = resolve_collaboration_mode_override(
+        "plan",
+        profile.and_then(|modes| modes.plan.as_ref()),
+        base.and_then(|modes| modes.plan.as_ref()),
+    )?;
+    let pair_programming = resolve_collaboration_mode_override(
+        "pair_programming",
+        profile.and_then(|modes| modes.pair_programming.as_ref()),
+        base.and_then(|modes| modes.pair_programming.as_ref()),
+    )?;
+    let execute = resolve_collaboration_mode_override(
+        "execute",
+        profile.and_then(|modes| modes.execute.as_ref()),
+        base.and_then(|modes| modes.execute.as_ref()),
+    )?;
+    let custom = resolve_collaboration_mode_override(
+        "custom",
+        profile.and_then(|modes| modes.custom.as_ref()),
+        base.and_then(|modes| modes.custom.as_ref()),
+    )?;
+
+    let resolved = CollaborationModesConfig {
+        plan,
+        pair_programming,
+        execute,
+        custom,
+    };
+    if resolved.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(resolved))
+    }
+}
+
+fn resolve_collaboration_mode_override(
+    label: &str,
+    profile: Option<&CollaborationModeOverrideToml>,
+    base: Option<&CollaborationModeOverrideToml>,
+) -> std::io::Result<Option<CollaborationModeOverride>> {
+    let model = trimmed_config_string(profile.and_then(|v| v.model.as_ref()))
+        .or_else(|| trimmed_config_string(base.and_then(|v| v.model.as_ref())));
+    let reasoning_effort = profile
+        .and_then(|v| v.reasoning_effort)
+        .or_else(|| base.and_then(|v| v.reasoning_effort));
+
+    let instructions_file = profile
+        .and_then(|v| v.developer_instructions_file.as_ref())
+        .or_else(|| base.and_then(|v| v.developer_instructions_file.as_ref()));
+    let developer_instructions = if let Some(path) = instructions_file {
+        Config::try_read_non_empty_file(
+            Some(path),
+            &format!("collaboration mode {label} instructions file"),
+        )?
+    } else {
+        trimmed_config_string(profile.and_then(|v| v.developer_instructions.as_ref()))
+            .or_else(|| trimmed_config_string(base.and_then(|v| v.developer_instructions.as_ref())))
+    };
+
+    if model.is_none() && reasoning_effort.is_none() && developer_instructions.is_none() {
+        return Ok(None);
+    }
+
+    Ok(Some(CollaborationModeOverride {
+        model,
+        reasoning_effort,
+        developer_instructions,
+    }))
+}
+
+fn trimmed_config_string(value: Option<&String>) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
 impl Config {
     #[cfg(test)]
     fn load_from_base_config_with_overrides(
@@ -1412,6 +1531,7 @@ impl Config {
         let forced_login_method = cfg.forced_login_method;
 
         let model = model.or(config_profile.model).or(cfg.model);
+        let collaboration_modes = resolve_collaboration_modes(&cfg, &config_profile)?;
 
         let compact_prompt = compact_prompt.or(cfg.compact_prompt).and_then(|value| {
             let trimmed = value.trim();
@@ -1530,6 +1650,7 @@ impl Config {
                 .unwrap_or_default(),
             model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
+            collaboration_modes,
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
@@ -3682,6 +3803,7 @@ model_verbosity = "high"
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: None,
                 model_verbosity: None,
+                collaboration_modes: None,
                 model_personality: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
@@ -3763,6 +3885,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
+            collaboration_modes: None,
             model_personality: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
@@ -3859,6 +3982,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
+            collaboration_modes: None,
             model_personality: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
@@ -3941,6 +4065,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_supports_reasoning_summaries: None,
             model_verbosity: Some(Verbosity::High),
+            collaboration_modes: None,
             model_personality: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,

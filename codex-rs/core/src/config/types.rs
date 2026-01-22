@@ -8,6 +8,7 @@ pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -458,6 +459,31 @@ pub struct Tui {
 
 const fn default_true() -> bool {
     true
+}
+
+/// Overrides for a collaboration mode preset loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct CollaborationModeOverrideToml {
+    /// Optional model override.
+    pub model: Option<String>,
+    /// Optional reasoning effort override.
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// Optional inline developer instructions for this mode.
+    pub developer_instructions: Option<String>,
+    /// Optional path to a file containing developer instructions for this mode.
+    pub developer_instructions_file: Option<AbsolutePathBuf>,
+}
+
+/// Optional collaboration mode presets loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[schemars(deny_unknown_fields)]
+pub struct CollaborationModesToml {
+    pub plan: Option<CollaborationModeOverrideToml>,
+    pub pair_programming: Option<CollaborationModeOverrideToml>,
+    pub execute: Option<CollaborationModeOverrideToml>,
+    pub custom: Option<CollaborationModeOverrideToml>,
 }
 
 /// Settings for notices we display to users via the tui and app-server clients

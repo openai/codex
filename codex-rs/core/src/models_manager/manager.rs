@@ -2,13 +2,13 @@ use super::cache::ModelsCacheManager;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::AuthManager;
-use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
 use crate::features::Feature;
 use crate::model_provider_info::ModelProviderInfo;
-use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
+use crate::config::Config;
+use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets_with_overrides;
 use crate::models_manager::model_info;
 use crate::models_manager::model_presets::builtin_model_presets;
 use codex_api::ModelsClient;
@@ -94,8 +94,9 @@ impl ModelsManager {
     /// List collaboration mode presets.
     ///
     /// Returns a static set of presets seeded with the configured model.
-    pub fn list_collaboration_modes(&self) -> Vec<CollaborationMode> {
-        builtin_collaboration_mode_presets()
+    pub fn list_collaboration_modes(&self, config: Option<&Config>) -> Vec<CollaborationMode> {
+        let overrides = config.and_then(|cfg| cfg.collaboration_modes.as_ref());
+        builtin_collaboration_mode_presets_with_overrides(overrides)
     }
 
     /// Attempt to list models without blocking, using the current cached state.

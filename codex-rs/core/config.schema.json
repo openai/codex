@@ -127,6 +127,9 @@
         "chatgpt_base_url": {
           "type": "string"
         },
+        "collaboration_modes": {
+          "$ref": "#/definitions/CollaborationModesToml"
+        },
         "experimental_compact_prompt_file": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
@@ -260,6 +263,42 @@
         },
         "web_search": {
           "$ref": "#/definitions/WebSearchMode"
+        }
+      },
+      "type": "object"
+    },
+    "CollaborationModeOverrideToml": {
+      "additionalProperties": false,
+      "properties": {
+        "developer_instructions": {
+          "type": "string"
+        },
+        "developer_instructions_file": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "model": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        }
+      },
+      "type": "object"
+    },
+    "CollaborationModesToml": {
+      "additionalProperties": false,
+      "properties": {
+        "custom": {
+          "$ref": "#/definitions/CollaborationModeOverrideToml"
+        },
+        "execute": {
+          "$ref": "#/definitions/CollaborationModeOverrideToml"
+        },
+        "pair_programming": {
+          "$ref": "#/definitions/CollaborationModeOverrideToml"
+        },
+        "plan": {
+          "$ref": "#/definitions/CollaborationModeOverrideToml"
         }
       },
       "type": "object"
@@ -1472,6 +1511,14 @@
         }
       ],
       "description": "Collection of settings that are specific to the TUI."
+    },
+    "collaboration_modes": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CollaborationModesToml"
+        }
+      ],
+      "description": "Optional collaboration mode preset overrides."
     },
     "web_search": {
       "allOf": [

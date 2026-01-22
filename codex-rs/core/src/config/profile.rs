@@ -3,6 +3,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::config::types::CollaborationModesToml;
 use crate::config::types::Personality;
 use crate::protocol::AskForApproval;
 use codex_protocol::config_types::ReasoningSummary;
@@ -27,6 +28,8 @@ pub struct ConfigProfile {
     pub model_verbosity: Option<Verbosity>,
     pub model_personality: Option<Personality>,
     pub chatgpt_base_url: Option<String>,
+    /// Optional collaboration mode preset overrides.
+    pub collaboration_modes: Option<CollaborationModesToml>,
     /// Optional path to a file containing model instructions.
     pub model_instructions_file: Option<AbsolutePathBuf>,
     /// Deprecated: ignored. Use `model_instructions_file`.

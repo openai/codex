@@ -778,7 +778,7 @@ async fn make_chatwidget_manual(
     let collaboration_modes_enabled = cfg.features.enabled(Feature::CollaborationModes);
     let reasoning_effort = None;
     let stored_collaboration_mode = if collaboration_modes_enabled {
-        collaboration_modes::default_mode(models_manager.as_ref()).unwrap_or_else(|| {
+        collaboration_modes::default_mode(models_manager.as_ref(), cfg).unwrap_or_else(|| {
             CollaborationMode::Custom(Settings {
                 model: resolved_model.clone(),
                 reasoning_effort,
