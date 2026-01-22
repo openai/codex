@@ -17,14 +17,12 @@ use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
 use codex_core::auth::enforce_login_restrictions;
-use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
-use codex_core::features::Feature;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
@@ -34,7 +32,6 @@ use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs::OpenOptions;
-use std::io::ErrorKind;
 use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
@@ -98,35 +95,6 @@ mod version;
 #[cfg(not(target_env = "musl"))]
 mod voice;
 mod wrapping;
-
-/// Update action the CLI should perform after the TUI exits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UpdateAction {
-    /// Update via `npm install -g @openai/codex@latest`.
-    NpmGlobalLatest,
-    /// Update via `bun install -g @openai/codex@latest`.
-    BunGlobalLatest,
-    /// Update via `brew upgrade codex`.
-    BrewUpgrade,
-}
-
-impl UpdateAction {
-    /// Returns the list of command-line arguments for invoking the update.
-    pub fn command_args(&self) -> (&'static str, &'static [&'static str]) {
-        match self {
-            UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex@latest"]),
-            UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex@latest"]),
-            UpdateAction::BrewUpgrade => ("brew", &["upgrade", "codex"]),
-        }
-    }
-
-    /// Returns string representation of the command-line arguments for invoking the update.
-    pub fn command_str(&self) -> String {
-        let (command, args) = self.command_args();
-        let args_str = args.join(" ");
-        format!("{command} {args_str}")
-    }
-}
 
 #[cfg(test)]
 pub mod test_backend;
@@ -621,30 +589,6 @@ async fn run_ratatui_app(
         }
         _ => config,
     };
-    if config.features.enabled(Feature::ExecPolicy) {
-        let rules_dir = config.codex_home.join("rules");
-        match tokio::fs::read_dir(&rules_dir).await {
-            Ok(_) => {}
-            Err(err) if err.kind() == ErrorKind::NotFound => {}
-            Err(err) => {
-                crate::tui::restore()?;
-                return Ok(AppExitInfo::fatal(format!(
-                    "Failed to initialize codex: failed to load rules: failed to read rules files from {}: {err}",
-                    rules_dir.display()
-                )));
-            }
-        }
-
-        if let Err(err) =
-            check_execpolicy_for_warnings(&config.features, &config.config_layer_stack).await
-        {
-            crate::tui::restore()?;
-            return Ok(AppExitInfo::fatal(format!(
-                "Failed to initialize codex: failed to load rules: {err}"
-            )));
-        }
-    }
-
     let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
 
