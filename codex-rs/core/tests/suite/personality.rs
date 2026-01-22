@@ -9,6 +9,7 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -81,6 +82,9 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
 
     let request = resp_mock.single_request();
     let developer_texts = request.message_input_texts("developer");
+    if developer_texts.is_empty() {
+        eprintln!("request body: {}", request.body_json());
+    }
     assert!(
         !developer_texts
             .iter()
@@ -96,7 +100,11 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let resp_mock = mount_sse_sequence(
+        &server,
+        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+    )
+    .await;
     let mut builder = test_codex().with_model("gpt-5.2-codex");
     let test = builder.build(&server).await?;
 
@@ -123,13 +131,50 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
-            personality: Some(Personality::Friendly),
+            personality: None,
         })
         .await?;
 
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let request = resp_mock.single_request();
+    test.codex
+        .submit(Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            sandbox_policy: None,
+            model: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: None,
+            personality: Some(Personality::Friendly),
+        })
+        .await?;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: test.config.approval_policy.value(),
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: test.session_configured.model.clone(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = resp_mock.requests();
+    assert_eq!(requests.len(), 2, "expected two requests");
+    let request = requests
+        .last()
+        .expect("expected personality update request");
     let developer_texts = request.message_input_texts("developer");
     let personality_text = developer_texts
         .iter()
@@ -142,7 +187,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
     );
     assert!(
         personality_text.contains(&personality_message),
-        "expected personality update to include the friendly template"
+        "expected personality update to include the friendly template, got: {personality_text:?}"
     );
 
     Ok(())

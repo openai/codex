@@ -1126,13 +1126,34 @@ impl Session {
         previous: Option<&Arc<TurnContext>>,
         next: &TurnContext,
     ) -> Option<ResponseItem> {
-        let prev = previous?;
-        if prev.personality == next.personality {
+        let personality = next.personality?;
+        if let Some(prev) = previous
+            && prev.personality == Some(personality)
+        {
             return None;
         }
-        let personality = next.personality?;
         let model_info = next.client.get_model_info();
-        Some(DeveloperInstructions::from_personality_update(&model_info, personality).into())
+        let personality_message =
+            Self::personality_message_for(&model_info, personality).or_else(|| {
+                let offline_model = ModelsManager::construct_model_info_offline(
+                    next.client.get_model().as_str(),
+                    &next.client.config(),
+                );
+                Self::personality_message_for(&offline_model, personality)
+            });
+
+        personality_message.map(|personality_message| {
+            DeveloperInstructions::personality_spec_message(personality_message).into()
+        })
+    }
+
+    fn personality_message_for(model_info: &ModelInfo, personality: Personality) -> Option<String> {
+        model_info
+            .model_instructions_template
+            .as_ref()
+            .and_then(|template| template.personality_messages.as_ref())
+            .and_then(|messages| messages.0.get(&personality))
+            .cloned()
     }
 
     fn build_collaboration_mode_update_item(
