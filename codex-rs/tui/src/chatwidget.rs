@@ -95,6 +95,7 @@ use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
@@ -2507,6 +2508,9 @@ impl ChatWidget {
             SlashCommand::Model => {
                 self.open_model_popup();
             }
+            SlashCommand::Personality => {
+                self.open_personality_popup();
+            }
             SlashCommand::Collab => {
                 if self.collaboration_modes_enabled() {
                     self.open_collaboration_modes_popup();
@@ -2840,7 +2844,7 @@ impl ChatWidget {
             summary: self.config.model_reasoning_summary,
             final_output_json_schema: None,
             collaboration_mode,
-            personality: None,
+            personality: self.config.model_personality,
         };
 
         self.codex_op_tx.send(op).unwrap_or_else(|e| {
@@ -3380,6 +3384,57 @@ impl ChatWidget {
             }
         };
         self.open_model_popup_with_presets(presets);
+    }
+
+    pub(crate) fn open_personality_popup(&mut self) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Personality selection is disabled until startup completes.".to_string(),
+                None,
+            );
+            return;
+        }
+
+        let current_personality = self.config.model_personality;
+        let personalities = [Personality::Friendly, Personality::Pragmatic];
+
+        let items: Vec<SelectionItem> = personalities
+            .into_iter()
+            .map(|personality| {
+                let name = Self::personality_label(personality).to_string();
+                let description = Some(Self::personality_description(personality).to_string());
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        model: None,
+                        effort: None,
+                        summary: None,
+                        collaboration_mode: None,
+                        personality: Some(personality),
+                    }));
+                    tx.send(AppEvent::UpdatePersonality(personality));
+                    tx.send(AppEvent::PersistPersonalitySelection { personality });
+                })];
+                SelectionItem {
+                    name,
+                    description,
+                    is_current: current_personality == Some(personality),
+                    actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Select Personality".to_string()),
+            subtitle: Some("Choose a communication style for future responses.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
     }
 
     fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
@@ -4621,6 +4676,10 @@ impl ChatWidget {
         self.refresh_model_display();
     }
 
+    pub(crate) fn set_personality(&mut self, personality: Personality) {
+        self.config.model_personality = Some(personality);
+    }
+
     pub(crate) fn current_model(&self) -> &str {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.model();
@@ -4744,6 +4803,20 @@ impl ChatWidget {
     fn update_collaboration_mode_indicator(&mut self) {
         let indicator = self.collaboration_mode_indicator();
         self.bottom_pane.set_collaboration_mode_indicator(indicator);
+    }
+
+    fn personality_label(personality: Personality) -> &'static str {
+        match personality {
+            Personality::Friendly => "Friendly",
+            Personality::Pragmatic => "Pragmatic",
+        }
+    }
+
+    fn personality_description(personality: Personality) -> &'static str {
+        match personality {
+            Personality::Friendly => "Warm, collaborative, and helpful.",
+            Personality::Pragmatic => "Concise, task-focused, and direct.",
+        }
     }
 
     /// Cycle to the next collaboration mode variant (Plan -> Code -> Plan).

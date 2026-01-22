@@ -65,6 +65,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -2414,6 +2415,24 @@ async fn collab_mode_enabling_keeps_custom_until_selected() {
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Custom);
     assert_eq!(chat.current_collaboration_mode().mode, ModeKind::Custom);
+}
+
+#[tokio::test]
+async fn user_turn_includes_personality_from_config() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_personality(Personality::Friendly);
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            personality: Some(Personality::Friendly),
+            ..
+        } => {}
+        other => panic!("expected Op::UserTurn with friendly personality, got {other:?}"),
+    }
 }
 
 #[tokio::test]
