@@ -3,12 +3,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
-use aws_config::BehaviorVersion;
-use aws_config::meta::region::RegionProviderChain;
-use aws_sdk_s3::Client as S3Client;
-use aws_sdk_s3::error::SdkError;
-use aws_sdk_s3::primitives::ByteStream;
-use aws_smithy_types::error::metadata::ProvideErrorMetadata;
 use azure_core::auth::TokenCredential;
 use azure_identity::AzureCliCredential;
 use codex_protocol::ThreadId;
@@ -34,7 +28,6 @@ pub struct SessionShareResult {
 #[derive(Debug, Clone)]
 enum SessionObjectStore {
     Http(HttpObjectStore),
-    S3(S3ObjectStore),
     Azure(AzureObjectStore),
 }
 
@@ -42,13 +35,6 @@ enum SessionObjectStore {
 struct HttpObjectStore {
     base_url: Url,
     client: reqwest::Client,
-}
-
-#[derive(Debug, Clone)]
-struct S3ObjectStore {
-    client: S3Client,
-    bucket: String,
-    prefix: String,
 }
 
 #[derive(Debug, Clone)]
@@ -73,7 +59,6 @@ impl SessionObjectStore {
         let mut url = Url::parse(base_url)
             .with_context(|| format!("invalid session_object_storage_url: {base_url}"))?;
         match url.scheme() {
-            "s3" => Ok(SessionObjectStore::S3(S3ObjectStore::new(&url).await?)),
             "az" => Ok(SessionObjectStore::Azure(AzureObjectStore::new_from_az(
                 &url,
             )?)),
@@ -97,7 +82,6 @@ impl SessionObjectStore {
     fn object_url(&self, key: &str) -> anyhow::Result<Url> {
         match self {
             SessionObjectStore::Http(store) => store.object_url(key),
-            SessionObjectStore::S3(store) => store.object_url(key),
             SessionObjectStore::Azure(store) => store.object_url(key),
         }
     }
@@ -105,7 +89,6 @@ impl SessionObjectStore {
     async fn object_exists(&self, key: &str) -> anyhow::Result<bool> {
         match self {
             SessionObjectStore::Http(store) => store.object_exists(key).await,
-            SessionObjectStore::S3(store) => store.object_exists(key).await,
             SessionObjectStore::Azure(store) => store.object_exists(key).await,
         }
     }
@@ -113,7 +96,6 @@ impl SessionObjectStore {
     async fn put_object(&self, key: &str, data: Vec<u8>, content_type: &str) -> anyhow::Result<()> {
         match self {
             SessionObjectStore::Http(store) => store.put_object(key, data, content_type).await,
-            SessionObjectStore::S3(store) => store.put_object(key, data, content_type).await,
             SessionObjectStore::Azure(store) => store.put_object(key, data, content_type).await,
         }
     }
@@ -121,7 +103,6 @@ impl SessionObjectStore {
     async fn get_object_bytes(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
         match self {
             SessionObjectStore::Http(store) => store.get_object_bytes(key).await,
-            SessionObjectStore::S3(store) => store.get_object_bytes(key).await,
             SessionObjectStore::Azure(store) => store.get_object_bytes(key).await,
         }
     }
@@ -334,113 +315,6 @@ impl HttpObjectStore {
             status => Err(anyhow::anyhow!(
                 "object store GET failed with status {status}"
             )),
-        }
-    }
-}
-
-impl S3ObjectStore {
-    async fn new(url: &Url) -> anyhow::Result<Self> {
-        let bucket = url
-            .host_str()
-            .ok_or_else(|| anyhow::anyhow!("s3 url missing bucket"))?
-            .to_string();
-        let prefix = url
-            .path()
-            .trim_start_matches('/')
-            .trim_end_matches('/')
-            .to_string();
-        let region_provider = RegionProviderChain::default_provider();
-        let shared_config = aws_config::defaults(BehaviorVersion::latest())
-            .region(region_provider)
-            .load()
-            .await;
-        if shared_config.region().is_none() {
-            return Err(anyhow::anyhow!(
-                "AWS region not set. Set AWS_REGION or configure a default region."
-            ));
-        }
-        let client = S3Client::new(&shared_config);
-        Ok(Self {
-            client,
-            bucket,
-            prefix,
-        })
-    }
-
-    fn object_url(&self, key: &str) -> anyhow::Result<Url> {
-        let full_key = join_prefix(&self.prefix, key);
-        Url::parse(&format!("s3://{}/{}", self.bucket, full_key))
-            .with_context(|| format!("failed to build s3 url for key {full_key}"))
-    }
-
-    async fn object_exists(&self, key: &str) -> anyhow::Result<bool> {
-        let full_key = join_prefix(&self.prefix, key);
-        let response = self
-            .client
-            .head_object()
-            .bucket(&self.bucket)
-            .key(&full_key)
-            .send()
-            .await;
-        match response {
-            Ok(_) => Ok(true),
-            Err(err) => match err {
-                SdkError::ServiceError(service) => {
-                    let code = service.err().code();
-                    if matches!(code, Some("NotFound") | Some("NoSuchKey")) {
-                        Ok(false)
-                    } else {
-                        Err(anyhow::anyhow!(
-                            "object store HEAD failed with status {code:?}"
-                        ))
-                    }
-                }
-                other => Err(anyhow::anyhow!("object store HEAD failed: {other}")),
-            },
-        }
-    }
-
-    async fn put_object(&self, key: &str, data: Vec<u8>, content_type: &str) -> anyhow::Result<()> {
-        let full_key = join_prefix(&self.prefix, key);
-        self.client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(&full_key)
-            .content_type(content_type)
-            .body(ByteStream::from(data))
-            .send()
-            .await
-            .with_context(|| format!("failed to upload s3://{}/{}", self.bucket, full_key))?;
-        Ok(())
-    }
-
-    async fn get_object_bytes(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
-        let full_key = join_prefix(&self.prefix, key);
-        let response = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(&full_key)
-            .send()
-            .await;
-        match response {
-            Ok(output) => {
-                let bytes = output.body.collect().await?;
-                Ok(Some(bytes.into_bytes().to_vec()))
-            }
-            Err(err) => match err {
-                SdkError::ServiceError(service) => {
-                    let code = service.err().code();
-                    if matches!(code, Some("NotFound") | Some("NoSuchKey")) {
-                        Ok(None)
-                    } else {
-                        Err(anyhow::anyhow!(
-                            "object store GET failed with status {code:?}"
-                        ))
-                    }
-                }
-                other => Err(anyhow::anyhow!("object store GET failed: {other}")),
-            },
         }
     }
 }
