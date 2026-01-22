@@ -48,11 +48,13 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
+use codex_core::read_session_meta_line;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::ThreadOrigin;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -531,8 +533,21 @@ impl App {
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
             SessionSelection::Fork(path) => {
+                let parent_thread_id = read_session_meta_line(&path)
+                    .await
+                    .wrap_err_with(|| {
+                        let path_display = path.display();
+                        format!("Failed to read session metadata from {path_display}")
+                    })?
+                    .meta
+                    .id;
                 let forked = thread_manager
-                    .fork_thread(usize::MAX, config.clone(), path.clone())
+                    .fork_thread(
+                        usize::MAX,
+                        config.clone(),
+                        path.clone(),
+                        ThreadOrigin::Forked { parent_thread_id },
+                    )
                     .await
                     .wrap_err_with(|| {
                         let path_display = path.display();
@@ -836,9 +851,24 @@ impl App {
                 let summary =
                     session_summary(self.chat_widget.token_usage(), self.chat_widget.thread_id());
                 if let Some(path) = self.chat_widget.rollout_path() {
+                    let parent_thread_id = match read_session_meta_line(&path).await {
+                        Ok(meta_line) => meta_line.meta.id,
+                        Err(err) => {
+                            let path_display = path.display();
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to read session metadata from {path_display}: {err}"
+                            ));
+                            return Ok(AppRunControl::Continue);
+                        }
+                    };
                     match self
                         .server
-                        .fork_thread(usize::MAX, self.config.clone(), path.clone())
+                        .fork_thread(
+                            usize::MAX,
+                            self.config.clone(),
+                            path.clone(),
+                            ThreadOrigin::Forked { parent_thread_id },
+                        )
                         .await
                     {
                         Ok(forked) => {

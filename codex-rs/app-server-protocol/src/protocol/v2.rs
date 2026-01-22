@@ -29,6 +29,7 @@ use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
 use codex_protocol::protocol::SkillInterface as CoreSkillInterface;
 use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
 use codex_protocol::protocol::SkillScope as CoreSkillScope;
+use codex_protocol::protocol::ThreadOrigin as CoreThreadOrigin;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
@@ -727,6 +728,62 @@ impl From<SessionSource> for CoreSessionSource {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadOrigin {
+    UserRequested,
+    Forked {
+        parent_thread_id: String,
+    },
+    SpawnedByThread {
+        parent_thread_id: String,
+        kind: ThreadSpawnedKind,
+    },
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadSpawnedKind {
+    Review,
+    Compact,
+    Other { name: String },
+}
+
+impl From<CoreThreadOrigin> for ThreadOrigin {
+    fn from(value: CoreThreadOrigin) -> Self {
+        match value {
+            CoreThreadOrigin::UserRequested => ThreadOrigin::UserRequested,
+            CoreThreadOrigin::Forked { parent_thread_id } => ThreadOrigin::Forked {
+                parent_thread_id: parent_thread_id.to_string(),
+            },
+            CoreThreadOrigin::SpawnedByThread {
+                parent_thread_id,
+                kind,
+            } => ThreadOrigin::SpawnedByThread {
+                parent_thread_id: parent_thread_id.to_string(),
+                kind: kind.into(),
+            },
+            CoreThreadOrigin::Unknown => ThreadOrigin::Unknown,
+        }
+    }
+}
+
+impl From<codex_protocol::protocol::SpawnedThreadKind> for ThreadSpawnedKind {
+    fn from(value: codex_protocol::protocol::SpawnedThreadKind) -> Self {
+        match value {
+            codex_protocol::protocol::SpawnedThreadKind::Review => ThreadSpawnedKind::Review,
+            codex_protocol::protocol::SpawnedThreadKind::Compact => ThreadSpawnedKind::Compact,
+            codex_protocol::protocol::SpawnedThreadKind::Other(name) => {
+                ThreadSpawnedKind::Other { name }
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct GitInfo {
@@ -1415,6 +1472,8 @@ pub struct Thread {
     pub cli_version: String,
     /// Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.).
     pub source: SessionSource,
+    /// Origin of the thread (user requested, forked, spawned by another thread, etc.).
+    pub thread_origin: ThreadOrigin,
     /// Optional Git metadata captured when the thread was created.
     pub git_info: Option<GitInfo>,
     /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork` responses.

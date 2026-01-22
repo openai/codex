@@ -17,7 +17,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SpawnedThreadKind;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
 use core_test_support::test_codex::test_codex;
@@ -70,7 +70,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
 
     let conversation_id = ThreadId::new();
     let auth_mode = AuthMode::ChatGPT;
-    let session_source = SessionSource::SubAgent(SubAgentSource::Review);
+    let session_source = SessionSource::SubAgent(SpawnedThreadKind::Review);
     let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
     let otel_manager = OtelManager::new(
         conversation_id,
@@ -165,7 +165,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
 
     let conversation_id = ThreadId::new();
     let auth_mode = AuthMode::ChatGPT;
-    let session_source = SessionSource::SubAgent(SubAgentSource::Other("my-task".to_string()));
+    let session_source = SessionSource::SubAgent(SpawnedThreadKind::Other("my-task".to_string()));
     let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
 
     let otel_manager = OtelManager::new(
@@ -320,7 +320,7 @@ async fn responses_respects_model_info_overrides_from_config() {
     let auth_mode =
         AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key")).get_auth_mode();
     let session_source =
-        SessionSource::SubAgent(SubAgentSource::Other("override-check".to_string()));
+        SessionSource::SubAgent(SpawnedThreadKind::Other("override-check".to_string()));
     let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
     let otel_manager = OtelManager::new(
         conversation_id,

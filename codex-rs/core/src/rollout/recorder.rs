@@ -36,6 +36,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadOrigin;
 
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
 /// every update.
@@ -57,6 +58,7 @@ pub enum RolloutRecorderParams {
     Create {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
+        thread_origin: ThreadOrigin,
         source: SessionSource,
         base_instructions: BaseInstructions,
     },
@@ -80,12 +82,14 @@ impl RolloutRecorderParams {
     pub fn new(
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
+        thread_origin: ThreadOrigin,
         source: SessionSource,
         base_instructions: BaseInstructions,
     ) -> Self {
         Self::Create {
             conversation_id,
             forked_from_id,
+            thread_origin,
             source,
             base_instructions,
         }
@@ -161,6 +165,7 @@ impl RolloutRecorder {
             RolloutRecorderParams::Create {
                 conversation_id,
                 forked_from_id,
+                thread_origin,
                 source,
                 base_instructions,
             } => {
@@ -185,6 +190,7 @@ impl RolloutRecorder {
                     Some(SessionMeta {
                         id: session_id,
                         forked_from_id,
+                        thread_origin: Some(thread_origin),
                         timestamp,
                         cwd: config.cwd.clone(),
                         originator: originator().value,

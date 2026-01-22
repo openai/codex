@@ -32,7 +32,7 @@ codex app-server generate-json-schema --out DIR
 
 The API exposes three top level primitives representing an interaction between a user and Codex:
 
-- **Thread**: A conversation between a user and the Codex agent. Each thread contains multiple turns.
+- **Thread**: A conversation between a user and the Codex agent. Each thread contains multiple turns. Thread objects also include `source` (client) and `threadOrigin` (how the thread was created, with `parentThreadId` for forked/review/spawned threads).
 - **Turn**: One turn of the conversation, typically starting with a user message and finishing with an agent message. Each turn contains multiple items.
 - **Item**: Represents user inputs and agent outputs as part of the turn, persisted and used as the context for future conversations. Example items include user message, agent reasoning, agent message, shell command, file edit, etc.
 

@@ -8,7 +8,9 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
+use codex_protocol::protocol::ThreadOrigin;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::skip_if_no_network;
@@ -131,7 +133,14 @@ async fn fork_thread_twice_drops_to_first_message() {
         thread: codex_fork1,
         ..
     } = thread_manager
-        .fork_thread(1, config_for_fork.clone(), base_path.clone())
+        .fork_thread(
+            1,
+            config_for_fork.clone(),
+            base_path.clone(),
+            ThreadOrigin::Forked {
+                parent_thread_id: ThreadId::new(),
+            },
+        )
         .await
         .expect("fork 1");
 
@@ -150,7 +159,14 @@ async fn fork_thread_twice_drops_to_first_message() {
         thread: codex_fork2,
         ..
     } = thread_manager
-        .fork_thread(0, config_for_fork.clone(), fork1_path.clone())
+        .fork_thread(
+            0,
+            config_for_fork.clone(),
+            fork1_path.clone(),
+            ThreadOrigin::Forked {
+                parent_thread_id: ThreadId::new(),
+            },
+        )
         .await
         .expect("fork 2");
 

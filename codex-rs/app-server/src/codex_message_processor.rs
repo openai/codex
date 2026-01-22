@@ -101,6 +101,7 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadOrigin;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -171,6 +172,8 @@ use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SpawnedThreadKind;
+use codex_protocol::protocol::ThreadOrigin as CoreThreadOrigin;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
@@ -248,6 +251,11 @@ pub(crate) struct CodexMessageProcessor {
     turn_summary_store: TurnSummaryStore,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     feedback: CodexFeedback,
+}
+
+pub(crate) struct ThreadSummaryWithOrigin {
+    pub(crate) summary: ConversationSummary,
+    pub(crate) thread_origin: ThreadOrigin,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1423,13 +1431,13 @@ impl CodexMessageProcessor {
 
                 // A bit hacky, but the summary contains a lot of useful information for the thread
                 // that unfortunately does not get returned from thread_manager.start_thread().
-                let thread = match read_summary_from_rollout(
+                let thread_summary = match read_thread_summary_from_rollout(
                     rollout_path.as_path(),
                     fallback_provider,
                 )
                 .await
                 {
-                    Ok(summary) => summary_to_thread(summary),
+                    Ok(summary) => summary,
                     Err(err) => {
                         self.send_internal_error(
                             request_id,
@@ -1452,7 +1460,10 @@ impl CodexMessageProcessor {
                     ..
                 } = session_configured;
                 let response = ThreadStartResponse {
-                    thread: thread.clone(),
+                    thread: summary_to_thread(
+                        thread_summary.summary.clone(),
+                        thread_summary.thread_origin.clone(),
+                    ),
                     model,
                     model_provider: model_provider_id,
                     cwd,
@@ -1480,7 +1491,9 @@ impl CodexMessageProcessor {
 
                 self.outgoing.send_response(request_id, response).await;
 
-                let notif = ThreadStartedNotification { thread };
+                let notif = ThreadStartedNotification {
+                    thread: summary_to_thread(thread_summary.summary, thread_summary.thread_origin),
+                };
                 self.outgoing
                     .send_server_notification(ServerNotification::ThreadStarted(notif))
                     .await;
@@ -1632,7 +1645,12 @@ impl CodexMessageProcessor {
             ThreadSortKey::UpdatedAt => CoreThreadSortKey::UpdatedAt,
         };
         let (summaries, next_cursor) = match self
-            .list_threads_common(requested_page_size, cursor, model_providers, core_sort_key)
+            .list_threads_common_with_origin(
+                requested_page_size,
+                cursor,
+                model_providers,
+                core_sort_key,
+            )
             .await
         {
             Ok(r) => r,
@@ -1642,7 +1660,10 @@ impl CodexMessageProcessor {
             }
         };
 
-        let data = summaries.into_iter().map(summary_to_thread).collect();
+        let data = summaries
+            .into_iter()
+            .map(|summary| summary_to_thread(summary.summary, summary.thread_origin))
+            .collect();
         let response = ThreadListResponse { data, next_cursor };
         self.outgoing.send_response(request_id, response).await;
     }
@@ -1877,13 +1898,13 @@ impl CodexMessageProcessor {
                     );
                 }
 
-                let mut thread = match read_summary_from_rollout(
+                let thread_summary = match read_thread_summary_from_rollout(
                     rollout_path.as_path(),
                     fallback_model_provider.as_str(),
                 )
                 .await
                 {
-                    Ok(summary) => summary_to_thread(summary),
+                    Ok(summary) => summary,
                     Err(err) => {
                         self.send_internal_error(
                             request_id,
@@ -1896,6 +1917,8 @@ impl CodexMessageProcessor {
                         return;
                     }
                 };
+                let mut thread =
+                    summary_to_thread(thread_summary.summary, thread_summary.thread_origin);
                 thread.turns = initial_messages
                     .as_deref()
                     .map_or_else(Vec::new, build_turns_from_event_msgs);
@@ -1937,22 +1960,23 @@ impl CodexMessageProcessor {
             developer_instructions,
         } = params;
 
+        let parent_thread_id = match ThreadId::from_string(&thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid thread id: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
         let rollout_path = if let Some(path) = path {
             path
         } else {
-            let existing_thread_id = match ThreadId::from_string(&thread_id) {
-                Ok(id) => id,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("invalid thread id: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            };
-
+            let existing_thread_id = parent_thread_id;
             match find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &existing_thread_id.to_string(),
@@ -1979,14 +2003,17 @@ impl CodexMessageProcessor {
             }
         };
 
-        let history_cwd = match read_session_meta_line(&rollout_path).await {
-            Ok(meta_line) => Some(meta_line.meta.cwd),
+        let session_meta_line = match read_session_meta_line(&rollout_path).await {
+            Ok(meta_line) => Some(meta_line),
             Err(err) => {
                 let rollout_path = rollout_path.display();
                 warn!("failed to read session metadata from rollout {rollout_path}: {err}");
                 None
             }
         };
+        let history_cwd = session_meta_line
+            .as_ref()
+            .map(|meta_line| meta_line.meta.cwd.clone());
 
         // Persist windows sandbox feature.
         let mut cli_overrides = cli_overrides.unwrap_or_default();
@@ -2039,7 +2066,12 @@ impl CodexMessageProcessor {
             ..
         } = match self
             .thread_manager
-            .fork_thread(usize::MAX, config, rollout_path.clone())
+            .fork_thread(
+                usize::MAX,
+                config,
+                rollout_path.clone(),
+                CoreThreadOrigin::Forked { parent_thread_id },
+            )
             .await
         {
             Ok(thread) => thread,
@@ -2079,13 +2111,13 @@ impl CodexMessageProcessor {
             );
         }
 
-        let mut thread = match read_summary_from_rollout(
+        let thread_summary = match read_thread_summary_from_rollout(
             rollout_path.as_path(),
             fallback_model_provider.as_str(),
         )
         .await
         {
-            Ok(summary) => summary_to_thread(summary),
+            Ok(summary) => summary,
             Err(err) => {
                 self.send_internal_error(
                     request_id,
@@ -2098,6 +2130,7 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let mut thread = summary_to_thread(thread_summary.summary, thread_summary.thread_origin);
         thread.turns = initial_messages
             .as_deref()
             .map_or_else(Vec::new, build_turns_from_event_msgs);
@@ -2279,6 +2312,120 @@ impl CodexMessageProcessor {
                         fallback_provider.as_str(),
                         updated_at,
                     )
+                })
+                .collect::<Vec<_>>();
+            if filtered.len() > remaining {
+                filtered.truncate(remaining);
+            }
+            items.extend(filtered);
+            remaining = requested_page_size.saturating_sub(items.len());
+
+            // Encode RolloutCursor into the JSON-RPC string form returned to clients.
+            let next_cursor_value = page.next_cursor.clone();
+            next_cursor = next_cursor_value
+                .as_ref()
+                .and_then(|cursor| serde_json::to_value(cursor).ok())
+                .and_then(|value| value.as_str().map(str::to_owned));
+            if remaining == 0 {
+                break;
+            }
+
+            match next_cursor_value {
+                Some(cursor_val) if remaining > 0 => {
+                    // Break if our pagination would reuse the same cursor again; this avoids
+                    // an infinite loop when filtering drops everything on the page.
+                    if last_cursor.as_ref() == Some(&cursor_val) {
+                        next_cursor = None;
+                        break;
+                    }
+                    last_cursor = Some(cursor_val.clone());
+                    cursor_obj = Some(cursor_val);
+                }
+                _ => break,
+            }
+        }
+
+        Ok((items, next_cursor))
+    }
+
+    async fn list_threads_common_with_origin(
+        &self,
+        requested_page_size: usize,
+        cursor: Option<String>,
+        model_providers: Option<Vec<String>>,
+        sort_key: CoreThreadSortKey,
+    ) -> Result<(Vec<ThreadSummaryWithOrigin>, Option<String>), JSONRPCErrorError> {
+        let mut cursor_obj: Option<RolloutCursor> = match cursor.as_ref() {
+            Some(cursor_str) => {
+                Some(parse_cursor(cursor_str).ok_or_else(|| JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid cursor: {cursor_str}"),
+                    data: None,
+                })?)
+            }
+            None => None,
+        };
+        let mut last_cursor = cursor_obj.clone();
+        let mut remaining = requested_page_size;
+        let mut items = Vec::with_capacity(requested_page_size);
+        let mut next_cursor: Option<String> = None;
+
+        let model_provider_filter = match model_providers {
+            Some(providers) => {
+                if providers.is_empty() {
+                    None
+                } else {
+                    Some(providers)
+                }
+            }
+            None => Some(vec![self.config.model_provider_id.clone()]),
+        };
+        let fallback_provider = self.config.model_provider_id.clone();
+
+        while remaining > 0 {
+            let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
+            let page = RolloutRecorder::list_threads(
+                &self.config.codex_home,
+                page_size,
+                cursor_obj.as_ref(),
+                sort_key,
+                INTERACTIVE_SESSION_SOURCES,
+                model_provider_filter.as_deref(),
+                fallback_provider.as_str(),
+            )
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to list threads: {err}"),
+                data: None,
+            })?;
+
+            let mut filtered = page
+                .items
+                .into_iter()
+                .filter_map(|it| {
+                    let updated_at = it.updated_at.clone();
+                    let session_meta_line = it.head.first().and_then(|first| {
+                        serde_json::from_value::<SessionMetaLine>(first.clone()).ok()
+                    })?;
+                    let summary = extract_conversation_summary(
+                        it.path,
+                        &it.head,
+                        &session_meta_line.meta,
+                        session_meta_line.git.as_ref(),
+                        fallback_provider.as_str(),
+                        updated_at,
+                    )?;
+                    let thread_origin = session_meta_line
+                        .meta
+                        .thread_origin
+                        .clone()
+                        .map(ThreadOrigin::from)
+                        .unwrap_or(ThreadOrigin::Unknown);
+                    Some(ThreadSummaryWithOrigin {
+                        summary,
+                        thread_origin,
+                    })
                 })
                 .collect::<Vec<_>>();
             if filtered.len() > remaining {
@@ -2878,12 +3025,31 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let history_cwd = match read_session_meta_line(&rollout_path).await {
-            Ok(meta_line) => Some(meta_line.meta.cwd),
+        let session_meta_line = match read_session_meta_line(&rollout_path).await {
+            Ok(meta_line) => Some(meta_line),
             Err(err) => {
                 let rollout_path = rollout_path.display();
                 warn!("failed to read session metadata from rollout {rollout_path}: {err}");
                 None
+            }
+        };
+        let history_cwd = session_meta_line
+            .as_ref()
+            .map(|meta_line| meta_line.meta.cwd.clone());
+        let parent_thread_id = conversation_id.or_else(|| {
+            session_meta_line
+                .as_ref()
+                .map(|meta_line| meta_line.meta.id)
+        });
+        let parent_thread_id = match parent_thread_id {
+            Some(id) => id,
+            None => {
+                self.send_invalid_request_error(
+                    request_id,
+                    "failed to derive parent thread id for fork".to_string(),
+                )
+                .await;
+                return;
             }
         };
 
@@ -2968,7 +3134,12 @@ impl CodexMessageProcessor {
             ..
         } = match self
             .thread_manager
-            .fork_thread(usize::MAX, config, rollout_path.clone())
+            .fork_thread(
+                usize::MAX,
+                config,
+                rollout_path.clone(),
+                CoreThreadOrigin::Forked { parent_thread_id },
+            )
             .await
         {
             Ok(thread) => thread,
@@ -3568,7 +3739,15 @@ impl CodexMessageProcessor {
             ..
         } = self
             .thread_manager
-            .fork_thread(usize::MAX, config, rollout_path)
+            .fork_thread(
+                usize::MAX,
+                config,
+                rollout_path,
+                CoreThreadOrigin::SpawnedByThread {
+                    parent_thread_id,
+                    kind: SpawnedThreadKind::Review,
+                },
+            )
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -3589,9 +3768,9 @@ impl CodexMessageProcessor {
 
         let rollout_path = review_thread.rollout_path();
         let fallback_provider = self.config.model_provider_id.as_str();
-        match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
+        match read_thread_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
             Ok(summary) => {
-                let thread = summary_to_thread(summary);
+                let thread = summary_to_thread(summary.summary, summary.thread_origin);
                 let notif = ThreadStartedNotification { thread };
                 self.outgoing
                     .send_server_notification(ServerNotification::ThreadStarted(notif))
@@ -4177,6 +4356,85 @@ pub(crate) async fn read_summary_from_rollout(
     })
 }
 
+pub(crate) async fn read_thread_summary_from_rollout(
+    path: &Path,
+    fallback_provider: &str,
+) -> std::io::Result<ThreadSummaryWithOrigin> {
+    let head = read_head_for_summary(path).await?;
+
+    let Some(first) = head.first() else {
+        return Err(IoError::other(format!(
+            "rollout at {} is empty",
+            path.display()
+        )));
+    };
+
+    let session_meta_line =
+        serde_json::from_value::<SessionMetaLine>(first.clone()).map_err(|_| {
+            IoError::other(format!(
+                "rollout at {} does not start with session metadata",
+                path.display()
+            ))
+        })?;
+    let SessionMetaLine {
+        meta: session_meta,
+        git,
+    } = session_meta_line;
+    let thread_origin = session_meta
+        .thread_origin
+        .clone()
+        .map(ThreadOrigin::from)
+        .unwrap_or(ThreadOrigin::Unknown);
+
+    let created_at = if session_meta.timestamp.is_empty() {
+        None
+    } else {
+        Some(session_meta.timestamp.as_str())
+    };
+    let updated_at = read_updated_at(path, created_at).await;
+    if let Some(summary) = extract_conversation_summary(
+        path.to_path_buf(),
+        &head,
+        &session_meta,
+        git.as_ref(),
+        fallback_provider,
+        updated_at.clone(),
+    ) {
+        return Ok(ThreadSummaryWithOrigin {
+            summary,
+            thread_origin,
+        });
+    }
+
+    let timestamp = if session_meta.timestamp.is_empty() {
+        None
+    } else {
+        Some(session_meta.timestamp.clone())
+    };
+    let model_provider = session_meta
+        .model_provider
+        .clone()
+        .unwrap_or_else(|| fallback_provider.to_string());
+    let git_info = git.as_ref().map(map_git_info);
+    let updated_at = updated_at.or_else(|| timestamp.clone());
+
+    Ok(ThreadSummaryWithOrigin {
+        summary: ConversationSummary {
+            conversation_id: session_meta.id,
+            timestamp,
+            updated_at,
+            path: path.to_path_buf(),
+            preview: String::new(),
+            model_provider,
+            cwd: session_meta.cwd,
+            cli_version: session_meta.cli_version,
+            source: session_meta.source,
+            git_info,
+        },
+        thread_origin,
+    })
+}
+
 pub(crate) async fn read_event_msgs_from_rollout(
     path: &Path,
 ) -> std::io::Result<Vec<codex_protocol::protocol::EventMsg>> {
@@ -4271,7 +4529,10 @@ async fn read_updated_at(path: &Path, created_at: Option<&str>) -> Option<String
     updated_at.or_else(|| created_at.map(str::to_string))
 }
 
-pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
+pub(crate) fn summary_to_thread(
+    summary: ConversationSummary,
+    thread_origin: ThreadOrigin,
+) -> Thread {
     let ConversationSummary {
         conversation_id,
         path,
@@ -4303,6 +4564,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         cwd,
         cli_version,
         source: source.into(),
+        thread_origin,
         git_info,
         turns: Vec::new(),
     }

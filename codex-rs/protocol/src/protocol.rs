@@ -1498,7 +1498,7 @@ pub enum SessionSource {
     VSCode,
     Exec,
     Mcp,
-    SubAgent(SubAgentSource),
+    SubAgent(SpawnedThreadKind),
     #[serde(other)]
     Unknown,
 }
@@ -1506,10 +1506,26 @@ pub enum SessionSource {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
-pub enum SubAgentSource {
+pub enum SpawnedThreadKind {
     Review,
     Compact,
     Other(String),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type", rename_all = "snake_case")]
+pub enum ThreadOrigin {
+    UserRequested,
+    Forked {
+        parent_thread_id: ThreadId,
+    },
+    SpawnedByThread {
+        parent_thread_id: ThreadId,
+        kind: SpawnedThreadKind,
+    },
+    #[serde(other)]
+    Unknown,
 }
 
 impl fmt::Display for SessionSource {
@@ -1519,18 +1535,18 @@ impl fmt::Display for SessionSource {
             SessionSource::VSCode => f.write_str("vscode"),
             SessionSource::Exec => f.write_str("exec"),
             SessionSource::Mcp => f.write_str("mcp"),
-            SessionSource::SubAgent(sub_source) => write!(f, "subagent_{sub_source}"),
+            SessionSource::SubAgent(kind) => write!(f, "subagent_{kind}"),
             SessionSource::Unknown => f.write_str("unknown"),
         }
     }
 }
 
-impl fmt::Display for SubAgentSource {
+impl fmt::Display for SpawnedThreadKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SubAgentSource::Review => f.write_str("review"),
-            SubAgentSource::Compact => f.write_str("compact"),
-            SubAgentSource::Other(other) => f.write_str(other),
+            SpawnedThreadKind::Review => f.write_str("review"),
+            SpawnedThreadKind::Compact => f.write_str("compact"),
+            SpawnedThreadKind::Other(other) => f.write_str(other),
         }
     }
 }
@@ -1545,6 +1561,8 @@ pub struct SessionMeta {
     pub id: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from_id: Option<ThreadId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_origin: Option<ThreadOrigin>,
     pub timestamp: String,
     pub cwd: PathBuf,
     pub originator: String,
@@ -1563,6 +1581,7 @@ impl Default for SessionMeta {
         SessionMeta {
             id: ThreadId::default(),
             forked_from_id: None,
+            thread_origin: None,
             timestamp: String::new(),
             cwd: PathBuf::new(),
             originator: String::new(),

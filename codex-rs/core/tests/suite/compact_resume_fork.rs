@@ -22,6 +22,8 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::WarningEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::ThreadOrigin;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ResponseMock;
@@ -1038,7 +1040,14 @@ async fn fork_thread(
     nth_user_message: usize,
 ) -> Arc<CodexThread> {
     let NewThread { thread, .. } = manager
-        .fork_thread(nth_user_message, config.clone(), path)
+        .fork_thread(
+            nth_user_message,
+            config.clone(),
+            path,
+            ThreadOrigin::Forked {
+                parent_thread_id: ThreadId::new(),
+            },
+        )
         .await
         .expect("fork conversation");
     thread

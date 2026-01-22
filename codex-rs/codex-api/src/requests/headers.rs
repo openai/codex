@@ -15,7 +15,7 @@ pub(crate) fn subagent_header(source: &Option<SessionSource>) -> Option<String> 
         return None;
     };
     match sub {
-        codex_protocol::protocol::SubAgentSource::Other(label) => Some(label.clone()),
+        codex_protocol::protocol::SpawnedThreadKind::Other(label) => Some(label.clone()),
         other => Some(
             serde_json::to_value(other)
                 .ok()

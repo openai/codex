@@ -4,6 +4,8 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::ThreadOrigin;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ev_completed;
@@ -353,7 +355,14 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     fork_config.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
     let forked = initial
         .thread_manager
-        .fork_thread(usize::MAX, fork_config, rollout_path)
+        .fork_thread(
+            usize::MAX,
+            fork_config,
+            rollout_path,
+            ThreadOrigin::Forked {
+                parent_thread_id: ThreadId::new(),
+            },
+        )
         .await?;
     forked
         .thread

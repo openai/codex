@@ -48,6 +48,7 @@ use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadOrigin;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -228,6 +229,7 @@ fn maybe_push_chat_wire_api_deprecation(
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn(
         config: Config,
         auth_manager: Arc<AuthManager>,
@@ -235,6 +237,7 @@ impl Codex {
         skills_manager: Arc<SkillsManager>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
+        thread_origin: ThreadOrigin,
         agent_control: AgentControl,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -324,6 +327,7 @@ impl Codex {
             agent_status_tx.clone(),
             conversation_history,
             session_source_clone,
+            thread_origin.clone(),
             skills_manager,
             agent_control,
         )
@@ -589,6 +593,7 @@ impl Session {
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
         session_source: SessionSource,
+        thread_origin: ThreadOrigin,
         skills_manager: Arc<SkillsManager>,
         agent_control: AgentControl,
     ) -> anyhow::Result<Arc<Self>> {
@@ -604,7 +609,13 @@ impl Session {
             ));
         }
 
-        let forked_from_id = initial_history.forked_from_id();
+        let forked_from_id = match &thread_origin {
+            ThreadOrigin::Forked { parent_thread_id }
+            | ThreadOrigin::SpawnedByThread {
+                parent_thread_id, ..
+            } => Some(*parent_thread_id),
+            _ => initial_history.forked_from_id(),
+        };
 
         let (conversation_id, rollout_params) = match &initial_history {
             InitialHistory::New | InitialHistory::Forked(_) => {
@@ -614,6 +625,7 @@ impl Session {
                     RolloutRecorderParams::new(
                         conversation_id,
                         forked_from_id,
+                        thread_origin,
                         session_source,
                         BaseInstructions {
                             text: session_configuration.base_instructions.clone(),

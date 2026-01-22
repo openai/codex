@@ -26,6 +26,7 @@ use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadOrigin;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -201,6 +202,7 @@ impl ThreadManager {
                 config,
                 InitialHistory::New,
                 Arc::clone(&self.state.auth_manager),
+                ThreadOrigin::UserRequested,
                 self.agent_control(),
             )
             .await
@@ -224,7 +226,13 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewThread> {
         self.state
-            .spawn_thread(config, initial_history, auth_manager, self.agent_control())
+            .spawn_thread(
+                config,
+                initial_history,
+                auth_manager,
+                ThreadOrigin::Unknown,
+                self.agent_control(),
+            )
             .await
     }
 
@@ -253,6 +261,7 @@ impl ThreadManager {
         nth_user_message: usize,
         config: Config,
         path: PathBuf,
+        thread_origin: ThreadOrigin,
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
         let history = truncate_before_nth_user_message(history, nth_user_message);
@@ -261,6 +270,7 @@ impl ThreadManager {
                 config,
                 history,
                 Arc::clone(&self.state.auth_manager),
+                thread_origin,
                 self.agent_control(),
             )
             .await
@@ -312,12 +322,14 @@ impl ThreadManagerState {
     pub(crate) async fn spawn_new_thread(
         &self,
         config: Config,
+        thread_origin: ThreadOrigin,
         agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
         self.spawn_thread(
             config,
             InitialHistory::New,
             Arc::clone(&self.auth_manager),
+            thread_origin,
             agent_control,
         )
         .await
@@ -329,6 +341,7 @@ impl ThreadManagerState {
         config: Config,
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
+        thread_origin: ThreadOrigin,
         agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
         let CodexSpawnOk {
@@ -340,6 +353,7 @@ impl ThreadManagerState {
             Arc::clone(&self.skills_manager),
             initial_history,
             self.session_source.clone(),
+            thread_origin,
             agent_control,
         )
         .await?;

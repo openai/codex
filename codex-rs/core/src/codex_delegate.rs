@@ -12,8 +12,9 @@ use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SpawnedThreadKind;
 use codex_protocol::protocol::Submission;
+use codex_protocol::protocol::ThreadOrigin;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
@@ -55,7 +56,11 @@ pub(crate) async fn run_codex_thread_interactive(
         models_manager,
         Arc::clone(&parent_session.services.skills_manager),
         initial_history.unwrap_or(InitialHistory::New),
-        SessionSource::SubAgent(SubAgentSource::Review),
+        SessionSource::SubAgent(SpawnedThreadKind::Review),
+        ThreadOrigin::SpawnedByThread {
+            parent_thread_id: parent_session.conversation_id,
+            kind: SpawnedThreadKind::Review,
+        },
         parent_session.services.agent_control.clone(),
     )
     .await?;

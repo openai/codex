@@ -226,7 +226,7 @@ impl ModelClient {
 
         let mut extra_headers = ApiHeaderMap::new();
         if let SessionSource::SubAgent(sub) = &self.state.session_source {
-            let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
+            let subagent = if let crate::protocol::SpawnedThreadKind::Other(label) = sub {
                 label.clone()
             } else {
                 serde_json::to_value(sub)

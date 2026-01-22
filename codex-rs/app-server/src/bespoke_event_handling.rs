@@ -4,7 +4,7 @@ use crate::codex_message_processor::PendingRollbacks;
 use crate::codex_message_processor::TurnSummary;
 use crate::codex_message_processor::TurnSummaryStore;
 use crate::codex_message_processor::read_event_msgs_from_rollout;
-use crate::codex_message_processor::read_summary_from_rollout;
+use crate::codex_message_processor::read_thread_summary_from_rollout;
 use crate::codex_message_processor::summary_to_thread;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
@@ -1007,14 +1007,14 @@ pub(crate) async fn apply_bespoke_event_handling(
 
             if let Some(request_id) = pending {
                 let rollout_path = conversation.rollout_path();
-                let response = match read_summary_from_rollout(
+                let response = match read_thread_summary_from_rollout(
                     rollout_path.as_path(),
                     fallback_model_provider.as_str(),
                 )
                 .await
                 {
                     Ok(summary) => {
-                        let mut thread = summary_to_thread(summary);
+                        let mut thread = summary_to_thread(summary.summary, summary.thread_origin);
                         match read_event_msgs_from_rollout(rollout_path.as_path()).await {
                             Ok(events) => {
                                 thread.turns = build_turns_from_event_msgs(&events);

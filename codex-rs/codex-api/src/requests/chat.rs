@@ -355,7 +355,7 @@ mod tests {
     use crate::provider::WireApi;
     use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::protocol::SessionSource;
-    use codex_protocol::protocol::SubAgentSource;
+    use codex_protocol::protocol::SpawnedThreadKind;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
@@ -389,7 +389,7 @@ mod tests {
         }];
         let req = ChatRequestBuilder::new("gpt-test", "inst", &prompt_input, &[])
             .conversation_id(Some("conv-1".into()))
-            .session_source(Some(SessionSource::SubAgent(SubAgentSource::Review)))
+            .session_source(Some(SessionSource::SubAgent(SpawnedThreadKind::Review)))
             .build(&provider())
             .expect("request");
 

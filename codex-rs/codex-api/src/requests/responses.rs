@@ -192,7 +192,7 @@ mod tests {
     use super::*;
     use crate::provider::RetryConfig;
     use crate::provider::WireApi;
-    use codex_protocol::protocol::SubAgentSource;
+    use codex_protocol::protocol::SpawnedThreadKind;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
     use std::time::Duration;
@@ -233,7 +233,7 @@ mod tests {
 
         let request = ResponsesRequestBuilder::new("gpt-test", "inst", &input)
             .conversation(Some("conv-1".into()))
-            .session_source(Some(SessionSource::SubAgent(SubAgentSource::Review)))
+            .session_source(Some(SessionSource::SubAgent(SpawnedThreadKind::Review)))
             .build(&provider)
             .expect("request");
 
