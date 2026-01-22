@@ -24,6 +24,8 @@ use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tracing::debug;
+use tracing::error;
+use tracing::info;
 use tracing::trace;
 use url::Url;
 
@@ -113,7 +115,9 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         extra_headers: HeaderMap,
         turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
-        let ws_url = Url::parse(&self.provider.url_for_path("responses"))
+        let ws_url = self
+            .provider
+            .websocket_url_for_path("responses")
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
 
         let mut headers = self.provider.headers.clone();
@@ -149,15 +153,30 @@ async fn connect_websocket(
     headers: HeaderMap,
     turn_state: Option<Arc<OnceLock<String>>>,
 ) -> Result<(WsStream, bool), ApiError> {
+    info!("connecting to websocket: {url}");
+
     let mut request = url
-        .clone()
+        .as_str()
         .into_client_request()
         .map_err(|err| ApiError::Stream(format!("failed to build websocket request: {err}")))?;
     request.headers_mut().extend(headers);
 
-    let (stream, response) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|err| map_ws_error(err, &url))?;
+    let response = tokio_tungstenite::connect_async(request).await;
+
+    let (stream, response) = match response {
+        Ok((stream, response)) => {
+            info!(
+                "successfully connected to websocket: {url}, headers: {:?}",
+                response.headers()
+            );
+            (stream, response)
+        }
+        Err(err) => {
+            error!("failed to connect to websocket: {err}, url: {url}");
+            return Err(map_ws_error(err, &url));
+        }
+    };
+
     let reasoning_included = response.headers().contains_key(X_REASONING_INCLUDED_HEADER);
     if let Some(turn_state) = turn_state
         && let Some(header_value) = response
@@ -209,7 +228,7 @@ async fn run_websocket_response_stream(
         }
     };
 
-    if let Err(err) = ws_stream.send(Message::Text(request_text)).await {
+    if let Err(err) = ws_stream.send(Message::Text(request_text.into())).await {
         return Err(ApiError::Stream(format!(
             "failed to send websocket request: {err}"
         )));
@@ -269,7 +288,7 @@ async fn run_websocket_response_stream(
             Message::Pong(_) => {}
             Message::Close(_) => {
                 return Err(ApiError::Stream(
-                    "websocket closed before response.completed".into(),
+                    "websocket closed by server before response.completed".into(),
                 ));
             }
             _ => {}

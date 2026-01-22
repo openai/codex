@@ -78,6 +78,9 @@ pub enum CodexErr {
     #[error("no thread with id: {0}")]
     ThreadNotFound(ThreadId),
 
+    #[error("agent thread limit reached (max {max_threads})")]
+    AgentLimitReached { max_threads: usize },
+
     #[error("session configured event was not the first event in the stream")]
     SessionConfiguredNotFirstEvent,
 
@@ -199,6 +202,7 @@ impl CodexErr {
             | CodexErr::RetryLimit(_)
             | CodexErr::ContextWindowExceeded
             | CodexErr::ThreadNotFound(_)
+            | CodexErr::AgentLimitReached { .. }
             | CodexErr::Spawn
             | CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::UsageLimitReached(_) => false,
@@ -497,9 +501,9 @@ impl CodexErr {
             CodexErr::SessionConfiguredNotFirstEvent
             | CodexErr::InternalServerError
             | CodexErr::InternalAgentDied => CodexErrorInfo::InternalServerError,
-            CodexErr::UnsupportedOperation(_) | CodexErr::ThreadNotFound(_) => {
-                CodexErrorInfo::BadRequest
-            }
+            CodexErr::UnsupportedOperation(_)
+            | CodexErr::ThreadNotFound(_)
+            | CodexErr::AgentLimitReached { .. } => CodexErrorInfo::BadRequest,
             CodexErr::Sandbox(_) => CodexErrorInfo::SandboxError,
             _ => CodexErrorInfo::Other,
         }

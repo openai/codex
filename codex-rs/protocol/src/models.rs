@@ -167,6 +167,23 @@ pub enum ResponseItem {
     Other,
 }
 
+pub const BASE_INSTRUCTIONS_DEFAULT: &str = include_str!("prompts/base_instructions/default.md");
+
+/// Base instructions for the model in a thread. Corresponds to the `instructions` field in the ResponsesAPI.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(rename = "base_instructions", rename_all = "snake_case")]
+pub struct BaseInstructions {
+    pub text: String,
+}
+
+impl Default for BaseInstructions {
+    fn default() -> Self {
+        Self {
+            text: BASE_INSTRUCTIONS_DEFAULT.to_string(),
+        }
+    }
+}
+
 /// Developer-provided guidance that is injected into a turn as a developer role
 /// message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]

@@ -217,7 +217,6 @@ v2_enum_from_core!(
     }
 );
 
-// TODO(mbolin): Support in-repo layer.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
@@ -449,6 +448,10 @@ pub enum ConfigWriteErrorCode {
 pub struct ConfigReadParams {
     #[serde(default)]
     pub include_layers: bool,
+    /// Optional working directory to resolve project config layers. If specified,
+    /// return the effective config as seen from that directory (i.e., including any
+    /// project layers between `cwd` and the project/repo root).
+    pub cwd: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1702,24 +1705,38 @@ pub struct TextElement {
     /// Byte range in the parent `text` buffer that this element occupies.
     pub byte_range: ByteRange,
     /// Optional human-readable placeholder for the element, displayed in the UI.
-    pub placeholder: Option<String>,
+    placeholder: Option<String>,
+}
+
+impl TextElement {
+    pub fn new(byte_range: ByteRange, placeholder: Option<String>) -> Self {
+        Self {
+            byte_range,
+            placeholder,
+        }
+    }
+
+    pub fn set_placeholder(&mut self, placeholder: Option<String>) {
+        self.placeholder = placeholder;
+    }
+
+    pub fn placeholder(&self) -> Option<&str> {
+        self.placeholder.as_deref()
+    }
 }
 
 impl From<CoreTextElement> for TextElement {
     fn from(value: CoreTextElement) -> Self {
-        Self {
-            byte_range: value.byte_range.into(),
-            placeholder: value.placeholder,
-        }
+        Self::new(
+            value.byte_range.into(),
+            value._placeholder_for_conversion_only().map(str::to_string),
+        )
     }
 }
 
 impl From<TextElement> for CoreTextElement {
     fn from(value: TextElement) -> Self {
-        Self {
-            byte_range: value.byte_range.into(),
-            placeholder: value.placeholder,
-        }
+        Self::new(value.byte_range.into(), value.placeholder)
     }
 }
 
@@ -2350,8 +2367,7 @@ pub struct ToolRequestUserInputParams {
 #[ts(export_to = "v2/")]
 /// EXPERIMENTAL. Captures a user's answer to a request_user_input question.
 pub struct ToolRequestUserInputAnswer {
-    pub selected: Vec<String>,
-    pub other: Option<String>,
+    pub answers: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

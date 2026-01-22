@@ -13,7 +13,6 @@ use crate::SandboxState;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
-use crate::client_common::REVIEW_PROMPT;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
@@ -36,9 +35,11 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
@@ -170,7 +171,6 @@ use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::config_types::Settings;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -280,6 +280,18 @@ impl Codex {
                 crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
             )
             .await;
+
+        // Resolve base instructions for the session. Priority order:
+        // 1. config.base_instructions override
+        // 2. conversation history => session_meta.base_instructions
+        // 3. base_intructions for current model
+        let model_info = models_manager.get_model_info(model.as_str(), &config).await;
+        let base_instructions = config
+            .base_instructions
+            .clone()
+            .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
+            .unwrap_or_else(|| model_info.base_instructions.clone());
+
         // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
         // to avoid extracting these fields separately and constructing CollaborationMode here.
         let collaboration_mode = CollaborationMode::Custom(Settings {
@@ -293,7 +305,7 @@ impl Codex {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
-            base_instructions: config.base_instructions.clone(),
+            base_instructions,
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -405,7 +417,6 @@ pub(crate) struct TurnContext {
     /// instead of `std::env::current_dir()`.
     pub(crate) cwd: PathBuf,
     pub(crate) developer_instructions: Option<String>,
-    pub(crate) base_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) approval_policy: AskForApproval,
@@ -447,8 +458,8 @@ pub(crate) struct SessionConfiguration {
     /// Model instructions that are appended to the base instructions.
     user_instructions: Option<String>,
 
-    /// Base instructions override.
-    base_instructions: Option<String>,
+    /// Base instructions for the session.
+    base_instructions: String,
 
     /// Compact prompt override.
     compact_prompt: Option<String>,
@@ -557,7 +568,6 @@ impl Session {
             client,
             cwd: session_configuration.cwd.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
-            base_instructions: session_configuration.base_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
             approval_policy: session_configuration.approval_policy.value(),
@@ -605,7 +615,14 @@ impl Session {
                 let conversation_id = ThreadId::default();
                 (
                     conversation_id,
-                    RolloutRecorderParams::new(conversation_id, forked_from_id, session_source),
+                    RolloutRecorderParams::new(
+                        conversation_id,
+                        forked_from_id,
+                        session_source,
+                        BaseInstructions {
+                            text: session_configuration.base_instructions.clone(),
+                        },
+                    ),
                 )
             }
             InitialHistory::Resumed(resumed_history) => (
@@ -665,6 +682,19 @@ impl Session {
                 msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }),
             });
         }
+        if crate::config::uses_deprecated_instructions_file(&config.config_layer_stack) {
+            post_session_configured_events.push(Event {
+                id: INITIAL_SUBMIT_ID.to_owned(),
+                msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
+                    summary: "`experimental_instructions_file` is deprecated and ignored. Use `model_instructions_file` instead."
+                        .to_string(),
+                    details: Some(
+                        "Move the setting to `model_instructions_file` in config.toml (or under a profile) to load instructions from a file."
+                            .to_string(),
+                    ),
+                }),
+            });
+        }
         maybe_push_chat_wire_api_deprecation(&config, &mut post_session_configured_events);
 
         let auth = auth.as_ref();
@@ -708,10 +738,12 @@ impl Session {
         let mut default_shell = shell::default_user_shell();
         // Create the mutable state for the Session.
         if config.features.enabled(Feature::ShellSnapshot) {
-            default_shell.shell_snapshot =
-                ShellSnapshot::try_new(&config.codex_home, conversation_id, &default_shell)
-                    .await
-                    .map(Arc::new);
+            ShellSnapshot::start_snapshotting(
+                config.codex_home.clone(),
+                conversation_id,
+                &mut default_shell,
+                otel_manager.clone(),
+            );
         }
         let state = SessionState::new(session_configuration.clone());
 
@@ -825,6 +857,13 @@ impl Session {
     async fn get_total_token_usage(&self) -> i64 {
         let state = self.state.lock().await;
         state.get_total_token_usage(state.server_reasoning_included())
+    }
+
+    pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
+        let state = self.state.lock().await;
+        BaseInstructions {
+            text: state.session_configuration.base_instructions.clone(),
+        }
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
@@ -1035,6 +1074,11 @@ impl Session {
         };
         self.new_turn_from_configuration(sub_id, session_configuration, None, false)
             .await
+    }
+
+    pub(crate) async fn current_collaboration_mode(&self) -> CollaborationMode {
+        let state = self.state.lock().await;
+        state.session_configuration.collaboration_mode.clone()
     }
 
     fn build_environment_update_item(
@@ -1499,6 +1543,11 @@ impl Session {
 
     pub(crate) fn features(&self) -> Features {
         self.features.clone()
+    }
+
+    pub(crate) async fn collaboration_mode(&self) -> CollaborationMode {
+        let state = self.state.lock().await;
+        state.session_configuration.collaboration_mode.clone()
     }
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
@@ -2482,6 +2531,7 @@ mod handlers {
             Arc::clone(&turn_context),
             vec![UserInput::Text {
                 text: turn_context.compact_prompt().to_string(),
+                // Compaction prompt is synthesized; no UI element ranges to preserve.
                 text_elements: Vec::new(),
             }],
             CompactTask,
@@ -2546,7 +2596,7 @@ mod handlers {
             .filter(|item| is_user_turn_boundary(item))
             .count();
         sess.services.otel_manager.counter(
-            "conversation.turn.count",
+            "codex.conversation.turn.count",
             i64::try_from(turn_count).unwrap_or(0),
             &[],
         );
@@ -2641,7 +2691,6 @@ async fn spawn_review_thread(
         web_search_mode: Some(review_web_search_mode),
     });
 
-    let base_instructions = REVIEW_PROMPT.to_string();
     let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.client.get_provider();
     let auth_manager = parent_turn_context.client.get_auth_manager();
@@ -2678,7 +2727,6 @@ async fn spawn_review_thread(
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         developer_instructions: None,
         user_instructions: None,
-        base_instructions: Some(base_instructions.clone()),
         compact_prompt: parent_turn_context.compact_prompt.clone(),
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
@@ -2693,6 +2741,7 @@ async fn spawn_review_thread(
     // Seed the child task with the review prompt as the initial user message.
     let input: Vec<UserInput> = vec![UserInput::Text {
         text: review_prompt,
+        // Review prompt is synthesized; no UI element ranges to preserve.
         text_elements: Vec::new(),
     }];
     let tc = Arc::new(review_turn_context);
@@ -2783,10 +2832,11 @@ pub(crate) async fn run_turn(
             .await,
     );
 
+    let otel_manager = turn_context.client.get_otel_manager();
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
-    } = build_skill_injections(&input, skills_outcome.as_ref()).await;
+    } = build_skill_injections(&input, skills_outcome.as_ref(), Some(&otel_manager)).await;
 
     for message in skill_warnings {
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
@@ -3024,11 +3074,14 @@ async fn run_sampling_request(
         .get_model_info()
         .supports_parallel_tool_calls;
 
+    let base_instructions = sess.get_base_instructions().await;
+
     let prompt = Prompt {
         input,
         tools: router.specs(),
         parallel_tool_calls: model_supports_parallel,
-        base_instructions_override: turn_context.base_instructions.clone(),
+        base_instructions,
+        personality: None,
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
@@ -3137,14 +3190,19 @@ async fn try_run_sampling_request(
     prompt: &Prompt,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
+    // TODO: If we need to guarantee the persisted mode always matches the prompt used for this
+    // turn, capture it in TurnContext at creation time. Using SessionConfiguration here avoids
+    // duplicating model settings on TurnContext, but a later Op could update the session config
+    // before this write occurs.
+    let collaboration_mode = sess.current_collaboration_mode().await;
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
         model: turn_context.client.get_model(),
+        collaboration_mode: Some(collaboration_mode),
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
-        base_instructions: turn_context.base_instructions.clone(),
         user_instructions: turn_context.user_instructions.clone(),
         developer_instructions: turn_context.developer_instructions.clone(),
         final_output_json_schema: turn_context.final_output_json_schema.clone(),
@@ -3389,6 +3447,7 @@ mod tests {
     use super::*;
     use crate::CodexAuth;
     use crate::config::ConfigBuilder;
+    use crate::config::test_config;
     use crate::exec::ExecToolCallOutput;
     use crate::function_tool::FunctionCallError;
     use crate::shell::default_user_shell;
@@ -3431,6 +3490,77 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
+
+    struct InstructionsTestCase {
+        slug: &'static str,
+        expects_apply_patch_instructions: bool,
+    }
+
+    #[tokio::test]
+    async fn get_base_instructions_no_user_content() {
+        let prompt_with_apply_patch_instructions =
+            include_str!("../prompt_with_apply_patch_instructions.md");
+        let test_cases = vec![
+            InstructionsTestCase {
+                slug: "gpt-3.5",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-4.1",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-4o",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5.1",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
+                slug: "codex-mini-latest",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-oss:120b",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5.1-codex",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5.1-codex-max",
+                expects_apply_patch_instructions: false,
+            },
+        ];
+
+        let (session, _turn_context) = make_session_and_context().await;
+
+        for test_case in test_cases {
+            let config = test_config();
+            let model_info = ModelsManager::construct_model_info_offline(test_case.slug, &config);
+            if test_case.expects_apply_patch_instructions {
+                assert_eq!(
+                    model_info.base_instructions.as_str(),
+                    prompt_with_apply_patch_instructions
+                );
+            }
+
+            {
+                let mut state = session.state.lock().await;
+                state.session_configuration.base_instructions =
+                    model_info.base_instructions.clone();
+            }
+
+            let base_instructions = session.get_base_instructions().await;
+            assert_eq!(base_instructions.text, model_info.base_instructions);
+        }
+    }
 
     #[tokio::test]
     async fn reconstruct_history_matches_live_compactions() {
@@ -3684,6 +3814,7 @@ mod tests {
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode::Custom(Settings {
             model,
@@ -3696,7 +3827,10 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            base_instructions: config.base_instructions.clone(),
+            base_instructions: config
+                .base_instructions
+                .clone()
+                .unwrap_or_else(|| model_info.base_instructions.clone()),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -3755,6 +3889,7 @@ mod tests {
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode::Custom(Settings {
             model,
@@ -3767,7 +3902,10 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            base_instructions: config.base_instructions.clone(),
+            base_instructions: config
+                .base_instructions
+                .clone()
+                .unwrap_or_else(|| model_info.base_instructions.clone()),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -4010,6 +4148,7 @@ mod tests {
         let exec_policy = ExecPolicyManager::default();
         let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode::Custom(Settings {
             model,
@@ -4022,7 +4161,10 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            base_instructions: config.base_instructions.clone(),
+            base_instructions: config
+                .base_instructions
+                .clone()
+                .unwrap_or_else(|| model_info.base_instructions.clone()),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -4110,6 +4252,7 @@ mod tests {
         let exec_policy = ExecPolicyManager::default();
         let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
         let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
         let reasoning_effort = config.model_reasoning_effort;
         let collaboration_mode = CollaborationMode::Custom(Settings {
             model,
@@ -4122,7 +4265,10 @@ mod tests {
             model_reasoning_summary: config.model_reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
-            base_instructions: config.base_instructions.clone(),
+            base_instructions: config
+                .base_instructions
+                .clone()
+                .unwrap_or_else(|| model_info.base_instructions.clone()),
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
@@ -4307,6 +4453,8 @@ mod tests {
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
+        // Interrupts persist a model-visible `<turn_aborted>` marker into history, but there is no
+        // separate client-visible event for that marker (only `EventMsg::TurnAborted`).
         let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
             .await
             .expect("timeout waiting for event")
@@ -4315,6 +4463,7 @@ mod tests {
             EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
             other => panic!("unexpected event: {other:?}"),
         }
+        // No extra events should be emitted after an abort.
         assert!(rx.try_recv().is_err());
     }
 
@@ -4337,11 +4486,17 @@ mod tests {
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-        let evt = rx.recv().await.expect("event");
+        // Even if tasks handle cancellation gracefully, interrupts still result in `TurnAborted`
+        // being the only client-visible signal.
+        let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("timeout waiting for event")
+            .expect("event");
         match evt.msg {
             EventMsg::TurnAborted(e) => assert_eq!(TurnAbortReason::Interrupted, e.reason),
             other => panic!("unexpected event: {other:?}"),
         }
+        // No extra events should be emitted after an abort.
         assert!(rx.try_recv().is_err());
     }
 
@@ -4357,42 +4512,67 @@ mod tests {
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-        // Drain events until we observe ExitedReviewMode; earlier
-        // RawResponseItem entries (e.g., environment context) may arrive first.
-        loop {
-            let evt = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+        // Aborting a review task should exit review mode before surfacing the abort to the client.
+        // We scan for these events (rather than relying on fixed ordering) since unrelated events
+        // may interleave.
+        let mut exited_review_mode_idx = None;
+        let mut turn_aborted_idx = None;
+        let mut idx = 0usize;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        while tokio::time::Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let evt = tokio::time::timeout(remaining, rx.recv())
                 .await
-                .expect("timeout waiting for first event")
-                .expect("first event");
+                .expect("timeout waiting for event")
+                .expect("event");
+            let event_idx = idx;
+            idx = idx.saturating_add(1);
             match evt.msg {
                 EventMsg::ExitedReviewMode(ev) => {
                     assert!(ev.review_output.is_none());
+                    exited_review_mode_idx = Some(event_idx);
+                }
+                EventMsg::TurnAborted(ev) => {
+                    assert_eq!(TurnAbortReason::Interrupted, ev.reason);
+                    turn_aborted_idx = Some(event_idx);
                     break;
                 }
-                // Ignore any non-critical events before exit.
-                _ => continue,
+                _ => {}
             }
         }
-        loop {
-            let evt = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-                .await
-                .expect("timeout waiting for next event")
-                .expect("event");
-            match evt.msg {
-                EventMsg::RawResponseItem(_) => continue,
-                EventMsg::ItemStarted(_) | EventMsg::ItemCompleted(_) => continue,
-                EventMsg::AgentMessage(_) => continue,
-                EventMsg::TurnAborted(e) => {
-                    assert_eq!(TurnAbortReason::Interrupted, e.reason);
-                    break;
-                }
-                other => panic!("unexpected second event: {other:?}"),
-            }
-        }
+        assert!(
+            exited_review_mode_idx.is_some(),
+            "expected ExitedReviewMode after abort"
+        );
+        assert!(
+            turn_aborted_idx.is_some(),
+            "expected TurnAborted after abort"
+        );
+        assert!(
+            exited_review_mode_idx.unwrap() < turn_aborted_idx.unwrap(),
+            "expected ExitedReviewMode before TurnAborted"
+        );
 
-        // TODO(jif) investigate what is this?
         let history = sess.clone_history().await;
-        let _ = history.raw_items();
+        // The `<turn_aborted>` marker is silent in the event stream, so verify it is still
+        // recorded in history for the model.
+        assert!(
+            history.raw_items().iter().any(|item| {
+                let ResponseItem::Message { role, content, .. } = item else {
+                    return false;
+                };
+                if role != "user" {
+                    return false;
+                }
+                content.iter().any(|content_item| {
+                    let ContentItem::InputText { text } = content_item else {
+                        return false;
+                    };
+                    text.contains(crate::session_prefix::TURN_ABORTED_OPEN_TAG)
+                })
+            }),
+            "expected a model-visible turn aborted marker in history after interrupt"
+        );
     }
 
     #[tokio::test]

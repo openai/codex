@@ -18,6 +18,7 @@ use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
 use crate::items::TurnItem;
 use crate::message_history::HistoryEntry;
+use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::num_format::format_with_separators;
@@ -1422,6 +1423,14 @@ impl InitialHistory {
         }
     }
 
+    pub fn session_cwd(&self) -> Option<PathBuf> {
+        match self {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(resumed) => session_cwd_from_items(&resumed.history),
+            InitialHistory::Forked(items) => session_cwd_from_items(items),
+        }
+    }
+
     pub fn get_rollout_items(&self) -> Vec<RolloutItem> {
         match self {
             InitialHistory::New => Vec::new(),
@@ -1454,6 +1463,30 @@ impl InitialHistory {
             ),
         }
     }
+
+    pub fn get_base_instructions(&self) -> Option<BaseInstructions> {
+        // TODO: SessionMeta should (in theory) always be first in the history, so we can probably only check the first item?
+        match self {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(resumed) => {
+                resumed.history.iter().find_map(|item| match item {
+                    RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
+                    _ => None,
+                })
+            }
+            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
+                _ => None,
+            }),
+        }
+    }
+}
+
+fn session_cwd_from_items(items: &[RolloutItem]) -> Option<PathBuf> {
+    items.iter().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.cwd.clone()),
+        _ => None,
+    })
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS, Default)]
@@ -1502,6 +1535,11 @@ impl fmt::Display for SubAgentSource {
     }
 }
 
+/// SessionMeta contains session-level data that doesn't correspond to a specific turn.
+///
+/// NOTE: There used to be an `instructions` field here, which stored user_instructions, but we
+/// now save that on TurnContext. base_instructions stores the base instructions for the session,
+/// and should be used when there is no config override.
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
     pub id: ThreadId,
@@ -1514,6 +1552,10 @@ pub struct SessionMeta {
     #[serde(default)]
     pub source: SessionSource,
     pub model_provider: Option<String>,
+    /// base_instructions for the session. This *should* always be present when creating a new session,
+    /// but may be missing for older sessions. If not present, fall back to rendering the base_instructions
+    /// from ModelsManager.
+    pub base_instructions: Option<BaseInstructions>,
 }
 
 impl Default for SessionMeta {
@@ -1527,6 +1569,7 @@ impl Default for SessionMeta {
             cli_version: String::new(),
             source: SessionSource::default(),
             model_provider: None,
+            base_instructions: None,
         }
     }
 }
@@ -1574,11 +1617,11 @@ pub struct TurnContextItem {
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collaboration_mode: Option<CollaborationMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
     pub summary: ReasoningSummaryConfig,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

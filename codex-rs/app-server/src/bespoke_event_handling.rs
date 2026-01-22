@@ -1445,8 +1445,7 @@ async fn on_request_user_input_response(
                 (
                     id,
                     CoreRequestUserInputAnswer {
-                        selected: answer.selected,
-                        other: answer.other,
+                        answers: answer.answers,
                     },
                 )
             })

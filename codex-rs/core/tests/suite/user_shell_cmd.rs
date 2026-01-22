@@ -1,6 +1,7 @@
 use anyhow::Context;
 use codex_core::NewThread;
 use codex_core::ThreadManager;
+use codex_core::features::Feature;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
@@ -129,7 +130,10 @@ async fn user_shell_cmd_can_be_interrupted() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
-    let mut builder = core_test_support::test_codex::test_codex();
+    // Disable it to ease command matching.
+    let mut builder = core_test_support::test_codex::test_codex().with_config(move |config| {
+        config.features.disable(Feature::ShellSnapshot);
+    });
     let test = builder.build(&server).await?;
 
     #[cfg(windows)]

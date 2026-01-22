@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::instructions::SkillInstructions;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::SkillMetadata;
+use codex_otel::OtelManager;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use tokio::fs;
@@ -17,6 +18,7 @@ pub(crate) struct SkillInjections {
 pub(crate) async fn build_skill_injections(
     inputs: &[UserInput],
     skills: Option<&SkillLoadOutcome>,
+    otel: Option<&OtelManager>,
 ) -> SkillInjections {
     if inputs.is_empty() {
         return SkillInjections::default();
@@ -40,6 +42,7 @@ pub(crate) async fn build_skill_injections(
     for skill in mentioned_skills {
         match fs::read_to_string(&skill.path).await {
             Ok(contents) => {
+                emit_skill_injected_metric(otel, &skill, "ok");
                 result.items.push(ResponseItem::from(SkillInstructions {
                     name: skill.name,
                     path: skill.path.to_string_lossy().into_owned(),
@@ -47,6 +50,7 @@ pub(crate) async fn build_skill_injections(
                 }));
             }
             Err(err) => {
+                emit_skill_injected_metric(otel, &skill, "error");
                 let message = format!(
                     "Failed to load skill {name} at {path}: {err:#}",
                     name = skill.name,
@@ -58,6 +62,18 @@ pub(crate) async fn build_skill_injections(
     }
 
     result
+}
+
+fn emit_skill_injected_metric(otel: Option<&OtelManager>, skill: &SkillMetadata, status: &str) {
+    let Some(otel) = otel else {
+        return;
+    };
+
+    otel.counter(
+        "codex.skill.injected",
+        1,
+        &[("status", status), ("skill", skill.name.as_str())],
+    );
 }
 
 fn collect_explicit_skill_mentions(
