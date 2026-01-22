@@ -1133,14 +1133,7 @@ impl Session {
             return None;
         }
         let model_info = next.client.get_model_info();
-        let personality_message =
-            Self::personality_message_for(&model_info, personality).or_else(|| {
-                let offline_model = ModelsManager::construct_model_info_offline(
-                    next.client.get_model().as_str(),
-                    &next.client.config(),
-                );
-                Self::personality_message_for(&offline_model, personality)
-            });
+        let personality_message = Self::personality_message_for(&model_info, personality);
 
         personality_message.map(|personality_message| {
             DeveloperInstructions::personality_spec_message(personality_message).into()
