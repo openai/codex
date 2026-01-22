@@ -3324,6 +3324,10 @@ impl ChatWidget {
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
             }
+            SlashCommand::Vim => {
+                self.bottom_pane.set_vim_enabled(true);
+                self.add_info_message("Composer input set to vim mode.".to_string(), None);
+            }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
                 {

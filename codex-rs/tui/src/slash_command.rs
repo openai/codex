@@ -16,6 +16,7 @@ pub enum SlashCommand {
     Approvals,
     Permissions,
     #[strum(serialize = "setup-default-sandbox")]
+    Vim,
     ElevateSandbox,
     #[strum(serialize = "sandbox-add-read-dir")]
     SandboxReadRoot,
@@ -84,8 +85,9 @@ impl SlashCommand {
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent => "switch the active agent thread",
-            SlashCommand::Approvals => "choose what Codex is allowed to do",
+            SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
+            SlashCommand::Vim => "enable vim key bindings for the composer",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::SandboxReadRoot => {
                 "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"
@@ -129,6 +131,7 @@ impl SlashCommand {
             | SlashCommand::Personality
             | SlashCommand::Approvals
             | SlashCommand::Permissions
+            | SlashCommand::Vim
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental

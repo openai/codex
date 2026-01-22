@@ -14,6 +14,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::InputResult;
 use crate::render::renderable::Renderable;
+use crate::slash_command::SlashCommand;
 
 /// Action returned from feeding a key event into the ComposerInput.
 pub enum ComposerAction {
@@ -56,6 +57,10 @@ impl ComposerInput {
     pub fn input(&mut self, key: KeyEvent) -> ComposerAction {
         let action = match self.inner.handle_key_event(key).0 {
             InputResult::Submitted { text, .. } => ComposerAction::Submitted(text),
+            InputResult::Command(cmd) => {
+                self.handle_slash_command(cmd);
+                ComposerAction::None
+            }
             _ => ComposerAction::None,
         };
         self.drain_app_events();
@@ -115,6 +120,13 @@ impl ComposerInput {
     /// paste-burst is active.
     pub fn recommended_flush_delay() -> Duration {
         crate::bottom_pane::ChatComposer::recommended_paste_flush_delay()
+    }
+
+    fn handle_slash_command(&mut self, cmd: SlashCommand) {
+        match cmd {
+            SlashCommand::Vim => self.inner.set_vim_enabled(true),
+            _ => {}
+        }
     }
 
     fn drain_app_events(&mut self) {

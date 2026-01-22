@@ -38,6 +38,12 @@ The solution is to detect paste-like _bursts_ and buffer them into a single expl
 2. **Paste burst**: transient detection state for non-bracketed paste.
    - implemented by `PasteBurst`
 
+`ChatComposer` also coordinates the textarea input mode:
+
+- **Vim mode**: modal editing (normal/insert). While in Vim normal mode, paste-burst detection
+  is disabled so rapid command keystrokes are never buffered as paste.
+- Slash command `/vim` enables vim mode in the TUI and the public composer widget.
+
 ### Key event routing
 
 `ChatComposer::handle_key_event` dispatches based on `active_popup`:

@@ -109,6 +109,12 @@
 //! edits and renders a placeholder prompt instead of the editable textarea. This is part of the
 //! overall state machine, since it affects which transitions are even possible from a given UI
 //! state.
+//!
+//! # Edit Modes
+//!
+//! The composer supports Emacs-style input (default) and Vim-style modal input. Vim mode uses the
+//! textarea's normal/insert states; paste-burst detection is disabled while in Vim normal mode so
+//! rapid command keystrokes are not buffered as paste.
 use crate::bottom_pane::footer::mode_indicator_line;
 use crate::bottom_pane::selection_popup_common::truncate_line_with_ellipsis_if_overflow;
 use crate::key_hint;
@@ -764,6 +770,12 @@ impl ChatComposer {
         self.relabel_attached_images_and_update_placeholders();
         self.textarea.set_cursor(self.textarea.text().len());
         self.sync_popups();
+    }
+
+    pub(crate) fn set_vim_enabled(&mut self, enabled: bool) {
+        self.textarea.set_vim_enabled(enabled);
+        self.paste_burst.clear_after_explicit_paste();
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
     }
 
     pub(crate) fn current_text_with_pending(&self) -> String {
@@ -2511,7 +2523,7 @@ impl ChatComposer {
             return (InputResult::None, true);
         }
         if key_event.code == KeyCode::Esc {
-            if self.is_empty() {
+            if self.is_empty() && !self.textarea.is_vim_insert() {
                 let next_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
                 if next_mode != self.footer_mode {
                     self.footer_mode = next_mode;
@@ -2669,7 +2681,7 @@ impl ChatComposer {
         } = input
         {
             let has_ctrl_or_alt = has_ctrl_or_alt(modifiers);
-            if !has_ctrl_or_alt && !self.disable_paste_burst {
+            if !has_ctrl_or_alt && !self.disable_paste_burst && self.textarea.allows_paste_burst() {
                 // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts, so avoid
                 // holding the first char while still allowing burst detection for paste input.
                 if !ch.is_ascii() {
