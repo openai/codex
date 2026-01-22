@@ -347,7 +347,7 @@ impl MessageProcessor {
         }
     }
     async fn handle_tool_call_codex(&self, id: RequestId, arguments: Option<serde_json::Value>) {
-        let (initial_prompt, config): (String, Config) = match arguments {
+        let (initial_prompt, images, config): (String, Vec<String>, Config) = match arguments {
             Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
                 Ok(tool_cfg) => match tool_cfg
                     .into_config(self.codex_linux_sandbox_exe.clone())
@@ -416,6 +416,7 @@ impl MessageProcessor {
             crate::codex_tool_runner::run_codex_tool_session(
                 id,
                 initial_prompt,
+                images,
                 config,
                 outgoing,
                 thread_manager,
@@ -510,6 +511,7 @@ impl MessageProcessor {
 
         // Spawn the long-running reply handler.
         let prompt = codex_tool_call_reply_param.prompt.clone();
+        let images = codex_tool_call_reply_param.get_images();
         tokio::spawn({
             let outgoing = outgoing.clone();
             let running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.clone();
@@ -521,6 +523,7 @@ impl MessageProcessor {
                     outgoing,
                     request_id,
                     prompt,
+                    images,
                     running_requests_id_to_codex_uuid,
                 )
                 .await;

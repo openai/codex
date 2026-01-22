@@ -130,6 +130,48 @@ Example:
 }
 ```
 
+## Image support
+
+Both `codex` and `codex-reply` tools accept an optional `images` parameter to include images alongside text prompts. Each image URL must be either:
+
+- An HTTP/HTTPS URL pointing to an image
+- A base64 data URI (e.g., `data:image/png;base64,...`)
+
+Example with images:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "codex",
+    "arguments": {
+      "prompt": "What's in this image?",
+      "images": ["https://example.com/image.png"]
+    }
+  }
+}
+```
+
+Example with base64 data URI:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "codex-reply",
+    "arguments": {
+      "threadId": "019bbed6-1e9e-7f31-984c-a05b65045719",
+      "prompt": "Compare this to the previous image",
+      "images": ["data:image/png;base64,iVBORw0KGgo..."]
+    }
+  }
+}
+```
+
 ## Approvals (server → client)
 
 When Codex needs approval to apply changes or run commands, the server issues JSON‑RPC requests to the client:

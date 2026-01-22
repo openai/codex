@@ -23,6 +23,12 @@ pub struct CodexToolCallParam {
     /// The *initial user prompt* to start the Codex conversation.
     pub prompt: String,
 
+    /// Optional image URL(s) to include with the prompt. Each URL must be either:
+    /// - An HTTP/HTTPS URL pointing to an image
+    /// - A base64 data URI (e.g., `data:image/png;base64,...`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<String>>,
+
     /// Optional override for the model name (e.g. 'gpt-5.2', 'gpt-5.2-codex').
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -148,14 +154,15 @@ fn codex_tool_output_schema() -> ToolOutputSchema {
 }
 
 impl CodexToolCallParam {
-    /// Returns the initial user prompt to start the Codex conversation and the
-    /// effective Config object generated from the supplied parameters.
+    /// Returns the initial user prompt, image URLs, and the effective Config
+    /// object generated from the supplied parameters.
     pub async fn into_config(
         self,
         codex_linux_sandbox_exe: Option<PathBuf>,
-    ) -> std::io::Result<(String, Config)> {
+    ) -> std::io::Result<(String, Vec<String>, Config)> {
         let Self {
             prompt,
+            images,
             model,
             profile,
             cwd,
@@ -190,7 +197,7 @@ impl CodexToolCallParam {
         let cfg =
             Config::load_with_cli_overrides_and_harness_overrides(cli_overrides, overrides).await?;
 
-        Ok((prompt, cfg))
+        Ok((prompt, images.unwrap_or_default(), cfg))
     }
 }
 
@@ -209,6 +216,12 @@ pub struct CodexToolCallReplyParam {
 
     /// The *next user prompt* to continue the Codex conversation.
     pub prompt: String,
+
+    /// Optional image URL(s) to include with the prompt. Each URL must be either:
+    /// - An HTTP/HTTPS URL pointing to an image
+    /// - A base64 data URI (e.g., `data:image/png;base64,...`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<String>>,
 }
 
 impl CodexToolCallReplyParam {
@@ -224,6 +237,10 @@ impl CodexToolCallReplyParam {
                 "either threadId or conversationId must be provided"
             ))
         }
+    }
+
+    pub(crate) fn get_images(&self) -> Vec<String> {
+        self.images.clone().unwrap_or_default()
     }
 }
 
@@ -313,6 +330,13 @@ mod tests {
                 "description": "Developer instructions that should be injected as a developer role message.",
                 "type": "string"
               },
+              "images": {
+                "description": "Optional image URL(s) to include with the prompt. Each URL must be either: - An HTTP/HTTPS URL pointing to an image - A base64 data URI (e.g., `data:image/png;base64,...`)",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "model": {
                 "description": "Optional override for the model name (e.g. 'gpt-5.2', 'gpt-5.2-codex').",
                 "type": "string"
@@ -372,6 +396,13 @@ mod tests {
               "conversationId": {
                 "description": "DEPRECATED: use threadId instead.",
                 "type": "string"
+              },
+              "images": {
+                "description": "Optional image URL(s) to include with the prompt. Each URL must be either: - An HTTP/HTTPS URL pointing to an image - A base64 data URI (e.g., `data:image/png;base64,...`)",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               "prompt": {
                 "description": "The *next user prompt* to continue the Codex conversation.",

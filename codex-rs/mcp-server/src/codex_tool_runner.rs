@@ -65,6 +65,7 @@ pub(crate) fn create_call_tool_result_with_thread_id(
 pub async fn run_codex_tool_session(
     id: RequestId,
     initial_prompt: String,
+    images: Vec<String>,
     config: CodexConfig,
     outgoing: Arc<OutgoingMessageSender>,
     thread_manager: Arc<ThreadManager>,
@@ -117,14 +118,22 @@ pub async fn run_codex_tool_session(
         .lock()
         .await
         .insert(id.clone(), thread_id);
+
+    // Build user input items: images first, then text.
+    let mut items: Vec<UserInput> = images
+        .into_iter()
+        .map(|image_url| UserInput::Image { image_url })
+        .collect();
+    items.push(UserInput::Text {
+        text: initial_prompt.clone(),
+        // MCP tool prompts are plain text with no UI element ranges.
+        text_elements: Vec::new(),
+    });
+
     let submission = Submission {
         id: sub_id.clone(),
         op: Op::UserInput {
-            items: vec![UserInput::Text {
-                text: initial_prompt.clone(),
-                // MCP tool prompts are plain text with no UI element ranges.
-                text_elements: Vec::new(),
-            }],
+            items,
             final_output_json_schema: None,
         },
     };
@@ -158,19 +167,28 @@ pub async fn run_codex_tool_session_reply(
     outgoing: Arc<OutgoingMessageSender>,
     request_id: RequestId,
     prompt: String,
+    images: Vec<String>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
 ) {
     running_requests_id_to_codex_uuid
         .lock()
         .await
         .insert(request_id.clone(), thread_id);
+
+    // Build user input items: images first, then text.
+    let mut items: Vec<UserInput> = images
+        .into_iter()
+        .map(|image_url| UserInput::Image { image_url })
+        .collect();
+    items.push(UserInput::Text {
+        text: prompt,
+        // MCP tool prompts are plain text with no UI element ranges.
+        text_elements: Vec::new(),
+    });
+
     if let Err(e) = thread
         .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: prompt,
-                // MCP tool prompts are plain text with no UI element ranges.
-                text_elements: Vec::new(),
-            }],
+            items,
             final_output_json_schema: None,
         })
         .await
