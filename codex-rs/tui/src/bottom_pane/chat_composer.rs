@@ -229,6 +229,8 @@ pub(crate) struct ChatComposer {
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
     collaboration_modes_enabled: bool,
+    /// Temporary storage for the prompt text (Ctrl+Q).
+    stash: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -289,6 +291,7 @@ impl ChatComposer {
             dismissed_skill_popup_token: None,
             steer_enabled: false,
             collaboration_modes_enabled: false,
+            stash: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -1744,6 +1747,10 @@ impl ChatComposer {
         }
 
         if let Some((text, text_elements)) = self.prepare_submission_text() {
+            // After successful submission, auto-restore stashed content
+            if let Some(stashed) = self.stash.take() {
+                self.set_text_content(stashed, Vec::new(), Vec::new());
+            }
             if should_queue {
                 (
                     InputResult::Queued {
@@ -1837,6 +1844,39 @@ impl ChatComposer {
                 kind: KeyEventKind::Press,
                 ..
             } if self.is_empty() => (InputResult::None, false),
+            // -------------------------------------------------------------
+            // Prompt Stashing (Ctrl+Q)
+            // -------------------------------------------------------------
+            KeyEvent {
+                code: KeyCode::Char('q'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if !self.is_empty() {
+                    // Stash
+                    let text = self.current_text();
+                    self.stash = Some(text);
+                    self.set_text_content(String::new(), Vec::new(), Vec::new());
+                    self.show_footer_flash(
+                        Line::from(vec![Span::raw("Stashed - auto-restores after submit")]),
+                        Duration::from_secs(2),
+                    );
+                } else if let Some(stashed) = self.stash.take() {
+                    // Restore
+                    self.set_text_content(stashed, Vec::new(), Vec::new());
+                    self.show_footer_flash(
+                        Line::from(vec![Span::raw("Restored")]),
+                        Duration::from_secs(2),
+                    );
+                } else {
+                    self.show_footer_flash(
+                        Line::from(vec![Span::raw("No stashed prompt")]),
+                        Duration::from_secs(2),
+                    );
+                }
+                (InputResult::None, true)
+            }
             // -------------------------------------------------------------
             // History navigation (Up / Down) – only when the composer is not
             // empty or when the cursor is at the correct position, to avoid
