@@ -1,14 +1,13 @@
 use std::time::Duration;
 
+pub use codex_protocol::instruction_markers::USER_SHELL_COMMAND_CLOSE;
+pub use codex_protocol::instruction_markers::USER_SHELL_COMMAND_OPEN;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::tools::format_exec_output_str;
-
-pub const USER_SHELL_COMMAND_OPEN: &str = "<user_shell_command>";
-pub const USER_SHELL_COMMAND_CLOSE: &str = "</user_shell_command>";
 
 pub fn is_user_shell_command_text(text: &str) -> bool {
     let trimmed = text.trim_start();

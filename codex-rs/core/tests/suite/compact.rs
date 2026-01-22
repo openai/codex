@@ -471,6 +471,9 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
     let codex = test_codex()
         .with_config(move |config| {
             config.model_provider.name = non_openai_provider_name;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(200_000);
+            config.model_context_window = Some(1_500_000);
         })
         .build(&server)
         .await
@@ -1042,6 +1045,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home).await;
     config.model_provider = model_provider;
+    config.model_context_window = Some(1_000_000);
     set_test_compact_prompt(&mut config);
     config.model_auto_compact_token_limit = Some(200_000);
     let thread_manager = ThreadManager::with_models_provider(
@@ -1919,9 +1923,9 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 
     let server = start_mock_server().await;
 
-    let context_window = 100;
-    let limit = context_window * 90 / 100;
-    let over_limit_tokens = context_window * 95 / 100 + 1;
+    let context_window = 200;
+    let limit = context_window / 2;
+    let over_limit_tokens = limit + 20;
     let follow_up_user = "FOLLOW_UP_AFTER_LIMIT";
 
     let first_turn = sse(vec![

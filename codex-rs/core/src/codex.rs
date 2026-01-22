@@ -481,6 +481,10 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
+    pub(crate) fn codex_home(&self) -> &PathBuf {
+        &self.original_config_do_not_use.codex_home
+    }
+
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
         if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
@@ -842,7 +846,7 @@ impl Session {
 
     async fn get_total_token_usage(&self) -> i64 {
         let state = self.state.lock().await;
-        state.get_total_token_usage(state.server_reasoning_included())
+        state.get_total_token_usage()
     }
 
     pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
@@ -1453,7 +1457,7 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> Vec<ResponseItem> {
-        let mut history = ContextManager::new();
+        let mut history = ContextManager::new(&self.codex_home().await);
         for item in rollout_items {
             match item {
                 RolloutItem::ResponseItem(response_item) => {
@@ -1680,6 +1684,15 @@ impl Session {
         };
         let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
         self.send_event(turn_context, event).await;
+    }
+
+    pub(crate) async fn codex_home(&self) -> PathBuf {
+        self.state
+            .lock()
+            .await
+            .session_configuration
+            .codex_home()
+            .clone()
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
@@ -4547,7 +4560,8 @@ mod tests {
         turn_context: &TurnContext,
     ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
         let mut rollout_items = Vec::new();
-        let mut live_history = ContextManager::new();
+        let codex_home = session.codex_home().await;
+        let mut live_history = ContextManager::new(&codex_home);
 
         let initial_context = session.build_initial_context(turn_context).await;
         for item in &initial_context {

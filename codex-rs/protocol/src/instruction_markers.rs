@@ -1,0 +1,14 @@
+pub const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
+pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
+pub const USER_INSTRUCTIONS_CLOSE_TAG: &str = "</user_instructions>";
+pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
+pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
+pub const COLLABORATION_MODE_OPEN_TAG: &str = "<collaboration_mode>";
+pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
+pub const SKILL_INSTRUCTIONS_PREFIX: &str = "<skill";
+pub const USER_SHELL_COMMAND_OPEN: &str = "<user_shell_command>";
+pub const USER_SHELL_COMMAND_CLOSE: &str = "</user_shell_command>";
+pub const IMAGE_OPEN_TAG: &str = "<image>";
+pub const IMAGE_CLOSE_TAG: &str = "</image>";
+pub const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=";
+pub const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = ">";

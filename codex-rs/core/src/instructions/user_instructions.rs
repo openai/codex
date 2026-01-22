@@ -4,9 +4,9 @@ use serde::Serialize;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
-pub const USER_INSTRUCTIONS_OPEN_TAG_LEGACY: &str = "<user_instructions>";
-pub const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
-pub const SKILL_INSTRUCTIONS_PREFIX: &str = "<skill";
+pub use codex_protocol::instruction_markers::SKILL_INSTRUCTIONS_PREFIX;
+pub use codex_protocol::instruction_markers::USER_INSTRUCTIONS_OPEN_TAG;
+pub use codex_protocol::instruction_markers::USER_INSTRUCTIONS_PREFIX;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "user_instructions", rename_all = "snake_case")]
@@ -19,7 +19,7 @@ impl UserInstructions {
     pub fn is_user_instructions(message: &[ContentItem]) -> bool {
         if let [ContentItem::InputText { text }] = message {
             text.starts_with(USER_INSTRUCTIONS_PREFIX)
-                || text.starts_with(USER_INSTRUCTIONS_OPEN_TAG_LEGACY)
+                || text.starts_with(USER_INSTRUCTIONS_OPEN_TAG)
         } else {
             false
         }

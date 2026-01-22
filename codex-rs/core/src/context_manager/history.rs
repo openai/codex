@@ -1,5 +1,6 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
+use crate::context_manager::offload::ContextOffloader;
 use crate::instructions::SkillInstructions;
 use crate::instructions::UserInstructions;
 use crate::session_prefix::is_session_prefix;
@@ -16,6 +17,8 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use std::ops::Deref;
+use std::path::Path;
+use std::path::PathBuf;
 
 /// Transcript of thread history
 #[derive(Debug, Clone, Default)]
@@ -23,13 +26,17 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
+    server_reasoning_included: bool,
+    codex_home: PathBuf,
 }
 
 impl ContextManager {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(codex_home: &Path) -> Self {
         Self {
             items: Vec::new(),
             token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            server_reasoning_included: false,
+            codex_home: codex_home.to_path_buf(),
         }
     }
 
@@ -48,6 +55,14 @@ impl ContextManager {
                 self.token_info = Some(TokenUsageInfo::full_context_window(context_window));
             }
         }
+    }
+
+    pub(crate) fn set_server_reasoning_included(&mut self, included: bool) {
+        self.server_reasoning_included = included;
+    }
+
+    pub(crate) fn total_token_usage(&self) -> i64 {
+        self.get_total_token_usage(self.server_reasoning_included)
     }
 
     /// `items` is ordered from oldest to newest.
@@ -291,8 +306,8 @@ impl ContextManager {
                     output: truncated,
                 }
             }
-            ResponseItem::Message { .. }
-            | ResponseItem::Reasoning { .. }
+            ResponseItem::Message { .. } => self.process_message_item(item, policy),
+            ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }
             | ResponseItem::WebSearchCall { .. }
@@ -301,6 +316,90 @@ impl ContextManager {
             | ResponseItem::GhostSnapshot { .. }
             | ResponseItem::Other => item.clone(),
         }
+    }
+    fn process_message_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
+        let ResponseItem::Message { role, content, id } = item else {
+            return item.clone();
+        };
+
+        if role != "user" {
+            return item.clone();
+        }
+
+        let Some(token_info) = self.token_info.as_ref() else {
+            return item.clone();
+        };
+        let Some(context_window) = token_info.model_context_window else {
+            return item.clone();
+        };
+
+        let mut remaining = context_window
+            .saturating_sub(self.get_total_token_usage(self.server_reasoning_included));
+        let offloader = ContextOffloader::new(&self.codex_home);
+        let mut new_content = Vec::with_capacity(content.len().saturating_add(1));
+        for item in content {
+            match item {
+                ContentItem::InputText { text } if item.is_user_message_text() => {
+                    let (items, used_tokens) =
+                        process_user_text_item(text, remaining, policy, &offloader);
+                    new_content.extend(items);
+                    remaining = remaining.saturating_sub(used_tokens);
+                }
+                ContentItem::InputText { .. }
+                | ContentItem::OutputText { .. }
+                | ContentItem::InputImage { .. } => {
+                    new_content.push(item.clone());
+                }
+            }
+        }
+
+        ResponseItem::Message {
+            id: id.clone(),
+            role: role.clone(),
+            content: new_content,
+        }
+    }
+}
+
+fn process_user_text_item(
+    text: &str,
+    remaining: i64,
+    policy: TruncationPolicy,
+    offloader: &ContextOffloader,
+) -> (Vec<ContentItem>, i64) {
+    if text.is_empty() {
+        return (Vec::new(), 0);
+    }
+
+    let text_tokens = i64::try_from(approx_token_count(text)).unwrap_or(i64::MAX);
+    if text_tokens <= remaining {
+        return (
+            vec![ContentItem::InputText {
+                text: text.to_string(),
+            }],
+            text_tokens,
+        );
+    }
+
+    if let Some(offloaded) = offloader.write_user_message(text) {
+        let notice = format!(
+            "User input was too large for the remaining context window and was saved to {}. Use read_file to load it.",
+            offloaded.display()
+        );
+        let notice_tokens = i64::try_from(approx_token_count(&notice)).unwrap_or(i64::MAX);
+        (vec![ContentItem::InputText { text: notice }], notice_tokens)
+    } else {
+        let truncated = truncate_text(text, policy);
+        let used_tokens = i64::try_from(approx_token_count(&truncated)).unwrap_or(i64::MAX);
+        (build_truncated_text_item(truncated), used_tokens)
+    }
+}
+
+fn build_truncated_text_item(truncated: String) -> Vec<ContentItem> {
+    if truncated.is_empty() {
+        Vec::new()
+    } else {
+        vec![ContentItem::InputText { text: truncated }]
     }
 }
 

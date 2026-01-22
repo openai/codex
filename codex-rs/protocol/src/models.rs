@@ -12,9 +12,13 @@ use ts_rs::TS;
 
 use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
+use crate::instruction_markers::COLLABORATION_MODE_CLOSE_TAG;
+use crate::instruction_markers::COLLABORATION_MODE_OPEN_TAG;
+use crate::instruction_markers::IMAGE_CLOSE_TAG;
+use crate::instruction_markers::IMAGE_OPEN_TAG;
+use crate::instruction_markers::LOCAL_IMAGE_OPEN_TAG_PREFIX;
+use crate::instruction_markers::LOCAL_IMAGE_OPEN_TAG_SUFFIX;
 use crate::protocol::AskForApproval;
-use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
-use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
 use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
@@ -69,6 +73,49 @@ pub enum ContentItem {
     InputText { text: String },
     InputImage { image_url: String },
     OutputText { text: String },
+}
+
+use crate::instruction_markers::ENVIRONMENT_CONTEXT_OPEN_TAG;
+use crate::instruction_markers::SKILL_INSTRUCTIONS_PREFIX;
+use crate::instruction_markers::USER_INSTRUCTIONS_OPEN_TAG;
+use crate::instruction_markers::USER_INSTRUCTIONS_PREFIX;
+use crate::instruction_markers::USER_SHELL_COMMAND_OPEN;
+
+impl ContentItem {
+    pub fn is_user_message_text(&self) -> bool {
+        let ContentItem::InputText { text } = self else {
+            return false;
+        };
+
+        if text.is_empty() {
+            return false;
+        }
+
+        if is_local_image_open_tag_text(text)
+            || is_local_image_close_tag_text(text)
+            || is_image_open_tag_text(text)
+            || is_image_close_tag_text(text)
+        {
+            return false;
+        }
+
+        let trimmed = text.trim_start();
+        if trimmed.starts_with(USER_INSTRUCTIONS_PREFIX)
+            || trimmed.starts_with(USER_INSTRUCTIONS_OPEN_TAG)
+            || trimmed.starts_with(SKILL_INSTRUCTIONS_PREFIX)
+        {
+            return false;
+        }
+
+        let lowered = trimmed.to_ascii_lowercase();
+        if lowered.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG)
+            || lowered.starts_with(USER_SHELL_COMMAND_OPEN)
+        {
+            return false;
+        }
+
+        true
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
@@ -380,10 +427,6 @@ fn local_image_error_placeholder(
 
 pub const VIEW_IMAGE_TOOL_NAME: &str = "view_image";
 
-const IMAGE_OPEN_TAG: &str = "<image>";
-const IMAGE_CLOSE_TAG: &str = "</image>";
-const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=";
-const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = ">";
 const LOCAL_IMAGE_CLOSE_TAG: &str = IMAGE_CLOSE_TAG;
 
 pub fn image_open_tag_text() -> String {
@@ -1225,5 +1268,48 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn input_text_detects_user_message_text() {
+        let user_text = ContentItem::InputText {
+            text: "hello world".to_string(),
+        };
+        assert!(user_text.is_user_message_text());
+
+        let user_instructions = ContentItem::InputText {
+            text: format!("{USER_INSTRUCTIONS_PREFIX}dir\n\n<INSTRUCTIONS>\ntext\n</INSTRUCTIONS>"),
+        };
+        assert!(!user_instructions.is_user_message_text());
+
+        let legacy_instructions = ContentItem::InputText {
+            text: "<user_instructions>text</user_instructions>".to_string(),
+        };
+        assert!(!legacy_instructions.is_user_message_text());
+
+        let skill_instructions = ContentItem::InputText {
+            text: "<skill>\n<name>x</name>\n<path>y</path>\nbody\n</skill>".to_string(),
+        };
+        assert!(!skill_instructions.is_user_message_text());
+
+        let session_prefix = ContentItem::InputText {
+            text: "<environment_context>\nfoo</environment_context>".to_string(),
+        };
+        assert!(!session_prefix.is_user_message_text());
+
+        let shell_command = ContentItem::InputText {
+            text: "<user_shell_command>\ncmd\n</user_shell_command>".to_string(),
+        };
+        assert!(!shell_command.is_user_message_text());
+
+        let image_open = ContentItem::InputText {
+            text: image_open_tag_text(),
+        };
+        assert!(!image_open.is_user_message_text());
+
+        let image_close = ContentItem::InputText {
+            text: image_close_tag_text(),
+        };
+        assert!(!image_close.is_user_message_text());
     }
 }

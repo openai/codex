@@ -10,8 +10,13 @@ use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TokenUsageInfo;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
+use std::fs;
+use std::path::PathBuf;
+use tempfile::tempdir;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
@@ -27,7 +32,8 @@ fn assistant_msg(text: &str) -> ResponseItem {
 }
 
 fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
-    let mut h = ContextManager::new();
+    let codex_home = PathBuf::from("/tmp");
+    let mut h = ContextManager::new(&codex_home);
     // Use a generous but fixed token budget; tests only rely on truncation
     // behavior, not on a specific model's token limit.
     h.record_items(items.iter(), TruncationPolicy::Tokens(10_000));
@@ -80,6 +86,208 @@ fn reasoning_with_encrypted_content(len: usize) -> ResponseItem {
 
 fn truncate_exec_output(content: &str) -> String {
     truncate::truncate_text(content, TruncationPolicy::Tokens(EXEC_FORMAT_MAX_TOKENS))
+}
+
+#[test]
+fn stores_oversized_user_message_in_user_message_dir() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let codex_home = temp_dir.path().to_path_buf();
+    let mut history = ContextManager::new(&codex_home);
+    history.set_token_info(Some(TokenUsageInfo {
+        total_token_usage: TokenUsage::default(),
+        last_token_usage: TokenUsage::default(),
+        model_context_window: Some(10),
+    }));
+
+    let original = "x".repeat(80);
+    let item = user_input_text_msg(&original);
+    history.record_items([&item], TruncationPolicy::Tokens(10_000));
+
+    let [ResponseItem::Message { content, .. }] = history.raw_items() else {
+        panic!("expected single message item");
+    };
+
+    let placeholder = content
+        .iter()
+        .find_map(|item| match item {
+            ContentItem::InputText { text }
+                if text.contains("User input was too large for the remaining context window") =>
+            {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected placeholder text, got {content:?}"));
+
+    let path = placeholder
+        .split("saved to ")
+        .nth(1)
+        .and_then(|tail| tail.split(". Use").next())
+        .expect("capture temp path");
+    let path = PathBuf::from(path);
+
+    assert!(
+        !content.iter().any(|item| matches!(
+            item,
+            ContentItem::InputText { text } if text == &original
+        )),
+        "original user text should not remain in the message content"
+    );
+
+    assert!(
+        path.exists(),
+        "expected saved user message at {}, placeholder: {placeholder}",
+        path.display()
+    );
+
+    let file_contents = fs::read_to_string(&path).expect("read temp file");
+    assert_eq!(file_contents, original);
+
+    fs::remove_file(path).expect("cleanup temp file");
+}
+
+#[test]
+fn offloads_each_user_input_item_independently() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let codex_home = temp_dir.path().to_path_buf();
+    let mut history = ContextManager::new(&codex_home);
+    history.set_token_info(Some(TokenUsageInfo {
+        total_token_usage: TokenUsage::default(),
+        last_token_usage: TokenUsage::default(),
+        model_context_window: Some(10),
+    }));
+
+    let small = "hi";
+    let large = "x".repeat(80);
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: small.to_string(),
+            },
+            ContentItem::InputText {
+                text: large.clone(),
+            },
+        ],
+    };
+    history.record_items([&item], TruncationPolicy::Tokens(10_000));
+
+    let [ResponseItem::Message { content, .. }] = history.raw_items() else {
+        panic!("expected single message item");
+    };
+
+    assert!(
+        content.iter().any(|item| matches!(
+            item,
+            ContentItem::InputText { text } if text == small
+        )),
+        "expected small user input to remain in message content"
+    );
+
+    assert!(
+        !content.iter().any(|item| matches!(
+            item,
+            ContentItem::InputText { text } if text == &large
+        )),
+        "expected large user input to be removed from message content"
+    );
+
+    let placeholder = content
+        .iter()
+        .find_map(|item| match item {
+            ContentItem::InputText { text }
+                if text.contains("User input was too large for the remaining context window") =>
+            {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected placeholder text, got {content:?}"));
+
+    let path = placeholder
+        .split("saved to ")
+        .nth(1)
+        .and_then(|tail| tail.split(". Use").next())
+        .expect("capture temp path");
+    let path = PathBuf::from(path);
+
+    let file_contents = fs::read_to_string(&path).expect("read temp file");
+    assert_eq!(file_contents, large);
+
+    fs::remove_file(path).expect("cleanup temp file");
+}
+
+#[test]
+fn decrements_remaining_for_multiple_user_text_items() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let codex_home = temp_dir.path().to_path_buf();
+    let mut history = ContextManager::new(&codex_home);
+    history.set_token_info(Some(TokenUsageInfo {
+        total_token_usage: TokenUsage::default(),
+        last_token_usage: TokenUsage::default(),
+        model_context_window: Some(10),
+    }));
+
+    let first = "a".repeat(36);
+    let second = "b".repeat(36);
+    let item = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: first.clone(),
+            },
+            ContentItem::InputText {
+                text: second.clone(),
+            },
+        ],
+    };
+    history.record_items([&item], TruncationPolicy::Tokens(10_000));
+
+    let [ResponseItem::Message { content, .. }] = history.raw_items() else {
+        panic!("expected single message item");
+    };
+
+    assert!(
+        content.iter().any(|item| matches!(
+            item,
+            ContentItem::InputText { text } if text == &first
+        )),
+        "expected first user input to remain in message content"
+    );
+
+    assert!(
+        !content.iter().any(|item| matches!(
+            item,
+            ContentItem::InputText { text } if text == &second
+        )),
+        "expected second user input to be removed from message content"
+    );
+
+    let placeholder = content
+        .iter()
+        .find_map(|item| match item {
+            ContentItem::InputText { text }
+                if text.contains("User input was too large for the remaining context window") =>
+            {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected placeholder text, got {content:?}"));
+
+    let path = placeholder
+        .split("saved to ")
+        .nth(1)
+        .and_then(|tail| tail.split(". Use").next())
+        .expect("capture temp path");
+    let path = PathBuf::from(path);
+
+    let file_contents = fs::read_to_string(&path).expect("read temp file");
+    assert_eq!(file_contents, second);
+
+    fs::remove_file(path).expect("cleanup temp file");
 }
 
 #[test]
@@ -462,7 +670,8 @@ fn normalization_retains_local_shell_outputs() {
 
 #[test]
 fn record_items_truncates_function_call_output_content() {
-    let mut history = ContextManager::new();
+    let codex_home = PathBuf::from("/tmp");
+    let mut history = ContextManager::new(&codex_home);
     // Any reasonably small token budget works; the test only cares that
     // truncation happens and the marker is present.
     let policy = TruncationPolicy::Tokens(1_000);
@@ -500,7 +709,8 @@ fn record_items_truncates_function_call_output_content() {
 
 #[test]
 fn record_items_truncates_custom_tool_call_output_content() {
-    let mut history = ContextManager::new();
+    let codex_home = PathBuf::from("/tmp");
+    let mut history = ContextManager::new(&codex_home);
     let policy = TruncationPolicy::Tokens(1_000);
     let line = "custom output that is very long\n";
     let long_output = line.repeat(2_500);
@@ -530,7 +740,8 @@ fn record_items_truncates_custom_tool_call_output_content() {
 
 #[test]
 fn record_items_respects_custom_token_limit() {
-    let mut history = ContextManager::new();
+    let codex_home = PathBuf::from("/tmp");
+    let mut history = ContextManager::new(&codex_home);
     let policy = TruncationPolicy::Tokens(10);
     let long_output = "tokenized content repeated many times ".repeat(200);
     let item = ResponseItem::FunctionCallOutput {

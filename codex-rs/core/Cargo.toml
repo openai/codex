@@ -93,7 +93,7 @@ tracing = { workspace = true, features = ["log"] }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }
 url = { workspace = true }
-uuid = { workspace = true, features = ["serde", "v4", "v5"] }
+uuid = { workspace = true, features = ["serde", "v4", "v5", "v7"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
 
