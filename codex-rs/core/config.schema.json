@@ -1,443 +1,5 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "ConfigToml",
-  "description": "Base config deserialized from ~/.codex/config.toml.",
-  "type": "object",
-  "properties": {
-    "agents": {
-      "description": "Agent-related settings (thread limits, etc.).",
-      "allOf": [
-        {
-          "$ref": "#/definitions/AgentsToml"
-        }
-      ]
-    },
-    "analytics": {
-      "description": "When `false`, disables analytics across Codex product surfaces in this machine. Defaults to `true`.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/AnalyticsConfigToml"
-        }
-      ]
-    },
-    "approval_policy": {
-      "description": "Default approval policy for executing commands.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/AskForApproval"
-        }
-      ]
-    },
-    "chatgpt_base_url": {
-      "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
-      "type": "string"
-    },
-    "check_for_update_on_startup": {
-      "description": "When `true`, checks for Codex updates on startup and surfaces update prompts. Set to `false` only if your Codex updates are centrally managed. Defaults to `true`.",
-      "type": "boolean"
-    },
-    "cli_auth_credentials_store": {
-      "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file.",
-      "default": null,
-      "allOf": [
-        {
-          "$ref": "#/definitions/AuthCredentialsStoreMode"
-        }
-      ]
-    },
-    "compact_prompt": {
-      "description": "Compact prompt used for history compaction.",
-      "type": "string"
-    },
-    "developer_instructions": {
-      "description": "Developer instructions inserted as a `developer` role message.",
-      "default": null,
-      "type": "string"
-    },
-    "disable_paste_burst": {
-      "description": "When true, disables burst-paste detection for typed input entirely. All characters are inserted as they are received, and no buffering or placeholder replacement will occur for fast keypress bursts.",
-      "type": "boolean"
-    },
-    "experimental_compact_prompt_file": {
-      "$ref": "#/definitions/AbsolutePathBuf"
-    },
-    "experimental_use_freeform_apply_patch": {
-      "type": "boolean"
-    },
-    "experimental_use_unified_exec_tool": {
-      "type": "boolean"
-    },
-    "features": {
-      "description": "Centralized feature flags (new). Prefer this over individual toggles.",
-      "default": null,
-      "type": "object",
-      "properties": {
-        "apply_patch_freeform": {
-          "type": "boolean"
-        },
-        "child_agents_md": {
-          "type": "boolean"
-        },
-        "collab": {
-          "type": "boolean"
-        },
-        "collaboration_modes": {
-          "type": "boolean"
-        },
-        "elevated_windows_sandbox": {
-          "type": "boolean"
-        },
-        "enable_experimental_windows_sandbox": {
-          "type": "boolean"
-        },
-        "enable_request_compression": {
-          "type": "boolean"
-        },
-        "exec_policy": {
-          "type": "boolean"
-        },
-        "experimental_use_freeform_apply_patch": {
-          "type": "boolean"
-        },
-        "experimental_use_unified_exec_tool": {
-          "type": "boolean"
-        },
-        "experimental_windows_sandbox": {
-          "type": "boolean"
-        },
-        "include_apply_patch_tool": {
-          "type": "boolean"
-        },
-        "powershell_utf8": {
-          "type": "boolean"
-        },
-        "remote_compaction": {
-          "type": "boolean"
-        },
-        "remote_models": {
-          "type": "boolean"
-        },
-        "responses_websockets": {
-          "type": "boolean"
-        },
-        "shell_snapshot": {
-          "type": "boolean"
-        },
-        "shell_tool": {
-          "type": "boolean"
-        },
-        "steer": {
-          "type": "boolean"
-        },
-        "tui2": {
-          "type": "boolean"
-        },
-        "undo": {
-          "type": "boolean"
-        },
-        "unified_exec": {
-          "type": "boolean"
-        },
-        "web_search": {
-          "type": "boolean"
-        },
-        "web_search_cached": {
-          "type": "boolean"
-        },
-        "web_search_request": {
-          "type": "boolean"
-        }
-      },
-      "additionalProperties": false
-    },
-    "feedback": {
-      "description": "When `false`, disables feedback collection across Codex product surfaces. Defaults to `true`.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/FeedbackConfigToml"
-        }
-      ]
-    },
-    "file_opener": {
-      "description": "Optional URI-based file opener. If set, citations to files in the model output will be hyperlinked using the specified URI scheme.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/UriBasedFileOpener"
-        }
-      ]
-    },
-    "forced_chatgpt_workspace_id": {
-      "description": "When set, restricts ChatGPT login to a specific workspace identifier.",
-      "default": null,
-      "type": "string"
-    },
-    "forced_login_method": {
-      "description": "When set, restricts the login mechanism users may use.",
-      "default": null,
-      "allOf": [
-        {
-          "$ref": "#/definitions/ForcedLoginMethod"
-        }
-      ]
-    },
-    "ghost_snapshot": {
-      "description": "Settings for ghost snapshots (used for undo).",
-      "default": null,
-      "allOf": [
-        {
-          "$ref": "#/definitions/GhostSnapshotToml"
-        }
-      ]
-    },
-    "hide_agent_reasoning": {
-      "description": "When set to `true`, `AgentReasoning` events will be hidden from the UI/output. Defaults to `false`.",
-      "type": "boolean"
-    },
-    "history": {
-      "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`.",
-      "default": null,
-      "allOf": [
-        {
-          "$ref": "#/definitions/History"
-        }
-      ]
-    },
-    "instructions": {
-      "description": "System instructions.",
-      "type": "string"
-    },
-    "mcp_oauth_callback_port": {
-      "description": "Optional fixed port for the local HTTP callback server used during MCP OAuth login. When unset, Codex will bind to an ephemeral port chosen by the OS.",
-      "type": "integer",
-      "format": "uint16",
-      "minimum": 0.0
-    },
-    "mcp_oauth_credentials_store": {
-      "description": "Preferred backend for storing MCP OAuth credentials. keyring: Use an OS-specific keyring service. https://github.com/openai/codex/blob/main/codex-rs/rmcp-client/src/oauth.rs#L2 file: Use a file in the Codex home directory. auto (default): Use the OS-specific keyring service if available, otherwise use a file.",
-      "default": null,
-      "allOf": [
-        {
-          "$ref": "#/definitions/OAuthCredentialsStoreMode"
-        }
-      ]
-    },
-    "mcp_servers": {
-      "description": "Definition for MCP servers that Codex can reach out to for tool calls.",
-      "default": {},
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/definitions/RawMcpServerConfig"
-      }
-    },
-    "model": {
-      "description": "Optional override of model selection.",
-      "type": "string"
-    },
-    "model_auto_compact_token_limit": {
-      "description": "Token usage threshold triggering auto-compaction of conversation history.",
-      "type": "integer",
-      "format": "int64"
-    },
-    "model_context_window": {
-      "description": "Size of the context window for the model, in tokens.",
-      "type": "integer",
-      "format": "int64"
-    },
-    "model_instructions_file": {
-      "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Codex will likely degrade model performance.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        }
-      ]
-    },
-    "model_personality": {
-      "description": "EXPERIMENTAL Optionally specify a personality for the model",
-      "allOf": [
-        {
-          "$ref": "#/definitions/Personality"
-        }
-      ]
-    },
-    "model_provider": {
-      "description": "Provider to use from the model_providers map.",
-      "type": "string"
-    },
-    "model_providers": {
-      "description": "User-defined provider entries that extend/override the built-in list.",
-      "default": {},
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/definitions/ModelProviderInfo"
-      }
-    },
-    "model_reasoning_effort": {
-      "$ref": "#/definitions/ReasoningEffort"
-    },
-    "model_reasoning_summary": {
-      "$ref": "#/definitions/ReasoningSummary"
-    },
-    "model_supports_reasoning_summaries": {
-      "description": "Override to force-enable reasoning summaries for the configured model.",
-      "type": "boolean"
-    },
-    "model_verbosity": {
-      "description": "Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).",
-      "allOf": [
-        {
-          "$ref": "#/definitions/Verbosity"
-        }
-      ]
-    },
-    "notice": {
-      "description": "Collection of in-product notices (different from notifications) See [`crate::config::types::Notices`] for more details",
-      "allOf": [
-        {
-          "$ref": "#/definitions/Notice"
-        }
-      ]
-    },
-    "notify": {
-      "description": "Optional external command to spawn for end-user notifications.",
-      "default": null,
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "oss_provider": {
-      "description": "Preferred OSS provider for local models, e.g. \"lmstudio\", \"ollama\", or \"ollama-chat\".",
-      "type": "string"
-    },
-    "otel": {
-      "description": "OTEL configuration.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/OtelConfigToml"
-        }
-      ]
-    },
-    "profile": {
-      "description": "Profile to use from the `profiles` map.",
-      "type": "string"
-    },
-    "profiles": {
-      "description": "Named profiles to facilitate switching between different configurations.",
-      "default": {},
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/definitions/ConfigProfile"
-      }
-    },
-    "project_doc_fallback_filenames": {
-      "description": "Ordered list of fallback filenames to look for when AGENTS.md is missing.",
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "project_doc_max_bytes": {
-      "description": "Maximum number of bytes to include from an AGENTS.md project doc file.",
-      "type": "integer",
-      "format": "uint",
-      "minimum": 0.0
-    },
-    "project_root_markers": {
-      "description": "Markers used to detect the project root when searching parent directories for `.codex` folders. Defaults to [\".git\"] when unset.",
-      "default": null,
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "projects": {
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/definitions/ProjectConfig"
-      }
-    },
-    "review_model": {
-      "description": "Review model override used by the `/review` feature.",
-      "type": "string"
-    },
-    "sandbox_mode": {
-      "description": "Sandbox mode to use.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/SandboxMode"
-        }
-      ]
-    },
-    "sandbox_workspace_write": {
-      "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/SandboxWorkspaceWrite"
-        }
-      ]
-    },
-    "shell_environment_policy": {
-      "default": {
-        "exclude": null,
-        "experimental_use_profile": null,
-        "ignore_default_excludes": null,
-        "include_only": null,
-        "inherit": null,
-        "set": null
-      },
-      "allOf": [
-        {
-          "$ref": "#/definitions/ShellEnvironmentPolicyToml"
-        }
-      ]
-    },
-    "show_raw_agent_reasoning": {
-      "description": "When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output. Defaults to `false`.",
-      "type": "boolean"
-    },
-    "skills": {
-      "description": "User-level skill config entries keyed by SKILL.md path.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/SkillsConfig"
-        }
-      ]
-    },
-    "tool_output_token_limit": {
-      "description": "Token budget applied when storing tool/function outputs in the context manager.",
-      "type": "integer",
-      "format": "uint",
-      "minimum": 0.0
-    },
-    "tools": {
-      "description": "Nested tools section for feature toggles",
-      "allOf": [
-        {
-          "$ref": "#/definitions/ToolsToml"
-        }
-      ]
-    },
-    "tui": {
-      "description": "Collection of settings that are specific to the TUI.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/Tui"
-        }
-      ]
-    },
-    "web_search": {
-      "description": "Controls the web search tool mode: disabled, cached, or live.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/WebSearchMode"
-        }
-      ]
-    },
-    "windows_wsl_setup_acknowledged": {
-      "description": "Tracks whether the Windows onboarding screen has been acknowledged.",
-      "type": "boolean"
-    }
-  },
   "additionalProperties": false,
   "definitions": {
     "AbsolutePathBuf": {
@@ -445,16 +7,16 @@
       "type": "string"
     },
     "AgentsToml": {
-      "type": "object",
+      "additionalProperties": false,
       "properties": {
         "max_threads": {
           "description": "Maximum number of agent threads that can be open concurrently. When unset, no limit is enforced.",
-          "type": "integer",
           "format": "uint",
-          "minimum": 1.0
+          "minimum": 1.0,
+          "type": "integer"
         }
       },
-      "additionalProperties": false
+      "type": "object"
     },
     "AltScreenMode": {
       "description": "Controls whether the TUI uses the terminal's alternate screen buffer.\n\n**Background:** The alternate screen buffer provides a cleaner fullscreen experience without polluting the terminal's scrollback history. However, it conflicts with terminal multiplexers like Zellij that strictly follow the xterm specification, which defines that alternate screen buffers should not have scrollback.\n\n**Zellij's behavior:** Zellij intentionally disables scrollback in alternate screen mode (see https://github.com/zellij-org/zellij/pull/1032) to comply with the xterm spec. This is by design and not configurable in Zellij—there is no option to enable scrollback in alternate screen mode.\n\n**Solution:** This setting provides a pragmatic workaround: - `auto` (default): Automatically detect the terminal multiplexer. If running in Zellij, disable alternate screen to preserve scrollback. Enable it everywhere else. - `always`: Always use alternate screen mode (original behavior before this fix). - `never`: Never use alternate screen mode. Runs in inline mode, preserving scrollback in all multiplexers.\n\nThe CLI flag `--no-alt-screen` can override this setting at runtime.",
@@ -664,12 +226,12 @@
           "type": "string"
         },
         "model_instructions_file": {
-          "description": "Optional path to a file containing model instructions.",
           "allOf": [
             {
               "$ref": "#/definitions/AbsolutePathBuf"
             }
-          ]
+          ],
+          "description": "Optional path to a file containing model instructions."
         },
         "model_personality": {
           "$ref": "#/definitions/Personality"
@@ -1559,6 +1121,14 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "agents": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AgentsToml"
+        }
+      ],
+      "description": "Agent-related settings (thread limits, etc.)."
+    },
     "analytics": {
       "allOf": [
         {
@@ -1607,14 +1177,6 @@
     },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
-    },
-    "experimental_instructions_file": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        }
-      ],
-      "description": "Legacy, now use features"
     },
     "experimental_use_freeform_apply_patch": {
       "type": "boolean"
@@ -1670,6 +1232,9 @@
           "type": "boolean"
         },
         "remote_models": {
+          "type": "boolean"
+        },
+        "responses_websockets": {
           "type": "boolean"
         },
         "shell_snapshot": {
@@ -1794,6 +1359,14 @@
       "description": "Size of the context window for the model, in tokens.",
       "format": "int64",
       "type": "integer"
+    },
+    "model_instructions_file": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      ],
+      "description": "Optional path to a file containing model instructions that will override the built-in instructions for the selected model. Users are STRONGLY DISCOURAGED from using this field, as deviating from the instructions sanctioned by Codex will likely degrade model performance."
     },
     "model_personality": {
       "allOf": [
