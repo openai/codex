@@ -2040,17 +2040,16 @@ async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
 
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
+    let enabled_initial = chat.stored_collaboration_mode.clone();
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
     assert!(matches!(
         chat.stored_collaboration_mode,
-        CollaborationMode::Code(_)
+        CollaborationMode::Code(_) | CollaborationMode::Plan(_)
     ));
+    assert_ne!(chat.stored_collaboration_mode, enabled_initial);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert!(matches!(
-        chat.stored_collaboration_mode,
-        CollaborationMode::Plan(_)
-    ));
+    assert_eq!(chat.stored_collaboration_mode, enabled_initial);
 
     chat.on_task_started();
     let before = chat.stored_collaboration_mode.clone();
