@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.92
 
       - name: Validate tag matches Cargo.toml version
         shell: bash
@@ -44,6 +45,15 @@ jobs:
 
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
+
+      - name: Verify config schema fixture
+        shell: bash
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          echo "If this fails, run: just write-config-schema to overwrite fixture with intentional changes."
+          cargo run -p codex-core --bin codex-write-config-schema
+          git diff --exit-code core/config.schema.json
 
   build:
     needs: tag-check
@@ -358,6 +368,10 @@ jobs:
 
           ls -R dist/
 
+      - name: Add config schema release asset
+        run: |
+          cp codex-rs/core/config.schema.json dist/config-schema.json
+
       - name: Define release name
         id: release_name
         run: |
@@ -427,6 +441,19 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
+
+      - name: Trigger developers.openai.com deploy
+        # Only trigger the deploy if the release is not a pre-release.
+        # The deploy is used to update the developers.openai.com website with the new config schema json file.
+        if: ${{ !contains(steps.release_name.outputs.name, '-') }}
+        continue-on-error: true
+        env:
+          DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if ! curl -sS -f -o /dev/null -X POST "$DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL"; then
+            echo "::warning title=developers.openai.com deploy hook failed::Vercel deploy hook POST failed for ${GITHUB_REF_NAME}"
+            exit 1
+          fi
 
   # Publish to npm using OIDC authentication.
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/

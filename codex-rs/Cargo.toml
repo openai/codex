@@ -35,7 +35,6 @@ members = [
     "stdio-to-uds",
     "otel",
     "tui",
-    "tui2",
     "utils/absolute-path",
     "utils/cargo-bin",
     "utils/git",
@@ -93,7 +92,6 @@ codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
-codex-tui2 = { path = "tui2" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-cache = { path = "utils/cache" }
 codex-utils-cargo-bin = { path = "utils/cargo-bin" }
@@ -178,7 +176,6 @@ pretty_assertions = "1.4.1"
 pulldown-cmark = "0.10"
 rand = "0.9"
 ratatui = "0.29.0"
-ratatui-core = "0.1.0"
 ratatui-macros = "0.6.0"
 regex = "1.12.2"
 regex-lite = "0.1.8"
@@ -225,7 +222,6 @@ tree-sitter-bash = "0.25"
 zstd = "0.13"
 tree-sitter-highlight = "0.25.10"
 ts-rs = "11"
-tui-scrollbar = "0.2.2"
 uds_windows = "1.1.0"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2"

@@ -135,10 +135,27 @@ impl ConfigService {
         &self,
         params: ConfigReadParams,
     ) -> Result<ConfigReadResponse, ConfigServiceError> {
-        let layers = self
-            .load_thread_agnostic_config()
-            .await
-            .map_err(|err| ConfigServiceError::io("failed to read configuration layers", err))?;
+        let layers = match params.cwd.as_deref() {
+            Some(cwd) => {
+                let cwd = AbsolutePathBuf::try_from(PathBuf::from(cwd)).map_err(|err| {
+                    ConfigServiceError::io("failed to resolve config cwd to an absolute path", err)
+                })?;
+                crate::config::ConfigBuilder::default()
+                    .codex_home(self.codex_home.clone())
+                    .cli_overrides(self.cli_overrides.clone())
+                    .loader_overrides(self.loader_overrides.clone())
+                    .fallback_cwd(Some(cwd.to_path_buf()))
+                    .build()
+                    .await
+                    .map_err(|err| {
+                        ConfigServiceError::io("failed to read configuration layers", err)
+                    })?
+                    .config_layer_stack
+            }
+            None => self.load_thread_agnostic_config().await.map_err(|err| {
+                ConfigServiceError::io("failed to read configuration layers", err)
+            })?,
+        };
 
         let effective = layers.effective_config();
         validate_config(&effective)
@@ -800,6 +817,7 @@ remote_compaction = true
         let response = service
             .read(ConfigReadParams {
                 include_layers: true,
+                cwd: None,
             })
             .await
             .expect("response");
@@ -892,6 +910,7 @@ remote_compaction = true
         let read_after = service
             .read(ConfigReadParams {
                 include_layers: true,
+                cwd: None,
             })
             .await
             .expect("read");
@@ -1032,6 +1051,7 @@ remote_compaction = true
         let response = service
             .read(ConfigReadParams {
                 include_layers: true,
+                cwd: None,
             })
             .await
             .expect("response");

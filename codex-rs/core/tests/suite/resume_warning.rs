@@ -26,6 +26,7 @@ fn resume_history(
         approval_policy: config.approval_policy.value(),
         sandbox_policy: config.sandbox_policy.get().clone(),
         model: previous_model.to_string(),
+        collaboration_mode: None,
         effort: config.model_reasoning_effort,
         summary: config.model_reasoning_summary,
         user_instructions: None,
