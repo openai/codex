@@ -28,7 +28,6 @@ pub fn blocked_header_value(reason: &str) -> &'static str {
         "not_allowed" | "not_allowed_local" => "blocked-by-allowlist",
         "denied" => "blocked-by-denylist",
         "method_not_allowed" => "blocked-by-method-policy",
-        "mitm_required" => "blocked-by-mitm-required",
         _ => "blocked-by-policy",
     }
 }
@@ -39,7 +38,6 @@ pub fn blocked_message(reason: &str) -> &'static str {
         "not_allowed_local" => "Codex blocked this request: local/private addresses not allowed.",
         "denied" => "Codex blocked this request: domain denied by policy.",
         "method_not_allowed" => "Codex blocked this request: method not allowed in limited mode.",
-        "mitm_required" => "Codex blocked this request: MITM required for limited HTTPS.",
         _ => "Codex blocked this request by network policy.",
     }
 }

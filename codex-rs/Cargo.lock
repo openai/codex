@@ -397,45 +397,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "asn1-rs"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56624a96882bb8c26d61312ae18cb45868e5a9992ea73c58e45c3101e56a1e60"
-dependencies = [
- "asn1-rs-derive",
- "asn1-rs-impl",
- "displaydoc",
- "nom 7.1.3",
- "num-traits",
- "rusticata-macros",
- "thiserror 2.0.17",
- "time",
-]
-
-[[package]]
-name = "asn1-rs-derive"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3109e49b1e4909e9db6515a30c633684d68cdeaa252f215214cb4fa1a5bfee2c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.104",
- "synstructure",
-]
-
-[[package]]
-name = "asn1-rs-impl"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b18050c2cd6fe86c3a76584ef5e0baf286d038cda203eb6223df2cc413565f7"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.104",
-]
-
-[[package]]
 name = "assert-json-diff"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1718,12 +1679,10 @@ dependencies = [
  "rama-http",
  "rama-http-backend",
  "rama-net",
- "rama-socks5",
  "rama-tcp",
  "rama-tls-boring",
  "rama-unix",
  "rama-utils",
- "rcgen",
  "serde",
  "serde_json",
  "time",
@@ -2650,20 +2609,6 @@ checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
  "pem-rfc7468",
  "zeroize",
-]
-
-[[package]]
-name = "der-parser"
-version = "10.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07da5016415d5a3c4dd39b11ed26f915f52fc4e0dc197d87908bc916e51bc1a6"
-dependencies = [
- "asn1-rs",
- "displaydoc",
- "nom 7.1.3",
- "num-bigint",
- "num-traits",
- "rusticata-macros",
 ]
 
 [[package]]
@@ -5129,15 +5074,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oid-registry"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12f40cff3dde1b6087cc5d5f5d4d65712f34016a03ed60e9c08dcc392736b5b7"
-dependencies = [
- "asn1-rs",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5418,16 +5354,6 @@ name = "pathdiff"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
-
-[[package]]
-name = "pem"
-version = "3.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
-dependencies = [
- "base64",
- "serde_core",
-]
 
 [[package]]
 name = "pem-rfc7468"
@@ -6140,21 +6066,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rama-socks5"
-version = "0.3.0-alpha.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5468b263516daaf258de32542c1974b7cbe962363ad913dcb669f5d46db0ef3e"
-dependencies = [
- "byteorder",
- "rama-core",
- "rama-net",
- "rama-tcp",
- "rama-udp",
- "rama-utils",
- "tokio",
-]
-
-[[package]]
 name = "rama-tcp"
 version = "0.3.0-alpha.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6190,18 +6101,6 @@ dependencies = [
  "rama-utils",
  "schannel",
  "tokio",
-]
-
-[[package]]
-name = "rama-udp"
-version = "0.3.0-alpha.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36ed05e0ecac73e084e92a3a8b1fbf16fdae8958c506f0f0eada180a2d99eef4"
-dependencies = [
- "rama-core",
- "rama-net",
- "tokio",
- "tokio-util",
 ]
 
 [[package]]
@@ -6349,20 +6248,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6fef540f80dbe8a0773266fa6077788ceb65ef624cdbf36e131aaf90b4a52df4"
 dependencies = [
  "ratatui",
-]
-
-[[package]]
-name = "rcgen"
-version = "0.14.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ec0a99f2de91c3cddc84b37e7db80e4d96b743e05607f647eb236fc0455907f"
-dependencies = [
- "pem",
- "ring",
- "rustls-pki-types",
- "time",
- "x509-parser",
- "yasna",
 ]
 
 [[package]]
@@ -6593,15 +6478,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
-]
-
-[[package]]
-name = "rusticata-macros"
-version = "4.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "faf0c4a6ece9950b9abdb62b1cfcf2a68b3b67a10ba445b3bb85be2a293d0632"
-dependencies = [
- "nom 7.1.3",
 ]
 
 [[package]]
@@ -9653,24 +9529,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec107c4503ea0b4a98ef47356329af139c0a4f7750e621cf2973cd3385ebcb3d"
 
 [[package]]
-name = "x509-parser"
-version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb3e137310115a65136898d2079f003ce33331a6c4b0d51f1531d1be082b6425"
-dependencies = [
- "asn1-rs",
- "data-encoding",
- "der-parser",
- "lazy_static",
- "nom 7.1.3",
- "oid-registry",
- "ring",
- "rusticata-macros",
- "thiserror 2.0.17",
- "time",
-]
-
-[[package]]
 name = "xdg-home"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9685,15 +9543,6 @@ name = "yansi"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
-
-[[package]]
-name = "yasna"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
-dependencies = [
- "time",
-]
 
 [[package]]
 name = "yoke"

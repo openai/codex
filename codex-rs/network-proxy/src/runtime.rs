@@ -1,6 +1,5 @@
 use crate::config::Config;
 use crate::config::NetworkMode;
-use crate::mitm::MitmState;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
 use crate::policy::method_allowed;
@@ -68,7 +67,6 @@ pub(crate) struct ConfigState {
     pub(crate) mtime: Option<SystemTime>,
     pub(crate) allow_set: GlobSet,
     pub(crate) deny_set: GlobSet,
-    pub(crate) mitm: Option<Arc<MitmState>>,
     pub(crate) constraints: NetworkProxyConstraints,
     pub(crate) cfg_path: PathBuf,
     pub(crate) blocked: VecDeque<BlockedRequest>,
@@ -283,12 +281,6 @@ impl AppState {
         Ok(())
     }
 
-    pub async fn mitm_state(&self) -> Result<Option<Arc<MitmState>>> {
-        self.reload_if_needed().await?;
-        let guard = self.state.read().await;
-        Ok(guard.mitm.clone())
-    }
-
     async fn reload_if_needed(&self) -> Result<()> {
         let needs_reload = {
             let guard = self.state.read().await;
@@ -415,7 +407,6 @@ pub(crate) fn app_state_for_policy(policy: crate::config::NetworkPolicy) -> AppS
         mtime: None,
         allow_set,
         deny_set,
-        mitm: None,
         constraints: NetworkProxyConstraints::default(),
         cfg_path: PathBuf::from("/nonexistent/config.toml"),
         blocked: VecDeque::new(),

@@ -3,7 +3,6 @@
 `codex-network-proxy` is Codex's local network policy enforcement proxy. It runs:
 
 - an HTTP proxy (default `127.0.0.1:3128`)
-- a SOCKS5 proxy (default `127.0.0.1:8081`)
 - an admin HTTP API (default `127.0.0.1:8080`)
 
 It enforces an allow/deny policy and a "limited" mode intended for read-only network access.
@@ -44,42 +43,15 @@ allow_local_binding = false
 
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
 allow_unix_sockets = ["/tmp/example.sock"]
-
-[network_proxy.mitm]
-# Enables CONNECT MITM for limited-mode HTTPS. If disabled, CONNECT is blocked in limited mode.
-enabled = true
-
-# When true, logs request/response body sizes (up to max_body_bytes).
-inspect = false
-max_body_bytes = 4096
-
-# These are resolved relative to $CODEX_HOME when relative.
-ca_cert_path = "network_proxy/mitm/ca.pem"
-ca_key_path = "network_proxy/mitm/ca.key"
 ```
 
-### 2) Initialize MITM directories (optional)
-
-This ensures the MITM directory exists (and is a good smoke test that the binary runs):
-
-```bash
-cargo run -p codex-network-proxy -- init
-```
-
-### 3) Run the proxy
+### 2) Run the proxy
 
 ```bash
 cargo run -p codex-network-proxy --
 ```
 
-Optional flags:
-
-```bash
-# Enable SOCKS5 UDP associate support (off by default).
-cargo run -p codex-network-proxy -- --enable-socks5-udp
-```
-
-### 4) Point a client at it
+### 3) Point a client at it
 
 For HTTP(S) traffic:
 
@@ -88,13 +60,7 @@ export HTTP_PROXY="http://127.0.0.1:3128"
 export HTTPS_PROXY="http://127.0.0.1:3128"
 ```
 
-For SOCKS5 traffic:
-
-```bash
-export ALL_PROXY="socks5://127.0.0.1:8081"
-```
-
-### 5) Understand blocks / debugging
+### 4) Understand blocks / debugging
 
 When a request is blocked, the proxy responds with `403` and includes:
 
@@ -102,13 +68,10 @@ When a request is blocked, the proxy responds with `403` and includes:
   - `blocked-by-allowlist`
   - `blocked-by-denylist`
   - `blocked-by-method-policy`
-  - `blocked-by-mitm-required`
   - `blocked-by-policy`
 
-In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed. In addition, HTTPS `CONNECT`
-requires MITM to be enabled to allow read-only HTTPS; otherwise the proxy blocks CONNECT with
-reason `mitm_required`. In "full" mode, CONNECT is always a transparent tunnel even if MITM
-is enabled.
+In "limited" mode, only `GET`, `HEAD`, and `OPTIONS` are allowed for plain HTTP. HTTPS `CONNECT`
+remains a transparent tunnel, so limited-mode method enforcement does not apply to HTTPS.
 
 ## Library API
 
@@ -119,7 +82,6 @@ use codex_network_proxy::{NetworkProxy, NetworkDecision, NetworkPolicyRequest};
 
 let proxy = NetworkProxy::builder()
     .http_addr("127.0.0.1:8080".parse()?)
-    .socks_addr("127.0.0.1:1080".parse()?)
     .admin_addr("127.0.0.1:9000".parse()?)
     .policy_decider(|request: NetworkPolicyRequest| async move {
         // Example: auto-allow when exec policy already approved a command prefix.
@@ -175,7 +137,7 @@ curl -sS -X POST http://127.0.0.1:8080/reload
 
 - Unix socket proxying via the `x-unix-socket` header is **macOS-only**; other platforms will
   reject unix socket requests.
-- MITM TLS termination uses BoringSSL via Rama's `rama-tls-boring`; building the proxy requires a
+- HTTPS tunneling uses BoringSSL via Rama's `rama-tls-boring`; building the proxy requires a
   native toolchain and CMake on macOS/Linux/Windows.
 
 ## Security notes (important)
@@ -191,7 +153,7 @@ what it can reasonably guarantee.
   allowlisted (best-effort DNS lookup).
 - Limited mode enforcement:
   - only `GET`, `HEAD`, and `OPTIONS` are allowed
-  - HTTPS `CONNECT` requires MITM to be enabled, otherwise CONNECT is blocked (to avoid “tunnel hides method” bypass).
+  - HTTPS `CONNECT` remains a tunnel; limited-mode method enforcement does not apply to HTTPS
 - Listener safety defaults:
   - the admin API is unauthenticated; non-loopback binds are clamped unless explicitly enabled via
     `dangerously_allow_non_loopback_admin`
@@ -200,10 +162,6 @@ what it can reasonably guarantee.
 - when unix socket proxying is enabled, both listeners are forced to loopback to avoid turning the
     proxy into a remote bridge into local daemons.
 - `enabled` is enforced at runtime; when false the proxy no-ops and does not bind listeners.
-- MITM CA key handling:
-  - the CA key file is created with restrictive permissions (`0600`) and written atomically using
-    create-new + fsync + rename, to avoid partial writes or transiently-permissive modes.
-
 Limitations:
 
 - DNS rebinding is hard to fully prevent without pinning the resolved IP(s) all the way down to the

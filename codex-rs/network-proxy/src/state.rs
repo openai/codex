@@ -1,7 +1,5 @@
 use crate::config::Config;
-use crate::config::MitmConfig;
 use crate::config::NetworkMode;
-use crate::mitm::MitmState;
 use crate::policy::DomainPattern;
 use crate::policy::compile_globset;
 use crate::runtime::ConfigState;
@@ -15,8 +13,6 @@ use codex_core::config::ConstraintError;
 use codex_core::config_loader::RequirementSource;
 use serde::Deserialize;
 use std::collections::HashSet;
-use std::path::Path;
-use std::sync::Arc;
 
 pub use crate::runtime::AppState;
 pub use crate::runtime::BlockedRequest;
@@ -36,7 +32,7 @@ pub(crate) async fn build_config_state() -> Result<ConfigState> {
     // Deserialize from the merged effective config, rather than parsing config.toml ourselves.
     // This avoids a second parser/merger implementation (and the drift that comes with it).
     let merged_toml = codex_cfg.config_layer_stack.effective_config();
-    let mut config: Config = merged_toml
+    let config: Config = merged_toml
         .try_into()
         .context("failed to deserialize network proxy config")?;
 
@@ -44,50 +40,18 @@ pub(crate) async fn build_config_state() -> Result<ConfigState> {
     // trusted/managed layers (e.g., MDM). Enforce this before building runtime state.
     let constraints = enforce_trusted_constraints(&codex_cfg.config_layer_stack, &config)?;
 
-    // Permit relative MITM paths for ergonomics; resolve them relative to CODEX_HOME so the
-    // proxy can be configured from multiple config locations without changing cert paths.
-    resolve_mitm_paths(&mut config, &codex_cfg.codex_home);
     let mtime = cfg_path.metadata().and_then(|m| m.modified()).ok();
     let deny_set = compile_globset(&config.network_proxy.policy.denied_domains)?;
     let allow_set = compile_globset(&config.network_proxy.policy.allowed_domains)?;
-    let mitm = if config.network_proxy.mitm.enabled {
-        build_mitm_state(
-            &config.network_proxy.mitm,
-            config.network_proxy.allow_upstream_proxy,
-        )?
-    } else {
-        None
-    };
     Ok(ConfigState {
         config,
         mtime,
         allow_set,
         deny_set,
-        mitm,
         constraints,
         cfg_path,
         blocked: std::collections::VecDeque::new(),
     })
-}
-
-fn resolve_mitm_paths(config: &mut Config, codex_home: &Path) {
-    let base = codex_home;
-    if config.network_proxy.mitm.ca_cert_path.is_relative() {
-        config.network_proxy.mitm.ca_cert_path = base.join(&config.network_proxy.mitm.ca_cert_path);
-    }
-    if config.network_proxy.mitm.ca_key_path.is_relative() {
-        config.network_proxy.mitm.ca_key_path = base.join(&config.network_proxy.mitm.ca_key_path);
-    }
-}
-
-fn build_mitm_state(
-    config: &MitmConfig,
-    allow_upstream_proxy: bool,
-) -> Result<Option<Arc<MitmState>>> {
-    Ok(Some(Arc::new(MitmState::new(
-        config,
-        allow_upstream_proxy,
-    )?)))
 }
 
 #[derive(Debug, Default, Deserialize)]

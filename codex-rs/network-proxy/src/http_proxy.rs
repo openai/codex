@@ -1,5 +1,4 @@
 use crate::config::NetworkMode;
-use crate::mitm;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::network_policy::NetworkPolicyRequest;
@@ -196,39 +195,8 @@ async fn http_connect_accept(
         }
     };
 
-    let mitm_state = match app_state.mitm_state().await {
-        Ok(state) => state,
-        Err(err) => {
-            error!("failed to load MITM state: {err}");
-            return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
-        }
-    };
-
-    if mode == NetworkMode::Limited && mitm_state.is_none() {
-        // Limited mode is designed to be read-only. Without MITM, a CONNECT tunnel would hide the
-        // inner HTTP method/headers from the proxy, effectively bypassing method policy.
-        let _ = app_state
-            .record_blocked(BlockedRequest::new(
-                host.clone(),
-                "mitm_required".to_string(),
-                client.clone(),
-                Some("CONNECT".to_string()),
-                Some(NetworkMode::Limited),
-                "http-connect".to_string(),
-            ))
-            .await;
-        let client = client.as_deref().unwrap_or_default();
-        warn!(
-            "CONNECT blocked; MITM required for read-only HTTPS in limited mode (client={client}, host={host}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
-        );
-        return Err(blocked_text("mitm_required"));
-    }
-
     req.extensions_mut().insert(ProxyTarget(authority));
     req.extensions_mut().insert(mode);
-    if let Some(mitm_state) = mitm_state {
-        req.extensions_mut().insert(mitm_state);
-    }
 
     Ok((
         Response::builder()
@@ -240,12 +208,6 @@ async fn http_connect_accept(
 }
 
 async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
-    let mode = upgraded
-        .extensions()
-        .get::<NetworkMode>()
-        .copied()
-        .unwrap_or(NetworkMode::Full);
-
     let Some(target) = upgraded
         .extensions()
         .get::<ProxyTarget>()
@@ -254,21 +216,7 @@ async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
         warn!("CONNECT missing proxy target");
         return Ok(());
     };
-    let host = normalize_host(&target.host.to_string());
-
-    if mode == NetworkMode::Limited
-        && upgraded
-            .extensions()
-            .get::<Arc<mitm::MitmState>>()
-            .is_some()
-    {
-        let port = target.port;
-        info!("CONNECT MITM enabled (host={host}, port={port}, mode={mode:?})");
-        if let Err(err) = mitm::mitm_tunnel(upgraded).await {
-            warn!("MITM tunnel error: {err}");
-        }
-        return Ok(());
-    }
+    let _host = normalize_host(&target.host.to_string());
 
     let allow_upstream_proxy = match upgraded.extensions().get::<Arc<AppState>>().cloned() {
         Some(state) => match state.allow_upstream_proxy().await {
