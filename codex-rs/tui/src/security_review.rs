@@ -2789,6 +2789,15 @@ pub enum BugValidationStatus {
     UnableToValidate,
 }
 
+fn validation_status_command_state(status: BugValidationStatus) -> SecurityReviewCommandState {
+    match status {
+        BugValidationStatus::Passed => SecurityReviewCommandState::Matches,
+        BugValidationStatus::Failed => SecurityReviewCommandState::NoMatches,
+        BugValidationStatus::UnableToValidate => SecurityReviewCommandState::Error,
+        BugValidationStatus::Pending => SecurityReviewCommandState::Running,
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BugValidationState {
     pub status: BugValidationStatus,
@@ -17914,6 +17923,80 @@ fn emit_command_status(
     }
 }
 
+#[derive(Clone)]
+struct CommandStatusEmitter {
+    progress_sender: Option<AppEventSender>,
+    metrics: Arc<ReviewMetrics>,
+}
+
+impl CommandStatusEmitter {
+    fn new(progress_sender: Option<AppEventSender>, metrics: Arc<ReviewMetrics>) -> Self {
+        Self {
+            progress_sender,
+            metrics,
+        }
+    }
+
+    fn emit(
+        &self,
+        summary: impl Into<String>,
+        state: SecurityReviewCommandState,
+        preview: Vec<String>,
+    ) {
+        let id = self.metrics.next_command_id();
+        emit_command_status(&self.progress_sender, id, summary.into(), state, preview);
+    }
+
+    fn emit_with_preview(
+        &self,
+        summary: impl Into<String>,
+        state: SecurityReviewCommandState,
+        command: Option<&str>,
+        output: Option<&str>,
+    ) {
+        let preview = build_command_preview(command, output);
+        self.emit(summary, state, preview);
+    }
+}
+
+fn build_command_preview(command: Option<&str>, output: Option<&str>) -> Vec<String> {
+    let mut preview = Vec::new();
+    if let Some(command) = command.map(str::trim).filter(|s| !s.is_empty()) {
+        preview.push(format!("$ {command}"));
+    }
+    if let Some(output) = output.map(str::trim).filter(|s| !s.is_empty()) {
+        preview.extend(command_preview_snippets(output));
+    }
+    preview
+}
+
+fn emit_command_start(
+    emitter: &CommandStatusEmitter,
+    summary: impl Into<String>,
+    command: Option<&str>,
+) {
+    emitter.emit_with_preview(summary, SecurityReviewCommandState::Running, command, None);
+}
+
+fn emit_command_result(
+    emitter: &CommandStatusEmitter,
+    summary: impl Into<String>,
+    state: SecurityReviewCommandState,
+    command: Option<&str>,
+    output: Option<&str>,
+) {
+    emitter.emit_with_preview(summary, state, command, output);
+}
+
+fn emit_command_error(emitter: &CommandStatusEmitter, summary: impl Into<String>, message: &str) {
+    emitter.emit_with_preview(
+        summary,
+        SecurityReviewCommandState::Error,
+        None,
+        Some(message),
+    );
+}
+
 fn command_completion_state(result: &SearchResult) -> (SecurityReviewCommandState, Vec<String>) {
     match result {
         SearchResult::Matches(text) => (
@@ -19708,6 +19791,7 @@ async fn execute_bug_command(
     repo_path: PathBuf,
     work_dir: PathBuf,
     web_validation: Option<WebValidationConfig>,
+    command_emitter: CommandStatusEmitter,
 ) -> BugCommandResult {
     let mut logs: Vec<String> = Vec::new();
     let label = if let Some(rank) = plan.risk_rank {
@@ -19723,10 +19807,9 @@ async fn execute_bug_command(
     } else {
         format!("bug_{}", plan.summary_id)
     };
-    logs.push(format!(
-        "Running {} verification for {label}",
-        plan.request.tool.as_str()
-    ));
+    let tool = plan.request.tool.as_str();
+    let base_summary = format!("Validation {tool} for {label}");
+    logs.push(format!("Running {tool} verification for {label}"));
 
     let initial_target = plan.request.target.clone().filter(|t| !t.is_empty());
     let mut validation = BugValidationState {
@@ -19750,10 +19833,17 @@ async fn execute_bug_command(
     match plan.request.tool {
         BugVerificationTool::Curl => {
             let timeout = Duration::from_secs(VALIDATION_CURL_TIMEOUT_SECS);
+            let control_summary = format!("{base_summary} (control)");
+            let repro_summary = format!("{base_summary} (repro)");
             let Some(target_raw) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing target URL".to_string());
                 logs.push(format!("{label}: no target URL provided for curl"));
+                emit_command_error(
+                    &command_emitter,
+                    repro_summary.as_str(),
+                    "Missing target URL",
+                );
                 validation.run_at = Some(OffsetDateTime::now_utc());
                 return BugCommandResult {
                     index: plan.index,
@@ -19775,6 +19865,14 @@ async fn execute_bug_command(
                         logs.push(format!(
                             "{label}: refusing to validate against non-target url {target_raw}: {err}"
                         ));
+                        emit_command_error(
+                            &command_emitter,
+                            repro_summary.as_str(),
+                            validation
+                                .summary
+                                .as_deref()
+                                .unwrap_or("Invalid target URL"),
+                        );
                         validation.run_at = Some(OffsetDateTime::now_utc());
                         return BugCommandResult {
                             index: plan.index,
@@ -19792,6 +19890,14 @@ async fn execute_bug_command(
                         logs.push(format!(
                             "{label}: refusing to validate against non-local target {target_raw}"
                         ));
+                        emit_command_error(
+                            &command_emitter,
+                            repro_summary.as_str(),
+                            validation
+                                .summary
+                                .as_deref()
+                                .unwrap_or("Invalid local target"),
+                        );
                         validation.run_at = Some(OffsetDateTime::now_utc());
                         return BugCommandResult {
                             index: plan.index,
@@ -19818,9 +19924,17 @@ async fn execute_bug_command(
                             .collect::<String>()
                     })
                     .unwrap_or_default();
-                validation.control_steps.push(format!(
-                    "Run: `curl --silent --show-error --location --max-time 15{header_steps} {control_target}`"
-                ));
+                let control_command = format!(
+                    "curl --silent --show-error --location --max-time 15{header_steps} {control_target}"
+                );
+                validation
+                    .control_steps
+                    .push(format!("Run: `{control_command}`"));
+                emit_command_start(
+                    &command_emitter,
+                    control_summary.as_str(),
+                    Some(control_command.as_str()),
+                );
                 let mut control_cmd = Command::new("curl");
                 control_cmd
                     .arg("--silent")
@@ -19862,6 +19976,22 @@ async fn execute_bug_command(
                             validation.control_output_snippet =
                                 Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
                         }
+                        let preview = validation
+                            .control_output_snippet
+                            .as_deref()
+                            .or(validation.control_summary.as_deref());
+                        let state = if success {
+                            SecurityReviewCommandState::Matches
+                        } else {
+                            SecurityReviewCommandState::Error
+                        };
+                        emit_command_result(
+                            &command_emitter,
+                            control_summary.as_str(),
+                            state,
+                            Some(control_command.as_str()),
+                            preview,
+                        );
                         let (stdout_path, stderr_path) = write_validation_output_files(
                             &bug_work_dir,
                             &repo_path,
@@ -19891,10 +20021,24 @@ async fn execute_bug_command(
                         .await;
                         validation.control_stdout_path = Some(stdout_path);
                         validation.control_stderr_path = Some(stderr_path);
+                        emit_command_result(
+                            &command_emitter,
+                            control_summary.as_str(),
+                            SecurityReviewCommandState::Error,
+                            Some(control_command.as_str()),
+                            Some(summary.as_str()),
+                        );
                     }
                     Err(err) => {
                         validation.control_summary =
                             Some(format!("Failed to run curl control: {err}"));
+                        emit_command_result(
+                            &command_emitter,
+                            control_summary.as_str(),
+                            SecurityReviewCommandState::Error,
+                            Some(control_command.as_str()),
+                            validation.control_summary.as_deref(),
+                        );
                     }
                 }
             }
@@ -19910,9 +20054,17 @@ async fn execute_bug_command(
                         .collect::<String>()
                 })
                 .unwrap_or_default();
-            validation.repro_steps.push(format!(
-                "Run: `curl --silent --show-error --location --max-time 15{header_steps} {target}`"
-            ));
+            let repro_command = format!(
+                "curl --silent --show-error --location --max-time 15{header_steps} {target}"
+            );
+            validation
+                .repro_steps
+                .push(format!("Run: `{repro_command}`"));
+            emit_command_start(
+                &command_emitter,
+                repro_summary.as_str(),
+                Some(repro_command.as_str()),
+            );
 
             let mut command = Command::new("curl");
             command
@@ -19964,6 +20116,17 @@ async fn execute_bug_command(
                         validation.output_snippet =
                             Some(truncate_text(trimmed_snippet, VALIDATION_OUTPUT_GRAPHEMES));
                     }
+                    let preview = validation
+                        .output_snippet
+                        .as_deref()
+                        .or(validation.summary.as_deref());
+                    emit_command_result(
+                        &command_emitter,
+                        repro_summary.as_str(),
+                        validation_status_command_state(validation.status),
+                        Some(repro_command.as_str()),
+                        preview,
+                    );
                     let (stdout_path, stderr_path) = write_validation_output_files(
                         &bug_work_dir,
                         &repo_path,
@@ -20000,11 +20163,25 @@ async fn execute_bug_command(
                     .await;
                     validation.stdout_path = Some(stdout_path);
                     validation.stderr_path = Some(stderr_path);
+                    emit_command_result(
+                        &command_emitter,
+                        repro_summary.as_str(),
+                        SecurityReviewCommandState::Error,
+                        Some(repro_command.as_str()),
+                        Some(summary.as_str()),
+                    );
                     logs.push(format!("{label}: curl timed out after {duration_label}"));
                 }
                 Err(err) => {
                     validation.status = BugValidationStatus::UnableToValidate;
                     validation.summary = Some(format!("Failed to run curl: {err}"));
+                    emit_command_result(
+                        &command_emitter,
+                        repro_summary.as_str(),
+                        SecurityReviewCommandState::Error,
+                        Some(repro_command.as_str()),
+                        validation.summary.as_deref(),
+                    );
                     logs.push(format!("{label}: failed to run curl: {err}"));
                 }
             }
@@ -20032,6 +20209,14 @@ async fn execute_bug_command(
                             label,
                             temp_path.display()
                         ));
+                        emit_command_error(
+                            &command_emitter,
+                            base_summary.as_str(),
+                            validation
+                                .summary
+                                .as_deref()
+                                .unwrap_or("Failed to write python script"),
+                        );
                         validation.run_at = Some(OffsetDateTime::now_utc());
                         return BugCommandResult {
                             index: plan.index,
@@ -20048,6 +20233,11 @@ async fn execute_bug_command(
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing python script path".to_string());
                 logs.push(format!("{label}: no python script provided"));
+                emit_command_error(
+                    &command_emitter,
+                    base_summary.as_str(),
+                    "Missing python script path",
+                );
                 validation.run_at = Some(OffsetDateTime::now_utc());
                 return BugCommandResult {
                     index: plan.index,
@@ -20056,9 +20246,8 @@ async fn execute_bug_command(
                 };
             };
 
-            validation
-                .artifacts
-                .push(display_path_for(script_path, &repo_path));
+            let display_script = display_path_for(script_path, &repo_path);
+            validation.artifacts.push(display_script.clone());
             if !script_path.exists() {
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary =
@@ -20068,6 +20257,14 @@ async fn execute_bug_command(
                     label,
                     script_path.display()
                 ));
+                emit_command_error(
+                    &command_emitter,
+                    base_summary.as_str(),
+                    validation
+                        .summary
+                        .as_deref()
+                        .unwrap_or("Python script not found"),
+                );
                 validation.run_at = Some(OffsetDateTime::now_utc());
                 return BugCommandResult {
                     index: plan.index,
@@ -20104,12 +20301,13 @@ async fn execute_bug_command(
             }
             command.current_dir(&repo_path);
 
-            let mut cmd = format!("python {}", display_path_for(script_path, &repo_path));
+            let mut cmd = format!("python {display_script}");
             if let Some(target) = plan.request.target.as_ref().filter(|t| !t.is_empty()) {
                 cmd.push(' ');
                 cmd.push_str(target);
             }
             validation.repro_steps.push(format!("Run: `{cmd}`"));
+            emit_command_start(&command_emitter, base_summary.as_str(), Some(cmd.as_str()));
 
             let timeout = Duration::from_secs(VALIDATION_EXEC_TIMEOUT_SECS);
             match command_output_with_timeout(command, timeout).await {
@@ -20183,6 +20381,17 @@ async fn execute_bug_command(
                         validation.output_snippet =
                             Some(truncate_text(&snippet, VALIDATION_OUTPUT_GRAPHEMES));
                     }
+                    let preview = validation
+                        .output_snippet
+                        .as_deref()
+                        .or(validation.summary.as_deref());
+                    emit_command_result(
+                        &command_emitter,
+                        base_summary.as_str(),
+                        validation_status_command_state(validation.status),
+                        Some(cmd.as_str()),
+                        preview,
+                    );
                     let (stdout_path, stderr_path) = write_validation_output_files(
                         &bug_work_dir,
                         &repo_path,
@@ -20219,21 +20428,42 @@ async fn execute_bug_command(
                     .await;
                     validation.stdout_path = Some(stdout_path);
                     validation.stderr_path = Some(stderr_path);
+                    emit_command_result(
+                        &command_emitter,
+                        base_summary.as_str(),
+                        SecurityReviewCommandState::Error,
+                        Some(cmd.as_str()),
+                        Some(summary.as_str()),
+                    );
                     logs.push(format!("{label}: python timed out after {duration_label}"));
                 }
                 Err(err) => {
                     validation.status = BugValidationStatus::UnableToValidate;
                     validation.summary = Some(format!("Failed to run python: {err}"));
+                    emit_command_result(
+                        &command_emitter,
+                        base_summary.as_str(),
+                        SecurityReviewCommandState::Error,
+                        Some(cmd.as_str()),
+                        validation.summary.as_deref(),
+                    );
                     logs.push(format!("{label}: failed to run python: {err}"));
                 }
             }
         }
         BugVerificationTool::Playwright => {
             let timeout = Duration::from_secs(VALIDATION_PLAYWRIGHT_TIMEOUT_SECS);
+            let control_summary = format!("{base_summary} (control)");
+            let repro_summary = format!("{base_summary} (repro)");
             let Some(target_raw) = plan.request.target.clone().filter(|t| !t.is_empty()) else {
                 validation.status = BugValidationStatus::UnableToValidate;
                 validation.summary = Some("Missing target URL".to_string());
                 logs.push(format!("{label}: no target URL provided for playwright"));
+                emit_command_error(
+                    &command_emitter,
+                    repro_summary.as_str(),
+                    "Missing target URL",
+                );
                 validation.run_at = Some(OffsetDateTime::now_utc());
                 return BugCommandResult {
                     index: plan.index,
@@ -20255,6 +20485,14 @@ async fn execute_bug_command(
                         logs.push(format!(
                             "{label}: refusing to validate against non-target url {target_raw}: {err}"
                         ));
+                        emit_command_error(
+                            &command_emitter,
+                            repro_summary.as_str(),
+                            validation
+                                .summary
+                                .as_deref()
+                                .unwrap_or("Invalid target URL"),
+                        );
                         validation.run_at = Some(OffsetDateTime::now_utc());
                         return BugCommandResult {
                             index: plan.index,
@@ -20272,6 +20510,14 @@ async fn execute_bug_command(
                         logs.push(format!(
                             "{label}: refusing to validate against non-local target {target_raw}"
                         ));
+                        emit_command_error(
+                            &command_emitter,
+                            repro_summary.as_str(),
+                            validation
+                                .summary
+                                .as_deref()
+                                .unwrap_or("Invalid local target"),
+                        );
                         validation.run_at = Some(OffsetDateTime::now_utc());
                         return BugCommandResult {
                             index: plan.index,
@@ -20369,10 +20615,19 @@ function originOf(urlString) {
             validation.control_target = control_target.clone();
             if let Some(control_target) = control_target.as_ref() {
                 let control_screenshot_path = bug_work_dir.join(format!("{file_stem}_control.png"));
-                validation.control_steps.push(format!(
-                    "Run: `npx --yes -p playwright node {display_script} {control_target} {}`",
-                    display_path_for(&control_screenshot_path, &repo_path)
-                ));
+                let display_control_screenshot =
+                    display_path_for(&control_screenshot_path, &repo_path);
+                let control_command = format!(
+                    "npx --yes -p playwright node {display_script} {control_target} {display_control_screenshot}"
+                );
+                validation
+                    .control_steps
+                    .push(format!("Run: `{control_command}`"));
+                emit_command_start(
+                    &command_emitter,
+                    control_summary.as_str(),
+                    Some(control_command.as_str()),
+                );
 
                 let mut control_cmd = Command::new("npx");
                 control_cmd
@@ -20402,12 +20657,11 @@ function originOf(urlString) {
                         let success = output.status.success();
                         if success {
                             validation.control_summary = Some(format!(
-                                "Saved control screenshot to {}",
-                                display_path_for(&control_screenshot_path, &repo_path)
+                                "Saved control screenshot to {display_control_screenshot}"
                             ));
                             validation
                                 .artifacts
-                                .push(display_path_for(&control_screenshot_path, &repo_path));
+                                .push(display_control_screenshot.clone());
                         } else {
                             validation.control_summary =
                                 Some(summarize_process_output(success, &stdout, &stderr));
@@ -20418,6 +20672,22 @@ function originOf(urlString) {
                             validation.control_output_snippet =
                                 Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
                         }
+                        let preview = validation
+                            .control_output_snippet
+                            .as_deref()
+                            .or(validation.control_summary.as_deref());
+                        let state = if success {
+                            SecurityReviewCommandState::Matches
+                        } else {
+                            SecurityReviewCommandState::Error
+                        };
+                        emit_command_result(
+                            &command_emitter,
+                            control_summary.as_str(),
+                            state,
+                            Some(control_command.as_str()),
+                            preview,
+                        );
                         let (stdout_path, stderr_path) = write_validation_output_files(
                             &bug_work_dir,
                             &repo_path,
@@ -20447,18 +20717,40 @@ function originOf(urlString) {
                         .await;
                         validation.control_stdout_path = Some(stdout_path);
                         validation.control_stderr_path = Some(stderr_path);
+                        emit_command_result(
+                            &command_emitter,
+                            control_summary.as_str(),
+                            SecurityReviewCommandState::Error,
+                            Some(control_command.as_str()),
+                            Some(summary.as_str()),
+                        );
                     }
                     Err(err) => {
                         validation.control_summary =
                             Some(format!("Failed to run playwright control: {err}"));
+                        emit_command_result(
+                            &command_emitter,
+                            control_summary.as_str(),
+                            SecurityReviewCommandState::Error,
+                            Some(control_command.as_str()),
+                            validation.control_summary.as_deref(),
+                        );
                     }
                 }
             }
 
-            validation.repro_steps.push(format!(
-                "Run: `npx --yes -p playwright node {display_script} {target} {}`",
-                display_path_for(&screenshot_path, &repo_path)
-            ));
+            let display_screenshot = display_path_for(&screenshot_path, &repo_path);
+            let repro_command = format!(
+                "npx --yes -p playwright node {display_script} {target} {display_screenshot}"
+            );
+            validation
+                .repro_steps
+                .push(format!("Run: `{repro_command}`"));
+            emit_command_start(
+                &command_emitter,
+                repro_summary.as_str(),
+                Some(repro_command.as_str()),
+            );
 
             let mut command = Command::new("npx");
             command
@@ -20511,6 +20803,17 @@ function originOf(urlString) {
                         validation.output_snippet =
                             Some(truncate_text(trimmed, VALIDATION_OUTPUT_GRAPHEMES));
                     }
+                    let preview = validation
+                        .output_snippet
+                        .as_deref()
+                        .or(validation.summary.as_deref());
+                    emit_command_result(
+                        &command_emitter,
+                        repro_summary.as_str(),
+                        validation_status_command_state(validation.status),
+                        Some(repro_command.as_str()),
+                        preview,
+                    );
                     let (stdout_path, stderr_path) = write_validation_output_files(
                         &bug_work_dir,
                         &repo_path,
@@ -20547,6 +20850,13 @@ function originOf(urlString) {
                     .await;
                     validation.stdout_path = Some(stdout_path);
                     validation.stderr_path = Some(stderr_path);
+                    emit_command_result(
+                        &command_emitter,
+                        repro_summary.as_str(),
+                        SecurityReviewCommandState::Error,
+                        Some(repro_command.as_str()),
+                        Some(summary.as_str()),
+                    );
                     logs.push(format!(
                         "{label}: playwright timed out after {duration_label}"
                     ));
@@ -20554,6 +20864,13 @@ function originOf(urlString) {
                 Err(err) => {
                     validation.status = BugValidationStatus::UnableToValidate;
                     validation.summary = Some(format!("Failed to run playwright: {err}"));
+                    emit_command_result(
+                        &command_emitter,
+                        repro_summary.as_str(),
+                        SecurityReviewCommandState::Error,
+                        Some(repro_command.as_str()),
+                        validation.summary.as_deref(),
+                    );
                     logs.push(format!("{label}: failed to run playwright: {err}"));
                 }
             }
@@ -20568,8 +20885,9 @@ function originOf(urlString) {
     }
 }
 
-pub(crate) async fn verify_bugs(
+async fn verify_bugs(
     batch: BugVerificationBatchRequest,
+    command_emitter: CommandStatusEmitter,
 ) -> Result<BugVerificationOutcome, BugVerificationFailure> {
     let mut logs: Vec<String> = Vec::new();
 
@@ -20624,7 +20942,11 @@ pub(crate) async fn verify_bugs(
             let repo_path = batch.repo_path.clone();
             let work_dir = batch.work_dir.clone();
             let web_validation = web_validation.clone();
-            async move { execute_bug_command(plan, repo_path, work_dir, web_validation).await }
+            let command_emitter = command_emitter.clone();
+            async move {
+                execute_bug_command(plan, repo_path, work_dir, web_validation, command_emitter)
+                    .await
+            }
         }))
         .buffer_unordered(VALIDATION_EXEC_CONCURRENCY)
         .collect::<Vec<_>>()
@@ -21156,6 +21478,7 @@ async fn run_validation_target_prep_agent(
         &mut logs,
         "Preparing runnable validation targets...".to_string(),
     );
+    let command_emitter = CommandStatusEmitter::new(progress_sender.clone(), metrics.clone());
 
     let mut prep_config = config.clone();
     prep_config.model = Some(model.to_string());
@@ -21252,6 +21575,8 @@ async fn run_validation_target_prep_agent(
                 }
                 EventMsg::ExecCommandBegin(begin) => {
                     let command = strip_bash_lc_and_escape(&begin.command);
+                    let summary = format!("Validation prep: {command}");
+                    emit_command_start(&command_emitter, summary, Some(command.as_str()));
                     push_progress_log(
                         &progress_sender,
                         &log_sink,
@@ -21261,11 +21586,29 @@ async fn run_validation_target_prep_agent(
                 }
                 EventMsg::ExecCommandEnd(done) => {
                     let command = strip_bash_lc_and_escape(&done.command);
+                    let summary = format!("Validation prep: {command}");
                     exec_commands.push(ValidationPrepExecCommand {
                         command: command.clone(),
                         exit_code: done.exit_code,
                         duration_secs: done.duration.as_secs(),
                     });
+                    let output = if done.exit_code == 0 {
+                        done.stdout.as_str()
+                    } else {
+                        done.stderr.as_str()
+                    };
+                    let state = if done.exit_code == 0 {
+                        SecurityReviewCommandState::Matches
+                    } else {
+                        SecurityReviewCommandState::Error
+                    };
+                    emit_command_result(
+                        &command_emitter,
+                        summary,
+                        state,
+                        Some(command.as_str()),
+                        Some(output),
+                    );
 
                     let duration = fmt_elapsed_compact(done.duration.as_secs());
                     if done.exit_code == 0 {
@@ -22066,6 +22409,7 @@ async fn run_asan_validation(
     web_creds_path: Option<PathBuf>,
 ) -> Result<(), BugVerificationFailure> {
     let mut logs: Vec<String> = Vec::new();
+    let command_emitter = CommandStatusEmitter::new(progress_sender.clone(), metrics.clone());
 
     let bytes = match tokio_fs::read(&snapshot_path).await {
         Ok(bytes) => bytes,
@@ -22579,7 +22923,7 @@ async fn run_asan_validation(
                 "Executing validation checks...".to_string(),
             ));
         }
-        match verify_bugs(batch.clone()).await {
+        match verify_bugs(batch.clone(), command_emitter.clone()).await {
             Ok(outcome) => {
                 for line in outcome.logs {
                     if let Some(tx) = progress_sender.as_ref() {
