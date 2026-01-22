@@ -2263,6 +2263,18 @@ pub struct CommandExecutionRequestApprovalParams {
     pub item_id: String,
     /// Optional explanatory reason (e.g. request for network access).
     pub reason: Option<String>,
+    /// The command to be executed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command: Option<String>,
+    /// The command's working directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cwd: Option<PathBuf>,
+    /// Best-effort parsed command actions for friendly display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command_actions: Option<Vec<CommandAction>>,
     /// Optional proposed execpolicy amendment to allow similar commands without prompting.
     pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
 }
