@@ -39,7 +39,6 @@ pub(crate) struct CommandPopup {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CommandPopupFlags {
     pub(crate) collaboration_modes_enabled: bool,
-    pub(crate) connectors_enabled: bool,
 }
 
 impl CommandPopup {
@@ -49,7 +48,6 @@ impl CommandPopup {
             .into_iter()
             .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
             .filter(|(_, cmd)| flags.collaboration_modes_enabled || *cmd != SlashCommand::Collab)
-            .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Connectors)
             .collect();
         // Exclude prompts that collide with builtin command names and sort by name.
         let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
@@ -468,7 +466,6 @@ mod tests {
             Vec::new(),
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
-                connectors_enabled: false,
             },
         );
         popup.on_composer_text_change("/collab".to_string());

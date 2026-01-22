@@ -1032,14 +1032,6 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::OpenAppLink {
-                title,
-                instructions,
-                url,
-            } => {
-                self.chat_widget
-                    .open_app_link_view(title, instructions, url);
-            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);
@@ -1050,9 +1042,6 @@ impl App {
             }
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
-            }
-            AppEvent::ConnectorsLoaded(result) => {
-                self.chat_widget.on_connectors_loaded(result);
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
