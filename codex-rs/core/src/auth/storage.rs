@@ -120,6 +120,10 @@ pub(crate) struct OAuthHealth {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown_until: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exhausted_until: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub requires_relogin: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_status_code: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error_at: Option<DateTime<Utc>>,
@@ -127,6 +131,10 @@ pub(crate) struct OAuthHealth {
     pub success_count: u64,
     #[serde(default)]
     pub failure_count: u64,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn default_oauth_namespace() -> String {

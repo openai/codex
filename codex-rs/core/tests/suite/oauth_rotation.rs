@@ -53,6 +53,12 @@ fn token_data(access: &str, refresh: &str) -> TokenData {
     }
 }
 
+fn token_data_with_account(access: &str, refresh: &str, account_id: &str) -> TokenData {
+    let mut data = token_data(access, refresh);
+    data.account_id = Some(account_id.to_string());
+    data
+}
+
 fn minimal_jwt() -> String {
     #[derive(serde::Serialize)]
     struct Header {
@@ -244,7 +250,11 @@ async fn rotates_on_429_and_uses_next_account() {
     let accounts = list_oauth_accounts(codex_home.path(), AuthCredentialsStoreMode::File)
         .expect("list accounts");
     let ordered_ids: Vec<String> = accounts.iter().map(|a| a.record_id.clone()).collect();
-    assert_eq!(ordered_ids, vec![record2, record1]);
+    assert_eq!(ordered_ids, vec![record2, record1.clone()]);
+    let _record1_account = accounts
+        .iter()
+        .find(|account| account.record_id == record1)
+        .expect("record should exist");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -492,7 +502,12 @@ async fn rotates_when_refresh_fails() {
     let accounts = list_oauth_accounts(codex_home.path(), AuthCredentialsStoreMode::File)
         .expect("list accounts");
     let ordered_ids: Vec<String> = accounts.iter().map(|a| a.record_id.clone()).collect();
-    assert_eq!(ordered_ids, vec![record2, record1]);
+    assert_eq!(ordered_ids, vec![record2, record1.clone()]);
+    let record1_account = accounts
+        .iter()
+        .find(|account| account.record_id == record1)
+        .expect("record should exist");
+    assert!(record1_account.health.requires_relogin);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -823,4 +838,99 @@ async fn single_account_fallback_does_not_set_cooldown() {
         .expect("record should exist");
     assert!(account.health.cooldown_until.is_none());
     assert_eq!(account.health.failure_count, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(auth_refresh)]
+async fn relogin_overrides_quarantined_account_by_account_id() {
+    let server = MockServer::start().await;
+    let _env = EnvGuard::set(
+        REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+        format!("{}/oauth/token", server.uri()),
+    );
+
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+            "error": { "code": "refresh_token_reused" }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", "Bearer access-bad"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header("authorization", "Bearer access-good"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            sse_completed("resp-relogin"),
+            "text/event-stream",
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let codex_home = TempDir::new().expect("temp dir");
+    let record1 = add_oauth_account(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        token_data_with_account("access-bad", "refresh-1", "acct-1"),
+        None,
+        None,
+    )
+    .expect("add account 1");
+    add_oauth_account(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        token_data_with_account("access-good", "refresh-2", "acct-2"),
+        None,
+        None,
+    )
+    .expect("add account 2");
+
+    let auth_manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        false,
+        AuthCredentialsStoreMode::File,
+    );
+    let provider = openai_provider(&server);
+    let mut client_session =
+        build_client_session(&codex_home, provider, Arc::clone(&auth_manager)).await;
+
+    let prompt = sample_prompt();
+    let stream = client_session.stream(&prompt).await.expect("stream");
+    drain_stream(stream).await;
+
+    let accounts = list_oauth_accounts(codex_home.path(), AuthCredentialsStoreMode::File)
+        .expect("list accounts");
+    let record1_account = accounts
+        .iter()
+        .find(|account| account.record_id == record1)
+        .expect("record should exist");
+    assert!(record1_account.health.requires_relogin);
+
+    let updated_record = add_oauth_account(
+        codex_home.path(),
+        AuthCredentialsStoreMode::File,
+        token_data_with_account("access-new", "refresh-new", "acct-1"),
+        None,
+        None,
+    )
+    .expect("update account");
+    assert_eq!(updated_record, record1);
+
+    let accounts = list_oauth_accounts(codex_home.path(), AuthCredentialsStoreMode::File)
+        .expect("list accounts");
+    let record1_account = accounts
+        .iter()
+        .find(|account| account.record_id == record1)
+        .expect("record should exist");
+    assert!(!record1_account.health.requires_relogin);
 }

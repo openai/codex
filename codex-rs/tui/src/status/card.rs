@@ -68,6 +68,7 @@ struct StatusHistoryCell {
     collaboration_mode: Option<String>,
     model_provider: Option<String>,
     account: Option<StatusAccountDisplay>,
+    oauth_rotation_summary: Option<String>,
     session_id: Option<String>,
     forked_from: Option<String>,
     token_usage: StatusTokenUsageData,
@@ -166,6 +167,11 @@ impl StatusHistoryCell {
         let agents_summary = compose_agents_summary(config);
         let model_provider = format_model_provider(config);
         let account = compose_account_display(auth_manager, plan_type);
+        let oauth_rotation_summary = auth_manager
+            .oauth_rotation_summary()
+            .ok()
+            .flatten()
+            .map(|summary| summary.format_compact());
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let forked_from = forked_from.map(|id| id.to_string());
         let default_usage = TokenUsage::default();
@@ -197,6 +203,7 @@ impl StatusHistoryCell {
             collaboration_mode: collaboration_mode.map(ToString::to_string),
             model_provider,
             account,
+            oauth_rotation_summary,
             session_id,
             forked_from,
             token_usage,
@@ -384,6 +391,9 @@ impl HistoryCell for StatusHistoryCell {
         if account_value.is_some() {
             push_label(&mut labels, &mut seen, "Account");
         }
+        if self.oauth_rotation_summary.is_some() {
+            push_label(&mut labels, &mut seen, "OAuth rotation");
+        }
         if self.session_id.is_some() {
             push_label(&mut labels, &mut seen, "Session");
         }
@@ -440,6 +450,9 @@ impl HistoryCell for StatusHistoryCell {
 
         if let Some(account_value) = account_value {
             lines.push(formatter.line("Account", vec![Span::from(account_value)]));
+        }
+        if let Some(summary) = self.oauth_rotation_summary.as_ref() {
+            lines.push(formatter.line("OAuth rotation", vec![Span::from(summary.clone())]));
         }
 
         if let Some(collab_mode) = self.collaboration_mode.as_ref() {
