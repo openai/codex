@@ -1,0 +1,9 @@
+*** Begin Patch
+*** Add File: nested/new.txt
++created
+*** Delete File: delete.txt
+*** Update File: modify.txt
+@@
+-line2
++changed
+*** End Patch

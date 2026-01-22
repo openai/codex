@@ -2,13 +2,12 @@ use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_protocol::ConversationId;
-use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SandboxRiskLevel;
 use codex_protocol::user_input::UserInput;
 use eventsource_stream::Event as StreamEvent;
 use eventsource_stream::EventStreamError as StreamError;
@@ -88,7 +87,6 @@ impl OtelEventManager {
         reasoning_effort: Option<ReasoningEffort>,
         reasoning_summary: ReasoningSummary,
         context_window: Option<i64>,
-        max_output_tokens: Option<i64>,
         auto_compact_token_limit: Option<i64>,
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
@@ -111,7 +109,6 @@ impl OtelEventManager {
             reasoning_effort = reasoning_effort.map(|e| e.to_string()),
             reasoning_summary = %reasoning_summary,
             context_window = context_window,
-            max_output_tokens = max_output_tokens,
             auto_compact_token_limit = auto_compact_token_limit,
             approval_policy = %approval_policy,
             sandbox_policy = %sandbox_policy,
@@ -133,7 +130,18 @@ impl OtelEventManager {
             Ok(response) => (Some(response.status().as_u16()), None),
             Err(error) => (error.status().map(|s| s.as_u16()), Some(error.to_string())),
         };
+        self.record_api_request(attempt, status, error.as_deref(), duration);
 
+        response
+    }
+
+    pub fn record_api_request(
+        &self,
+        attempt: u64,
+        status: Option<u16>,
+        error: Option<&str>,
+        duration: Duration,
+    ) {
         tracing::event!(
             tracing::Level::INFO,
             event.name = "codex.api_request",
@@ -151,8 +159,6 @@ impl OtelEventManager {
             error.message = error,
             attempt = attempt,
         );
-
-        response
     }
 
     pub fn log_sse_event<E>(
@@ -345,7 +351,7 @@ impl OtelEventManager {
         &self,
         tool_name: &str,
         call_id: &str,
-        decision: ReviewDecision,
+        decision: &ReviewDecision,
         source: ToolDecisionSource,
     ) {
         tracing::event!(
@@ -362,54 +368,8 @@ impl OtelEventManager {
             slug = %self.metadata.slug,
             tool_name = %tool_name,
             call_id = %call_id,
-            decision = %decision.to_string().to_lowercase(),
+            decision = %decision.clone().to_string().to_lowercase(),
             source = %source.to_string(),
-        );
-    }
-
-    pub fn sandbox_assessment(
-        &self,
-        call_id: &str,
-        status: &str,
-        risk_level: Option<SandboxRiskLevel>,
-        duration: Duration,
-    ) {
-        let level = risk_level.map(|level| level.as_str());
-
-        tracing::event!(
-            tracing::Level::INFO,
-            event.name = "codex.sandbox_assessment",
-            event.timestamp = %timestamp(),
-            conversation.id = %self.metadata.conversation_id,
-            app.version = %self.metadata.app_version,
-            auth_mode = self.metadata.auth_mode,
-            user.account_id = self.metadata.account_id,
-            user.email = self.metadata.account_email,
-            terminal.type = %self.metadata.terminal_type,
-            model = %self.metadata.model,
-            slug = %self.metadata.slug,
-            call_id = %call_id,
-            status = %status,
-            risk_level = level,
-            duration_ms = %duration.as_millis(),
-        );
-    }
-
-    pub fn sandbox_assessment_latency(&self, call_id: &str, duration: Duration) {
-        tracing::event!(
-            tracing::Level::INFO,
-            event.name = "codex.sandbox_assessment_latency",
-            event.timestamp = %timestamp(),
-            conversation.id = %self.metadata.conversation_id,
-            app.version = %self.metadata.app_version,
-            auth_mode = self.metadata.auth_mode,
-            user.account_id = self.metadata.account_id,
-            user.email = self.metadata.account_email,
-            terminal.type = %self.metadata.terminal_type,
-            model = %self.metadata.model,
-            slug = %self.metadata.slug,
-            call_id = %call_id,
-            duration_ms = %duration.as_millis(),
         );
     }
 

@@ -2,13 +2,14 @@
 name = "codex-git"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 readme = "README.md"
 
 [lints]
 workspace = true
 
 [dependencies]
-once_cell = "1"
+once_cell = { workspace = true }
 regex = "1"
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

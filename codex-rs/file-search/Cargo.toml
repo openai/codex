@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "codex-file-search"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "codex-file-search"

@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 
 use crate::JSONRPCNotification;
 use crate::JSONRPCRequest;
@@ -8,12 +7,6 @@ use crate::export::GeneratedSchema;
 use crate::export::write_json_schema;
 use crate::protocol::v1;
 use crate::protocol::v2;
-use codex_protocol::ConversationId;
-use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::protocol::FileChange;
-use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SandboxCommandAssessment;
-use paste::paste;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -45,7 +38,7 @@ macro_rules! client_request_definitions {
     (
         $(
             $(#[$variant_meta:meta])*
-            $variant:ident {
+            $variant:ident $(=> $wire:literal)? {
                 params: $(#[$params_meta:meta])* $params:ty,
                 response: $response:ty,
             }
@@ -57,6 +50,7 @@ macro_rules! client_request_definitions {
         pub enum ClientRequest {
             $(
                 $(#[$variant_meta])*
+                $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
                 $variant {
                     #[serde(rename = "id")]
                     request_id: RequestId,
@@ -100,54 +94,111 @@ macro_rules! client_request_definitions {
 }
 
 client_request_definitions! {
-    /// NEW APIs
-    #[serde(rename = "model/list")]
-    #[ts(rename = "model/list")]
-    ListModels {
-        params: v2::ListModelsParams,
-        response: v2::ListModelsResponse,
-    },
-
-    #[serde(rename = "account/login")]
-    #[ts(rename = "account/login")]
-    LoginAccount {
-        params: v2::LoginAccountParams,
-        response: v2::LoginAccountResponse,
-    },
-
-    #[serde(rename = "account/logout")]
-    #[ts(rename = "account/logout")]
-    LogoutAccount {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v2::LogoutAccountResponse,
-    },
-
-    #[serde(rename = "account/rateLimits/read")]
-    #[ts(rename = "account/rateLimits/read")]
-    GetAccountRateLimits {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v2::GetAccountRateLimitsResponse,
-    },
-
-    #[serde(rename = "feedback/upload")]
-    #[ts(rename = "feedback/upload")]
-    UploadFeedback {
-        params: v2::UploadFeedbackParams,
-        response: v2::UploadFeedbackResponse,
-    },
-
-    #[serde(rename = "account/read")]
-    #[ts(rename = "account/read")]
-    GetAccount {
-        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        response: v2::GetAccountResponse,
-    },
-
-    /// DEPRECATED APIs below
     Initialize {
         params: v1::InitializeParams,
         response: v1::InitializeResponse,
     },
+
+    /// NEW APIs
+    // Thread lifecycle
+    ThreadStart => "thread/start" {
+        params: v2::ThreadStartParams,
+        response: v2::ThreadStartResponse,
+    },
+    ThreadResume => "thread/resume" {
+        params: v2::ThreadResumeParams,
+        response: v2::ThreadResumeResponse,
+    },
+    ThreadArchive => "thread/archive" {
+        params: v2::ThreadArchiveParams,
+        response: v2::ThreadArchiveResponse,
+    },
+    ThreadList => "thread/list" {
+        params: v2::ThreadListParams,
+        response: v2::ThreadListResponse,
+    },
+    ThreadCompact => "thread/compact" {
+        params: v2::ThreadCompactParams,
+        response: v2::ThreadCompactResponse,
+    },
+    TurnStart => "turn/start" {
+        params: v2::TurnStartParams,
+        response: v2::TurnStartResponse,
+    },
+    TurnInterrupt => "turn/interrupt" {
+        params: v2::TurnInterruptParams,
+        response: v2::TurnInterruptResponse,
+    },
+    ReviewStart => "review/start" {
+        params: v2::ReviewStartParams,
+        response: v2::ReviewStartResponse,
+    },
+
+    ModelList => "model/list" {
+        params: v2::ModelListParams,
+        response: v2::ModelListResponse,
+    },
+
+    McpServerOauthLogin => "mcpServer/oauth/login" {
+        params: v2::McpServerOauthLoginParams,
+        response: v2::McpServerOauthLoginResponse,
+    },
+
+    McpServersList => "mcpServers/list" {
+        params: v2::ListMcpServersParams,
+        response: v2::ListMcpServersResponse,
+    },
+
+    LoginAccount => "account/login/start" {
+        params: v2::LoginAccountParams,
+        response: v2::LoginAccountResponse,
+    },
+
+    CancelLoginAccount => "account/login/cancel" {
+        params: v2::CancelLoginAccountParams,
+        response: v2::CancelLoginAccountResponse,
+    },
+
+    LogoutAccount => "account/logout" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::LogoutAccountResponse,
+    },
+
+    GetAccountRateLimits => "account/rateLimits/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::GetAccountRateLimitsResponse,
+    },
+
+    FeedbackUpload => "feedback/upload" {
+        params: v2::FeedbackUploadParams,
+        response: v2::FeedbackUploadResponse,
+    },
+
+    /// Execute a command (argv vector) under the server's sandbox.
+    OneOffCommandExec => "command/exec" {
+        params: v2::CommandExecParams,
+        response: v2::CommandExecResponse,
+    },
+
+    ConfigRead => "config/read" {
+        params: v2::ConfigReadParams,
+        response: v2::ConfigReadResponse,
+    },
+    ConfigValueWrite => "config/value/write" {
+        params: v2::ConfigValueWriteParams,
+        response: v2::ConfigWriteResponse,
+    },
+    ConfigBatchWrite => "config/batchWrite" {
+        params: v2::ConfigBatchWriteParams,
+        response: v2::ConfigWriteResponse,
+    },
+
+    GetAccount => "account/read" {
+        params: v2::GetAccountParams,
+        response: v2::GetAccountResponse,
+    },
+
+    /// DEPRECATED APIs below
     NewConversation {
         params: v1::NewConversationParams,
         response: v1::NewConversationResponse,
@@ -202,6 +253,7 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::LoginChatGptResponse,
     },
+    // DEPRECATED in favor of CancelLoginAccount
     CancelLoginChatGpt {
         params: v1::CancelLoginChatGptParams,
         response: v1::CancelLoginChatGptResponse,
@@ -210,6 +262,7 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v1::LogoutChatGptResponse,
     },
+    /// DEPRECATED in favor of GetAccount
     GetAuthStatus {
         params: v1::GetAuthStatusParams,
         response: v1::GetAuthStatusResponse,
@@ -249,34 +302,36 @@ macro_rules! server_request_definitions {
     (
         $(
             $(#[$variant_meta:meta])*
-            $variant:ident
+            $variant:ident $(=> $wire:literal)? {
+                params: $params:ty,
+                response: $response:ty,
+            }
         ),* $(,)?
     ) => {
-        paste! {
-            /// Request initiated from the server and sent to the client.
-            #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-            #[serde(tag = "method", rename_all = "camelCase")]
-            pub enum ServerRequest {
-                $(
-                    $(#[$variant_meta])*
-                    $variant {
-                        #[serde(rename = "id")]
-                        request_id: RequestId,
-                        params: [<$variant Params>],
-                    },
-                )*
-            }
+        /// Request initiated from the server and sent to the client.
+        #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+        #[serde(tag = "method", rename_all = "camelCase")]
+        pub enum ServerRequest {
+            $(
+                $(#[$variant_meta])*
+                $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
+                $variant {
+                    #[serde(rename = "id")]
+                    request_id: RequestId,
+                    params: $params,
+                },
+            )*
+        }
 
-            #[derive(Debug, Clone, PartialEq, JsonSchema)]
-            pub enum ServerRequestPayload {
-                $( $variant([<$variant Params>]), )*
-            }
+        #[derive(Debug, Clone, PartialEq, JsonSchema)]
+        pub enum ServerRequestPayload {
+            $( $variant($params), )*
+        }
 
-            impl ServerRequestPayload {
-                pub fn request_with_id(self, request_id: RequestId) -> ServerRequest {
-                    match self {
-                        $(Self::$variant(params) => ServerRequest::$variant { request_id, params },)*
-                    }
+        impl ServerRequestPayload {
+            pub fn request_with_id(self, request_id: RequestId) -> ServerRequest {
+                match self {
+                    $(Self::$variant(params) => ServerRequest::$variant { request_id, params },)*
                 }
             }
         }
@@ -284,31 +339,37 @@ macro_rules! server_request_definitions {
         pub fn export_server_responses(
             out_dir: &::std::path::Path,
         ) -> ::std::result::Result<(), ::ts_rs::ExportError> {
-            paste! {
-                $(<[<$variant Response>] as ::ts_rs::TS>::export_all_to(out_dir)?;)*
-            }
+            $(
+                <$response as ::ts_rs::TS>::export_all_to(out_dir)?;
+            )*
             Ok(())
         }
 
         #[allow(clippy::vec_init_then_push)]
         pub fn export_server_response_schemas(
-            out_dir: &::std::path::Path,
+            out_dir: &Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
             let mut schemas = Vec::new();
-            paste! {
-                $(schemas.push(crate::export::write_json_schema::<[<$variant Response>]>(out_dir, stringify!([<$variant Response>]))?);)*
-            }
+            $(
+                schemas.push(crate::export::write_json_schema::<$response>(
+                    out_dir,
+                    concat!(stringify!($variant), "Response"),
+                )?);
+            )*
             Ok(schemas)
         }
 
         #[allow(clippy::vec_init_then_push)]
         pub fn export_server_param_schemas(
-            out_dir: &::std::path::Path,
+            out_dir: &Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
             let mut schemas = Vec::new();
-            paste! {
-                $(schemas.push(crate::export::write_json_schema::<[<$variant Params>]>(out_dir, stringify!([<$variant Params>]))?);)*
-            }
+            $(
+                schemas.push(crate::export::write_json_schema::<$params>(
+                    out_dir,
+                    concat!(stringify!($variant), "Params"),
+                )?);
+            )*
             Ok(schemas)
         }
     };
@@ -346,7 +407,7 @@ macro_rules! server_notification_definitions {
         impl TryFrom<JSONRPCNotification> for ServerNotification {
             type Error = serde_json::Error;
 
-            fn try_from(value: JSONRPCNotification) -> Result<Self, Self::Error> {
+            fn try_from(value: JSONRPCNotification) -> Result<Self, serde_json::Error> {
                 serde_json::from_value(serde_json::to_value(value)?)
             }
         }
@@ -398,49 +459,34 @@ impl TryFrom<JSONRPCRequest> for ServerRequest {
 }
 
 server_request_definitions! {
+    /// NEW APIs
+    /// Sent when approval is requested for a specific command execution.
+    /// This request is used for Turns started via turn/start.
+    CommandExecutionRequestApproval => "item/commandExecution/requestApproval" {
+        params: v2::CommandExecutionRequestApprovalParams,
+        response: v2::CommandExecutionRequestApprovalResponse,
+    },
+
+    /// Sent when approval is requested for a specific file change.
+    /// This request is used for Turns started via turn/start.
+    FileChangeRequestApproval => "item/fileChange/requestApproval" {
+        params: v2::FileChangeRequestApprovalParams,
+        response: v2::FileChangeRequestApprovalResponse,
+    },
+
+    /// DEPRECATED APIs below
     /// Request to approve a patch.
-    ApplyPatchApproval,
+    /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
+    ApplyPatchApproval {
+        params: v1::ApplyPatchApprovalParams,
+        response: v1::ApplyPatchApprovalResponse,
+    },
     /// Request to exec a command.
-    ExecCommandApproval,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ApplyPatchApprovalParams {
-    pub conversation_id: ConversationId,
-    /// Use to correlate this with [codex_core::protocol::PatchApplyBeginEvent]
-    /// and [codex_core::protocol::PatchApplyEndEvent].
-    pub call_id: String,
-    pub file_changes: HashMap<PathBuf, FileChange>,
-    /// Optional explanatory reason (e.g. request for extra write access).
-    pub reason: Option<String>,
-    /// When set, the agent is asking the user to allow writes under this root
-    /// for the remainder of the session (unclear if this is honored today).
-    pub grant_root: Option<PathBuf>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecCommandApprovalParams {
-    pub conversation_id: ConversationId,
-    /// Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent]
-    /// and [codex_core::protocol::ExecCommandEndEvent].
-    pub call_id: String,
-    pub command: Vec<String>,
-    pub cwd: PathBuf,
-    pub reason: Option<String>,
-    pub risk: Option<SandboxCommandAssessment>,
-    pub parsed_cmd: Vec<ParsedCommand>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-pub struct ExecCommandApprovalResponse {
-    pub decision: ReviewDecision,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-pub struct ApplyPatchApprovalResponse {
-    pub decision: ReviewDecision,
+    /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
+    ExecCommandApproval {
+        params: v1::ExecCommandApprovalParams,
+        response: v1::ExecCommandApprovalResponse,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -470,19 +516,40 @@ pub struct FuzzyFileSearchResponse {
 
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
+    Error => "error" (v2::ErrorNotification),
     ThreadStarted => "thread/started" (v2::ThreadStartedNotification),
+    ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
+    TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
+    TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
     AgentMessageDelta => "item/agentMessage/delta" (v2::AgentMessageDeltaNotification),
     CommandExecutionOutputDelta => "item/commandExecution/outputDelta" (v2::CommandExecutionOutputDeltaNotification),
+    TerminalInteraction => "item/commandExecution/terminalInteraction" (v2::TerminalInteractionNotification),
+    FileChangeOutputDelta => "item/fileChange/outputDelta" (v2::FileChangeOutputDeltaNotification),
     McpToolCallProgress => "item/mcpToolCall/progress" (v2::McpToolCallProgressNotification),
+    McpServerOauthLoginCompleted => "mcpServer/oauthLogin/completed" (v2::McpServerOauthLoginCompletedNotification),
     AccountUpdated => "account/updated" (v2::AccountUpdatedNotification),
     AccountRateLimitsUpdated => "account/rateLimits/updated" (v2::AccountRateLimitsUpdatedNotification),
+    ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),
+    ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
+    ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
+    ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
+
+    /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
+    WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
+
+    #[serde(rename = "account/login/completed")]
+    #[ts(rename = "account/login/completed")]
+    #[strum(serialize = "account/login/completed")]
+    AccountLoginCompleted(v2::AccountLoginCompletedNotification),
 
     /// DEPRECATED NOTIFICATIONS below
     AuthStatusChange(v1::AuthStatusChangeNotification),
+
+    /// Deprecated: use `account/login/completed` instead.
     LoginChatGptComplete(v1::LoginChatGptCompleteNotification),
     SessionConfigured(v1::SessionConfiguredNotification),
 }
@@ -495,17 +562,20 @@ client_notification_definitions! {
 mod tests {
     use super::*;
     use anyhow::Result;
+    use codex_protocol::ConversationId;
     use codex_protocol::account::PlanType;
+    use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::AskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::path::PathBuf;
 
     #[test]
     fn serialize_new_conversation() -> Result<()> {
         let request = ClientRequest::NewConversation {
             request_id: RequestId::Integer(42),
             params: v1::NewConversationParams {
-                model: Some("gpt-5-codex".to_string()),
+                model: Some("gpt-5.1-codex-max".to_string()),
                 model_provider: None,
                 profile: None,
                 cwd: None,
@@ -523,7 +593,7 @@ mod tests {
                 "method": "newConversation",
                 "id": 42,
                 "params": {
-                    "model": "gpt-5-codex",
+                    "model": "gpt-5.1-codex-max",
                     "modelProvider": null,
                     "profile": null,
                     "cwd": null,
@@ -578,13 +648,12 @@ mod tests {
     #[test]
     fn serialize_server_request() -> Result<()> {
         let conversation_id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
-        let params = ExecCommandApprovalParams {
+        let params = v1::ExecCommandApprovalParams {
             conversation_id,
             call_id: "call-42".to_string(),
             command: vec!["echo".to_string(), "hello".to_string()],
             cwd: PathBuf::from("/tmp"),
             reason: Some("because tests".to_string()),
-            risk: None,
             parsed_cmd: vec![ParsedCommand::Unknown {
                 cmd: "echo hello".to_string(),
             }],
@@ -604,7 +673,6 @@ mod tests {
                     "command": ["echo", "hello"],
                     "cwd": "/tmp",
                     "reason": "because tests",
-                    "risk": null,
                     "parsedCmd": [
                         {
                             "type": "unknown",
@@ -647,7 +715,7 @@ mod tests {
         };
         assert_eq!(
             json!({
-                "method": "account/login",
+                "method": "account/login/start",
                 "id": 2,
                 "params": {
                     "type": "apiKey",
@@ -663,11 +731,11 @@ mod tests {
     fn serialize_account_login_chatgpt() -> Result<()> {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(3),
-            params: v2::LoginAccountParams::ChatGpt,
+            params: v2::LoginAccountParams::Chatgpt,
         };
         assert_eq!(
             json!({
-                "method": "account/login",
+                "method": "account/login/start",
                 "id": 3,
                 "params": {
                     "type": "chatgpt"
@@ -698,12 +766,17 @@ mod tests {
     fn serialize_get_account() -> Result<()> {
         let request = ClientRequest::GetAccount {
             request_id: RequestId::Integer(5),
-            params: None,
+            params: v2::GetAccountParams {
+                refresh_token: false,
+            },
         };
         assert_eq!(
             json!({
                 "method": "account/read",
                 "id": 5,
+                "params": {
+                    "refreshToken": false
+                }
             }),
             serde_json::to_value(&request)?,
         );
@@ -712,19 +785,16 @@ mod tests {
 
     #[test]
     fn account_serializes_fields_in_camel_case() -> Result<()> {
-        let api_key = v2::Account::ApiKey {
-            api_key: "secret".to_string(),
-        };
+        let api_key = v2::Account::ApiKey {};
         assert_eq!(
             json!({
                 "type": "apiKey",
-                "apiKey": "secret",
             }),
             serde_json::to_value(&api_key)?,
         );
 
-        let chatgpt = v2::Account::ChatGpt {
-            email: Some("user@example.com".to_string()),
+        let chatgpt = v2::Account::Chatgpt {
+            email: "user@example.com".to_string(),
             plan_type: PlanType::Plus,
         };
         assert_eq!(
@@ -741,16 +811,16 @@ mod tests {
 
     #[test]
     fn serialize_list_models() -> Result<()> {
-        let request = ClientRequest::ListModels {
+        let request = ClientRequest::ModelList {
             request_id: RequestId::Integer(6),
-            params: v2::ListModelsParams::default(),
+            params: v2::ModelListParams::default(),
         };
         assert_eq!(
             json!({
                 "method": "model/list",
                 "id": 6,
                 "params": {
-                    "pageSize": null,
+                    "limit": null,
                     "cursor": null
                 }
             }),

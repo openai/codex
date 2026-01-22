@@ -3,7 +3,6 @@
 
 use core_test_support::responses;
 use core_test_support::test_codex_exec::test_codex_exec;
-use wiremock::matchers::any;
 
 /// Verify that when the server reports an error, `codex-exec` exits with a
 /// non-zero status code so automation can detect failures.
@@ -21,7 +20,7 @@ async fn exits_non_zero_when_server_reports_error() -> anyhow::Result<()> {
             "error": {"code": "rate_limit_exceeded", "message": "synthetic server error"}
         }
     })]);
-    responses::mount_sse_once_match(&server, any(), body).await;
+    responses::mount_sse_once(&server, body).await;
 
     test.cmd_with_server(&server)
         .arg("--skip-git-repo-check")

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_fake_rollout;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -15,12 +16,8 @@ use codex_core::protocol::EventMsg;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
-use serde_json::json;
-use std::fs;
-use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
-use uuid::Uuid;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -34,6 +31,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         "2025-01-02T12:00:00Z",
         "Hello A",
         Some("openai"),
+        None,
     )?;
     create_fake_rollout(
         codex_home.path(),
@@ -41,12 +39,14 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         "2025-01-01T13:00:00Z",
         "Hello B",
         Some("openai"),
+        None,
     )?;
     create_fake_rollout(
         codex_home.path(),
         "2025-01-01T12-00-00",
         "2025-01-01T12:00:00Z",
         "Hello C",
+        None,
         None,
     )?;
 
@@ -108,6 +108,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
         "2025-01-01T11:30:00Z",
         "Hello TP",
         Some("test-provider"),
+        None,
     )?;
 
     // Filtering by model provider should return only matching sessions.
@@ -358,69 +359,80 @@ async fn test_list_and_resume_conversations() -> Result<()> {
     Ok(())
 }
 
-fn create_fake_rollout(
-    codex_home: &Path,
-    filename_ts: &str,
-    meta_rfc3339: &str,
-    preview: &str,
-    model_provider: Option<&str>,
-) -> Result<()> {
-    let uuid = Uuid::new_v4();
-    // sessions/YYYY/MM/DD/ derived from filename_ts (YYYY-MM-DDThh-mm-ss)
-    let year = &filename_ts[0..4];
-    let month = &filename_ts[5..7];
-    let day = &filename_ts[8..10];
-    let dir = codex_home.join("sessions").join(year).join(month).join(day);
-    fs::create_dir_all(&dir)?;
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn list_conversations_fetches_through_filtered_pages() -> Result<()> {
+    let codex_home = TempDir::new()?;
 
-    let file_path = dir.join(format!("rollout-{filename_ts}-{uuid}.jsonl"));
-    let mut lines = Vec::new();
-    // Meta line with timestamp (flattened meta in payload for new schema)
-    let mut payload = json!({
-        "id": uuid,
-        "timestamp": meta_rfc3339,
-        "cwd": "/",
-        "originator": "codex",
-        "cli_version": "0.0.0",
-        "instructions": null,
-    });
-    if let Some(provider) = model_provider {
-        payload["model_provider"] = json!(provider);
+    // Only the last 3 conversations match the provider filter; request 3 and
+    // ensure pagination keeps fetching past non-matching pages.
+    let cases = [
+        (
+            "2025-03-04T12-00-00",
+            "2025-03-04T12:00:00Z",
+            "skip_provider",
+        ),
+        (
+            "2025-03-03T12-00-00",
+            "2025-03-03T12:00:00Z",
+            "skip_provider",
+        ),
+        (
+            "2025-03-02T12-00-00",
+            "2025-03-02T12:00:00Z",
+            "target_provider",
+        ),
+        (
+            "2025-03-01T12-00-00",
+            "2025-03-01T12:00:00Z",
+            "target_provider",
+        ),
+        (
+            "2025-02-28T12-00-00",
+            "2025-02-28T12:00:00Z",
+            "target_provider",
+        ),
+    ];
+
+    for (ts_file, ts_rfc, provider) in cases {
+        create_fake_rollout(
+            codex_home.path(),
+            ts_file,
+            ts_rfc,
+            "Hello",
+            Some(provider),
+            None,
+        )?;
     }
-    lines.push(
-        json!({
-            "timestamp": meta_rfc3339,
-            "type": "session_meta",
-            "payload": payload
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_list_conversations_request(ListConversationsParams {
+            page_size: Some(3),
+            cursor: None,
+            model_providers: Some(vec!["target_provider".to_string()]),
         })
-        .to_string(),
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ListConversationsResponse { items, next_cursor } =
+        to_response::<ListConversationsResponse>(resp)?;
+
+    assert_eq!(
+        items.len(),
+        3,
+        "should fetch across pages to satisfy the limit"
     );
-    // Minimal user message entry as a persisted response item (with envelope timestamp)
-    lines.push(
-        json!({
-            "timestamp": meta_rfc3339,
-            "type":"response_item",
-            "payload": {
-                "type":"message",
-                "role":"user",
-                "content":[{"type":"input_text","text": preview}]
-            }
-        })
-        .to_string(),
+    assert!(
+        items
+            .iter()
+            .all(|item| item.model_provider == "target_provider")
     );
-    // Add a matching user message event line to satisfy filters
-    lines.push(
-        json!({
-            "timestamp": meta_rfc3339,
-            "type":"event_msg",
-            "payload": {
-                "type":"user_message",
-                "message": preview,
-                "kind": "plain"
-            }
-        })
-        .to_string(),
-    );
-    fs::write(file_path, lines.join("\n") + "\n")?;
+    assert_eq!(next_cursor, None);
+
     Ok(())
 }

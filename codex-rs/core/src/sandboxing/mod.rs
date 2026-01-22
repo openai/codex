@@ -6,42 +6,45 @@ sandbox placement and transformation of portable CommandSpec into a
 ready‑to‑spawn environment.
 */
 
-pub mod assessment;
-
+use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::execute_exec_env;
 use crate::landlock::create_linux_sandbox_command_args;
 use crate::protocol::SandboxPolicy;
+#[cfg(target_os = "macos")]
 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+#[cfg(target_os = "macos")]
 use crate::seatbelt::create_seatbelt_command_args;
+#[cfg(target_os = "macos")]
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::SandboxablePreference;
+pub use codex_protocol::models::SandboxPermissions;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct CommandSpec {
     pub program: String,
     pub args: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
-    pub timeout_ms: Option<u64>,
-    pub with_escalated_permissions: Option<bool>,
+    pub expiration: ExecExpiration,
+    pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ExecEnv {
     pub command: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
-    pub timeout_ms: Option<u64>,
+    pub expiration: ExecExpiration,
     pub sandbox: SandboxType,
-    pub with_escalated_permissions: Option<bool>,
+    pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
     pub arg0: Option<String>,
 }
@@ -56,6 +59,9 @@ pub enum SandboxPreference {
 pub(crate) enum SandboxTransformError {
     #[error("missing codex-linux-sandbox executable path")]
     MissingLinuxSandboxExecutable,
+    #[cfg(not(target_os = "macos"))]
+    #[error("seatbelt sandbox is only available on macOS")]
+    SeatbeltUnavailable,
 }
 
 #[derive(Default)]
@@ -87,13 +93,13 @@ impl SandboxManager {
 
     pub(crate) fn transform(
         &self,
-        spec: &CommandSpec,
+        mut spec: CommandSpec,
         policy: &SandboxPolicy,
         sandbox: SandboxType,
         sandbox_policy_cwd: &Path,
         codex_linux_sandbox_exe: Option<&PathBuf>,
     ) -> Result<ExecEnv, SandboxTransformError> {
-        let mut env = spec.env.clone();
+        let mut env = spec.env;
         if !policy.has_full_network_access() {
             env.insert(
                 CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
@@ -102,11 +108,12 @@ impl SandboxManager {
         }
 
         let mut command = Vec::with_capacity(1 + spec.args.len());
-        command.push(spec.program.clone());
-        command.extend(spec.args.iter().cloned());
+        command.push(spec.program);
+        command.append(&mut spec.args);
 
         let (command, sandbox_env, arg0_override) = match sandbox {
             SandboxType::None => (command, HashMap::new(), None),
+            #[cfg(target_os = "macos")]
             SandboxType::MacosSeatbelt => {
                 let mut seatbelt_env = HashMap::new();
                 seatbelt_env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
@@ -117,6 +124,8 @@ impl SandboxManager {
                 full_command.append(&mut args);
                 (full_command, seatbelt_env, None)
             }
+            #[cfg(not(target_os = "macos"))]
+            SandboxType::MacosSeatbelt => return Err(SandboxTransformError::SeatbeltUnavailable),
             SandboxType::LinuxSeccomp => {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
@@ -145,12 +154,12 @@ impl SandboxManager {
 
         Ok(ExecEnv {
             command,
-            cwd: spec.cwd.clone(),
+            cwd: spec.cwd,
             env,
-            timeout_ms: spec.timeout_ms,
+            expiration: spec.expiration,
             sandbox,
-            with_escalated_permissions: spec.with_escalated_permissions,
-            justification: spec.justification.clone(),
+            sandbox_permissions: spec.sandbox_permissions,
+            justification: spec.justification,
             arg0: arg0_override,
         })
     }
@@ -161,9 +170,9 @@ impl SandboxManager {
 }
 
 pub async fn execute_env(
-    env: &ExecEnv,
+    env: ExecEnv,
     policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> crate::error::Result<ExecToolCallOutput> {
-    execute_exec_env(env.clone(), policy, stdout_stream).await
+    execute_exec_env(env, policy, stdout_stream).await
 }

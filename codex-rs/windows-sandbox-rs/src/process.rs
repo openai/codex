@@ -30,6 +30,7 @@ use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
 
+#[allow(dead_code)]
 pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     let mut items: Vec<(String, String)> =
         env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -49,6 +50,7 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     w
 }
 
+#[allow(dead_code)]
 fn quote_arg(a: &str) -> String {
     let needs_quote = a.is_empty() || a.chars().any(|ch| ch.is_whitespace() || ch == '"');
     if !needs_quote {
@@ -79,6 +81,8 @@ fn quote_arg(a: &str) -> String {
     out.push('"');
     out
 }
+
+#[allow(dead_code)]
 unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
     for kind in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
         let h = GetStdHandle(kind);
@@ -96,12 +100,17 @@ unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
     Ok(())
 }
 
+/// # Safety
+/// Caller must provide a valid primary token handle (`h_token`) with appropriate access,
+/// and the `argv`, `cwd`, and `env_map` must remain valid for the duration of the call.
+#[allow(dead_code)]
 pub unsafe fn create_process_as_user(
     h_token: HANDLE,
     argv: &[String],
     cwd: &Path,
     env_map: &HashMap<String, String>,
     logs_base_dir: Option<&Path>,
+    stdio: Option<(HANDLE, HANDLE, HANDLE)>,
 ) -> Result<(PROCESS_INFORMATION, STARTUPINFOW)> {
     let cmdline_str = argv
         .iter()
@@ -117,15 +126,37 @@ pub unsafe fn create_process_as_user(
     // Point explicitly at the interactive desktop.
     let desktop = to_wide("Winsta0\\Default");
     si.lpDesktop = desktop.as_ptr() as *mut u16;
-    ensure_inheritable_stdio(&mut si)?;
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
+    // Ensure handles are inheritable when custom stdio is supplied.
+    let inherit_handles = match stdio {
+        Some((stdin_h, stdout_h, stderr_h)) => {
+            si.dwFlags |= STARTF_USESTDHANDLES;
+            si.hStdInput = stdin_h;
+            si.hStdOutput = stdout_h;
+            si.hStdError = stderr_h;
+            for h in [stdin_h, stdout_h, stderr_h] {
+                if SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) == 0 {
+                    return Err(anyhow!(
+                        "SetHandleInformation failed for stdio handle: {}",
+                        GetLastError()
+                    ));
+                }
+            }
+            true
+        }
+        None => {
+            ensure_inheritable_stdio(&mut si)?;
+            true
+        }
+    };
+
     let ok = CreateProcessAsUserW(
         h_token,
         std::ptr::null(),
         cmdline.as_mut_ptr(),
         std::ptr::null_mut(),
         std::ptr::null_mut(),
-        1,
+        inherit_handles as i32,
         CREATE_UNICODE_ENVIRONMENT,
         env_block.as_ptr() as *mut c_void,
         to_wide(cwd).as_ptr(),
@@ -149,6 +180,9 @@ pub unsafe fn create_process_as_user(
     Ok((pi, si))
 }
 
+/// # Safety
+/// Caller must provide valid process information handles.
+#[allow(dead_code)]
 pub unsafe fn wait_process_and_exitcode(pi: &PROCESS_INFORMATION) -> Result<i32> {
     let res = WaitForSingleObject(pi.hProcess, INFINITE);
     if res != 0 {
@@ -161,6 +195,9 @@ pub unsafe fn wait_process_and_exitcode(pi: &PROCESS_INFORMATION) -> Result<i32>
     Ok(code as i32)
 }
 
+/// # Safety
+/// Caller must close the returned job handle.
+#[allow(dead_code)]
 pub unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
     let h = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
     if h == 0 {
@@ -183,6 +220,9 @@ pub unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
     Ok(h)
 }
 
+/// # Safety
+/// Caller must pass valid handles for a job object and a process.
+#[allow(dead_code)]
 pub unsafe fn assign_to_job(h_job: HANDLE, h_process: HANDLE) -> Result<()> {
     if AssignProcessToJobObject(h_job, h_process) == 0 {
         return Err(anyhow!(

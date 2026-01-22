@@ -102,12 +102,10 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
     deny_syscall(libc::SYS_getsockname);
     deny_syscall(libc::SYS_shutdown);
     deny_syscall(libc::SYS_sendto);
-    deny_syscall(libc::SYS_sendmsg);
     deny_syscall(libc::SYS_sendmmsg);
     // NOTE: allowing recvfrom allows some tools like: `cargo clippy` to run
     // with their socketpair + child processes for sub-proc management
     // deny_syscall(libc::SYS_recvfrom);
-    deny_syscall(libc::SYS_recvmsg);
     deny_syscall(libc::SYS_recvmmsg);
     deny_syscall(libc::SYS_getsockopt);
     deny_syscall(libc::SYS_setsockopt);

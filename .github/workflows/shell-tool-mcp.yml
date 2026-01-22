@@ -1,0 +1,405 @@
+name: shell-tool-mcp
+
+on:
+  workflow_call:
+    inputs:
+      release-version:
+        description: Version to publish (x.y.z or x.y.z-alpha.N). Defaults to GITHUB_REF_NAME when it starts with rust-v.
+        required: false
+        type: string
+      release-tag:
+        description: Tag name to use when downloading release artifacts (defaults to rust-v<version>).
+        required: false
+        type: string
+      publish:
+        description: Whether to publish to npm when the version is releasable.
+        required: false
+        default: true
+        type: boolean
+
+env:
+  NODE_VERSION: 22
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      release_tag: ${{ steps.compute.outputs.release_tag }}
+      should_publish: ${{ steps.compute.outputs.should_publish }}
+      npm_tag: ${{ steps.compute.outputs.npm_tag }}
+    steps:
+      - name: Compute version and tags
+        id: compute
+        run: |
+          set -euo pipefail
+
+          version="${{ inputs.release-version }}"
+          release_tag="${{ inputs.release-tag }}"
+
+          if [[ -z "$version" ]]; then
+            if [[ -n "$release_tag" && "$release_tag" =~ ^rust-v.+ ]]; then
+              version="${release_tag#rust-v}"
+            elif [[ "${GITHUB_REF_NAME:-}" =~ ^rust-v.+ ]]; then
+              version="${GITHUB_REF_NAME#rust-v}"
+              release_tag="${GITHUB_REF_NAME}"
+            else
+              echo "release-version is required when GITHUB_REF_NAME is not a rust-v tag."
+              exit 1
+            fi
+          fi
+
+          if [[ -z "$release_tag" ]]; then
+            release_tag="rust-v${version}"
+          fi
+
+          npm_tag=""
+          should_publish="false"
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            should_publish="true"
+          elif [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
+            should_publish="true"
+            npm_tag="alpha"
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+          echo "npm_tag=${npm_tag}" >> "$GITHUB_OUTPUT"
+          echo "should_publish=${should_publish}" >> "$GITHUB_OUTPUT"
+
+  rust-binaries:
+    name: Build Rust - ${{ matrix.target }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: codex-rs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+          - runner: macos-15-xlarge
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            install_musl: true
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            install_musl: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@1.90
+        with:
+          targets: ${{ matrix.target }}
+
+      - if: ${{ matrix.install_musl }}
+        name: Install musl build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools pkg-config
+
+      - name: Build exec server binaries
+        run: cargo build --release --target ${{ matrix.target }} --bin codex-exec-mcp-server --bin codex-execve-wrapper
+
+      - name: Stage exec server binaries
+        run: |
+          dest="${GITHUB_WORKSPACE}/artifacts/vendor/${{ matrix.target }}"
+          mkdir -p "$dest"
+          cp "target/${{ matrix.target }}/release/codex-exec-mcp-server" "$dest/"
+          cp "target/${{ matrix.target }}/release/codex-execve-wrapper" "$dest/"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: shell-tool-mcp-rust-${{ matrix.target }}
+          path: artifacts/**
+          if-no-files-found: error
+
+  bash-linux:
+    name: Build Bash (Linux) - ${{ matrix.variant }} - ${{ matrix.target }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    container:
+      image: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: ubuntu-24.04
+            image: ubuntu:24.04
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: ubuntu-22.04
+            image: ubuntu:22.04
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: debian-12
+            image: debian:12
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: debian-11
+            image: debian:11
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            variant: centos-9
+            image: quay.io/centos/centos:stream9
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: ubuntu-24.04
+            image: arm64v8/ubuntu:24.04
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: ubuntu-22.04
+            image: arm64v8/ubuntu:22.04
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: ubuntu-20.04
+            image: arm64v8/ubuntu:20.04
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: debian-12
+            image: arm64v8/debian:12
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: debian-11
+            image: arm64v8/debian:11
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            variant: centos-9
+            image: quay.io/centos/centos:stream9
+    steps:
+      - name: Install build prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential bison autoconf gettext
+          elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y git gcc gcc-c++ make bison autoconf gettext
+          elif command -v yum >/dev/null 2>&1; then
+            yum install -y git gcc gcc-c++ make bison autoconf gettext
+          else
+            echo "Unsupported package manager in container"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build patched Bash
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/bminor/bash /tmp/bash
+          cd /tmp/bash
+          git fetch --depth 1 origin a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
+          git checkout a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
+          git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/bash-exec-wrapper.patch"
+          ./configure --without-bash-malloc
+          cores="$(command -v nproc >/dev/null 2>&1 && nproc || getconf _NPROCESSORS_ONLN)"
+          make -j"${cores}"
+
+          dest="${GITHUB_WORKSPACE}/artifacts/vendor/${{ matrix.target }}/bash/${{ matrix.variant }}"
+          mkdir -p "$dest"
+          cp bash "$dest/bash"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: shell-tool-mcp-bash-${{ matrix.target }}-${{ matrix.variant }}
+          path: artifacts/**
+          if-no-files-found: error
+
+  bash-darwin:
+    name: Build Bash (macOS) - ${{ matrix.variant }} - ${{ matrix.target }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+            variant: macos-15
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            variant: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build patched Bash
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/bminor/bash /tmp/bash
+          cd /tmp/bash
+          git fetch --depth 1 origin a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
+          git checkout a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
+          git apply "${GITHUB_WORKSPACE}/shell-tool-mcp/patches/bash-exec-wrapper.patch"
+          ./configure --without-bash-malloc
+          cores="$(getconf _NPROCESSORS_ONLN)"
+          make -j"${cores}"
+
+          dest="${GITHUB_WORKSPACE}/artifacts/vendor/${{ matrix.target }}/bash/${{ matrix.variant }}"
+          mkdir -p "$dest"
+          cp bash "$dest/bash"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: shell-tool-mcp-bash-${{ matrix.target }}-${{ matrix.variant }}
+          path: artifacts/**
+          if-no-files-found: error
+
+  package:
+    name: Package npm module
+    needs:
+      - metadata
+      - rust-binaries
+      - bash-linux
+      - bash-darwin
+    runs-on: ubuntu-latest
+    env:
+      PACKAGE_VERSION: ${{ needs.metadata.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.8.1
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (shell-tool-mcp)
+        run: pnpm --filter @openai/codex-shell-tool-mcp run build
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble staging directory
+        id: staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          staging="${STAGING_DIR}"
+          mkdir -p "$staging" "$staging/vendor"
+          cp shell-tool-mcp/README.md "$staging/"
+          cp shell-tool-mcp/package.json "$staging/"
+          cp -R shell-tool-mcp/bin "$staging/"
+
+          found_vendor="false"
+          shopt -s nullglob
+          for vendor_dir in artifacts/*/vendor; do
+            rsync -av "$vendor_dir/" "$staging/vendor/"
+            found_vendor="true"
+          done
+          if [[ "$found_vendor" == "false" ]]; then
+            echo "No vendor payloads were downloaded."
+            exit 1
+          fi
+
+          node - <<'NODE'
+            import fs from "node:fs";
+            import path from "node:path";
+
+            const stagingDir = process.env.STAGING_DIR;
+            const version = process.env.PACKAGE_VERSION;
+            const pkgPath = path.join(stagingDir, "package.json");
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+            pkg.version = version;
+            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+          NODE
+
+          echo "dir=$staging" >> "$GITHUB_OUTPUT"
+        env:
+          STAGING_DIR: ${{ runner.temp }}/shell-tool-mcp
+
+      - name: Ensure binaries are executable
+        run: |
+          set -euo pipefail
+          staging="${{ steps.staging.outputs.dir }}"
+          chmod +x \
+            "$staging"/vendor/*/codex-exec-mcp-server \
+            "$staging"/vendor/*/codex-execve-wrapper \
+            "$staging"/vendor/*/bash/*/bash
+
+      - name: Create npm tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/npm
+          staging="${{ steps.staging.outputs.dir }}"
+          pack_info=$(cd "$staging" && npm pack --ignore-scripts --json --pack-destination "${GITHUB_WORKSPACE}/dist/npm")
+          filename=$(PACK_INFO="$pack_info" node -e 'const data = JSON.parse(process.env.PACK_INFO); console.log(data[0].filename);')
+          mv "dist/npm/${filename}" "dist/npm/codex-shell-tool-mcp-npm-${PACKAGE_VERSION}.tgz"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: codex-shell-tool-mcp-npm
+          path: dist/npm/codex-shell-tool-mcp-npm-${{ env.PACKAGE_VERSION }}.tgz
+          if-no-files-found: error
+
+  publish:
+    name: Publish npm package
+    needs:
+      - metadata
+      - package
+    if: ${{ inputs.publish && needs.metadata.outputs.should_publish == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.8.1
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+          scope: "@openai"
+
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Download npm tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: codex-shell-tool-mcp-npm
+          path: dist/npm
+
+      - name: Publish to npm
+        env:
+          NPM_TAG: ${{ needs.metadata.outputs.npm_tag }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_args=()
+          if [[ -n "${NPM_TAG}" ]]; then
+            tag_args+=(--tag "${NPM_TAG}")
+          fi
+          npm publish "dist/npm/codex-shell-tool-mcp-npm-${VERSION}.tgz" "${tag_args[@]}"

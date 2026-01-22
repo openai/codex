@@ -1,3 +1,4 @@
+use crate::key_hint::is_altgr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -222,13 +223,19 @@ impl TextArea {
         match event {
             // Some terminals (or configurations) send Control key chords as
             // C0 control characters without reporting the CONTROL modifier.
-            // Handle common fallbacks for Ctrl-B/Ctrl-F here so they don't get
+            // Handle common fallbacks for Ctrl-B/F/P/N here so they don't get
             // inserted as literal control bytes.
             KeyEvent { code: KeyCode::Char('\u{0002}'), modifiers: KeyModifiers::NONE, .. } /* ^B */ => {
                 self.move_cursor_left();
             }
             KeyEvent { code: KeyCode::Char('\u{0006}'), modifiers: KeyModifiers::NONE, .. } /* ^F */ => {
                 self.move_cursor_right();
+            }
+            KeyEvent { code: KeyCode::Char('\u{0010}'), modifiers: KeyModifiers::NONE, .. } /* ^P */ => {
+                self.move_cursor_up();
+            }
+            KeyEvent { code: KeyCode::Char('\u{000e}'), modifiers: KeyModifiers::NONE, .. } /* ^N */ => {
+                self.move_cursor_down();
             }
             KeyEvent {
                 code: KeyCode::Char(c),
@@ -254,6 +261,13 @@ impl TextArea {
             } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
                 self.delete_backward_word()
             },
+            // Windows AltGr generates ALT|CONTROL; treat as a plain character input unless
+            // we match a specific Control+Alt binding above.
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                ..
+            } if is_altgr(modifiers) => self.insert_str(&c.to_string()),
             KeyEvent {
                 code: KeyCode::Backspace,
                 modifiers: KeyModifiers::ALT,
@@ -357,6 +371,20 @@ impl TextArea {
                 ..
             } => {
                 self.move_cursor_right();
+            }
+            KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.move_cursor_up();
+            }
+            KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.move_cursor_down();
             }
             // Some terminals send Alt+Arrow for word-wise movement:
             // Option/Left -> Alt+Left (previous word start)
@@ -1517,6 +1545,18 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
         assert_eq!(t.text(), "124");
         assert_eq!(t.cursor(), 3);
+    }
+
+    #[cfg_attr(not(windows), ignore = "AltGr modifier only applies on Windows")]
+    #[test]
+    fn altgr_ctrl_alt_char_inserts_literal() {
+        let mut t = ta_with("");
+        t.input(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ));
+        assert_eq!(t.text(), "c");
+        assert_eq!(t.cursor(), 1);
     }
 
     #[test]

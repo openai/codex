@@ -1,0 +1,13 @@
+---
+source: tui/src/model_migration.rs
+assertion_line: 392
+expression: terminal.backend()
+---
+
+> Try gpt-5.1
+
+  We recommend switching from gpt-5 to gpt-5.1.
+
+  Broad world knowledge with strong general reasoning.
+
+  Press enter to continue

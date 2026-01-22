@@ -1,4 +1,5 @@
 use crate::bash::parse_shell_lc_plain_commands;
+use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 
 pub fn is_known_safe_command(command: &[String]) -> bool {
     let command: Vec<String> = command
@@ -11,12 +12,9 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
             }
         })
         .collect();
-    #[cfg(target_os = "windows")]
-    {
-        use super::windows_safe_commands::is_safe_command_windows;
-        if is_safe_command_windows(&command) {
-            return true;
-        }
+
+    if is_safe_command_windows(&command) {
+        return true;
     }
 
     if is_safe_to_call_with_exec(&command) {
@@ -49,23 +47,46 @@ fn is_safe_to_call_with_exec(command: &[String]) -> bool {
         .file_name()
         .and_then(|osstr| osstr.to_str())
     {
+        Some(cmd) if cfg!(target_os = "linux") && matches!(cmd, "numfmt" | "tac") => true,
+
         #[rustfmt::skip]
         Some(
             "cat" |
             "cd" |
+            "cut" |
             "echo" |
+            "expr" |
             "false" |
             "grep" |
             "head" |
+            "id" |
             "ls" |
             "nl" |
+            "paste" |
             "pwd" |
+            "rev" |
+            "seq" |
+            "stat" |
             "tail" |
+            "tr" |
             "true" |
+            "uname" |
+            "uniq" |
             "wc" |
-            "which") => {
+            "which" |
+            "whoami") => {
             true
         },
+
+        Some("base64") => {
+            const UNSAFE_BASE64_OPTIONS: &[&str] = &["-o", "--output"];
+
+            !command.iter().skip(1).any(|arg| {
+                UNSAFE_BASE64_OPTIONS.contains(&arg.as_str())
+                    || arg.starts_with("--output=")
+                    || (arg.starts_with("-o") && arg != "-o")
+            })
+        }
 
         Some("find") => {
             // Certain options to `find` can delete files, write to files, or
@@ -186,6 +207,7 @@ mod tests {
     fn known_safe_examples() {
         assert!(is_safe_to_call_with_exec(&vec_str(&["ls"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&["git", "status"])));
+        assert!(is_safe_to_call_with_exec(&vec_str(&["base64"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&[
             "sed", "-n", "1,5p", "file.txt"
         ])));
@@ -199,6 +221,14 @@ mod tests {
         assert!(is_safe_to_call_with_exec(&vec_str(&[
             "find", ".", "-name", "file.txt"
         ])));
+
+        if cfg!(target_os = "linux") {
+            assert!(is_safe_to_call_with_exec(&vec_str(&["numfmt", "1000"])));
+            assert!(is_safe_to_call_with_exec(&vec_str(&["tac", "Cargo.toml"])));
+        } else {
+            assert!(!is_safe_to_call_with_exec(&vec_str(&["numfmt", "1000"])));
+            assert!(!is_safe_to_call_with_exec(&vec_str(&["tac", "Cargo.toml"])));
+        }
     }
 
     #[test]
@@ -236,6 +266,21 @@ mod tests {
     }
 
     #[test]
+    fn base64_output_options_are_unsafe() {
+        for args in [
+            vec_str(&["base64", "-o", "out.bin"]),
+            vec_str(&["base64", "--output", "out.bin"]),
+            vec_str(&["base64", "--output=out.bin"]),
+            vec_str(&["base64", "-ob64.txt"]),
+        ] {
+            assert!(
+                !is_safe_to_call_with_exec(&args),
+                "expected {args:?} to be considered unsafe due to output option"
+            );
+        }
+    }
+
+    #[test]
     fn ripgrep_rules() {
         // Safe ripgrep invocations – none of the unsafe flags are present.
         assert!(is_safe_to_call_with_exec(&vec_str(&[
@@ -267,6 +312,20 @@ mod tests {
                 "expected {args:?} to be considered unsafe due to external-command flag",
             );
         }
+    }
+
+    #[test]
+    fn windows_powershell_full_path_is_safe() {
+        if !cfg!(windows) {
+            // Windows only because on Linux path splitting doesn't handle `/` separators properly
+            return;
+        }
+
+        assert!(is_known_safe_command(&vec_str(&[
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            "-Command",
+            "Get-Location",
+        ])));
     }
 
     #[test]

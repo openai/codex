@@ -1,0 +1,3 @@
+*** Begin Patch
+*** Delete File: missing.txt
+*** End Patch

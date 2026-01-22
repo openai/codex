@@ -10,6 +10,7 @@ use std::time::Duration;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_protocol::ConversationId;
+use codex_protocol::protocol::SessionSource;
 use tracing_subscriber::fmt::writer::MakeWriter;
 
 const DEFAULT_MAX_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
@@ -174,6 +175,7 @@ impl CodexLogSnapshot {
         reason: Option<&str>,
         include_logs: bool,
         rollout_path: Option<&std::path::Path>,
+        session_source: Option<SessionSource>,
     ) -> Result<()> {
         use std::collections::BTreeMap;
         use std::fs;
@@ -203,6 +205,9 @@ impl CodexLogSnapshot {
             (String::from("classification"), classification.to_string()),
             (String::from("cli_version"), cli_version.to_string()),
         ]);
+        if let Some(source) = session_source.as_ref() {
+            tags.insert(String::from("session_source"), source.to_string());
+        }
         if let Some(r) = reason {
             tags.insert(String::from("reason"), r.to_string());
         }

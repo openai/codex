@@ -95,14 +95,6 @@ function detectPackageManager() {
     return "bun";
   }
 
-  if (
-    process.env.BUN_INSTALL ||
-    process.env.BUN_INSTALL_GLOBAL_DIR ||
-    process.env.BUN_INSTALL_BIN_DIR
-  ) {
-    return "bun";
-  }
-
   return userAgent ? "npm" : null;
 }
 

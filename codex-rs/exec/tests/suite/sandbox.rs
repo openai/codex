@@ -110,6 +110,45 @@ if __name__ == '__main__':
 }
 
 #[tokio::test]
+async fn python_getpwuid_works_under_sandbox() {
+    core_test_support::skip_if_sandbox!();
+
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .status()
+        .is_err()
+    {
+        eprintln!("python3 not found in PATH, skipping test.");
+        return;
+    }
+
+    let policy = SandboxPolicy::ReadOnly;
+    let command_cwd = std::env::current_dir().expect("should be able to get current dir");
+    let sandbox_cwd = command_cwd.clone();
+
+    let mut child = spawn_command_under_sandbox(
+        vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            "import pwd, os; print(pwd.getpwuid(os.getuid()))".to_string(),
+        ],
+        command_cwd,
+        &policy,
+        sandbox_cwd.as_path(),
+        StdioPolicy::RedirectForShellTool,
+        HashMap::new(),
+    )
+    .await
+    .expect("should be able to spawn python under sandbox");
+
+    let status = child
+        .wait()
+        .await
+        .expect("should be able to wait for child process");
+    assert!(status.success(), "python exited with {status:?}");
+}
+
+#[tokio::test]
 async fn sandbox_distinguishes_command_and_policy_cwds() {
     core_test_support::skip_if_sandbox!();
     let temp = tempfile::tempdir().expect("should be able to create temp dir");

@@ -10,16 +10,8 @@ struct Alias {
 
 const ALIASES: &[Alias] = &[
     Alias {
-        legacy_key: "experimental_sandbox_command_assessment",
-        feature: Feature::SandboxCommandAssessment,
-    },
-    Alias {
         legacy_key: "experimental_use_unified_exec_tool",
         feature: Feature::UnifiedExec,
-    },
-    Alias {
-        legacy_key: "experimental_use_exec_command_tool",
-        feature: Feature::StreamableShell,
     },
     Alias {
         legacy_key: "experimental_use_rmcp_client",
@@ -52,9 +44,7 @@ pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
 #[derive(Debug, Default)]
 pub struct LegacyFeatureToggles {
     pub include_apply_patch_tool: Option<bool>,
-    pub experimental_sandbox_command_assessment: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
-    pub experimental_use_exec_command_tool: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
     pub experimental_use_rmcp_client: Option<bool>,
     pub tools_web_search: Option<bool>,
@@ -71,21 +61,9 @@ impl LegacyFeatureToggles {
         );
         set_if_some(
             features,
-            Feature::SandboxCommandAssessment,
-            self.experimental_sandbox_command_assessment,
-            "experimental_sandbox_command_assessment",
-        );
-        set_if_some(
-            features,
             Feature::ApplyPatchFreeform,
             self.experimental_use_freeform_apply_patch,
             "experimental_use_freeform_apply_patch",
-        );
-        set_if_some(
-            features,
-            Feature::StreamableShell,
-            self.experimental_use_exec_command_tool,
-            "experimental_use_exec_command_tool",
         );
         set_if_some(
             features,

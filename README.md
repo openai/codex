@@ -69,7 +69,9 @@ Codex can access MCP servers. To configure them, refer to the [config docs](./do
 
 Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
 
----
+### Execpolicy
+
+See the [Execpolicy quickstart](./docs/execpolicy.md) to set up rules that govern what commands Codex can execute.
 
 ### Docs & FAQ
 
@@ -83,6 +85,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 - [**Configuration**](./docs/config.md)
   - [Example config](./docs/example-config.md)
 - [**Sandbox & approvals**](./docs/sandbox.md)
+- [**Execpolicy quickstart**](./docs/execpolicy.md)
 - [**Authentication**](./docs/authentication.md)
   - [Auth methods](./docs/authentication.md#forcing-a-specific-auth-method-advanced)
   - [Login on a "Headless" machine](./docs/authentication.md#connecting-on-a-headless-machine)

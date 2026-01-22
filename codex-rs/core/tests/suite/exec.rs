@@ -8,6 +8,7 @@ use codex_core::exec::ExecToolCallOutput;
 use codex_core::exec::SandboxType;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::sandboxing::SandboxPermissions;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use tempfile::TempDir;
 
@@ -32,16 +33,16 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
     let params = ExecParams {
         command: cmd.iter().map(ToString::to_string).collect(),
         cwd: tmp.path().to_path_buf(),
-        timeout_ms: Some(1000),
+        expiration: 1000.into(),
         env: HashMap::new(),
-        with_escalated_permissions: None,
+        sandbox_permissions: SandboxPermissions::UseDefault,
         justification: None,
         arg0: None,
     };
 
     let policy = SandboxPolicy::new_read_only_policy();
 
-    process_exec_tool_call(params, sandbox_type, &policy, tmp.path(), &None, None).await
+    process_exec_tool_call(params, &policy, tmp.path(), &None, None).await
 }
 
 /// Command succeeds with exit code 0 normally

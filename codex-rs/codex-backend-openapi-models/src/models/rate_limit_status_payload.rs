@@ -23,6 +23,13 @@ pub struct RateLimitStatusPayload {
         skip_serializing_if = "Option::is_none"
     )]
     pub rate_limit: Option<Option<Box<models::RateLimitStatusDetails>>>,
+    #[serde(
+        rename = "credits",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub credits: Option<Option<Box<models::CreditStatusDetails>>>,
 }
 
 impl RateLimitStatusPayload {
@@ -30,12 +37,15 @@ impl RateLimitStatusPayload {
         RateLimitStatusPayload {
             plan_type,
             rate_limit: None,
+            credits: None,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum PlanType {
+    #[serde(rename = "guest")]
+    Guest,
     #[serde(rename = "free")]
     Free,
     #[serde(rename = "go")]
@@ -44,6 +54,8 @@ pub enum PlanType {
     Plus,
     #[serde(rename = "pro")]
     Pro,
+    #[serde(rename = "free_workspace")]
+    FreeWorkspace,
     #[serde(rename = "team")]
     Team,
     #[serde(rename = "business")]
@@ -52,6 +64,8 @@ pub enum PlanType {
     Education,
     #[serde(rename = "quorum")]
     Quorum,
+    #[serde(rename = "k12")]
+    K12,
     #[serde(rename = "enterprise")]
     Enterprise,
     #[serde(rename = "edu")]
@@ -60,6 +74,6 @@ pub enum PlanType {
 
 impl Default for PlanType {
     fn default() -> PlanType {
-        Self::Free
+        Self::Guest
     }
 }

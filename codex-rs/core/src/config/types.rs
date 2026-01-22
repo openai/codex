@@ -3,13 +3,15 @@
 // Note this file should generally be restricted to simple struct/enum
 // definitions that do not contain business logic.
 
-use serde::Deserializer;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde::de::Error as SerdeError;
 
@@ -256,8 +258,8 @@ pub struct History {
     /// If true, history entries will not be written to disk.
     pub persistence: HistoryPersistence,
 
-    /// If set, the maximum size of the history file in bytes.
-    /// TODO(mbolin): Not currently honored.
+    /// If set, the maximum size of the history file in bytes. The oldest entries
+    /// are dropped once the file exceeds this limit.
     pub max_bytes: Option<usize>,
 }
 
@@ -282,6 +284,14 @@ pub enum OtelHttpProtocol {
     Json,
 }
 
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub struct OtelTlsConfig {
+    pub ca_certificate: Option<AbsolutePathBuf>,
+    pub client_certificate: Option<AbsolutePathBuf>,
+    pub client_private_key: Option<AbsolutePathBuf>,
+}
+
 /// Which OTEL exporter to use.
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -289,12 +299,18 @@ pub enum OtelExporterKind {
     None,
     OtlpHttp {
         endpoint: String,
+        #[serde(default)]
         headers: HashMap<String, String>,
         protocol: OtelHttpProtocol,
+        #[serde(default)]
+        tls: Option<OtelTlsConfig>,
     },
     OtlpGrpc {
         endpoint: String,
+        #[serde(default)]
         headers: HashMap<String, String>,
+        #[serde(default)]
+        tls: Option<OtelTlsConfig>,
     },
 }
 
@@ -338,7 +354,7 @@ pub enum Notifications {
 
 impl Default for Notifications {
     fn default() -> Self {
-        Self::Enabled(false)
+        Self::Enabled(true)
     }
 }
 
@@ -346,9 +362,23 @@ impl Default for Notifications {
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {
     /// Enable desktop notifications from the TUI when the terminal is unfocused.
-    /// Defaults to `false`.
+    /// Defaults to `true`.
     #[serde(default)]
     pub notifications: Notifications,
+
+    /// Enable animations (welcome screen, shimmer effects, spinners).
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub animations: bool,
+
+    /// Show startup tooltips in the TUI welcome screen.
+    /// Defaults to `true`.
+    #[serde(default = "default_true")]
+    pub show_tooltips: bool,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 /// Settings for notices we display to users via the tui and app-server clients
@@ -358,6 +388,18 @@ pub struct Tui {
 pub struct Notice {
     /// Tracks whether the user has acknowledged the full access warning prompt.
     pub hide_full_access_warning: Option<bool>,
+    /// Tracks whether the user has acknowledged the Windows world-writable directories warning.
+    pub hide_world_writable_warning: Option<bool>,
+    /// Tracks whether the user opted out of the rate limit model switch reminder.
+    pub hide_rate_limit_model_nudge: Option<bool>,
+    /// Tracks whether the user has seen the model migration prompt
+    pub hide_gpt5_1_migration_prompt: Option<bool>,
+    /// Tracks whether the user has seen the gpt-5.1-codex-max migration prompt
+    #[serde(rename = "hide_gpt-5.1-codex-max_migration_prompt")]
+    pub hide_gpt_5_1_codex_max_migration_prompt: Option<bool>,
+    /// Tracks acknowledged model migrations as old->new model slug mappings.
+    #[serde(default)]
+    pub model_migrations: BTreeMap<String, String>,
 }
 
 impl Notice {
@@ -482,14 +524,6 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             use_profile,
         }
     }
-}
-
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq, Default, Hash)]
-#[serde(rename_all = "kebab-case")]
-pub enum ReasoningSummaryFormat {
-    #[default]
-    None,
-    Experimental,
 }
 
 #[cfg(test)]

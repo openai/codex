@@ -1,7 +1,8 @@
 [package]
-edition = "2024"
 name = "mcp_test_support"
-version = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [lib]
 path = "lib.rs"
@@ -23,3 +24,5 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
 ] }
 wiremock = { workspace = true }
+core_test_support = { path = "../../../core/tests/common" }
+shlex = { workspace = true }

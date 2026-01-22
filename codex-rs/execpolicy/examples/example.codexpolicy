@@ -1,0 +1,77 @@
+
+# Example policy to illustrate syntax; not comprehensive and not recommended for actual use.
+
+prefix_rule(
+    pattern = ["git", "reset", "--hard"],
+    decision = "forbidden",
+    match = [
+        ["git", "reset", "--hard"],
+    ],
+    not_match = [
+        ["git", "reset", "--keep"],
+        "git reset --merge",
+    ],
+)
+
+prefix_rule(
+    pattern = ["ls"],
+    match = [
+        ["ls"],
+        ["ls", "-l"],
+        ["ls", "-a", "."],
+    ],
+)
+
+prefix_rule(
+    pattern = ["cat"],
+    match = [
+        ["cat", "file.txt"],
+        ["cat", "-n", "README.md"],
+    ],
+)
+
+prefix_rule(
+    pattern = ["cp"],
+    decision = "prompt",
+    match = [
+        ["cp", "foo", "bar"],
+        "cp -r src dest",
+    ],
+)
+
+prefix_rule(
+    pattern = ["head"],
+    match = [
+        ["head", "README.md"],
+        ["head", "-n", "5", "CHANGELOG.md"],
+    ],
+    not_match = [
+        ["hea", "-n", "1,5p", "CHANGELOG.md"],
+    ],
+)
+
+prefix_rule(
+    pattern = ["printenv"],
+    match = [
+        ["printenv"],
+        ["printenv", "PATH"],
+    ],
+    not_match = [
+        ["print", "-0"],
+    ],
+)
+
+prefix_rule(
+    pattern = ["pwd"],
+    match = [
+        ["pwd"],
+    ],
+)
+
+prefix_rule(
+    pattern = ["which"],
+    match = [
+        ["which", "python3"],
+        ["which", "-a", "python3"],
+    ],
+)

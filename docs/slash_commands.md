@@ -16,6 +16,7 @@ Control Codex’s behavior during an interactive session with slash commands.
 | `/approvals` | choose what Codex can do without approval                   |
 | `/review`    | review my current changes and find issues                   |
 | `/new`       | start a new chat during a conversation                      |
+| `/resume`    | resume an old chat                                          |
 | `/init`      | create an AGENTS.md file with instructions for Codex        |
 | `/compact`   | summarize conversation to prevent hitting the context limit |
 | `/undo`      | ask Codex to undo a turn                                    |

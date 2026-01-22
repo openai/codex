@@ -1,3 +1,4 @@
+use codex_core::features::Feature;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -8,14 +9,12 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_custom_tool_call;
 use core_test_support::responses::ev_function_call;
-use core_test_support::responses::mount_sse;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event_with_timeout;
-use std::time::Duration;
+use core_test_support::wait_for_event;
 use tracing_test::traced_test;
 
 use core_test_support::responses::ev_local_shell_call;
@@ -38,12 +37,7 @@ async fn responses_api_emits_api_request_event() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -84,12 +78,7 @@ async fn process_sse_emits_tracing_for_output_item() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -112,8 +101,7 @@ async fn process_sse_emits_failed_event_on_parse_error() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
+            config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -128,12 +116,7 @@ async fn process_sse_emits_failed_event_on_parse_error() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -157,8 +140,7 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
+            config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -173,12 +155,7 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -211,11 +188,18 @@ async fn process_sse_failed_event_records_response_error_message() {
         })]),
     )
     .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
+            config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -230,12 +214,7 @@ async fn process_sse_failed_event_records_response_error_message() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -266,11 +245,18 @@ async fn process_sse_failed_event_logs_parse_error() {
         })]),
     )
     .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
+            config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -285,12 +271,7 @@ async fn process_sse_failed_event_logs_parse_error() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -319,8 +300,7 @@ async fn process_sse_failed_event_logs_missing_error() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
+            config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -335,12 +315,7 @@ async fn process_sse_failed_event_logs_missing_error() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -367,10 +342,18 @@ async fn process_sse_failed_event_logs_response_completed_parse_error() {
     )
     .await;
 
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
+            config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -385,12 +368,7 @@ async fn process_sse_failed_event_logs_response_completed_parse_error() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -440,12 +418,7 @@ async fn process_sse_emits_completed_telemetry() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         lines
@@ -469,7 +442,7 @@ async fn process_sse_emits_completed_telemetry() {
 async fn handle_response_item_records_tool_result_for_custom_tool_call() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_custom_tool_call(
@@ -481,11 +454,18 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
         ]),
     )
     .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
+            config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -500,12 +480,7 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(|lines: &[&str]| {
         let line = lines
@@ -537,7 +512,7 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
 async fn handle_response_item_records_tool_result_for_function_call() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_function_call("function-call", "nonexistent", "{\"value\":1}"),
@@ -546,10 +521,18 @@ async fn handle_response_item_records_tool_result_for_function_call() {
     )
     .await;
 
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
+            config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -564,12 +547,7 @@ async fn handle_response_item_records_tool_result_for_function_call() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(|lines: &[&str]| {
         let line = lines
@@ -601,7 +579,7 @@ async fn handle_response_item_records_tool_result_for_function_call() {
 async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             serde_json::json!({
@@ -620,10 +598,18 @@ async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() 
     )
     .await;
 
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
+            config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -638,12 +624,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() 
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(|lines: &[&str]| {
         let line = lines
@@ -669,7 +650,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() 
 async fn handle_response_item_records_tool_result_for_local_shell_call() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_local_shell_call("shell-call", "completed", vec!["/bin/echo", "shell"]),
@@ -678,10 +659,18 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
     )
     .await;
 
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
+            config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -696,12 +685,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(|lines: &[&str]| {
         let line = lines
@@ -765,10 +749,23 @@ fn tool_decision_assertion<'a>(
 #[traced_test]
 async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
     let server = start_mock_server().await;
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
-            ev_local_shell_call("auto_config_call", "completed", vec!["/bin/echo", "hello"]),
+            ev_local_shell_call(
+                "auto_config_call",
+                "completed",
+                vec!["/bin/echo", "local shell"],
+            ),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
             ev_completed("done"),
         ]),
     )
@@ -778,8 +775,6 @@ async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
         .with_config(|config| {
             config.approval_policy = AskForApproval::OnRequest;
             config.sandbox_policy = SandboxPolicy::DangerFullAccess;
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -794,12 +789,7 @@ async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     logs_assert(tool_decision_assertion(
         "auto_config_call",
@@ -812,7 +802,7 @@ async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
 #[traced_test]
 async fn handle_container_exec_user_approved_records_tool_decision() {
     let server = start_mock_server().await;
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_local_shell_call("user_approved_call", "completed", vec!["/bin/date"]),
@@ -821,11 +811,18 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
     )
     .await;
 
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.approval_policy = AskForApproval::UnlessTrusted;
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -840,12 +837,7 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExecApprovalRequest(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
 
     codex
         .submit(Op::ExecApproval {
@@ -855,12 +847,7 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(tool_decision_assertion(
         "user_approved_call",
@@ -874,10 +861,18 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
 async fn handle_container_exec_user_approved_for_session_records_tool_decision() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_local_shell_call("user_approved_session_call", "completed", vec!["/bin/date"]),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
             ev_completed("done"),
         ]),
     )
@@ -886,8 +881,6 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.approval_policy = AskForApproval::UnlessTrusted;
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -902,12 +895,7 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExecApprovalRequest(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
 
     codex
         .submit(Op::ExecApproval {
@@ -917,12 +905,7 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(tool_decision_assertion(
         "user_approved_session_call",
@@ -936,10 +919,18 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
 async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_local_shell_call("sandbox_retry_call", "completed", vec!["/bin/date"]),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
             ev_completed("done"),
         ]),
     )
@@ -948,8 +939,6 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.approval_policy = AskForApproval::UnlessTrusted;
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -964,12 +953,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExecApprovalRequest(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
 
     codex
         .submit(Op::ExecApproval {
@@ -979,12 +963,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(tool_decision_assertion(
         "sandbox_retry_call",
@@ -998,7 +977,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
 async fn handle_container_exec_user_denies_records_tool_decision() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_local_shell_call("user_denied_call", "completed", vec!["/bin/date"]),
@@ -1007,11 +986,17 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
     )
     .await;
 
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.approval_policy = AskForApproval::UnlessTrusted;
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -1026,12 +1011,7 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExecApprovalRequest(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
 
     codex
         .submit(Op::ExecApproval {
@@ -1041,12 +1021,7 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(tool_decision_assertion(
         "user_denied_call",
@@ -1060,10 +1035,18 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
 async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_local_shell_call("sandbox_session_call", "completed", vec!["/bin/date"]),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
             ev_completed("done"),
         ]),
     )
@@ -1072,8 +1055,6 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.approval_policy = AskForApproval::UnlessTrusted;
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -1088,12 +1069,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExecApprovalRequest(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
 
     codex
         .submit(Op::ExecApproval {
@@ -1103,12 +1079,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(tool_decision_assertion(
         "sandbox_session_call",
@@ -1122,7 +1093,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
 async fn handle_sandbox_error_user_denies_records_tool_decision() {
     let server = start_mock_server().await;
 
-    mount_sse(
+    mount_sse_once(
         &server,
         sse(vec![
             ev_local_shell_call("sandbox_deny_call", "completed", vec!["/bin/date"]),
@@ -1131,11 +1102,18 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
     )
     .await;
 
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "local shell done"),
+            ev_completed("done"),
+        ]),
+    )
+    .await;
+
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.approval_policy = AskForApproval::UnlessTrusted;
-            config.model_provider.request_max_retries = Some(0);
-            config.model_provider.stream_max_retries = Some(0);
         })
         .build(&server)
         .await
@@ -1150,12 +1128,7 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExecApprovalRequest(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecApprovalRequest(_))).await;
 
     codex
         .submit(Op::ExecApproval {
@@ -1165,12 +1138,7 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TokenCount(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
 
     logs_assert(tool_decision_assertion(
         "sandbox_deny_call",

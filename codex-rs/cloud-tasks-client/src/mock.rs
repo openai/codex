@@ -1,6 +1,7 @@
 use crate::ApplyOutcome;
 use crate::AttemptStatus;
 use crate::CloudBackend;
+use crate::CloudTaskError;
 use crate::DiffSummary;
 use crate::Result;
 use crate::TaskId;
@@ -58,6 +59,14 @@ impl CloudBackend for MockClient {
             });
         }
         Ok(out)
+    }
+
+    async fn get_task_summary(&self, id: TaskId) -> Result<TaskSummary> {
+        let tasks = self.list_tasks(None).await?;
+        tasks
+            .into_iter()
+            .find(|t| t.id == id)
+            .ok_or_else(|| CloudTaskError::Msg(format!("Task {} not found (mock)", id.0)))
     }
 
     async fn get_task_diff(&self, id: TaskId) -> Result<Option<String>> {

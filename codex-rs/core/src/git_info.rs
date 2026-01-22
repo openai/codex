@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::util::resolve_path;
 use codex_app_server_protocol::GitSha;
 use codex_protocol::protocol::GitInfo;
 use futures::future::join_all;
@@ -131,11 +132,15 @@ pub async fn recent_commits(cwd: &Path, limit: usize) -> Vec<CommitLogEntry> {
     }
 
     let fmt = "%H%x1f%ct%x1f%s"; // <sha> <US> <commit_time> <US> <subject>
-    let n = limit.max(1).to_string();
-    let Some(log_out) =
-        run_git_command_with_timeout(&["log", "-n", &n, &format!("--pretty=format:{fmt}")], cwd)
-            .await
-    else {
+    let limit_arg = (limit > 0).then(|| limit.to_string());
+    let mut args: Vec<String> = vec!["log".to_string()];
+    if let Some(n) = &limit_arg {
+        args.push("-n".to_string());
+        args.push(n.clone());
+    }
+    args.push(format!("--pretty=format:{fmt}"));
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let Some(log_out) = run_git_command_with_timeout(&arg_refs, cwd).await else {
         return Vec::new();
     };
     if !log_out.status.success() {
@@ -544,11 +549,7 @@ pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
         .trim()
         .to_string();
 
-    let git_dir_path_raw = if Path::new(&git_dir_s).is_absolute() {
-        PathBuf::from(&git_dir_s)
-    } else {
-        base.join(&git_dir_s)
-    };
+    let git_dir_path_raw = resolve_path(base, &PathBuf::from(&git_dir_s));
 
     // Normalize to handle macOS /var vs /private/var and resolve ".." segments.
     let git_dir_path = std::fs::canonicalize(&git_dir_path_raw).unwrap_or(git_dir_path_raw);
@@ -825,11 +826,21 @@ mod tests {
             .await
             .expect("Should collect git info from repo");
 
+        let remote_url_output = Command::new("git")
+            .args(["remote", "get-url", "origin"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to read remote url");
+        // Some dev environments rewrite remotes (e.g., force SSH), so compare against
+        // whatever URL Git reports instead of a fixed placeholder.
+        let expected_remote = String::from_utf8(remote_url_output.stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+
         // Should have repository URL
-        assert_eq!(
-            git_info.repository_url,
-            Some("https://github.com/example/repo.git".to_string())
-        );
+        assert_eq!(git_info.repository_url, Some(expected_remote));
     }
 
     #[tokio::test]

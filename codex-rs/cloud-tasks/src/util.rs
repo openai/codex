@@ -1,6 +1,12 @@
 use base64::Engine as _;
+use chrono::DateTime;
+use chrono::Local;
 use chrono::Utc;
 use reqwest::header::HeaderMap;
+
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
+use codex_login::AuthManager;
 
 pub fn set_user_agent_suffix(suffix: &str) {
     if let Ok(mut guard) = codex_core::default_client::USER_AGENT_SUFFIX.lock() {
@@ -54,6 +60,18 @@ pub fn extract_chatgpt_account_id(token: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+pub async fn load_auth_manager() -> Option<AuthManager> {
+    // TODO: pass in cli overrides once cloud tasks properly support them.
+    let config = Config::load_with_cli_overrides(Vec::new(), ConfigOverrides::default())
+        .await
+        .ok()?;
+    Some(AuthManager::new(
+        config.codex_home,
+        false,
+        config.cli_auth_credentials_store_mode,
+    ))
+}
+
 /// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,
 /// and optional `ChatGPT-Account-Id`.
 pub async fn build_chatgpt_headers() -> HeaderMap {
@@ -69,31 +87,22 @@ pub async fn build_chatgpt_headers() -> HeaderMap {
         USER_AGENT,
         HeaderValue::from_str(&ua).unwrap_or(HeaderValue::from_static("codex-cli")),
     );
-    if let Ok(home) = codex_core::config::find_codex_home() {
-        let store_mode = codex_core::config::Config::load_from_base_config_with_overrides(
-            codex_core::config::ConfigToml::default(),
-            codex_core::config::ConfigOverrides::default(),
-            home.clone(),
-        )
-        .map(|cfg| cfg.cli_auth_credentials_store_mode)
-        .unwrap_or_default();
-        let am = codex_login::AuthManager::new(home, false, store_mode);
-        if let Some(auth) = am.auth()
-            && let Ok(tok) = auth.get_token().await
-            && !tok.is_empty()
+    if let Some(am) = load_auth_manager().await
+        && let Some(auth) = am.auth()
+        && let Ok(tok) = auth.get_token().await
+        && !tok.is_empty()
+    {
+        let v = format!("Bearer {tok}");
+        if let Ok(hv) = HeaderValue::from_str(&v) {
+            headers.insert(AUTHORIZATION, hv);
+        }
+        if let Some(acc) = auth
+            .get_account_id()
+            .or_else(|| extract_chatgpt_account_id(&tok))
+            && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
+            && let Ok(hv) = HeaderValue::from_str(&acc)
         {
-            let v = format!("Bearer {tok}");
-            if let Ok(hv) = HeaderValue::from_str(&v) {
-                headers.insert(AUTHORIZATION, hv);
-            }
-            if let Some(acc) = auth
-                .get_account_id()
-                .or_else(|| extract_chatgpt_account_id(&tok))
-                && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
-                && let Ok(hv) = HeaderValue::from_str(&acc)
-            {
-                headers.insert(name, hv);
-            }
+            headers.insert(name, hv);
         }
     }
     headers
@@ -112,4 +121,28 @@ pub fn task_url(base_url: &str, task_id: &str) -> String {
         return format!("{normalized}/tasks/{task_id}");
     }
     format!("{normalized}/codex/tasks/{task_id}")
+}
+
+pub fn format_relative_time(reference: DateTime<Utc>, ts: DateTime<Utc>) -> String {
+    let mut secs = (reference - ts).num_seconds();
+    if secs < 0 {
+        secs = 0;
+    }
+    if secs < 60 {
+        return format!("{secs}s ago");
+    }
+    let mins = secs / 60;
+    if mins < 60 {
+        return format!("{mins}m ago");
+    }
+    let hours = mins / 60;
+    if hours < 24 {
+        return format!("{hours}h ago");
+    }
+    let local = ts.with_timezone(&Local);
+    local.format("%b %e %H:%M").to_string()
+}
+
+pub fn format_relative_time_now(ts: DateTime<Utc>) -> String {
+    format_relative_time(Utc::now(), ts)
 }

@@ -1474,6 +1474,10 @@ pub struct Tool {
     pub title: Option<String>,
 }
 
+fn tool_output_schema_type_default_str() -> String {
+    "object".to_string()
+}
+
 /// An optional JSON Schema object defining the structure of the tool's output returned in
 /// the structuredContent field of a CallToolResult.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
@@ -1484,7 +1488,12 @@ pub struct ToolOutputSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub required: Option<Vec<String>>,
+    #[serde(default = "tool_output_schema_type_default_str")]
     pub r#type: String, // &'static str = "object"
+}
+
+fn tool_input_schema_type_default_str() -> String {
+    "object".to_string()
 }
 
 /// A JSON Schema object defining the expected parameters for the tool.
@@ -1496,6 +1505,7 @@ pub struct ToolInputSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub required: Option<Vec<String>>,
+    #[serde(default = "tool_input_schema_type_default_str")]
     pub r#type: String, // &'static str = "object"
 }
 

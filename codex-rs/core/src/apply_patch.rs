@@ -70,7 +70,9 @@ pub(crate) async fn apply_patch(
                 )
                 .await;
             match rx_approve.await.unwrap_or_default() {
-                ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
+                ReviewDecision::Approved
+                | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                | ReviewDecision::ApprovedForSession => {
                     InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
                         action,
                         user_explicitly_approved_this_action: true,

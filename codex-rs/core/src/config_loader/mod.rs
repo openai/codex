@@ -11,15 +11,15 @@ use toml::Value as TomlValue;
 #[cfg(unix)]
 const CODEX_MANAGED_CONFIG_SYSTEM_PATH: &str = "/etc/codex/managed_config.toml";
 
-#[derive(Debug)]
-pub(crate) struct LoadedConfigLayers {
+#[derive(Debug, Clone)]
+pub struct LoadedConfigLayers {
     pub base: TomlValue,
     pub managed_config: Option<TomlValue>,
     pub managed_preferences: Option<TomlValue>,
 }
 
-#[derive(Debug, Default)]
-pub(crate) struct LoaderOverrides {
+#[derive(Debug, Default, Clone)]
+pub struct LoaderOverrides {
     pub managed_config_path: Option<PathBuf>,
     #[cfg(target_os = "macos")]
     pub managed_preferences_base64: Option<String>,
@@ -47,11 +47,15 @@ pub async fn load_config_as_toml(codex_home: &Path) -> io::Result<TomlValue> {
     load_config_as_toml_with_overrides(codex_home, LoaderOverrides::default()).await
 }
 
+pub async fn load_config_layers(codex_home: &Path) -> io::Result<LoadedConfigLayers> {
+    load_config_layers_with_overrides(codex_home, LoaderOverrides::default()).await
+}
+
 fn default_empty_table() -> TomlValue {
     TomlValue::Table(Default::default())
 }
 
-pub(crate) async fn load_config_layers_with_overrides(
+pub async fn load_config_layers_with_overrides(
     codex_home: &Path,
     overrides: LoaderOverrides,
 ) -> io::Result<LoadedConfigLayers> {
@@ -130,7 +134,7 @@ async fn read_config_from_path(
 }
 
 /// Merge config `overlay` into `base`, giving `overlay` precedence.
-pub(crate) fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
+pub fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
     if let TomlValue::Table(overlay_table) = overlay
         && let TomlValue::Table(base_table) = base
     {
@@ -147,6 +151,10 @@ pub(crate) fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
 }
 
 fn managed_config_default_path(codex_home: &Path) -> PathBuf {
+    if let Ok(path) = std::env::var("CODEX_MANAGED_CONFIG_PATH") {
+        return PathBuf::from(path);
+    }
+
     #[cfg(unix)]
     {
         let _ = codex_home;

@@ -159,23 +159,18 @@ async fn read_only_forbids_all_writes() {
         .await;
 }
 
-/// Verify that user lookups via `pwd.getpwuid(os.getuid())` work under the
-/// seatbelt sandbox. Prior to allowing the necessary mach‑lookup for
-/// OpenDirectory libinfo, this would fail with `KeyError: getpwuid(): uid not found`.
 #[tokio::test]
-async fn python_getpwuid_works_under_seatbelt() {
+async fn openpty_works_under_seatbelt() {
     if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
         eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
         return;
     }
 
-    // For local dev.
     if which::which("python3").is_err() {
         eprintln!("python3 not found in PATH, skipping test.");
         return;
     }
 
-    // ReadOnly is sufficient here since we are only exercising user lookup.
     let policy = SandboxPolicy::ReadOnly;
     let command_cwd = std::env::current_dir().expect("getcwd");
     let sandbox_cwd = command_cwd.clone();
@@ -184,8 +179,12 @@ async fn python_getpwuid_works_under_seatbelt() {
         vec![
             "python3".to_string(),
             "-c".to_string(),
-            // Print the passwd struct; success implies lookup worked.
-            "import pwd, os; print(pwd.getpwuid(os.getuid()))".to_string(),
+            r#"import os
+
+master, slave = os.openpty()
+os.write(slave, b"ping")
+assert os.read(master, 4) == b"ping""#
+                .to_string(),
         ],
         command_cwd,
         &policy,

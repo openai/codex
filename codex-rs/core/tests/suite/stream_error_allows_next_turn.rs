@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use codex_core::ModelProviderInfo;
 use codex_core::WireApi;
 use codex_core::protocol::EventMsg;
@@ -9,7 +7,7 @@ use core_test_support::load_sse_fixture_with_id;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
-use core_test_support::wait_for_event_with_timeout;
+use core_test_support::wait_for_event;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -96,19 +94,9 @@ async fn continue_after_stream_error() {
         .unwrap();
 
     // Expect an Error followed by TaskComplete so the session is released.
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::Error(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::Error(_))).await;
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // 2) Second turn: now send another prompt that should succeed using the
     // mock server SSE stream. If the agent failed to clear the running task on
@@ -122,10 +110,5 @@ async fn continue_after_stream_error() {
         .await
         .unwrap();
 
-    wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        Duration::from_secs(5),
-    )
-    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 }

@@ -1,17 +1,615 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use crate::protocol::common::AuthMode;
-use codex_protocol::ConversationId;
 use codex_protocol::account::PlanType;
-use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
+use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
+use codex_protocol::config_types::Verbosity;
+use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use codex_protocol::items::TurnItem as CoreTurnItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
+use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
+use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
+use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
+use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
+use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
+use codex_protocol::protocol::SessionSource as CoreSessionSource;
+use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
+use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
+use codex_protocol::user_input::UserInput as CoreUserInput;
 use mcp_types::ContentBlock as McpContentBlock;
+use mcp_types::Resource as McpResource;
+use mcp_types::ResourceTemplate as McpResourceTemplate;
+use mcp_types::Tool as McpTool;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
-use std::path::PathBuf;
+use thiserror::Error;
 use ts_rs::TS;
-use uuid::Uuid;
+
+// Macro to declare a camelCased API v2 enum mirroring a core enum which
+// tends to use either snake_case or kebab-case.
+macro_rules! v2_enum_from_core {
+    (
+        pub enum $Name:ident from $Src:path { $( $Variant:ident ),+ $(,)? }
+    ) => {
+        #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+        #[serde(rename_all = "camelCase")]
+        #[ts(export_to = "v2/")]
+        pub enum $Name { $( $Variant ),+ }
+
+        impl $Name {
+            pub fn to_core(self) -> $Src {
+                match self { $( $Name::$Variant => <$Src>::$Variant ),+ }
+            }
+        }
+
+        impl From<$Src> for $Name {
+            fn from(value: $Src) -> Self {
+                match value { $( <$Src>::$Variant => $Name::$Variant ),+ }
+            }
+        }
+    };
+}
+
+/// This translation layer make sure that we expose codex error code in camel case.
+///
+/// When an upstream HTTP status is available (for example, from the Responses API or a provider),
+/// it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum CodexErrorInfo {
+    ContextWindowExceeded,
+    UsageLimitExceeded,
+    HttpConnectionFailed {
+        #[serde(rename = "httpStatusCode")]
+        #[ts(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    /// Failed to connect to the response SSE stream.
+    ResponseStreamConnectionFailed {
+        #[serde(rename = "httpStatusCode")]
+        #[ts(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    InternalServerError,
+    Unauthorized,
+    BadRequest,
+    SandboxError,
+    /// The response SSE stream disconnected in the middle of a turn before completion.
+    ResponseStreamDisconnected {
+        #[serde(rename = "httpStatusCode")]
+        #[ts(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    /// Reached the retry limit for responses.
+    ResponseTooManyFailedAttempts {
+        #[serde(rename = "httpStatusCode")]
+        #[ts(rename = "httpStatusCode")]
+        http_status_code: Option<u16>,
+    },
+    Other,
+}
+
+impl From<CoreCodexErrorInfo> for CodexErrorInfo {
+    fn from(value: CoreCodexErrorInfo) -> Self {
+        match value {
+            CoreCodexErrorInfo::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
+            CoreCodexErrorInfo::UsageLimitExceeded => CodexErrorInfo::UsageLimitExceeded,
+            CoreCodexErrorInfo::HttpConnectionFailed { http_status_code } => {
+                CodexErrorInfo::HttpConnectionFailed { http_status_code }
+            }
+            CoreCodexErrorInfo::ResponseStreamConnectionFailed { http_status_code } => {
+                CodexErrorInfo::ResponseStreamConnectionFailed { http_status_code }
+            }
+            CoreCodexErrorInfo::InternalServerError => CodexErrorInfo::InternalServerError,
+            CoreCodexErrorInfo::Unauthorized => CodexErrorInfo::Unauthorized,
+            CoreCodexErrorInfo::BadRequest => CodexErrorInfo::BadRequest,
+            CoreCodexErrorInfo::SandboxError => CodexErrorInfo::SandboxError,
+            CoreCodexErrorInfo::ResponseStreamDisconnected { http_status_code } => {
+                CodexErrorInfo::ResponseStreamDisconnected { http_status_code }
+            }
+            CoreCodexErrorInfo::ResponseTooManyFailedAttempts { http_status_code } => {
+                CodexErrorInfo::ResponseTooManyFailedAttempts { http_status_code }
+            }
+            CoreCodexErrorInfo::Other => CodexErrorInfo::Other,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum AskForApproval {
+    #[serde(rename = "untrusted")]
+    #[ts(rename = "untrusted")]
+    UnlessTrusted,
+    OnFailure,
+    OnRequest,
+    Never,
+}
+
+impl AskForApproval {
+    pub fn to_core(self) -> CoreAskForApproval {
+        match self {
+            AskForApproval::UnlessTrusted => CoreAskForApproval::UnlessTrusted,
+            AskForApproval::OnFailure => CoreAskForApproval::OnFailure,
+            AskForApproval::OnRequest => CoreAskForApproval::OnRequest,
+            AskForApproval::Never => CoreAskForApproval::Never,
+        }
+    }
+}
+
+impl From<CoreAskForApproval> for AskForApproval {
+    fn from(value: CoreAskForApproval) -> Self {
+        match value {
+            CoreAskForApproval::UnlessTrusted => AskForApproval::UnlessTrusted,
+            CoreAskForApproval::OnFailure => AskForApproval::OnFailure,
+            CoreAskForApproval::OnRequest => AskForApproval::OnRequest,
+            CoreAskForApproval::Never => AskForApproval::Never,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum SandboxMode {
+    ReadOnly,
+    WorkspaceWrite,
+    DangerFullAccess,
+}
+
+impl SandboxMode {
+    pub fn to_core(self) -> CoreSandboxMode {
+        match self {
+            SandboxMode::ReadOnly => CoreSandboxMode::ReadOnly,
+            SandboxMode::WorkspaceWrite => CoreSandboxMode::WorkspaceWrite,
+            SandboxMode::DangerFullAccess => CoreSandboxMode::DangerFullAccess,
+        }
+    }
+}
+
+impl From<CoreSandboxMode> for SandboxMode {
+    fn from(value: CoreSandboxMode) -> Self {
+        match value {
+            CoreSandboxMode::ReadOnly => SandboxMode::ReadOnly,
+            CoreSandboxMode::WorkspaceWrite => SandboxMode::WorkspaceWrite,
+            CoreSandboxMode::DangerFullAccess => SandboxMode::DangerFullAccess,
+        }
+    }
+}
+
+v2_enum_from_core!(
+    pub enum ReviewDelivery from codex_protocol::protocol::ReviewDelivery {
+        Inline, Detached
+    }
+);
+
+v2_enum_from_core!(
+    pub enum McpAuthStatus from codex_protocol::protocol::McpAuthStatus {
+        Unsupported,
+        NotLoggedIn,
+        BearerToken,
+        OAuth
+    }
+);
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ConfigLayerName {
+    Mdm,
+    System,
+    SessionFlags,
+    User,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct SandboxWorkspaceWrite {
+    #[serde(default)]
+    pub writable_roots: Vec<PathBuf>,
+    #[serde(default)]
+    pub network_access: bool,
+    #[serde(default)]
+    pub exclude_tmpdir_env_var: bool,
+    #[serde(default)]
+    pub exclude_slash_tmp: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct ToolsV2 {
+    #[serde(alias = "web_search_request")]
+    pub web_search: Option<bool>,
+    pub view_image: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct ProfileV2 {
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub model_reasoning_summary: Option<ReasoningSummary>,
+    pub model_verbosity: Option<Verbosity>,
+    pub chatgpt_base_url: Option<String>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct Config {
+    pub model: Option<String>,
+    pub review_model: Option<String>,
+    pub model_context_window: Option<i64>,
+    pub model_auto_compact_token_limit: Option<i64>,
+    pub model_provider: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub sandbox_mode: Option<SandboxMode>,
+    pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
+    pub forced_chatgpt_workspace_id: Option<String>,
+    pub forced_login_method: Option<ForcedLoginMethod>,
+    pub tools: Option<ToolsV2>,
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub profiles: HashMap<String, ProfileV2>,
+    pub instructions: Option<String>,
+    pub developer_instructions: Option<String>,
+    pub compact_prompt: Option<String>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub model_reasoning_summary: Option<ReasoningSummary>,
+    pub model_verbosity: Option<Verbosity>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigLayerMetadata {
+    pub name: ConfigLayerName,
+    pub source: String,
+    pub version: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigLayer {
+    pub name: ConfigLayerName,
+    pub source: String,
+    pub version: String,
+    pub config: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum MergeStrategy {
+    Replace,
+    Upsert,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum WriteStatus {
+    Ok,
+    OkOverridden,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct OverriddenMetadata {
+    pub message: String,
+    pub overriding_layer: ConfigLayerMetadata,
+    pub effective_value: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigWriteResponse {
+    pub status: WriteStatus,
+    pub version: String,
+    /// Canonical path to the config file that was written.
+    pub file_path: String,
+    pub overridden_metadata: Option<OverriddenMetadata>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ConfigWriteErrorCode {
+    ConfigLayerReadonly,
+    ConfigVersionConflict,
+    ConfigValidationError,
+    ConfigPathNotFound,
+    ConfigSchemaUnknownKey,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigReadParams {
+    #[serde(default)]
+    pub include_layers: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigReadResponse {
+    pub config: Config,
+    pub origins: HashMap<String, ConfigLayerMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<ConfigLayer>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigValueWriteParams {
+    pub key_path: String,
+    pub value: JsonValue,
+    pub merge_strategy: MergeStrategy,
+    /// Path to the config file to write; defaults to the user's `config.toml` when omitted.
+    pub file_path: Option<String>,
+    pub expected_version: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigBatchWriteParams {
+    pub edits: Vec<ConfigEdit>,
+    /// Path to the config file to write; defaults to the user's `config.toml` when omitted.
+    pub file_path: Option<String>,
+    pub expected_version: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigEdit {
+    pub key_path: String,
+    pub value: JsonValue,
+    pub merge_strategy: MergeStrategy,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ApprovalDecision {
+    Accept,
+    /// Approve and remember the approval for the session.
+    AcceptForSession,
+    AcceptWithExecpolicyAmendment {
+        execpolicy_amendment: ExecPolicyAmendment,
+    },
+    Decline,
+    Cancel,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum SandboxPolicy {
+    DangerFullAccess,
+    ReadOnly,
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    WorkspaceWrite {
+        #[serde(default)]
+        writable_roots: Vec<PathBuf>,
+        #[serde(default)]
+        network_access: bool,
+        #[serde(default)]
+        exclude_tmpdir_env_var: bool,
+        #[serde(default)]
+        exclude_slash_tmp: bool,
+    },
+}
+
+impl SandboxPolicy {
+    pub fn to_core(&self) -> codex_protocol::protocol::SandboxPolicy {
+        match self {
+            SandboxPolicy::DangerFullAccess => {
+                codex_protocol::protocol::SandboxPolicy::DangerFullAccess
+            }
+            SandboxPolicy::ReadOnly => codex_protocol::protocol::SandboxPolicy::ReadOnly,
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                network_access,
+                exclude_tmpdir_env_var,
+                exclude_slash_tmp,
+            } => codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
+                writable_roots: writable_roots.clone(),
+                network_access: *network_access,
+                exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+                exclude_slash_tmp: *exclude_slash_tmp,
+            },
+        }
+    }
+}
+
+impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
+    fn from(value: codex_protocol::protocol::SandboxPolicy) -> Self {
+        match value {
+            codex_protocol::protocol::SandboxPolicy::DangerFullAccess => {
+                SandboxPolicy::DangerFullAccess
+            }
+            codex_protocol::protocol::SandboxPolicy::ReadOnly => SandboxPolicy::ReadOnly,
+            codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                network_access,
+                exclude_tmpdir_env_var,
+                exclude_slash_tmp,
+            } => SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                network_access,
+                exclude_tmpdir_env_var,
+                exclude_slash_tmp,
+            },
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(transparent)]
+#[ts(type = "Array<string>", export_to = "v2/")]
+pub struct ExecPolicyAmendment {
+    pub command: Vec<String>,
+}
+
+impl ExecPolicyAmendment {
+    pub fn into_core(self) -> CoreExecPolicyAmendment {
+        CoreExecPolicyAmendment::new(self.command)
+    }
+}
+
+impl From<CoreExecPolicyAmendment> for ExecPolicyAmendment {
+    fn from(value: CoreExecPolicyAmendment) -> Self {
+        Self {
+            command: value.command().to_vec(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum CommandAction {
+    Read {
+        command: String,
+        name: String,
+        path: PathBuf,
+    },
+    ListFiles {
+        command: String,
+        path: Option<String>,
+    },
+    Search {
+        command: String,
+        query: Option<String>,
+        path: Option<String>,
+    },
+    Unknown {
+        command: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+#[derive(Default)]
+pub enum SessionSource {
+    Cli,
+    #[serde(rename = "vscode")]
+    #[ts(rename = "vscode")]
+    #[default]
+    VsCode,
+    Exec,
+    AppServer,
+    #[serde(other)]
+    Unknown,
+}
+
+impl From<CoreSessionSource> for SessionSource {
+    fn from(value: CoreSessionSource) -> Self {
+        match value {
+            CoreSessionSource::Cli => SessionSource::Cli,
+            CoreSessionSource::VSCode => SessionSource::VsCode,
+            CoreSessionSource::Exec => SessionSource::Exec,
+            CoreSessionSource::Mcp => SessionSource::AppServer,
+            CoreSessionSource::SubAgent(_) => SessionSource::Unknown,
+            CoreSessionSource::Unknown => SessionSource::Unknown,
+        }
+    }
+}
+
+impl From<SessionSource> for CoreSessionSource {
+    fn from(value: SessionSource) -> Self {
+        match value {
+            SessionSource::Cli => CoreSessionSource::Cli,
+            SessionSource::VsCode => CoreSessionSource::VSCode,
+            SessionSource::Exec => CoreSessionSource::Exec,
+            SessionSource::AppServer => CoreSessionSource::Mcp,
+            SessionSource::Unknown => CoreSessionSource::Unknown,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GitInfo {
+    pub sha: Option<String>,
+    pub branch: Option<String>,
+    pub origin_url: Option<String>,
+}
+
+impl CommandAction {
+    pub fn into_core(self) -> CoreParsedCommand {
+        match self {
+            CommandAction::Read {
+                command: cmd,
+                name,
+                path,
+            } => CoreParsedCommand::Read { cmd, name, path },
+            CommandAction::ListFiles { command: cmd, path } => {
+                CoreParsedCommand::ListFiles { cmd, path }
+            }
+            CommandAction::Search {
+                command: cmd,
+                query,
+                path,
+            } => CoreParsedCommand::Search { cmd, query, path },
+            CommandAction::Unknown { command: cmd } => CoreParsedCommand::Unknown { cmd },
+        }
+    }
+}
+
+impl From<CoreParsedCommand> for CommandAction {
+    fn from(value: CoreParsedCommand) -> Self {
+        match value {
+            CoreParsedCommand::Read { cmd, name, path } => CommandAction::Read {
+                command: cmd,
+                name,
+                path,
+            },
+            CoreParsedCommand::ListFiles { cmd, path } => {
+                CommandAction::ListFiles { command: cmd, path }
+            }
+            CoreParsedCommand::Search { cmd, query, path } => CommandAction::Search {
+                command: cmd,
+                query,
+                path,
+            },
+            CoreParsedCommand::Unknown { cmd } => CommandAction::Unknown { command: cmd },
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -20,14 +618,11 @@ use uuid::Uuid;
 pub enum Account {
     #[serde(rename = "apiKey", rename_all = "camelCase")]
     #[ts(rename = "apiKey", rename_all = "camelCase")]
-    ApiKey { api_key: String },
+    ApiKey {},
 
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    ChatGpt {
-        email: Option<String>,
-        plan_type: PlanType,
-    },
+    Chatgpt { email: String, plan_type: PlanType },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -35,8 +630,8 @@ pub enum Account {
 #[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum LoginAccountParams {
-    #[serde(rename = "apiKey")]
-    #[ts(rename = "apiKey")]
+    #[serde(rename = "apiKey", rename_all = "camelCase")]
+    #[ts(rename = "apiKey", rename_all = "camelCase")]
     ApiKey {
         #[serde(rename = "apiKey")]
         #[ts(rename = "apiKey")]
@@ -44,20 +639,49 @@ pub enum LoginAccountParams {
     },
     #[serde(rename = "chatgpt")]
     #[ts(rename = "chatgpt")]
-    ChatGpt,
+    Chatgpt,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
+#[ts(export_to = "v2/")]
+pub enum LoginAccountResponse {
+    #[serde(rename = "apiKey", rename_all = "camelCase")]
+    #[ts(rename = "apiKey", rename_all = "camelCase")]
+    ApiKey {},
+    #[serde(rename = "chatgpt", rename_all = "camelCase")]
+    #[ts(rename = "chatgpt", rename_all = "camelCase")]
+    Chatgpt {
+        // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.
+        // Convert to/from UUIDs at the application layer as needed.
+        login_id: String,
+        /// URL the client should open in a browser to initiate the OAuth flow.
+        auth_url: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct LoginAccountResponse {
-    /// Only set if the login method is ChatGPT.
-    #[schemars(with = "String")]
-    pub login_id: Option<Uuid>,
+pub struct CancelLoginAccountParams {
+    pub login_id: String,
+}
 
-    /// URL the client should open in a browser to initiate the OAuth flow.
-    /// Only set if the login method is ChatGPT.
-    pub auth_url: Option<String>,
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum CancelLoginAccountStatus {
+    Canceled,
+    NotFound,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CancelLoginAccountResponse {
+    pub status: CancelLoginAccountStatus,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -75,18 +699,27 @@ pub struct GetAccountRateLimitsResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct GetAccountParams {
+    #[serde(default)]
+    pub refresh_token: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct GetAccountResponse {
-    pub account: Account,
+    pub account: Option<Account>,
+    pub requires_openai_auth: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ListModelsParams {
-    /// Optional page size; defaults to a reasonable server-side value.
-    pub page_size: Option<usize>,
+pub struct ModelListParams {
     /// Opaque pagination cursor returned by a previous call.
     pub cursor: Option<String>,
+    /// Optional page size; defaults to a reasonable server-side value.
+    pub limit: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -114,8 +747,208 @@ pub struct ReasoningEffortOption {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ListModelsResponse {
-    pub items: Vec<Model>,
+pub struct ModelListResponse {
+    pub data: Vec<Model>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// If None, there are no more items to return.
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ListMcpServersParams {
+    /// Opaque pagination cursor returned by a previous call.
+    pub cursor: Option<String>,
+    /// Optional page size; defaults to a server-defined value.
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServer {
+    pub name: String,
+    pub tools: std::collections::HashMap<String, McpTool>,
+    pub resources: Vec<McpResource>,
+    pub resource_templates: Vec<McpResourceTemplate>,
+    pub auth_status: McpAuthStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ListMcpServersResponse {
+    pub data: Vec<McpServer>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// If None, there are no more items to return.
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerOauthLoginParams {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub scopes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub timeout_secs: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerOauthLoginResponse {
+    pub authorization_url: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FeedbackUploadParams {
+    pub classification: String,
+    pub reason: Option<String>,
+    pub thread_id: Option<String>,
+    pub include_logs: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FeedbackUploadResponse {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecParams {
+    pub command: Vec<String>,
+    #[ts(type = "number | null")]
+    pub timeout_ms: Option<i64>,
+    pub cwd: Option<PathBuf>,
+    pub sandbox_policy: Option<SandboxPolicy>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecResponse {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+// === Threads, Turns, and Items ===
+// Thread APIs
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadStartParams {
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub cwd: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub sandbox: Option<SandboxMode>,
+    pub config: Option<HashMap<String, JsonValue>>,
+    pub base_instructions: Option<String>,
+    pub developer_instructions: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadStartResponse {
+    pub thread: Thread,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox: SandboxPolicy,
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// There are three ways to resume a thread:
+/// 1. By thread_id: load the thread from disk by thread_id and resume it.
+/// 2. By history: instantiate the thread from memory and resume it.
+/// 3. By path: load the thread from disk by path and resume it.
+///
+/// The precedence is: history > path > thread_id.
+/// If using history or path, the thread_id param will be ignored.
+///
+/// Prefer using thread_id whenever possible.
+pub struct ThreadResumeParams {
+    pub thread_id: String,
+
+    /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
+    /// If specified, the thread will be resumed with the provided history
+    /// instead of loaded from disk.
+    pub history: Option<Vec<ResponseItem>>,
+
+    /// [UNSTABLE] Specify the rollout path to resume from.
+    /// If specified, the thread_id param will be ignored.
+    pub path: Option<PathBuf>,
+
+    /// Configuration overrides for the resumed thread, if any.
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub cwd: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub sandbox: Option<SandboxMode>,
+    pub config: Option<HashMap<String, serde_json::Value>>,
+    pub base_instructions: Option<String>,
+    pub developer_instructions: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadResumeResponse {
+    pub thread: Thread,
+    pub model: String,
+    pub model_provider: String,
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox: SandboxPolicy,
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadArchiveParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadArchiveResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadListParams {
+    /// Opaque pagination cursor returned by a previous call.
+    pub cursor: Option<String>,
+    /// Optional page size; defaults to a reasonable server-side value.
+    pub limit: Option<u32>,
+    /// Optional provider filter; when set, only sessions recorded under these
+    /// providers are returned. When present but empty, includes all providers.
+    pub model_providers: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadListResponse {
+    pub data: Vec<Thread>,
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// if None, there are no more items to return.
     pub next_cursor: Option<String>,
@@ -124,32 +957,105 @@ pub struct ListModelsResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct UploadFeedbackParams {
-    pub classification: String,
-    pub reason: Option<String>,
-    pub conversation_id: Option<ConversationId>,
-    pub include_logs: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct UploadFeedbackResponse {
+pub struct ThreadCompactParams {
     pub thread_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct AccountUpdatedNotification {
-    pub auth_method: Option<AuthMode>,
-}
+pub struct ThreadCompactResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct Thread {
     pub id: String,
+    /// Usually the first user message in the thread, if available.
+    pub preview: String,
+    /// Model provider used for this thread (for example, 'openai').
+    pub model_provider: String,
+    /// Unix timestamp (in seconds) when the thread was created.
+    #[ts(type = "number")]
+    pub created_at: i64,
+    /// [UNSTABLE] Path to the thread on disk.
+    pub path: PathBuf,
+    /// Working directory captured for the thread.
+    pub cwd: PathBuf,
+    /// Version of the CLI that created the thread.
+    pub cli_version: String,
+    /// Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.).
+    pub source: SessionSource,
+    /// Optional Git metadata captured when the thread was created.
+    pub git_info: Option<GitInfo>,
+    /// Only populated on a `thread/resume` response.
+    /// For all other responses and notifications returning a Thread,
+    /// the turns field will be an empty list.
+    pub turns: Vec<Turn>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountUpdatedNotification {
+    pub auth_mode: Option<AuthMode>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTokenUsageUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub token_usage: ThreadTokenUsage,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTokenUsage {
+    pub total: TokenUsageBreakdown,
+    pub last: TokenUsageBreakdown,
+    #[ts(type = "number | null")]
+    pub model_context_window: Option<i64>,
+}
+
+impl From<CoreTokenUsageInfo> for ThreadTokenUsage {
+    fn from(value: CoreTokenUsageInfo) -> Self {
+        Self {
+            total: value.total_token_usage.into(),
+            last: value.last_token_usage.into(),
+            model_context_window: value.model_context_window,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TokenUsageBreakdown {
+    #[ts(type = "number")]
+    pub total_tokens: i64,
+    #[ts(type = "number")]
+    pub input_tokens: i64,
+    #[ts(type = "number")]
+    pub cached_input_tokens: i64,
+    #[ts(type = "number")]
+    pub output_tokens: i64,
+    #[ts(type = "number")]
+    pub reasoning_output_tokens: i64,
+}
+
+impl From<CoreTokenUsage> for TokenUsageBreakdown {
+    fn from(value: CoreTokenUsage) -> Self {
+        Self {
+            total_tokens: value.total_tokens,
+            input_tokens: value.input_tokens,
+            cached_input_tokens: value.cached_input_tokens,
+            output_tokens: value.output_tokens,
+            reasoning_output_tokens: value.reasoning_output_tokens,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -157,9 +1063,34 @@ pub struct Thread {
 #[ts(export_to = "v2/")]
 pub struct Turn {
     pub id: String,
+    /// Only populated on a `thread/resume` response.
+    /// For all other responses and notifications returning a Turn,
+    /// the items field will be an empty list.
     pub items: Vec<ThreadItem>,
     pub status: TurnStatus,
+    /// Only populated when the Turn's status is failed.
     pub error: Option<TurnError>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Error)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+#[error("{message}")]
+pub struct TurnError {
+    pub message: String,
+    pub codex_error_info: Option<CodexErrorInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ErrorNotification {
+    pub error: TurnError,
+    // Set to true if the error is transient and the app-server process will automatically retry.
+    // If true, this will not interrupt a turn.
+    pub will_retry: bool,
+    pub thread_id: String,
+    pub turn_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -172,15 +1103,103 @@ pub enum TurnStatus {
     InProgress,
 }
 
+// Turn APIs
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnStartParams {
+    pub thread_id: String,
+    pub input: Vec<UserInput>,
+    /// Override the working directory for this turn and subsequent turns.
+    pub cwd: Option<PathBuf>,
+    /// Override the approval policy for this turn and subsequent turns.
+    pub approval_policy: Option<AskForApproval>,
+    /// Override the sandbox policy for this turn and subsequent turns.
+    pub sandbox_policy: Option<SandboxPolicy>,
+    /// Override the model for this turn and subsequent turns.
+    pub model: Option<String>,
+    /// Override the reasoning effort for this turn and subsequent turns.
+    pub effort: Option<ReasoningEffort>,
+    /// Override the reasoning summary for this turn and subsequent turns.
+    pub summary: Option<ReasoningSummary>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct TurnError {
-    pub message: String,
+pub struct ReviewStartParams {
+    pub thread_id: String,
+    pub target: ReviewTarget,
+
+    /// Where to run the review: inline (default) on the current thread or
+    /// detached on a new thread (returned in `reviewThreadId`).
+    #[serde(default)]
+    pub delivery: Option<ReviewDelivery>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ReviewStartResponse {
+    pub turn: Turn,
+    /// Identifies the thread where the review runs.
+    ///
+    /// For inline reviews, this is the original thread id.
+    /// For detached reviews, this is the id of the new review thread.
+    pub review_thread_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type", export_to = "v2/")]
+pub enum ReviewTarget {
+    /// Review the working tree: staged, unstaged, and untracked files.
+    UncommittedChanges,
+
+    /// Review changes between the current branch and the given base branch.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    BaseBranch { branch: String },
+
+    /// Review the changes introduced by a specific commit.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Commit {
+        sha: String,
+        /// Optional human-readable label (e.g., commit subject) for UIs.
+        title: Option<String>,
+    },
+
+    /// Arbitrary instructions, equivalent to the old free-form prompt.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    Custom { instructions: String },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnStartResponse {
+    pub turn: Turn,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnInterruptParams {
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnInterruptResponse {}
+
+// User input types
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum UserInput {
     Text { text: String },
@@ -188,35 +1207,79 @@ pub enum UserInput {
     LocalImage { path: PathBuf },
 }
 
+impl UserInput {
+    pub fn into_core(self) -> CoreUserInput {
+        match self {
+            UserInput::Text { text } => CoreUserInput::Text { text },
+            UserInput::Image { url } => CoreUserInput::Image { image_url: url },
+            UserInput::LocalImage { path } => CoreUserInput::LocalImage { path },
+        }
+    }
+}
+
+impl From<CoreUserInput> for UserInput {
+    fn from(value: CoreUserInput) -> Self {
+        match value {
+            CoreUserInput::Text { text } => UserInput::Text { text },
+            CoreUserInput::Image { image_url } => UserInput::Image { url: image_url },
+            CoreUserInput::LocalImage { path } => UserInput::LocalImage { path },
+            _ => unreachable!("unsupported user input variant"),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum ThreadItem {
-    UserMessage {
-        id: String,
-        content: Vec<UserInput>,
-    },
-    AgentMessage {
-        id: String,
-        text: String,
-    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    UserMessage { id: String, content: Vec<UserInput> },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    AgentMessage { id: String, text: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     Reasoning {
         id: String,
-        text: String,
+        #[serde(default)]
+        summary: Vec<String>,
+        #[serde(default)]
+        content: Vec<String>,
     },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     CommandExecution {
         id: String,
+        /// The command to be executed.
         command: String,
-        aggregated_output: String,
-        exit_code: Option<i32>,
+        /// The command's working directory.
+        cwd: PathBuf,
+        /// Identifier for the underlying PTY process (when available).
+        process_id: Option<String>,
         status: CommandExecutionStatus,
+        /// A best-effort parsing of the command to understand the action(s) it will perform.
+        /// This returns a list of CommandAction objects because a single shell command may
+        /// be composed of many commands piped together.
+        command_actions: Vec<CommandAction>,
+        /// The command's output, aggregated from stdout and stderr.
+        aggregated_output: Option<String>,
+        /// The command's exit code.
+        exit_code: Option<i32>,
+        /// The duration of the command execution in milliseconds.
+        #[ts(type = "number | null")]
         duration_ms: Option<i64>,
     },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     FileChange {
         id: String,
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
     },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     McpToolCall {
         id: String,
         server: String,
@@ -225,23 +1288,52 @@ pub enum ThreadItem {
         arguments: JsonValue,
         result: Option<McpToolCallResult>,
         error: Option<McpToolCallError>,
+        /// The duration of the MCP tool call in milliseconds.
+        #[ts(type = "number | null")]
+        duration_ms: Option<i64>,
     },
-    WebSearch {
-        id: String,
-        query: String,
-    },
-    TodoList {
-        id: String,
-        items: Vec<TodoItem>,
-    },
-    ImageView {
-        id: String,
-        path: String,
-    },
-    CodeReview {
-        id: String,
-        review: String,
-    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    WebSearch { id: String, query: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ImageView { id: String, path: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    EnteredReviewMode { id: String, review: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ExitedReviewMode { id: String, review: String },
+}
+
+impl From<CoreTurnItem> for ThreadItem {
+    fn from(value: CoreTurnItem) -> Self {
+        match value {
+            CoreTurnItem::UserMessage(user) => ThreadItem::UserMessage {
+                id: user.id,
+                content: user.content.into_iter().map(UserInput::from).collect(),
+            },
+            CoreTurnItem::AgentMessage(agent) => {
+                let text = agent
+                    .content
+                    .into_iter()
+                    .map(|entry| match entry {
+                        CoreAgentMessageContent::Text { text } => text,
+                    })
+                    .collect::<String>();
+                ThreadItem::AgentMessage { id: agent.id, text }
+            }
+            CoreTurnItem::Reasoning(reasoning) => ThreadItem::Reasoning {
+                id: reasoning.id,
+                summary: reasoning.summary_text,
+                content: reasoning.raw_content,
+            },
+            CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch {
+                id: search.id,
+                query: search.query,
+            },
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -251,6 +1343,7 @@ pub enum CommandExecutionStatus {
     InProgress,
     Completed,
     Failed,
+    Declined,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -263,20 +1356,23 @@ pub struct FileUpdateChange {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase")]
+#[ts(tag = "type")]
 #[ts(export_to = "v2/")]
 pub enum PatchChangeKind {
     Add,
     Delete,
-    Update,
+    Update { move_path: Option<PathBuf> },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum PatchApplyStatus {
+    InProgress,
     Completed,
     Failed,
+    Declined,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -293,7 +1389,7 @@ pub enum McpToolCallStatus {
 #[ts(export_to = "v2/")]
 pub struct McpToolCallResult {
     pub content: Vec<McpContentBlock>,
-    pub structured_content: JsonValue,
+    pub structured_content: Option<JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -303,17 +1399,8 @@ pub struct McpToolCallError {
     pub message: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct TodoItem {
-    pub id: String,
-    pub text: String,
-    pub completed: bool,
-}
-
 // === Server Notifications ===
-
+// Thread/Turn lifecycle notifications and item progress events
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -325,6 +1412,7 @@ pub struct ThreadStartedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnStartedNotification {
+    pub thread_id: String,
     pub turn: Turn,
 }
 
@@ -341,8 +1429,65 @@ pub struct Usage {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct TurnCompletedNotification {
+    pub thread_id: String,
     pub turn: Turn,
-    pub usage: Usage,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// Notification that the turn-level unified diff has changed.
+/// Contains the latest aggregated diff across all file changes in the turn.
+pub struct TurnDiffUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub diff: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnPlanUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub explanation: Option<String>,
+    pub plan: Vec<TurnPlanStep>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnPlanStep {
+    pub step: String,
+    pub status: TurnPlanStepStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum TurnPlanStepStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+impl From<CorePlanItemArg> for TurnPlanStep {
+    fn from(value: CorePlanItemArg) -> Self {
+        Self {
+            step: value.step,
+            status: value.status.into(),
+        }
+    }
+}
+
+impl From<CorePlanStepStatus> for TurnPlanStepStatus {
+    fn from(value: CorePlanStepStatus) -> Self {
+        match value {
+            CorePlanStepStatus::Pending => Self::Pending,
+            CorePlanStepStatus::InProgress => Self::InProgress,
+            CorePlanStepStatus::Completed => Self::Completed,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -350,6 +1495,8 @@ pub struct TurnCompletedNotification {
 #[ts(export_to = "v2/")]
 pub struct ItemStartedNotification {
     pub item: ThreadItem,
+    pub thread_id: String,
+    pub turn_id: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -357,12 +1504,17 @@ pub struct ItemStartedNotification {
 #[ts(export_to = "v2/")]
 pub struct ItemCompletedNotification {
     pub item: ThreadItem,
+    pub thread_id: String,
+    pub turn_id: String,
 }
 
+// Item-specific progress notifications
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AgentMessageDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
 }
@@ -370,7 +1522,65 @@ pub struct AgentMessageDeltaNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ReasoningSummaryTextDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+    #[ts(type = "number")]
+    pub summary_index: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ReasoningSummaryPartAddedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    #[ts(type = "number")]
+    pub summary_index: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ReasoningTextDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+    #[ts(type = "number")]
+    pub content_index: i64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TerminalInteractionNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub process_id: String,
+    pub stdin: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct CommandExecutionOutputDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub delta: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FileChangeOutputDeltaNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub delta: String,
 }
@@ -379,8 +1589,78 @@ pub struct CommandExecutionOutputDeltaNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct McpToolCallProgressNotification {
+    pub thread_id: String,
+    pub turn_id: String,
     pub item_id: String,
     pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpServerOauthLoginCompletedNotification {
+    pub name: String,
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct WindowsWorldWritableWarningNotification {
+    pub sample_paths: Vec<String>,
+    pub extra_count: usize,
+    pub failed_scan: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ContextCompactedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecutionRequestApprovalParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    /// Optional explanatory reason (e.g. request for network access).
+    pub reason: Option<String>,
+    /// Optional proposed execpolicy amendment to allow similar commands without prompting.
+    pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CommandExecutionRequestApprovalResponse {
+    pub decision: ApprovalDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FileChangeRequestApprovalParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    /// Optional explanatory reason (e.g. request for extra write access).
+    pub reason: Option<String>,
+    /// [UNSTABLE] When set, the agent is asking the user to allow writes under this root
+    /// for the remainder of the session (unclear if this is honored today).
+    pub grant_root: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub struct FileChangeRequestApprovalResponse {
+    pub decision: ApprovalDecision,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -396,6 +1676,8 @@ pub struct AccountRateLimitsUpdatedNotification {
 pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
+    pub credits: Option<CreditsSnapshot>,
+    pub plan_type: Option<PlanType>,
 }
 
 impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
@@ -403,6 +1685,8 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
         Self {
             primary: value.primary.map(RateLimitWindow::from),
             secondary: value.secondary.map(RateLimitWindow::from),
+            credits: value.credits.map(CreditsSnapshot::from),
+            plan_type: value.plan_type,
         }
     }
 }
@@ -412,7 +1696,9 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
 #[ts(export_to = "v2/")]
 pub struct RateLimitWindow {
     pub used_percent: i32,
+    #[ts(type = "number | null")]
     pub window_duration_mins: Option<i64>,
+    #[ts(type = "number | null")]
     pub resets_at: Option<i64>,
 }
 
@@ -423,5 +1709,150 @@ impl From<CoreRateLimitWindow> for RateLimitWindow {
             window_duration_mins: value.window_minutes,
             resets_at: value.resets_at,
         }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct CreditsSnapshot {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    pub balance: Option<String>,
+}
+
+impl From<CoreCreditsSnapshot> for CreditsSnapshot {
+    fn from(value: CoreCreditsSnapshot) -> Self {
+        Self {
+            has_credits: value.has_credits,
+            unlimited: value.unlimited,
+            balance: value.balance,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountLoginCompletedNotification {
+    // Use plain String for identifiers to avoid TS/JSON Schema quirks around uuid-specific types.
+    // Convert to/from UUIDs at the application layer as needed.
+    pub login_id: Option<String>,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_protocol::items::AgentMessageContent;
+    use codex_protocol::items::AgentMessageItem;
+    use codex_protocol::items::ReasoningItem;
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::items::UserMessageItem;
+    use codex_protocol::items::WebSearchItem;
+    use codex_protocol::user_input::UserInput as CoreUserInput;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    #[test]
+    fn core_turn_item_into_thread_item_converts_supported_variants() {
+        let user_item = TurnItem::UserMessage(UserMessageItem {
+            id: "user-1".to_string(),
+            content: vec![
+                CoreUserInput::Text {
+                    text: "hello".to_string(),
+                },
+                CoreUserInput::Image {
+                    image_url: "https://example.com/image.png".to_string(),
+                },
+                CoreUserInput::LocalImage {
+                    path: PathBuf::from("local/image.png"),
+                },
+            ],
+        });
+
+        assert_eq!(
+            ThreadItem::from(user_item),
+            ThreadItem::UserMessage {
+                id: "user-1".to_string(),
+                content: vec![
+                    UserInput::Text {
+                        text: "hello".to_string(),
+                    },
+                    UserInput::Image {
+                        url: "https://example.com/image.png".to_string(),
+                    },
+                    UserInput::LocalImage {
+                        path: PathBuf::from("local/image.png"),
+                    },
+                ],
+            }
+        );
+
+        let agent_item = TurnItem::AgentMessage(AgentMessageItem {
+            id: "agent-1".to_string(),
+            content: vec![
+                AgentMessageContent::Text {
+                    text: "Hello ".to_string(),
+                },
+                AgentMessageContent::Text {
+                    text: "world".to_string(),
+                },
+            ],
+        });
+
+        assert_eq!(
+            ThreadItem::from(agent_item),
+            ThreadItem::AgentMessage {
+                id: "agent-1".to_string(),
+                text: "Hello world".to_string(),
+            }
+        );
+
+        let reasoning_item = TurnItem::Reasoning(ReasoningItem {
+            id: "reasoning-1".to_string(),
+            summary_text: vec!["line one".to_string(), "line two".to_string()],
+            raw_content: vec![],
+        });
+
+        assert_eq!(
+            ThreadItem::from(reasoning_item),
+            ThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: vec!["line one".to_string(), "line two".to_string()],
+                content: vec![],
+            }
+        );
+
+        let search_item = TurnItem::WebSearch(WebSearchItem {
+            id: "search-1".to_string(),
+            query: "docs".to_string(),
+        });
+
+        assert_eq!(
+            ThreadItem::from(search_item),
+            ThreadItem::WebSearch {
+                id: "search-1".to_string(),
+                query: "docs".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn codex_error_info_serializes_http_status_code_in_camel_case() {
+        let value = CodexErrorInfo::ResponseTooManyFailedAttempts {
+            http_status_code: Some(401),
+        };
+
+        assert_eq!(
+            serde_json::to_value(value).unwrap(),
+            json!({
+                "responseTooManyFailedAttempts": {
+                    "httpStatusCode": 401
+                }
+            })
+        );
     }
 }

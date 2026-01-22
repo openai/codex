@@ -1,11 +1,10 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use dirs_next::home_dir;
 use std::collections::HashMap;
 use std::env;
-use std::fs::File;
-use std::fs::{self};
+use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub fn normalize_null_device_env(env_map: &mut HashMap<String, String>) {
     let keys: Vec<String> = env_map.keys().cloned().collect();
@@ -27,6 +26,21 @@ pub fn ensure_non_interactive_pager(env_map: &mut HashMap<String, String>) {
         .entry("PAGER".into())
         .or_insert_with(|| "more.com".into());
     env_map.entry("LESS".into()).or_insert_with(|| "".into());
+}
+
+// Keep PATH and PATHEXT stable for callers that rely on inheriting the parent process env.
+#[allow(dead_code)]
+pub fn inherit_path_env(env_map: &mut HashMap<String, String>) {
+    if !env_map.contains_key("PATH") {
+        if let Ok(path) = env::var("PATH") {
+            env_map.insert("PATH".into(), path);
+        }
+    }
+    if !env_map.contains_key("PATHEXT") {
+        if let Ok(pathext) = env::var("PATHEXT") {
+            env_map.insert("PATHEXT".into(), pathext);
+        }
+    }
 }
 
 fn prepend_path(env_map: &mut HashMap<String, String>, prefix: &str) {
@@ -64,7 +78,7 @@ fn reorder_pathext_for_stubs(env_map: &mut HashMap<String, String>) {
         .map(|s| s.to_string())
         .collect();
     let exts_norm: Vec<String> = exts.iter().map(|e| e.to_ascii_uppercase()).collect();
-    let want = [".BAT", ".CMD"]; // move to front if present
+    let want = [".BAT", ".CMD"];
     let mut front: Vec<String> = Vec::new();
     for w in want {
         if let Some(idx) = exts_norm.iter().position(|e| e == w) {
@@ -90,7 +104,7 @@ fn ensure_denybin(tools: &[&str], denybin_dir: Option<&Path>) -> Result<PathBuf>
     let base = match denybin_dir {
         Some(p) => p.to_path_buf(),
         None => {
-            let home = dirs_next::home_dir().ok_or_else(|| anyhow::anyhow!("no home dir"))?;
+            let home = home_dir().ok_or_else(|| anyhow!("no home dir"))?;
             home.join(".sbx-denybin")
         }
     };
@@ -146,16 +160,12 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
         .entry("GIT_ALLOW_PROTOCOLS".into())
         .or_insert_with(|| "".into());
 
-    // Block interactive network tools that bypass HTTP(S) proxy settings, but
-    // allow curl/wget to run so commands like `curl --version` still succeed.
-    // Network access is disabled via proxy envs above.
     let base = ensure_denybin(&["ssh", "scp"], None)?;
-    // Clean up any stale stubs from previous runs so real curl/wget can run.
     for tool in ["curl", "wget"] {
         for ext in [".bat", ".cmd"] {
             let p = base.join(format!("{}{}", tool, ext));
             if p.exists() {
-                let _ = std::fs::remove_file(&p);
+                let _ = fs::remove_file(&p);
             }
         }
     }

@@ -28,6 +28,7 @@ use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
+use unicode_width::UnicodeWidthStr;
 
 /// One selectable item in the generic selection list.
 pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
@@ -39,6 +40,7 @@ pub(crate) struct SelectionItem {
     pub description: Option<String>,
     pub selected_description: Option<String>,
     pub is_current: bool,
+    pub is_default: bool,
     pub actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
     pub search_value: Option<String>,
@@ -52,6 +54,7 @@ pub(crate) struct SelectionViewParams {
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
     pub header: Box<dyn Renderable>,
+    pub initial_selected_idx: Option<usize>,
 }
 
 impl Default for SelectionViewParams {
@@ -64,6 +67,7 @@ impl Default for SelectionViewParams {
             is_searchable: false,
             search_placeholder: None,
             header: Box::new(()),
+            initial_selected_idx: None,
         }
     }
 }
@@ -80,6 +84,7 @@ pub(crate) struct ListSelectionView {
     filtered_indices: Vec<usize>,
     last_selected_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
+    initial_selected_idx: Option<usize>,
 }
 
 impl ListSelectionView {
@@ -110,6 +115,7 @@ impl ListSelectionView {
             filtered_indices: Vec::new(),
             last_selected_actual_idx: None,
             header,
+            initial_selected_idx: params.initial_selected_idx,
         };
         s.apply_filter();
         s
@@ -132,7 +138,8 @@ impl ListSelectionView {
                 (!self.is_searchable)
                     .then(|| self.items.iter().position(|item| item.is_current))
                     .flatten()
-            });
+            })
+            .or_else(|| self.initial_selected_idx.take());
 
         if self.is_searchable && !self.search_query.is_empty() {
             let query_lower = self.search_query.to_lowercase();
@@ -181,29 +188,35 @@ impl ListSelectionView {
                     let is_selected = self.state.selected_idx == Some(visible_idx);
                     let prefix = if is_selected { '›' } else { ' ' };
                     let name = item.name.as_str();
-                    let name_with_marker = if item.is_current {
-                        format!("{name} (current)")
+                    let marker = if item.is_current {
+                        " (current)"
+                    } else if item.is_default {
+                        " (default)"
                     } else {
-                        item.name.clone()
+                        ""
                     };
+                    let name_with_marker = format!("{name}{marker}");
                     let n = visible_idx + 1;
-                    let display_name = if self.is_searchable {
+                    let wrap_prefix = if self.is_searchable {
                         // The number keys don't work when search is enabled (since we let the
                         // numbers be used for the search query).
-                        format!("{prefix} {name_with_marker}")
+                        format!("{prefix} ")
                     } else {
-                        format!("{prefix} {n}. {name_with_marker}")
+                        format!("{prefix} {n}. ")
                     };
+                    let wrap_prefix_width = UnicodeWidthStr::width(wrap_prefix.as_str());
+                    let display_name = format!("{wrap_prefix}{name_with_marker}");
                     let description = is_selected
                         .then(|| item.selected_description.clone())
                         .flatten()
                         .or_else(|| item.description.clone());
+                    let wrap_indent = description.is_none().then_some(wrap_prefix_width);
                     GenericDisplayRow {
                         name: display_name,
                         display_shortcut: item.display_shortcut,
                         match_indices: None,
-                        is_current: item.is_current,
                         description,
+                        wrap_indent,
                     }
                 })
             })
@@ -250,18 +263,55 @@ impl ListSelectionView {
     pub(crate) fn take_last_selected_index(&mut self) -> Option<usize> {
         self.last_selected_actual_idx.take()
     }
+
+    fn rows_width(total_width: u16) -> u16 {
+        total_width.saturating_sub(2)
+    }
 }
 
 impl BottomPaneView for ListSelectionView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
+            // Some terminals (or configurations) send Control key chords as
+            // C0 control characters without reporting the CONTROL modifier.
+            // Handle fallbacks for Ctrl-P/N here so navigation works everywhere.
             KeyEvent {
                 code: KeyCode::Up, ..
-            } => self.move_up(),
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\u{0010}'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } /* ^P */ => self.move_up(),
+            KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if !self.is_searchable => self.move_up(),
             KeyEvent {
                 code: KeyCode::Down,
                 ..
-            } => self.move_down(),
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('\u{000e}'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } /* ^N */ => self.move_down(),
+            KeyEvent {
+                code: KeyCode::Char('j'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if !self.is_searchable => self.move_down(),
             KeyEvent {
                 code: KeyCode::Backspace,
                 ..
@@ -327,8 +377,13 @@ impl Renderable for ListSelectionView {
         // Measure wrapped height for up to MAX_POPUP_ROWS items at the given width.
         // Build the same display rows used by the renderer so wrapping math matches.
         let rows = self.build_rows();
-
-        let rows_height = measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width);
+        let rows_width = Self::rows_width(width);
+        let rows_height = measure_rows_height(
+            &rows,
+            &self.state,
+            MAX_POPUP_ROWS,
+            rows_width.saturating_add(1),
+        );
 
         // Subtract 4 for the padding on the left and right of the header.
         let mut height = self.header.desired_height(width.saturating_sub(4));
@@ -362,8 +417,13 @@ impl Renderable for ListSelectionView {
             // Subtract 4 for the padding on the left and right of the header.
             .desired_height(content_area.width.saturating_sub(4));
         let rows = self.build_rows();
-        let rows_height =
-            measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, content_area.width);
+        let rows_width = Self::rows_width(content_area.width);
+        let rows_height = measure_rows_height(
+            &rows,
+            &self.state,
+            MAX_POPUP_ROWS,
+            rows_width.saturating_add(1),
+        );
         let [header_area, _, search_area, list_area] = Layout::vertical([
             Constraint::Max(header_height),
             Constraint::Max(1),
@@ -398,18 +458,18 @@ impl Renderable for ListSelectionView {
         }
 
         if list_area.height > 0 {
-            let list_area = Rect {
-                x: list_area.x - 2,
+            let render_area = Rect {
+                x: list_area.x.saturating_sub(2),
                 y: list_area.y,
-                width: list_area.width + 2,
+                width: rows_width.max(1),
                 height: list_area.height,
             };
             render_rows(
-                list_area,
+                render_area,
                 buf,
                 &rows,
                 &self.state,
-                list_area.height as usize,
+                render_area.height as usize,
                 "no matches",
             );
         }
@@ -467,7 +527,10 @@ mod tests {
     }
 
     fn render_lines(view: &ListSelectionView) -> String {
-        let width = 48;
+        render_lines_with_width(view, 48)
+    }
+
+    fn render_lines_with_width(view: &ListSelectionView, width: u16) -> String {
         let height = view.desired_height(width);
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
@@ -533,6 +596,203 @@ mod tests {
         assert!(
             lines.contains("filters"),
             "expected search query line to include rendered query, got {lines:?}"
+        );
+    }
+
+    #[test]
+    fn wraps_long_option_without_overflowing_columns() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![
+            SelectionItem {
+                name: "Yes, proceed".to_string(),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "Yes, and don't ask again for commands that start with `python -mpre_commit run --files eslint-plugin/no-mixed-const-enum-exports.js`".to_string(),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Approval".to_string()),
+                items,
+                ..Default::default()
+            },
+            tx,
+        );
+
+        let rendered = render_lines_with_width(&view, 60);
+        let command_line = rendered
+            .lines()
+            .find(|line| line.contains("python -mpre_commit run"))
+            .expect("rendered lines should include wrapped command");
+        assert!(
+            command_line.starts_with("     `python -mpre_commit run"),
+            "wrapped command line should align under the numbered prefix:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("eslint-plugin/no-")
+                && rendered.contains("mixed-const-enum-exports.js"),
+            "long command should not be truncated even when wrapped:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn width_changes_do_not_hide_rows() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![
+            SelectionItem {
+                name: "gpt-5.1-codex".to_string(),
+                description: Some(
+                    "Optimized for Codex. Balance of reasoning quality and coding ability."
+                        .to_string(),
+                ),
+                is_current: true,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "gpt-5.1-codex-mini".to_string(),
+                description: Some(
+                    "Optimized for Codex. Cheaper, faster, but less capable.".to_string(),
+                ),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "gpt-4.1-codex".to_string(),
+                description: Some(
+                    "Legacy model. Use when you need compatibility with older automations."
+                        .to_string(),
+                ),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Select Model and Effort".to_string()),
+                items,
+                ..Default::default()
+            },
+            tx,
+        );
+        let mut missing: Vec<u16> = Vec::new();
+        for width in 60..=90 {
+            let rendered = render_lines_with_width(&view, width);
+            if !rendered.contains("3.") {
+                missing.push(width);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "third option missing at widths {missing:?}"
+        );
+    }
+
+    #[test]
+    fn narrow_width_keeps_all_rows_visible() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let desc = "x".repeat(10);
+        let items: Vec<SelectionItem> = (1..=3)
+            .map(|idx| SelectionItem {
+                name: format!("Item {idx}"),
+                description: Some(desc.clone()),
+                dismiss_on_select: true,
+                ..Default::default()
+            })
+            .collect();
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Debug".to_string()),
+                items,
+                ..Default::default()
+            },
+            tx,
+        );
+        let rendered = render_lines_with_width(&view, 24);
+        assert!(
+            rendered.contains("3."),
+            "third option missing for width 24:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn snapshot_model_picker_width_80() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![
+            SelectionItem {
+                name: "gpt-5.1-codex".to_string(),
+                description: Some(
+                    "Optimized for Codex. Balance of reasoning quality and coding ability."
+                        .to_string(),
+                ),
+                is_current: true,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "gpt-5.1-codex-mini".to_string(),
+                description: Some(
+                    "Optimized for Codex. Cheaper, faster, but less capable.".to_string(),
+                ),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: "gpt-4.1-codex".to_string(),
+                description: Some(
+                    "Legacy model. Use when you need compatibility with older automations."
+                        .to_string(),
+                ),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Select Model and Effort".to_string()),
+                items,
+                ..Default::default()
+            },
+            tx,
+        );
+        assert_snapshot!(
+            "list_selection_model_picker_width_80",
+            render_lines_with_width(&view, 80)
+        );
+    }
+
+    #[test]
+    fn snapshot_narrow_width_preserves_third_option() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let desc = "x".repeat(10);
+        let items: Vec<SelectionItem> = (1..=3)
+            .map(|idx| SelectionItem {
+                name: format!("Item {idx}"),
+                description: Some(desc.clone()),
+                dismiss_on_select: true,
+                ..Default::default()
+            })
+            .collect();
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Debug".to_string()),
+                items,
+                ..Default::default()
+            },
+            tx,
+        );
+        assert_snapshot!(
+            "list_selection_narrow_width_preserves_rows",
+            render_lines_with_width(&view, 24)
         );
     }
 }

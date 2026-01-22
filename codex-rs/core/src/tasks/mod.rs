@@ -19,6 +19,7 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::openai_models::models_manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnAbortReason;
@@ -54,6 +55,10 @@ impl SessionTaskContext {
 
     pub(crate) fn auth_manager(&self) -> Arc<AuthManager> {
         Arc::clone(&self.session.services.auth_manager)
+    }
+
+    pub(crate) fn models_manager(&self) -> Arc<ModelsManager> {
+        Arc::clone(&self.session.services.models_manager)
     }
 }
 

@@ -1,19 +1,18 @@
-use std::time::Duration;
-
-use async_trait::async_trait;
-use serde::Deserialize;
-use serde::Serialize;
-
 use crate::function_tool::FunctionCallError;
+use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandOutputDeltaEvent;
-use crate::protocol::ExecOutputStream;
+use crate::protocol::ExecCommandSource;
+use crate::protocol::TerminalInteractionEvent;
+use crate::sandboxing::SandboxPermissions;
+use crate::shell::Shell;
+use crate::shell::get_shell_by_model_provided_path;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
+use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::unified_exec::ExecCommandRequest;
@@ -21,35 +20,50 @@ use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::UnifiedExecSessionManager;
 use crate::unified_exec::WriteStdinRequest;
+use async_trait::async_trait;
+use serde::Deserialize;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 pub struct UnifiedExecHandler;
 
 #[derive(Debug, Deserialize)]
 struct ExecCommandArgs {
     cmd: String,
-    #[serde(default = "default_shell")]
-    shell: String,
+    #[serde(default)]
+    workdir: Option<String>,
+    #[serde(default)]
+    shell: Option<String>,
     #[serde(default = "default_login")]
     login: bool,
-    #[serde(default)]
-    yield_time_ms: Option<u64>,
+    #[serde(default = "default_exec_yield_time_ms")]
+    yield_time_ms: u64,
     #[serde(default)]
     max_output_tokens: Option<usize>,
+    #[serde(default)]
+    sandbox_permissions: SandboxPermissions,
+    #[serde(default)]
+    justification: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct WriteStdinArgs {
+    // The model is trained on `session_id`.
     session_id: i32,
     #[serde(default)]
     chars: String,
-    #[serde(default)]
-    yield_time_ms: Option<u64>,
+    #[serde(default = "default_write_stdin_yield_time_ms")]
+    yield_time_ms: u64,
     #[serde(default)]
     max_output_tokens: Option<usize>,
 }
 
-fn default_shell() -> String {
-    "/bin/bash".to_string()
+fn default_exec_yield_time_ms() -> u64 {
+    10000
+}
+
+fn default_write_stdin_yield_time_ms() -> u64 {
+    250
 }
 
 fn default_login() -> bool {
@@ -69,10 +83,25 @@ impl ToolHandler for UnifiedExecHandler {
         )
     }
 
+    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
+        let (ToolPayload::Function { arguments } | ToolPayload::UnifiedExec { arguments }) =
+            &invocation.payload
+        else {
+            return true;
+        };
+
+        let Ok(params) = serde_json::from_str::<ExecCommandArgs>(arguments) else {
+            return true;
+        };
+        let command = get_command(&params, invocation.session.user_shell());
+        !is_known_safe_command(&command)
+    }
+
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
+            tracker,
             call_id,
             tool_name,
             payload,
@@ -99,6 +128,51 @@ impl ToolHandler for UnifiedExecHandler {
                         "failed to parse exec_command arguments: {err:?}"
                     ))
                 })?;
+                let process_id = manager.allocate_process_id().await;
+                let command = get_command(&args, session.user_shell());
+
+                let ExecCommandArgs {
+                    workdir,
+                    yield_time_ms,
+                    max_output_tokens,
+                    sandbox_permissions,
+                    justification,
+                    ..
+                } = args;
+
+                if sandbox_permissions.requires_escalated_permissions()
+                    && !matches!(
+                        context.turn.approval_policy,
+                        codex_protocol::protocol::AskForApproval::OnRequest
+                    )
+                {
+                    manager.release_process_id(&process_id).await;
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "approval policy is {policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {policy:?}",
+                        policy = context.turn.approval_policy
+                    )));
+                }
+
+                let workdir = workdir.filter(|value| !value.is_empty());
+
+                let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
+                let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
+
+                if let Some(output) = intercept_apply_patch(
+                    &command,
+                    &cwd,
+                    Some(yield_time_ms),
+                    context.session.as_ref(),
+                    context.turn.as_ref(),
+                    Some(&tracker),
+                    &context.call_id,
+                    tool_name.as_str(),
+                )
+                .await?
+                {
+                    manager.release_process_id(&process_id).await;
+                    return Ok(output);
+                }
 
                 let event_ctx = ToolEventCtx::new(
                     context.session.as_ref(),
@@ -106,18 +180,24 @@ impl ToolHandler for UnifiedExecHandler {
                     &context.call_id,
                     None,
                 );
-                let emitter =
-                    ToolEmitter::unified_exec(args.cmd.clone(), context.turn.cwd.clone(), true);
+                let emitter = ToolEmitter::unified_exec(
+                    &command,
+                    cwd.clone(),
+                    ExecCommandSource::UnifiedExecStartup,
+                    Some(process_id.clone()),
+                );
                 emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
                 manager
                     .exec_command(
                         ExecCommandRequest {
-                            command: &args.cmd,
-                            shell: &args.shell,
-                            login: args.login,
-                            yield_time_ms: args.yield_time_ms,
-                            max_output_tokens: args.max_output_tokens,
+                            command,
+                            process_id,
+                            yield_time_ms,
+                            max_output_tokens,
+                            workdir,
+                            sandbox_permissions,
+                            justification,
                         },
                         &context,
                     )
@@ -132,9 +212,9 @@ impl ToolHandler for UnifiedExecHandler {
                         "failed to parse write_stdin arguments: {err:?}"
                     ))
                 })?;
-                manager
+                let response = manager
                     .write_stdin(WriteStdinRequest {
-                        session_id: args.session_id,
+                        process_id: &args.session_id.to_string(),
                         input: &args.chars,
                         yield_time_ms: args.yield_time_ms,
                         max_output_tokens: args.max_output_tokens,
@@ -142,7 +222,18 @@ impl ToolHandler for UnifiedExecHandler {
                     .await
                     .map_err(|err| {
                         FunctionCallError::RespondToModel(format!("write_stdin failed: {err:?}"))
-                    })?
+                    })?;
+
+                let interaction = TerminalInteractionEvent {
+                    call_id: response.event_call_id.clone(),
+                    process_id: args.session_id.to_string(),
+                    stdin: args.chars.clone(),
+                };
+                session
+                    .send_event(turn.as_ref(), EventMsg::TerminalInteraction(interaction))
+                    .await;
+
+                response
             }
             other => {
                 return Err(FunctionCallError::RespondToModel(format!(
@@ -151,23 +242,7 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
-        // Emit a delta event with the chunk of output we just produced, if any.
-        if !response.output.is_empty() {
-            let delta = ExecCommandOutputDeltaEvent {
-                call_id: response.event_call_id.clone(),
-                stream: ExecOutputStream::Stdout,
-                chunk: response.output.as_bytes().to_vec(),
-            };
-            session
-                .send_event(turn.as_ref(), EventMsg::ExecCommandOutputDelta(delta))
-                .await;
-        }
-
-        let content = serialize_response(&response).map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "failed to serialize unified exec output: {err:?}"
-            ))
-        })?;
+        let content = format_response(&response);
 
         Ok(ToolOutput::Function {
             content,
@@ -177,32 +252,113 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
-#[derive(Serialize)]
-struct SerializedUnifiedExecResponse<'a> {
-    chunk_id: &'a str,
-    wall_time_seconds: f64,
-    output: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    session_id: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    exit_code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    original_token_count: Option<usize>,
+fn get_command(args: &ExecCommandArgs, session_shell: Arc<Shell>) -> Vec<String> {
+    let model_shell = args.shell.as_ref().map(|shell_str| {
+        let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
+        shell.shell_snapshot = None;
+        shell
+    });
+
+    let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
+
+    shell.derive_exec_args(&args.cmd, args.login)
 }
 
-fn serialize_response(response: &UnifiedExecResponse) -> Result<String, serde_json::Error> {
-    let payload = SerializedUnifiedExecResponse {
-        chunk_id: &response.chunk_id,
-        wall_time_seconds: duration_to_seconds(response.wall_time),
-        output: &response.output,
-        session_id: response.session_id,
-        exit_code: response.exit_code,
-        original_token_count: response.original_token_count,
-    };
+fn format_response(response: &UnifiedExecResponse) -> String {
+    let mut sections = Vec::new();
 
-    serde_json::to_string(&payload)
+    if !response.chunk_id.is_empty() {
+        sections.push(format!("Chunk ID: {}", response.chunk_id));
+    }
+
+    let wall_time_seconds = response.wall_time.as_secs_f64();
+    sections.push(format!("Wall time: {wall_time_seconds:.4} seconds"));
+
+    if let Some(exit_code) = response.exit_code {
+        sections.push(format!("Process exited with code {exit_code}"));
+    }
+
+    if let Some(process_id) = &response.process_id {
+        // Training still uses "session ID".
+        sections.push(format!("Process running with session ID {process_id}"));
+    }
+
+    if let Some(original_token_count) = response.original_token_count {
+        sections.push(format!("Original token count: {original_token_count}"));
+    }
+
+    sections.push("Output:".to_string());
+    sections.push(response.output.clone());
+
+    sections.join("\n")
 }
 
-fn duration_to_seconds(duration: Duration) -> f64 {
-    duration.as_secs_f64()
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shell::default_user_shell;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_get_command_uses_default_shell_when_unspecified() {
+        let json = r#"{"cmd": "echo hello"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        assert!(args.shell.is_none());
+
+        let command = get_command(&args, Arc::new(default_user_shell()));
+
+        assert_eq!(command.len(), 3);
+        assert_eq!(command[2], "echo hello");
+    }
+
+    #[test]
+    fn test_get_command_respects_explicit_bash_shell() {
+        let json = r#"{"cmd": "echo hello", "shell": "/bin/bash"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
+
+        let command = get_command(&args, Arc::new(default_user_shell()));
+
+        assert_eq!(command.last(), Some(&"echo hello".to_string()));
+        if command
+            .iter()
+            .any(|arg| arg.eq_ignore_ascii_case("-Command"))
+        {
+            assert!(command.contains(&"-NoProfile".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_get_command_respects_explicit_powershell_shell() {
+        let json = r#"{"cmd": "echo hello", "shell": "powershell"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        assert_eq!(args.shell.as_deref(), Some("powershell"));
+
+        let command = get_command(&args, Arc::new(default_user_shell()));
+
+        assert_eq!(command[2], "echo hello");
+    }
+
+    #[test]
+    fn test_get_command_respects_explicit_cmd_shell() {
+        let json = r#"{"cmd": "echo hello", "shell": "cmd"}"#;
+
+        let args: ExecCommandArgs =
+            serde_json::from_str(json).expect("deserialize ExecCommandArgs");
+
+        assert_eq!(args.shell.as_deref(), Some("cmd"));
+
+        let command = get_command(&args, Arc::new(default_user_shell()));
+
+        assert_eq!(command[2], "echo hello");
+    }
 }
