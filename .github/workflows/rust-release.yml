@@ -443,8 +443,8 @@ jobs:
           config: .github/dotslash-config.json
 
       - name: Trigger developers.openai.com deploy
-      # Only trigger the deploy if the release is not a pre-release.
-      # The deploy is used to update the developers.openai.com website with the new config schema json file.
+        # Only trigger the deploy if the release is not a pre-release.
+        # The deploy is used to update the developers.openai.com website with the new config schema json file.
         if: ${{ !contains(steps.release_name.outputs.name, '-') }}
         continue-on-error: true
         env:
