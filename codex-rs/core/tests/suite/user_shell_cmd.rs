@@ -18,6 +18,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::sandbox_exec_available;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -134,6 +135,10 @@ async fn user_shell_cmd_can_be_interrupted() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyhow::Result<()> {
+    if !sandbox_exec_available() {
+        eprintln!("Skipping test because sandbox-exec is unavailable.");
+        return Ok(());
+    }
     let server = responses::start_mock_server().await;
     let mut builder = core_test_support::test_codex::test_codex();
     let test = builder.build(&server).await?;

@@ -14,7 +14,7 @@ Looking for something specific? Jump ahead:
 | `codex "..."`      | Initial prompt for interactive TUI | `codex "fix lint errors"`       |
 | `codex exec "..."` | Non-interactive "automation mode"  | `codex exec "explain utils.ts"` |
 
-Key flags: `--model/-m`, `--ask-for-approval/-a`.
+Key flags: `--model/-m`, `--ask-for-approval/-a`, `--force-onboarding-question`.
 
 ### Resuming interactive sessions
 

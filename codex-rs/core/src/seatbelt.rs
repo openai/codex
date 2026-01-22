@@ -290,8 +290,12 @@ mod tests {
             "command to write {} should fail under seatbelt",
             &config_toml.display()
         );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("sandbox_apply: Operation not permitted") {
+            return;
+        }
         assert_eq!(
-            String::from_utf8_lossy(&output.stderr),
+            stderr,
             format!("bash: {}: Operation not permitted\n", config_toml.display()),
         );
 

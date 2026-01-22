@@ -16,11 +16,13 @@ use codex_core::RolloutRecorder;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::find_conversation_path_by_id_str;
 use codex_core::get_platform_sandbox;
+use codex_core::guardrails::scaffold_guardrail_files;
 use codex_core::protocol::AskForApproval;
 use codex_protocol::config_types::SandboxMode;
 use std::fs::OpenOptions;
@@ -89,6 +91,7 @@ mod wrapping;
 #[cfg(test)]
 pub mod test_backend;
 
+use crate::onboarding::SophisticationLevel;
 use crate::onboarding::TrustDirectorySelection;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
@@ -386,13 +389,21 @@ async fn run_ratatui_app(
         initial_config.cli_auth_credentials_store_mode,
     );
     let login_status = get_login_status(&initial_config);
+    let is_first_time_user = is_first_time_user(&initial_config);
     let should_show_trust_screen = should_show_trust_screen(&initial_config);
-    let should_show_onboarding =
-        should_show_onboarding(login_status, &initial_config, should_show_trust_screen);
+    let should_show_sophistication_screen =
+        should_show_sophistication_screen(&initial_config, cli.force_onboarding_question);
+    let should_show_onboarding = should_show_onboarding(
+        login_status,
+        &initial_config,
+        should_show_trust_screen,
+        should_show_sophistication_screen,
+    );
 
     let config = if should_show_onboarding {
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
+                show_sophistication_screen: should_show_sophistication_screen,
                 show_login_screen: should_show_login_screen(login_status, &initial_config),
                 show_trust_screen: should_show_trust_screen,
                 login_status,
@@ -412,6 +423,20 @@ async fn run_ratatui_app(
                 update_action: None,
                 session_lines: Vec::new(),
             });
+        }
+        if onboarding_result.sophistication_level.is_some()
+            && let Err(err) = ConfigEditsBuilder::new(&initial_config.codex_home)
+                .set_hide_sophistication_prompt(true)
+                .apply()
+                .await
+        {
+            error!("Failed to persist sophistication onboarding flag: {err}");
+        }
+        if onboarding_result.sophistication_level == Some(SophisticationLevel::Low)
+            && is_first_time_user
+            && let Err(err) = scaffold_guardrail_files(&initial_config.cwd)
+        {
+            error!("Failed to scaffold guardrail files: {err}");
         }
         // if the user acknowledged windows or made an explicit decision ato trust the directory, reload the config accordingly
         if onboarding_result
@@ -598,16 +623,25 @@ fn should_show_trust_screen(config: &Config) -> bool {
     config.active_project.trust_level.is_none()
 }
 
+fn is_first_time_user(config: &Config) -> bool {
+    !config.notices.hide_sophistication_prompt.unwrap_or(false)
+}
+
+fn should_show_sophistication_screen(config: &Config, force_onboarding_question: bool) -> bool {
+    force_onboarding_question || is_first_time_user(config)
+}
+
 fn should_show_onboarding(
     login_status: LoginStatus,
     config: &Config,
     show_trust_screen: bool,
+    show_sophistication_screen: bool,
 ) -> bool {
     if show_trust_screen {
         return true;
     }
 
-    should_show_login_screen(login_status, config)
+    show_sophistication_screen || should_show_login_screen(login_status, config)
 }
 
 fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool {

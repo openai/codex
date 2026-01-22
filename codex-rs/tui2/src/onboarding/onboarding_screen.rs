@@ -17,6 +17,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use crate::LoginStatus;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInState;
+use crate::onboarding::sophistication::SophisticationWidget;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
 use crate::onboarding::welcome::WelcomeWidget;
@@ -27,9 +28,12 @@ use color_eyre::eyre::Result;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+use super::SophisticationLevel;
+
 #[allow(clippy::large_enum_variant)]
 enum Step {
     Welcome(WelcomeWidget),
+    Sophistication(SophisticationWidget),
     Auth(AuthModeWidget),
     TrustDirectory(TrustDirectoryWidget),
 }
@@ -58,6 +62,7 @@ pub(crate) struct OnboardingScreen {
 }
 
 pub(crate) struct OnboardingScreenArgs {
+    pub show_sophistication_screen: bool,
     pub show_trust_screen: bool,
     pub show_login_screen: bool,
     pub login_status: LoginStatus,
@@ -67,12 +72,14 @@ pub(crate) struct OnboardingScreenArgs {
 
 pub(crate) struct OnboardingResult {
     pub directory_trust_decision: Option<TrustDirectorySelection>,
+    pub sophistication_level: Option<SophisticationLevel>,
     pub should_exit: bool,
 }
 
 impl OnboardingScreen {
     pub(crate) fn new(tui: &mut Tui, args: OnboardingScreenArgs) -> Self {
         let OnboardingScreenArgs {
+            show_sophistication_screen,
             show_trust_screen,
             show_login_screen,
             login_status,
@@ -90,6 +97,9 @@ impl OnboardingScreen {
             tui.frame_requester(),
             config.animations,
         )));
+        if show_sophistication_screen {
+            steps.push(Step::Sophistication(SophisticationWidget::new()));
+        }
         if show_login_screen {
             let highlighted_mode = match forced_login_method {
                 Some(ForcedLoginMethod::Api) => AuthMode::ApiKey,
@@ -194,6 +204,19 @@ impl OnboardingScreen {
 
     pub fn should_exit(&self) -> bool {
         self.should_exit
+    }
+
+    pub fn sophistication_level(&self) -> Option<SophisticationLevel> {
+        self.steps
+            .iter()
+            .find_map(|step| {
+                if let Step::Sophistication(widget) = step {
+                    Some(widget.selection)
+                } else {
+                    None
+                }
+            })
+            .flatten()
     }
 
     fn is_api_key_entry_active(&self) -> bool {
@@ -333,6 +356,7 @@ impl KeyboardHandler for Step {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match self {
             Step::Welcome(widget) => widget.handle_key_event(key_event),
+            Step::Sophistication(widget) => widget.handle_key_event(key_event),
             Step::Auth(widget) => widget.handle_key_event(key_event),
             Step::TrustDirectory(widget) => widget.handle_key_event(key_event),
         }
@@ -341,6 +365,7 @@ impl KeyboardHandler for Step {
     fn handle_paste(&mut self, pasted: String) {
         match self {
             Step::Welcome(_) => {}
+            Step::Sophistication(_) => {}
             Step::Auth(widget) => widget.handle_paste(pasted),
             Step::TrustDirectory(widget) => widget.handle_paste(pasted),
         }
@@ -351,6 +376,7 @@ impl StepStateProvider for Step {
     fn get_step_state(&self) -> StepState {
         match self {
             Step::Welcome(w) => w.get_step_state(),
+            Step::Sophistication(w) => w.get_step_state(),
             Step::Auth(w) => w.get_step_state(),
             Step::TrustDirectory(w) => w.get_step_state(),
         }
@@ -361,6 +387,9 @@ impl WidgetRef for Step {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         match self {
             Step::Welcome(widget) => {
+                widget.render_ref(area, buf);
+            }
+            Step::Sophistication(widget) => {
                 widget.render_ref(area, buf);
             }
             Step::Auth(widget) => {
@@ -440,6 +469,7 @@ pub(crate) async fn run_onboarding_app(
     }
     Ok(OnboardingResult {
         directory_trust_decision: onboarding_screen.directory_trust_decision(),
+        sophistication_level: onboarding_screen.sophistication_level(),
         should_exit: onboarding_screen.should_exit(),
     })
 }

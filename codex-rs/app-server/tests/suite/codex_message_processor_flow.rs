@@ -4,6 +4,7 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell;
+use app_test_support::sandbox_exec_available;
 use app_test_support::to_response;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
@@ -44,6 +45,10 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
         );
+        return Ok(());
+    }
+    if !sandbox_exec_available() {
+        println!("Skipping test because sandbox-exec is unavailable.");
         return Ok(());
     }
 
@@ -165,6 +170,10 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
         );
+        return Ok(());
+    }
+    if !sandbox_exec_available() {
+        println!("Skipping test because sandbox-exec is unavailable.");
         return Ok(());
     }
 

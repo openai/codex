@@ -20,6 +20,7 @@ use tokio::time::timeout;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_shell_command_sse_response;
+use app_test_support::sandbox_exec_available;
 use app_test_support::to_response;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -27,6 +28,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_shell_command_interruption() {
     skip_if_no_network!();
+    if !sandbox_exec_available() {
+        println!("Skipping test because sandbox-exec is unavailable.");
+        return;
+    }
 
     if let Err(err) = shell_command_interruption().await {
         panic!("failure: {err}");

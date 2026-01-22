@@ -7,6 +7,7 @@ use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_mock_chat_completions_server_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
+use app_test_support::sandbox_exec_available;
 use app_test_support::to_response;
 use codex_app_server_protocol::ApprovalDecision;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
@@ -932,6 +933,10 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
 #[cfg_attr(windows, ignore = "process id reporting differs on Windows")]
 async fn command_execution_notifications_include_process_id() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    if !sandbox_exec_available() {
+        println!("Skipping test because sandbox-exec is unavailable.");
+        return Ok(());
+    }
 
     let responses = vec![
         create_exec_command_sse_response("uexec-1")?,

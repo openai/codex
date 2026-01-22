@@ -162,6 +162,7 @@ windows_wsl_setup_acknowledged = false
 [notice]
 # hide_full_access_warning = true
 # hide_rate_limit_model_nudge = true
+# hide_sophistication_prompt = true
 
 ################################################################################
 # Authentication & Login

@@ -81,6 +81,10 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Force the onboarding sophistication question even if already answered.
+    #[arg(long = "force-onboarding-question", default_value_t = false)]
+    pub force_onboarding_question: bool,
+
     /// Additional directories that should be writable alongside the primary workspace.
     #[arg(long = "add-dir", value_name = "DIR", value_hint = ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
@@ -108,6 +112,7 @@ impl From<codex_tui::Cli> for Cli {
             dangerously_bypass_approvals_and_sandbox: cli.dangerously_bypass_approvals_and_sandbox,
             cwd: cli.cwd,
             web_search: cli.web_search,
+            force_onboarding_question: cli.force_onboarding_question,
             add_dir: cli.add_dir,
             config_overrides: cli.config_overrides,
         }

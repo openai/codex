@@ -34,3 +34,24 @@ pub fn to_response<T: DeserializeOwned>(response: JSONRPCResponse) -> anyhow::Re
     let codex_response = serde_json::from_value(value)?;
     Ok(codex_response)
 }
+
+pub fn sandbox_exec_available() -> bool {
+    let output = std::process::Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", "(version 1)(allow default)", "--", "/usr/bin/true"])
+        .output();
+
+    let Ok(output) = output else {
+        return false;
+    };
+
+    if !output.status.success() {
+        return false;
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("sandbox_apply: Operation not permitted") {
+        return false;
+    }
+
+    true
+}

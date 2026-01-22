@@ -81,6 +81,10 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Force the onboarding sophistication question even if already answered.
+    #[arg(long = "force-onboarding-question", default_value_t = false)]
+    pub force_onboarding_question: bool,
+
     /// Additional directories that should be writable alongside the primary workspace.
     #[arg(long = "add-dir", value_name = "DIR", value_hint = ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,

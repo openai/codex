@@ -219,6 +219,27 @@ pub fn sandbox_network_env_var() -> &'static str {
     codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
 }
 
+pub fn sandbox_exec_available() -> bool {
+    let output = std::process::Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", "(version 1)(allow default)", "--", "/usr/bin/true"])
+        .output();
+
+    let Ok(output) = output else {
+        return false;
+    };
+
+    if !output.status.success() {
+        return false;
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("sandbox_apply: Operation not permitted") {
+        return false;
+    }
+
+    true
+}
+
 pub fn format_with_current_shell(command: &str) -> Vec<String> {
     codex_core::shell::default_user_shell().derive_exec_args(command, true)
 }

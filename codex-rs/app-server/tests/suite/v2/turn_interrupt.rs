@@ -4,6 +4,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_chat_completions_server;
 use app_test_support::create_shell_command_sse_response;
+use app_test_support::sandbox_exec_available;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -24,6 +25,10 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 
 #[tokio::test]
 async fn turn_interrupt_aborts_running_turn() -> Result<()> {
+    if !sandbox_exec_available() {
+        println!("Skipping test because sandbox-exec is unavailable.");
+        return Ok(());
+    }
     // Use a portable sleep command to keep the turn running.
     #[cfg(target_os = "windows")]
     let shell_command = vec![
