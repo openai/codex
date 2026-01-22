@@ -610,10 +610,7 @@ impl Session {
         }
 
         let forked_from_id = match &thread_origin {
-            ThreadOrigin::Forked { parent_thread_id }
-            | ThreadOrigin::SpawnedByThread {
-                parent_thread_id, ..
-            } => Some(*parent_thread_id),
+            ThreadOrigin::Forked { parent_thread_id } => Some(*parent_thread_id),
             _ => initial_history.forked_from_id(),
         };
 

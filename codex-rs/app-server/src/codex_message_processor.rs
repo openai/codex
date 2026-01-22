@@ -1960,22 +1960,21 @@ impl CodexMessageProcessor {
             developer_instructions,
         } = params;
 
-        let parent_thread_id = match ThreadId::from_string(&thread_id) {
-            Ok(id) => id,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid thread id: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        let rollout_path = if let Some(path) = path {
-            path
+        let (rollout_path, parent_thread_id) = if let Some(path) = path {
+            (path, None)
         } else {
+            let parent_thread_id = match ThreadId::from_string(&thread_id) {
+                Ok(id) => id,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid thread id: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
             let existing_thread_id = parent_thread_id;
             match find_thread_path_by_id_str(
                 &self.config.codex_home,
@@ -1983,7 +1982,7 @@ impl CodexMessageProcessor {
             )
             .await
             {
-                Ok(Some(p)) => p,
+                Ok(Some(p)) => (p, Some(parent_thread_id)),
                 Ok(None) => {
                     self.send_invalid_request_error(
                         request_id,
@@ -2014,6 +2013,22 @@ impl CodexMessageProcessor {
         let history_cwd = session_meta_line
             .as_ref()
             .map(|meta_line| meta_line.meta.cwd.clone());
+        let parent_thread_id = parent_thread_id.or_else(|| {
+            session_meta_line
+                .as_ref()
+                .map(|meta_line| meta_line.meta.id)
+        });
+        let parent_thread_id = match parent_thread_id {
+            Some(id) => id,
+            None => {
+                self.send_invalid_request_error(
+                    request_id,
+                    "failed to derive parent thread id for fork".to_string(),
+                )
+                .await;
+                return;
+            }
+        };
 
         // Persist windows sandbox feature.
         let mut cli_overrides = cli_overrides.unwrap_or_default();
