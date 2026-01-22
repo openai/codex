@@ -131,6 +131,7 @@ use crate::bottom_pane::BetaFeatureItem;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::CollaborationModeIndicator;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::InputResult;
@@ -1938,6 +1939,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
+        widget.update_collaboration_mode_indicator();
 
         widget
     }
@@ -2057,6 +2059,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
+        widget.update_collaboration_mode_indicator();
 
         widget
     }
@@ -4333,6 +4336,7 @@ impl ChatWidget {
             } else {
                 CollaborationMode::Custom(settings)
             };
+            self.update_collaboration_mode_indicator();
         }
     }
 
@@ -4418,6 +4422,25 @@ impl ChatWidget {
         }
     }
 
+    fn collaboration_mode_indicator(&self) -> Option<CollaborationModeIndicator> {
+        if !self.collaboration_modes_enabled() {
+            return None;
+        }
+        match &self.stored_collaboration_mode {
+            CollaborationMode::Plan(_) => Some(CollaborationModeIndicator::Plan),
+            CollaborationMode::PairProgramming(_) => {
+                Some(CollaborationModeIndicator::PairProgramming)
+            }
+            CollaborationMode::Execute(_) => Some(CollaborationModeIndicator::Execute),
+            CollaborationMode::Custom(_) => None,
+        }
+    }
+
+    fn update_collaboration_mode_indicator(&mut self) {
+        let indicator = self.collaboration_mode_indicator();
+        self.bottom_pane.set_collaboration_mode_indicator(indicator);
+    }
+
     /// Cycle to the next collaboration mode variant (Plan -> PairProgramming -> Execute -> Plan).
     fn cycle_collaboration_mode(&mut self) {
         if !self.collaboration_modes_enabled() {
@@ -4443,18 +4466,7 @@ impl ChatWidget {
         }
 
         self.stored_collaboration_mode = mode;
-
-        let label = self.collaboration_mode_label();
-        if let Some(label) = label {
-            let flash = Line::from(vec![
-                label.bold(),
-                " (".dim(),
-                key_hint::shift(KeyCode::Tab).into(),
-                " to change mode)".dim(),
-            ]);
-            const FLASH_DURATION: Duration = Duration::from_secs(2);
-            self.bottom_pane.flash_footer_hint(flash, FLASH_DURATION);
-        }
+        self.update_collaboration_mode_indicator();
         self.request_redraw();
     }
 

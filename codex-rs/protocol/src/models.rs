@@ -80,6 +80,10 @@ pub enum ResponseItem {
         id: Option<String>,
         role: String,
         content: Vec<ContentItem>,
+        // Do not use directly, no available consistently across all providers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        end_turn: Option<bool>,
     },
     Reasoning {
         #[serde(default, skip_serializing)]
@@ -328,6 +332,7 @@ impl From<DeveloperInstructions> for ResponseItem {
             content: vec![ContentItem::InputText {
                 text: di.into_text(),
             }],
+            end_turn: None,
         }
     }
 }
@@ -497,6 +502,7 @@ impl From<ResponseInputItem> for ResponseItem {
                 role,
                 content,
                 id: None,
+                end_turn: None,
             },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }

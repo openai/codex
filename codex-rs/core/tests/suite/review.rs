@@ -532,6 +532,7 @@ async fn review_input_isolated_from_parent_history() {
             content: vec![codex_protocol::models::ContentItem::InputText {
                 text: "parent: earlier user message".to_string(),
             }],
+            end_turn: None,
         };
         let user_json = serde_json::to_value(&user).unwrap();
         let user_line = serde_json::json!({
@@ -550,6 +551,7 @@ async fn review_input_isolated_from_parent_history() {
             content: vec![codex_protocol::models::ContentItem::OutputText {
                 text: "parent: assistant reply".to_string(),
             }],
+            end_turn: None,
         };
         let assistant_json = serde_json::to_value(&assistant).unwrap();
         let assistant_line = serde_json::json!({

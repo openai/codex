@@ -93,13 +93,17 @@ use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::command_popup::CommandPopupFlags;
 use super::file_search_popup::FileSearchPopup;
+use super::footer::CollaborationModeIndicator;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
+use super::footer::footer_hint_items_width;
+use super::footer::footer_line_width;
 use super::footer::inset_footer_hint_area;
 use super::footer::render_footer;
 use super::footer::render_footer_hint_items;
+use super::footer::render_mode_indicator;
 use super::footer::reset_mode_after_activity;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
@@ -229,6 +233,7 @@ pub(crate) struct ChatComposer {
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
     collaboration_modes_enabled: bool,
+    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
 }
 
 #[derive(Clone, Debug)]
@@ -289,6 +294,7 @@ impl ChatComposer {
             dismissed_skill_popup_token: None,
             steer_enabled: false,
             collaboration_modes_enabled: false,
+            collaboration_mode_indicator: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -311,6 +317,13 @@ impl ChatComposer {
 
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
         self.collaboration_modes_enabled = enabled;
+    }
+
+    pub fn set_collaboration_mode_indicator(
+        &mut self,
+        indicator: Option<CollaborationModeIndicator>,
+    ) {
+        self.collaboration_mode_indicator = indicator;
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -545,6 +558,7 @@ impl ChatComposer {
         self.footer_hint_override = items;
     }
 
+    #[cfg(test)]
     pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
         let expires_at = Instant::now()
             .checked_add(duration)
@@ -2510,15 +2524,25 @@ impl Renderable for ChatComposer {
                 } else {
                     popup_rect
                 };
+                let mut left_content_width = None;
                 if self.footer_flash_visible() {
                     if let Some(flash) = self.footer_flash.as_ref() {
                         flash.line.render(inset_footer_hint_area(hint_rect), buf);
+                        left_content_width = Some(flash.line.width() as u16);
                     }
                 } else if let Some(items) = self.footer_hint_override.as_ref() {
                     render_footer_hint_items(hint_rect, buf, items);
+                    left_content_width = Some(footer_hint_items_width(items));
                 } else {
                     render_footer(hint_rect, buf, footer_props);
+                    left_content_width = Some(footer_line_width(footer_props));
                 }
+                render_mode_indicator(
+                    hint_rect,
+                    buf,
+                    self.collaboration_mode_indicator,
+                    left_content_width,
+                );
             }
         }
         let style = user_message_style();
