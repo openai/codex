@@ -338,8 +338,7 @@ impl S3ObjectStore {
                         Ok(false)
                     } else {
                         Err(anyhow::anyhow!(
-                            "object store HEAD failed with status {:?}",
-                            code
+                            "object store HEAD failed with status {code:?}"
                         ))
                     }
                 }
@@ -383,8 +382,7 @@ impl S3ObjectStore {
                         Ok(None)
                     } else {
                         Err(anyhow::anyhow!(
-                            "object store GET failed with status {:?}",
-                            code
+                            "object store GET failed with status {code:?}"
                         ))
                     }
                 }
@@ -623,7 +621,7 @@ fn azure_header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Optio
     headers
         .get(name)
         .and_then(|value| value.to_str().ok())
-        .map(|value| value.to_string())
+        .map(ToString::to_string)
 }
 
 fn azure_response_body_snippet(body: &str) -> String {
