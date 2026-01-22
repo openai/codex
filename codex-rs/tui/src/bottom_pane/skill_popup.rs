@@ -14,9 +14,8 @@ use super::selection_popup_common::render_rows_single_line;
 use crate::key_hint;
 use crate::render::Insets;
 use crate::render::RectExt;
-use codex_common::fuzzy_match::fuzzy_match;
-
 use crate::text_formatting::truncate_text;
+use codex_common::fuzzy_match::fuzzy_match;
 
 #[derive(Clone, Debug)]
 pub(crate) struct MentionItem {
@@ -120,20 +119,34 @@ impl SkillPopup {
         }
 
         for (idx, mention) in self.mentions.iter().enumerate() {
-            let display_name = mention.display_name.as_str();
-            if let Some((indices, score)) = fuzzy_match(display_name, filter) {
-                out.push((idx, Some(indices), score));
-                continue;
+            let mut best_match: Option<(Option<Vec<usize>>, i32)> = None;
+
+            if let Some((indices, score)) = fuzzy_match(&mention.display_name, filter) {
+                best_match = Some((Some(indices), score));
             }
 
-            let mut best_score: Option<i32> = None;
             for term in &mention.search_terms {
+                if term == &mention.display_name {
+                    continue;
+                }
+
                 if let Some((_indices, score)) = fuzzy_match(term, filter) {
-                    best_score = Some(best_score.map_or(score, |best| best.max(score)));
+                    match best_match.as_mut() {
+                        Some((best_indices, best_score)) => {
+                            if score > *best_score {
+                                *best_score = score;
+                                *best_indices = None;
+                            }
+                        }
+                        None => {
+                            best_match = Some((None, score));
+                        }
+                    }
                 }
             }
-            if let Some(score) = best_score {
-                out.push((idx, None, score));
+
+            if let Some((indices, score)) = best_match {
+                out.push((idx, indices, score));
             }
         }
 

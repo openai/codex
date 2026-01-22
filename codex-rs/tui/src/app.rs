@@ -1032,6 +1032,14 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::OpenAppLink {
+                title,
+                instructions,
+                url,
+            } => {
+                self.chat_widget
+                    .open_app_link_view(title, instructions, url);
+            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);
@@ -1479,6 +1487,33 @@ impl App {
             AppEvent::OpenApprovalsPopup => {
                 self.chat_widget.open_approvals_popup();
             }
+            AppEvent::OpenSkillsList => {
+                self.chat_widget.open_skills_list();
+            }
+            AppEvent::OpenManageSkillsPopup => {
+                self.chat_widget.open_manage_skills_popup();
+            }
+            AppEvent::SetSkillEnabled { path, enabled } => {
+                let edits = [ConfigEdit::SetSkillConfig {
+                    path: path.clone(),
+                    enabled,
+                }];
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits(edits)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        self.chat_widget.update_skill_enabled(path.clone(), enabled);
+                    }
+                    Err(err) => {
+                        let path_display = path.display();
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to update skill config for {path_display}: {err}"
+                        ));
+                    }
+                }
+            }
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;
             }
@@ -1487,6 +1522,9 @@ impl App {
             }
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
+            }
+            AppEvent::ManageSkillsClosed => {
+                self.chat_widget.handle_manage_skills_closed();
             }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {

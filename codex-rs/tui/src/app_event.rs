@@ -100,6 +100,13 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
+    /// Open the app link view in the bottom pane.
+    OpenAppLink {
+        title: String,
+        instructions: String,
+        url: String,
+    },
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     StartCommitAnimation,
@@ -220,6 +227,21 @@ pub(crate) enum AppEvent {
 
     /// Re-open the approval presets popup.
     OpenApprovalsPopup,
+
+    /// Open the skills list popup.
+    OpenSkillsList,
+
+    /// Open the skills enable/disable picker.
+    OpenManageSkillsPopup,
+
+    /// Enable or disable a skill by path.
+    SetSkillEnabled {
+        path: PathBuf,
+        enabled: bool,
+    },
+
+    /// Notify that the manage skills popup was closed.
+    ManageSkillsClosed,
 
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),

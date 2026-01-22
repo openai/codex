@@ -38,7 +38,6 @@ pub(crate) struct CommandPopup {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CommandPopupFlags {
-    pub(crate) skills_enabled: bool,
     pub(crate) collaboration_modes_enabled: bool,
     pub(crate) connectors_enabled: bool,
 }
@@ -48,7 +47,6 @@ impl CommandPopup {
         let allow_elevate_sandbox = windows_degraded_sandbox_active();
         let builtins: Vec<(&'static str, SlashCommand)> = built_in_slash_commands()
             .into_iter()
-            .filter(|(_, cmd)| flags.skills_enabled || *cmd != SlashCommand::Skills)
             .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
             .filter(|(_, cmd)| flags.collaboration_modes_enabled || *cmd != SlashCommand::Collab)
             .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Connectors)
@@ -469,7 +467,6 @@ mod tests {
         let mut popup = CommandPopup::new(
             Vec::new(),
             CommandPopupFlags {
-                skills_enabled: false,
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
             },

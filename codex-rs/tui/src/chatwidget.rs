@@ -73,7 +73,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
-use codex_core::protocol::SkillsListEntry;
+use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TerminalInteractionEvent;
 use codex_core::protocol::TokenUsage;
@@ -88,7 +88,6 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
-use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
@@ -177,6 +176,8 @@ use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 mod session_header;
 use self::session_header::SessionHeader;
+mod skills;
+use self::skills::find_skill_mentions;
 use crate::streaming::controller::StreamController;
 use std::path::Path;
 
@@ -439,6 +440,8 @@ pub(crate) struct ChatWidget {
     stream_controller: Option<StreamController>,
     running_commands: HashMap<String, RunningCommand>,
     suppressed_exec_calls: HashSet<String>,
+    skills_all: Vec<ProtocolSkillMetadata>,
+    skills_initial_state: Option<HashMap<PathBuf, bool>>,
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     task_complete_pending: bool,
@@ -776,11 +779,6 @@ impl ChatWidget {
         self.bottom_pane.set_skills(skills);
     }
 
-    fn set_skills_from_response(&mut self, response: &ListSkillsResponseEvent) {
-        let skills = skills_for_cwd(&self.config.cwd, &response.skills);
-        self.set_skills(Some(skills));
-    }
-
     pub(crate) fn open_feedback_note(
         &mut self,
         category: crate::app_event::FeedbackCategory,
@@ -800,6 +798,12 @@ impl ChatWidget {
             self.app_event_tx.clone(),
             include_logs,
         );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    pub(crate) fn open_app_link_view(&mut self, title: String, instructions: String, url: String) {
+        let view = crate::bottom_pane::AppLinkView::new(title, instructions, url);
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
     }
@@ -1901,6 +1905,8 @@ impl ChatWidget {
             active_cell,
             active_cell_revision: 0,
             config,
+            skills_all: Vec::new(),
+            skills_initial_state: None,
             stored_collaboration_mode,
             auth_manager,
             models_manager,
@@ -2022,6 +2028,8 @@ impl ChatWidget {
             active_cell: None,
             active_cell_revision: 0,
             config,
+            skills_all: Vec::new(),
+            skills_initial_state: None,
             stored_collaboration_mode,
             auth_manager,
             models_manager,
@@ -2399,7 +2407,7 @@ impl ChatWidget {
                 self.insert_str("@");
             }
             SlashCommand::Skills => {
-                self.insert_str("$");
+                self.open_skills_menu();
             }
             SlashCommand::Status => {
                 self.add_status_output();
@@ -4599,6 +4607,7 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = Vec::with_capacity(connectors.len());
         for connector in connectors {
             let connector_label = connectors::connector_display_label(connector);
+            let connector_title = connector_label.clone();
             let description = Self::connector_brief_description(connector);
             let search_value = format!("{connector_label} {}", connector.connector_id);
             let mut item = SelectionItem {
@@ -4607,28 +4616,39 @@ impl ChatWidget {
                 search_value: Some(search_value),
                 ..Default::default()
             };
-            if !connector.is_accessible {
-                if let Some(install_url) = connector.install_url.clone() {
-                    item.actions = vec![Box::new(move |tx| {
-                        tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            history_cell::new_install_instructions_event(install_url.clone()),
-                        )));
-                    })];
-                    item.dismiss_on_select = true;
-                    item.selected_description =
-                        Some("Press Enter to view the install link.".to_string());
-                } else {
-                    item.actions = vec![Box::new(|tx| {
-                        tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            history_cell::new_info_event(
-                                "Install link unavailable.".to_string(),
-                                None,
-                            ),
-                        )));
-                    })];
-                    item.dismiss_on_select = true;
-                    item.selected_description = Some("Install link unavailable.".to_string());
-                }
+            let (selected_label, missing_label, instructions) = if connector.is_accessible {
+                (
+                    "Press Enter to view the app link.",
+                    "App link unavailable.",
+                    "Open this app's connector page in your browser.",
+                )
+            } else {
+                (
+                    "Press Enter to view the install link.",
+                    "Install link unavailable.",
+                    "Install this app in your browser, then reload Codex.",
+                )
+            };
+            if let Some(install_url) = connector.install_url.clone() {
+                let title = connector_title.clone();
+                let instructions = instructions.to_string();
+                item.actions = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenAppLink {
+                        title: title.clone(),
+                        instructions: instructions.clone(),
+                        url: install_url.clone(),
+                    });
+                })];
+                item.dismiss_on_select = true;
+                item.selected_description = Some(selected_label.to_string());
+            } else {
+                item.actions = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_info_event(missing_label.to_string(), None),
+                    )));
+                })];
+                item.dismiss_on_select = true;
+                item.selected_description = Some(missing_label.to_string());
             }
             items.push(item);
         }
@@ -4636,7 +4656,8 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Apps".to_string()),
             subtitle: Some(
-                "Browse apps. Select an unconnected app to view its install link.".to_string(),
+                "Use $ to insert an app in the prompt. Browse apps to view connector links."
+                    .to_string(),
             ),
             footer_hint: Some(Self::connectors_popup_hint_line()),
             items,
@@ -4648,7 +4669,7 @@ impl ChatWidget {
 
     fn connectors_popup_hint_line() -> Line<'static> {
         Line::from(vec![
-            "Use $ to insert apps. Press ".into(),
+            "Press ".into(),
             key_hint::plain(KeyCode::Esc).into(),
             " to close.".into(),
         ])
@@ -5278,50 +5299,6 @@ pub(crate) fn show_review_commit_picker_with_entries(
         search_placeholder: Some("Type to search commits".to_string()),
         ..Default::default()
     });
-}
-
-fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillMetadata> {
-    skills_entries
-        .iter()
-        .find(|entry| entry.cwd.as_path() == cwd)
-        .map(|entry| {
-            entry
-                .skills
-                .iter()
-                .map(|skill| SkillMetadata {
-                    name: skill.name.clone(),
-                    description: skill.description.clone(),
-                    short_description: skill.short_description.clone(),
-                    interface: skill.interface.clone().map(|interface| SkillInterface {
-                        display_name: interface.display_name,
-                        short_description: interface.short_description,
-                        icon_small: interface.icon_small,
-                        icon_large: interface.icon_large,
-                        brand_color: interface.brand_color,
-                        default_prompt: interface.default_prompt,
-                    }),
-                    path: skill.path.clone(),
-                    scope: skill.scope,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn find_skill_mentions(text: &str, skills: &[SkillMetadata]) -> Vec<SkillMetadata> {
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut matches: Vec<SkillMetadata> = Vec::new();
-    for skill in skills {
-        if seen.contains(&skill.name) {
-            continue;
-        }
-        let needle = format!("${}", skill.name);
-        if text.contains(&needle) {
-            seen.insert(skill.name.clone());
-            matches.push(skill.clone());
-        }
-    }
-    matches
 }
 
 #[cfg(test)]
