@@ -6795,58 +6795,69 @@ pub async fn run_security_review(
         });
     }
 
+    let validation_already_complete = matches!(
+        plan_tracker.status_for(SecurityReviewPlanStep::ValidateFindings),
+        Some(StepStatus::Completed)
+    );
     let include_web_browser = request
         .validation_target_url
         .as_deref()
         .map(str::trim)
         .is_some_and(|s| !s.is_empty());
-    let validation_targets = build_validation_findings_context(&snapshot, include_web_browser);
-
-    if validation_targets.ids.is_empty() {
+    if validation_already_complete {
         record(
             &mut logs,
-            "No high-risk findings selected for validation; skipping.".to_string(),
+            "Validate findings already completed; skipping validation.".to_string(),
         );
     } else {
-        record(
-            &mut logs,
-            format!(
-                "Validating high-risk findings... (model: {model}, reasoning: {validation_reasoning_label}).",
-                model = request.validation_model.as_str(),
-                validation_reasoning_label =
-                    reasoning_effort_label(normalize_reasoning_effort_for_model(
-                        request.validation_model.as_str(),
-                        validation_reasoning_effort,
-                    ))
-            ),
-        );
-        match run_asan_validation(
-            repo_path.clone(),
-            artifacts.snapshot_path.clone(),
-            artifacts.bugs_path.clone(),
-            None,
-            None,
-            request.provider.clone(),
-            request.validation_model.clone(),
-            validation_reasoning_effort,
-            &request.config,
-            request.auth_manager.clone(),
-            progress_sender.clone(),
-            metrics.clone(),
-            request.validation_target_url.clone(),
-            request.validation_creds_path.clone(),
-        )
-        .await
-        {
-            Ok(_) => {
-                record(
-                    &mut logs,
-                    "Validation complete; snapshot updated.".to_string(),
-                );
-            }
-            Err(err) => {
-                record(&mut logs, format!("Validation failed: {}", err.message));
-                logs.extend(err.logs);
+        let validation_targets = build_validation_findings_context(&snapshot, include_web_browser);
+
+        if validation_targets.ids.is_empty() {
+            record(
+                &mut logs,
+                "No high-risk findings selected for validation; skipping.".to_string(),
+            );
+        } else {
+            record(
+                &mut logs,
+                format!(
+                    "Validating high-risk findings... (model: {model}, reasoning: {validation_reasoning_label}).",
+                    model = request.validation_model.as_str(),
+                    validation_reasoning_label =
+                        reasoning_effort_label(normalize_reasoning_effort_for_model(
+                            request.validation_model.as_str(),
+                            validation_reasoning_effort,
+                        ))
+                ),
+            );
+            match run_asan_validation(
+                repo_path.clone(),
+                artifacts.snapshot_path.clone(),
+                artifacts.bugs_path.clone(),
+                None,
+                None,
+                request.provider.clone(),
+                request.validation_model.clone(),
+                validation_reasoning_effort,
+                &request.config,
+                request.auth_manager.clone(),
+                progress_sender.clone(),
+                metrics.clone(),
+                request.validation_target_url.clone(),
+                request.validation_creds_path.clone(),
+            )
+            .await
+            {
+                Ok(_) => {
+                    record(
+                        &mut logs,
+                        "Validation complete; snapshot updated.".to_string(),
+                    );
+                }
+                Err(err) => {
+                    record(&mut logs, format!("Validation failed: {}", err.message));
+                    logs.extend(err.logs);
+                }
             }
         }
     }
@@ -6886,14 +6897,16 @@ pub async fn run_security_review(
         }
     }
 
-    plan_tracker.complete_and_start_next(
-        SecurityReviewPlanStep::ValidateFindings,
-        Some(SecurityReviewPlanStep::PostValidationRefine),
-    );
-    plan_tracker.complete_and_start_next(
-        SecurityReviewPlanStep::PostValidationRefine,
-        Some(SecurityReviewPlanStep::AssembleReport),
-    );
+    if !validation_already_complete {
+        plan_tracker.complete_and_start_next(
+            SecurityReviewPlanStep::ValidateFindings,
+            Some(SecurityReviewPlanStep::PostValidationRefine),
+        );
+        plan_tracker.complete_and_start_next(
+            SecurityReviewPlanStep::PostValidationRefine,
+            Some(SecurityReviewPlanStep::AssembleReport),
+        );
+    }
     checkpoint.plan_statuses = plan_tracker.snapshot_statuses();
     persist_checkpoint(&mut checkpoint, &mut logs);
 
