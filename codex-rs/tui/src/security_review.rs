@@ -21680,6 +21680,14 @@ async fn run_validation_target_prep_agent(
                         &mut logs,
                     );
                 }
+                EventMsg::AgentReasoningRawContent(reason) => {
+                    reasoning_accumulator.push_full(
+                        &reason.text,
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                    );
+                }
                 EventMsg::AgentReasoningDelta(delta) => {
                     reasoning_accumulator.push_delta(
                         &delta.delta,
@@ -21687,6 +21695,17 @@ async fn run_validation_target_prep_agent(
                         &log_sink,
                         &mut logs,
                     );
+                }
+                EventMsg::AgentReasoningRawContentDelta(delta) => {
+                    reasoning_accumulator.push_delta(
+                        &delta.delta,
+                        &progress_sender,
+                        &log_sink,
+                        &mut logs,
+                    );
+                }
+                EventMsg::AgentReasoningSectionBreak(_) => {
+                    reasoning_accumulator.flush_remaining(&progress_sender, &log_sink, &mut logs);
                 }
                 EventMsg::McpToolCallBegin(begin) => {
                     let tool = begin.invocation.tool.clone();
@@ -21981,8 +22000,17 @@ async fn run_validation_plan_agent(
             EventMsg::AgentReasoning(reason) => {
                 reasoning_accumulator.push_full(&reason.text, &progress_sender, &None, &mut logs);
             }
+            EventMsg::AgentReasoningRawContent(reason) => {
+                reasoning_accumulator.push_full(&reason.text, &progress_sender, &None, &mut logs);
+            }
             EventMsg::AgentReasoningDelta(delta) => {
                 reasoning_accumulator.push_delta(&delta.delta, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::AgentReasoningRawContentDelta(delta) => {
+                reasoning_accumulator.push_delta(&delta.delta, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::AgentReasoningSectionBreak(_) => {
+                reasoning_accumulator.flush_remaining(&progress_sender, &None, &mut logs);
             }
             EventMsg::McpToolCallBegin(begin) => {
                 let tool = begin.invocation.tool.clone();
@@ -22266,8 +22294,17 @@ async fn run_validation_refine_agent(
             EventMsg::AgentReasoning(reason) => {
                 reasoning_accumulator.push_full(&reason.text, &progress_sender, &None, &mut logs);
             }
+            EventMsg::AgentReasoningRawContent(reason) => {
+                reasoning_accumulator.push_full(&reason.text, &progress_sender, &None, &mut logs);
+            }
             EventMsg::AgentReasoningDelta(delta) => {
                 reasoning_accumulator.push_delta(&delta.delta, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::AgentReasoningRawContentDelta(delta) => {
+                reasoning_accumulator.push_delta(&delta.delta, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::AgentReasoningSectionBreak(_) => {
+                reasoning_accumulator.flush_remaining(&progress_sender, &None, &mut logs);
             }
             EventMsg::McpToolCallBegin(begin) => {
                 let tool = begin.invocation.tool.clone();
