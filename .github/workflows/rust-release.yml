@@ -285,7 +285,28 @@ jobs:
             # Must run from inside the dest dir so 7z won't
             # embed the directory path inside the zip.
             if [[ "${{ matrix.runner }}" == windows* ]]; then
-              (cd "$dest" && 7z a "${base}.zip" "$base")
+              if [[ "$base" == "codex-${{ matrix.target }}.exe" ]]; then
+                # Bundle the sandbox helper binaries into the main codex zip so
+                # WinGet installs include the required helpers next to codex.exe.
+                # Fall back to the single-binary zip if the helpers are missing
+                # to avoid breaking releases.
+                bundle_dir="$(mktemp -d)"
+                runner_src="$dest/codex-command-runner-${{ matrix.target }}.exe"
+                setup_src="$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
+                if [[ -f "$runner_src" && -f "$setup_src" ]]; then
+                  cp "$dest/$base" "$bundle_dir/$base"
+                  cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
+                  cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
+                  (cd "$bundle_dir" && 7z a "$dest/${base}.zip" .)
+                else
+                  echo "warning: missing sandbox binaries; falling back to single-binary zip"
+                  echo "warning: expected $runner_src and $setup_src"
+                  (cd "$dest" && 7z a "${base}.zip" "$base")
+                fi
+                rm -rf "$bundle_dir"
+              else
+                (cd "$dest" && 7z a "${base}.zip" "$base")
+              fi
             fi
 
             # Also create .zst (existing behaviour) *and* remove the original
