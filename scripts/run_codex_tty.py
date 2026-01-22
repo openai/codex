@@ -190,8 +190,15 @@ def run_instance(
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"codex_{index}.txt"
         with out_path.open("w", encoding="utf-8") as f:
+            text = ""
             for line in screen.display:
-                f.write(line.rstrip() + "\n")
+                text += line.rstrip() + "\n"
+
+            text = text.rstrip("\n ")
+            f.write(text)
+
+
+        print(f"done {index}: {out_path}")
         result_queue.put((index, out_path))
 
         os.close(master_fd)
@@ -229,9 +236,7 @@ def main() -> int:
     for thread in threads:
         thread.join()
 
-    results = sorted(result_queue.get() for _ in range(args.instances))
-    for index, path in results:
-        print(f"instance {index}: {path}")
+    sorted(result_queue.get() for _ in range(args.instances))
     return 0
 
 
