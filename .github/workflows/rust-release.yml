@@ -98,7 +98,7 @@ jobs:
         name: Install musl build tools
         env:
           TARGET: ${{ matrix.target }}
-        run: bash .github/scripts/install-musl-build-tools.sh
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
 
       - name: Cargo build
         shell: bash

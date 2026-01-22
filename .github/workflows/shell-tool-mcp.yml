@@ -101,7 +101,7 @@ jobs:
         name: Install musl build dependencies
         env:
           TARGET: ${{ matrix.target }}
-        run: bash .github/scripts/install-musl-build-tools.sh
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
 
       - name: Build exec server binaries
         run: cargo build --release --target ${{ matrix.target }} --bin codex-exec-mcp-server --bin codex-execve-wrapper

@@ -269,7 +269,7 @@ jobs:
           APT_UPDATE_ARGS: -o Acquire::Retries=3
           APT_INSTALL_ARGS: --no-install-recommends
         shell: bash
-        run: bash .github/scripts/install-musl-build-tools.sh
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
 
       - name: Install cargo-chef
         if: ${{ matrix.profile == 'release' }}
