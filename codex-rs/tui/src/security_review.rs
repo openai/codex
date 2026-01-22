@@ -1454,7 +1454,9 @@ impl SecurityReviewPlanTracker {
         next: Option<SecurityReviewPlanStep>,
     ) {
         let mut changed = self.set_status_if_present(finished, StepStatus::Completed);
-        if let Some(next_step) = next {
+        if let Some(next_step) = next
+            && !matches!(self.status_for(next_step), Some(StepStatus::Completed))
+        {
             changed |= self.set_status_if_present(next_step, StepStatus::InProgress);
         }
         if changed {
@@ -1466,7 +1468,9 @@ impl SecurityReviewPlanTracker {
     }
 
     fn start_step(&mut self, step: SecurityReviewPlanStep) {
-        if self.set_status_if_present(step, StepStatus::InProgress) {
+        if !matches!(self.status_for(step), Some(StepStatus::Completed))
+            && self.set_status_if_present(step, StepStatus::InProgress)
+        {
             self.emit_update();
             if self.snapshots_enabled {
                 self.emit_plan_snapshot();
@@ -21737,6 +21741,8 @@ async fn run_validation_plan_agent(
     let start = Instant::now();
     let deadline = start + Duration::from_secs(VALIDATION_AGENT_TIMEOUT_SECS);
     let remaining = || deadline.saturating_duration_since(Instant::now());
+    let command_emitter = CommandStatusEmitter::new(progress_sender.clone(), metrics.clone());
+    let mut last_tool_log: Option<String> = None;
     push_progress_log(
         &progress_sender,
         &None,
@@ -21854,6 +21860,65 @@ async fn run_validation_plan_agent(
             EventMsg::AgentReasoning(reason) => {
                 log_model_reasoning(&reason.text, &progress_sender, &None, &mut logs);
             }
+            EventMsg::McpToolCallBegin(begin) => {
+                let tool = begin.invocation.tool.clone();
+                let message = format!("Validation planning: tool → {tool}");
+                if last_tool_log.as_deref() != Some(message.as_str()) {
+                    push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                    last_tool_log = Some(message);
+                }
+            }
+            EventMsg::ExecCommandBegin(begin) => {
+                let command = strip_bash_lc_and_escape(&begin.command);
+                let summary = format!("Validation planning for {label}");
+                emit_command_start(&command_emitter, summary, Some(command.as_str()));
+                push_progress_log(
+                    &progress_sender,
+                    &None,
+                    &mut logs,
+                    format!("Validation planning: run `{command}`"),
+                );
+            }
+            EventMsg::ExecCommandEnd(done) => {
+                let command = strip_bash_lc_and_escape(&done.command);
+                let output = if done.exit_code == 0 {
+                    done.stdout.as_str()
+                } else {
+                    done.stderr.as_str()
+                };
+                let state = if done.exit_code == 0 {
+                    SecurityReviewCommandState::Matches
+                } else {
+                    SecurityReviewCommandState::Error
+                };
+                emit_command_result(
+                    &command_emitter,
+                    format!("Validation planning for {label}"),
+                    state,
+                    Some(command.as_str()),
+                    Some(output),
+                );
+                let duration = fmt_elapsed_compact(done.duration.as_secs());
+                if done.exit_code == 0 {
+                    push_progress_log(
+                        &progress_sender,
+                        &None,
+                        &mut logs,
+                        format!("Validation planning: ok ({duration}) · `{command}`"),
+                    );
+                } else {
+                    let summary = summarize_process_output(false, &done.stdout, &done.stderr);
+                    push_progress_log(
+                        &progress_sender,
+                        &None,
+                        &mut logs,
+                        format!(
+                            "Validation planning: `{command}` exited {} ({duration}) · {summary}",
+                            done.exit_code
+                        ),
+                    );
+                }
+            }
             EventMsg::Warning(warn) => {
                 push_progress_log(&progress_sender, &None, &mut logs, warn.message);
             }
@@ -21957,6 +22022,8 @@ async fn run_validation_refine_agent(
     let start = Instant::now();
     let deadline = start + Duration::from_secs(VALIDATION_AGENT_TIMEOUT_SECS);
     let remaining = || deadline.saturating_duration_since(Instant::now());
+    let command_emitter = CommandStatusEmitter::new(progress_sender.clone(), metrics.clone());
+    let mut last_tool_log: Option<String> = None;
     push_progress_log(
         &progress_sender,
         &None,
@@ -22072,6 +22139,65 @@ async fn run_validation_refine_agent(
             }
             EventMsg::AgentReasoning(reason) => {
                 log_model_reasoning(&reason.text, &progress_sender, &None, &mut logs);
+            }
+            EventMsg::McpToolCallBegin(begin) => {
+                let tool = begin.invocation.tool.clone();
+                let message = format!("Validation refine: tool → {tool}");
+                if last_tool_log.as_deref() != Some(message.as_str()) {
+                    push_progress_log(&progress_sender, &None, &mut logs, message.clone());
+                    last_tool_log = Some(message);
+                }
+            }
+            EventMsg::ExecCommandBegin(begin) => {
+                let command = strip_bash_lc_and_escape(&begin.command);
+                let summary = format!("Validation refine for {label}");
+                emit_command_start(&command_emitter, summary, Some(command.as_str()));
+                push_progress_log(
+                    &progress_sender,
+                    &None,
+                    &mut logs,
+                    format!("Validation refine: run `{command}`"),
+                );
+            }
+            EventMsg::ExecCommandEnd(done) => {
+                let command = strip_bash_lc_and_escape(&done.command);
+                let output = if done.exit_code == 0 {
+                    done.stdout.as_str()
+                } else {
+                    done.stderr.as_str()
+                };
+                let state = if done.exit_code == 0 {
+                    SecurityReviewCommandState::Matches
+                } else {
+                    SecurityReviewCommandState::Error
+                };
+                emit_command_result(
+                    &command_emitter,
+                    format!("Validation refine for {label}"),
+                    state,
+                    Some(command.as_str()),
+                    Some(output),
+                );
+                let duration = fmt_elapsed_compact(done.duration.as_secs());
+                if done.exit_code == 0 {
+                    push_progress_log(
+                        &progress_sender,
+                        &None,
+                        &mut logs,
+                        format!("Validation refine: ok ({duration}) · `{command}`"),
+                    );
+                } else {
+                    let summary = summarize_process_output(false, &done.stdout, &done.stderr);
+                    push_progress_log(
+                        &progress_sender,
+                        &None,
+                        &mut logs,
+                        format!(
+                            "Validation refine: `{command}` exited {} ({duration}) · {summary}",
+                            done.exit_code
+                        ),
+                    );
+                }
             }
             EventMsg::Warning(warn) => {
                 push_progress_log(&progress_sender, &None, &mut logs, warn.message);
@@ -22680,6 +22806,14 @@ async fn run_asan_validation(
                     .filter(|s| !s.trim().is_empty())
                 {
                     testing_md_additions.insert(id, additions.to_string());
+                }
+                if let Some(reason) = parsed
+                    .reason
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    log_model_reasoning(reason, &progress_sender, &None, &mut logs);
                 }
                 let Some(tool_raw) = parsed
                     .tool
