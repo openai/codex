@@ -38,6 +38,8 @@ use tokio::time::sleep;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
 
+const LOCAL_FRIENDLY_TEMPLATE: &str = include_str!("../../templates/personalities/friendly.md");
+
 fn sse_completed(id: &str) -> String {
     sse(vec![ev_response_created(id), ev_completed(id)])
 }
@@ -102,15 +104,65 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
 
     let request = resp_mock.single_request();
     let developer_texts = request.message_input_texts("developer");
-    if developer_texts.is_empty() {
-        eprintln!("request body: {}", request.body_json());
-    }
     assert!(
         !developer_texts
             .iter()
             .any(|text| text.contains("<personality_spec>")),
         "did not expect a personality update message when personality is None"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_personality_some_sets_instructions_template() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
+    let mut builder = test_codex()
+        .with_model("gpt-5.2-codex")
+        .with_config(|config| {
+            config.model_personality = Some(Personality::Friendly);
+            config.features.disable(Feature::RemoteModels);
+        });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: test.config.approval_policy.value(),
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: test.session_configured.model.clone(),
+            effort: test.config.model_reasoning_effort,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let instructions_text = request.instructions_text();
+
+    assert!(
+        instructions_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        "expected personality update to include the local friendly template, got: {instructions_text:?}"
+    );
+
+    let developer_texts = request.message_input_texts("developer");
+    for text in developer_texts {
+        assert!(
+            !text.contains("<personality_spec>"),
+            "expected no personality update message in developer input"
+        );
+    }
 
     Ok(())
 }
@@ -125,17 +177,12 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
         vec![sse_completed("resp-1"), sse_completed("resp-2")],
     )
     .await;
-    let mut builder = test_codex().with_model("gpt-5.2-codex");
+    let mut builder = test_codex()
+        .with_model("gpt-5.2-codex")
+        .with_config(|config| {
+            config.features.disable(Feature::RemoteModels);
+        });
     let test = builder.build(&server).await?;
-
-    let model_info = ModelsManager::construct_model_info_offline("gpt-5.2-codex", &test.config);
-    let personality_message = model_info
-        .model_instructions_template
-        .as_ref()
-        .and_then(|template| template.personality_messages.as_ref())
-        .and_then(|messages| messages.0.get(&Personality::Friendly))
-        .expect("friendly personality message should exist")
-        .to_string();
 
     test.codex
         .submit(Op::UserTurn {
@@ -195,6 +242,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
     let request = requests
         .last()
         .expect("expected personality update request");
+
     let developer_texts = request.message_input_texts("developer");
     let personality_text = developer_texts
         .iter()
@@ -206,8 +254,8 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
         "expected personality update preamble, got {personality_text:?}"
     );
     assert!(
-        personality_text.contains(&personality_message),
-        "expected personality update to include the friendly template, got: {personality_text:?}"
+        personality_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        "expected personality update to include the local friendly template, got: {personality_text:?}"
     );
 
     Ok(())
