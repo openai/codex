@@ -488,6 +488,11 @@ pub(crate) struct ChatWidget {
     // This gates rendering of the "Worked for …" separator so purely conversational turns don't
     // show an empty divider. It is reset when the separator is emitted.
     had_work_activity: bool,
+    // Status-indicator elapsed seconds captured at the last emitted final-message separator.
+    //
+    // This lets the separator show per-chunk work time (since the previous separator) rather than
+    // the total task-running time reported by the status indicator.
+    last_separator_elapsed_secs: Option<u64>,
 
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
@@ -1542,7 +1547,8 @@ impl ChatWidget {
                 let elapsed_seconds = self
                     .bottom_pane
                     .status_widget()
-                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds);
+                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
+                    .map(|current| self.worked_elapsed_from(current));
                 self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
                 self.needs_final_message_separator = false;
                 self.had_work_activity = false;
@@ -1560,6 +1566,17 @@ impl ChatWidget {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
         self.request_redraw();
+    }
+
+    fn worked_elapsed_from(&mut self, current_elapsed: u64) -> u64 {
+        let baseline = match self.last_separator_elapsed_secs {
+            Some(last) if current_elapsed < last => 0,
+            Some(last) => last,
+            None => 0,
+        };
+        let elapsed = current_elapsed.saturating_sub(baseline);
+        self.last_separator_elapsed_secs = Some(current_elapsed);
+        elapsed
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
@@ -1906,6 +1923,7 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
+            last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -2022,6 +2040,7 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
+            last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,

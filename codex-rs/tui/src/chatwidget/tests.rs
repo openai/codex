@@ -838,6 +838,7 @@ async fn make_chatwidget_manual(
         pre_review_token_info: None,
         needs_final_message_separator: false,
         had_work_activity: false,
+        last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
@@ -866,6 +867,16 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
     ));
+}
+
+#[tokio::test]
+async fn worked_elapsed_from_resets_when_timer_restarts() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    assert_eq!(chat.worked_elapsed_from(5), 5);
+    assert_eq!(chat.worked_elapsed_from(9), 4);
+    // Simulate status timer resetting (e.g., status indicator recreated for a new task).
+    assert_eq!(chat.worked_elapsed_from(3), 3);
+    assert_eq!(chat.worked_elapsed_from(7), 4);
 }
 
 pub(crate) async fn make_chatwidget_manual_with_sender() -> (
