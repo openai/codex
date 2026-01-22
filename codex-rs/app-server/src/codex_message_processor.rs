@@ -1833,6 +1833,7 @@ impl CodexMessageProcessor {
             config: request_overrides,
             base_instructions,
             developer_instructions,
+            personality,
         } = params;
 
         let thread_history = if let Some(history) = history {
@@ -1918,7 +1919,7 @@ impl CodexMessageProcessor {
             sandbox,
             base_instructions,
             developer_instructions,
-            None,
+            personality,
         );
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.

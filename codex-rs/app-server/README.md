@@ -126,10 +126,13 @@ Start a fresh thread when you need a new Codex conversation.
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
 
-To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted:
+To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
 
 ```json
-{ "method": "thread/resume", "id": 11, "params": { "threadId": "thr_123" } }
+{ "method": "thread/resume", "id": 11, "params": {
+    "threadId": "thr_123",
+    "personality": "friendly"
+} }
 { "id": 11, "result": { "thread": { "id": "thr_123", … } } }
 ```
 
