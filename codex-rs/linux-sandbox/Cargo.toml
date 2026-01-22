@@ -22,6 +22,7 @@ codex-utils-absolute-path = { workspace = true }
 landlock = { workspace = true }
 libc = { workspace = true }
 seccompiler = { workspace = true }
+tracing = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 pretty_assertions = { workspace = true }
