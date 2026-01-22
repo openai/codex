@@ -33,7 +33,7 @@ Example: "I checked the readme and searched for the feature you mentioned, but d
 
 Use `request_user_input` only when you are genuinely blocked on a decision that materially changes the plan (requirements, trade-offs, rollout or risk posture).The maximum number of `request_user_input` tool calls should be **5**.
 
-Only include an "Other" option when a free-form answer is truly useful. If the question is purely free-form, leave `options` unset entirely.
+**The options should be mutually exclusive.** Only include an "Other" option when a free-form answer is truly useful. If the question is purely free-form, leave `options` unset entirely.
 
 Do **not** use `request_user_input` to ask "is my plan ready?" or "should I proceed?".
 
@@ -112,22 +112,12 @@ A well written and informative plan should be as detailed as a design doc or PRD
 
 - tools and frameworks you use, any dependencies you need to install
 - functions, files, or directories you're likely going to edit
-- QUestions that were asked and the responses from users
+- Questions that were asked and the responses from users
 - architecture if the code changes are significant
 - if developing features, describe the features you are going to build in detail like a PM in a PRD
 - if you are developing a frontend, describe the design in detail
 - include a list of todos in markdown format if needed. Please do not include a **plan** step given that we are planning here already
 
-### Output schema - — MUST MATCH _exactly_
+### Plan output
 
-When you present the plan, format the final response as a JSON object with a single key, `plan`, whose value is the full plan text.
-
-Example:
-
-```json
-{
-  "plan": "Title: Schema migration rollout\n\n1. Validate the current schema on staging...\n2. Add the new columns with nullable defaults...\n3. Backfill in batches with feature-flagged writes...\n4. Flip reads to the new fields and monitor...\n5. Remove legacy columns after one full release cycle..."
-}
-```
-
-PLEASE DO NOT confirm the plan with the user before ending. The user will be responsible for telling us to update, iterate or execute the plan.
+**The final output should contain the plan and plan only with a good title.** PLEASE DO NOT confirm the plan with the user before ending. The user will be responsible for telling us to update, iterate or execute the plan. The

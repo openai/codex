@@ -33,6 +33,10 @@ impl AbsolutePathBuf {
                 return home;
             }
             if let Some(rest) = path_str.strip_prefix("~/") {
+                let rest = rest.trim_start_matches('/');
+                if rest.is_empty() {
+                    return home;
+                }
                 return home.join(rest);
             }
         }
@@ -249,6 +253,20 @@ mod tests {
         let abs_path_buf = {
             let _guard = AbsolutePathBufGuard::new(temp_dir.path());
             serde_json::from_str::<AbsolutePathBuf>("\"~/code\"").expect("failed to deserialize")
+        };
+        assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn home_directory_double_slash_on_non_windows_is_expanded_in_deserialization() {
+        let Some(home) = home_dir() else {
+            return;
+        };
+        let temp_dir = tempdir().expect("base dir");
+        let abs_path_buf = {
+            let _guard = AbsolutePathBufGuard::new(temp_dir.path());
+            serde_json::from_str::<AbsolutePathBuf>("\"~//code\"").expect("failed to deserialize")
         };
         assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
     }

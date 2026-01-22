@@ -84,11 +84,17 @@ async fn run_compact_task_inner(
     let max_retries = turn_context.client.get_provider().stream_max_retries();
     let mut retries = 0;
 
+    // TODO: If we need to guarantee the persisted mode always matches the prompt used for this
+    // turn, capture it in TurnContext at creation time. Using SessionConfiguration here avoids
+    // duplicating model settings on TurnContext, but an Op after turn start could update the
+    // session config before this write occurs.
+    let collaboration_mode = sess.current_collaboration_mode().await;
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
         model: turn_context.client.get_model(),
+        collaboration_mode: Some(collaboration_mode),
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
         user_instructions: turn_context.user_instructions.clone(),

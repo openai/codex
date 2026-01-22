@@ -59,6 +59,7 @@ mod footer;
 mod list_selection_view;
 mod prompt_args;
 mod skill_popup;
+mod skills_toggle_view;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
 pub(crate) use feedback_view::feedback_disabled_params;
@@ -109,6 +110,8 @@ pub(crate) use experimental_features_view::BetaFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
+pub(crate) use skills_toggle_view::SkillsToggleItem;
+pub(crate) use skills_toggle_view::SkillsToggleView;
 
 /// Pane displayed in the lower half of the chat UI.
 ///

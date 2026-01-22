@@ -87,7 +87,7 @@ async fn request_user_input_round_trip() -> Result<()> {
         request_id,
         serde_json::json!({
             "answers": {
-                "confirm_path": { "selected": ["yes"], "other": serde_json::Value::Null }
+                "confirm_path": { "answers": ["yes"] }
             }
         }),
     )
