@@ -926,35 +926,12 @@ impl ChatWidget {
         let (implement_actions, implement_disabled_reason) = match execute_mode {
             Some(mode) => {
                 let collaboration_mode = mode.clone();
-                let model = mode.model().to_string();
-                let effort = mode.reasoning_effort();
-                let cwd = self.config.cwd.clone();
-                let approval_policy = self.config.approval_policy.value();
-                let sandbox_policy = self.config.sandbox_policy.get().clone();
-                let summary = self.config.model_reasoning_summary;
                 let user_text = PLAN_IMPLEMENTATION_EXECUTE_MESSAGE.to_string();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::UpdateCollaborationMode(
-                        collaboration_mode.clone(),
-                    ));
-                    tx.send(AppEvent::CodexOp(Op::UserTurn {
-                        items: vec![UserInput::Text {
-                            text: user_text.clone(),
-                            text_elements: Vec::new(),
-                        }],
-                        cwd: cwd.clone(),
-                        approval_policy,
-                        sandbox_policy: sandbox_policy.clone(),
-                        model: model.clone(),
-                        effort,
-                        summary,
-                        personality: None,
-                        final_output_json_schema: None,
-                        collaboration_mode: Some(collaboration_mode.clone()),
-                    }));
-                    tx.send(AppEvent::CodexOp(Op::AddToHistory {
+                    tx.send(AppEvent::SubmitUserMessageWithMode {
                         text: user_text.clone(),
-                    }));
+                        collaboration_mode: collaboration_mode.clone(),
+                    });
                 })];
                 (actions, None)
             }
@@ -4749,6 +4726,17 @@ impl ChatWidget {
 
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.bottom_pane.composer_is_empty()
+    }
+
+    pub(crate) fn submit_user_message_with_mode(
+        &mut self,
+        text: String,
+        collaboration_mode: CollaborationMode,
+    ) {
+        let model = collaboration_mode.model().to_string();
+        self.set_collaboration_mode(collaboration_mode);
+        self.set_model(&model);
+        self.submit_user_message(text.into());
     }
 
     /// True when the UI is in the regular composer state with no running task,
