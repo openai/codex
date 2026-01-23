@@ -150,13 +150,8 @@ impl OtelManager {
         if !self.metrics_use_metadata_tags {
             return Ok(Vec::new());
         }
-        let mut tags = Vec::with_capacity(7);
+        let mut tags = Vec::with_capacity(6);
         Self::push_metadata_tag(&mut tags, "auth_mode", self.metadata.auth_mode.as_deref())?;
-        Self::push_metadata_tag(
-            &mut tags,
-            "user.account_id",
-            self.metadata.account_id.as_deref(),
-        )?;
         Self::push_metadata_tag(
             &mut tags,
             "session.source",

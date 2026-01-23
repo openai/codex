@@ -57,7 +57,6 @@ fn manager_attaches_metadata_tags_to_metrics() -> Result<()> {
         ("service".to_string(), "codex-cli".to_string()),
         ("session.source".to_string(), "cli".to_string()),
         ("source".to_string(), "tui".to_string()),
-        ("user.account_id".to_string(), "account-id".to_string()),
     ]);
     assert_eq!(attrs, expected);
 
