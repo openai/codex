@@ -4,8 +4,25 @@ use crate::error::Result as CodexResult;
 use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
+use codex_protocol::config_types::Personality;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
 use std::path::PathBuf;
 use tokio::sync::watch;
+
+#[derive(Clone, Debug)]
+pub struct ThreadConfigSnapshot {
+    pub model: String,
+    pub model_provider_id: String,
+    pub approval_policy: AskForApproval,
+    pub sandbox_policy: SandboxPolicy,
+    pub cwd: PathBuf,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub personality: Option<Personality>,
+    pub session_source: SessionSource,
+}
 
 pub struct CodexThread {
     codex: Codex,
@@ -45,5 +62,9 @@ impl CodexThread {
 
     pub fn rollout_path(&self) -> Option<PathBuf> {
         self.rollout_path.clone()
+    }
+
+    pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
+        self.codex.thread_config_snapshot().await
     }
 }
