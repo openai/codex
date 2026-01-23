@@ -1682,7 +1682,6 @@ dependencies = [
  "rama-tcp",
  "rama-tls-boring",
  "rama-unix",
- "rama-utils",
  "serde",
  "serde_json",
  "time",

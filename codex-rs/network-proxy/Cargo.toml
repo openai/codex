@@ -35,7 +35,6 @@ rama-http-backend = { version = "=0.3.0-alpha.4", features = ["tls"] }
 rama-net = { version = "=0.3.0-alpha.4", features = ["http", "tls"] }
 rama-tcp = { version = "=0.3.0-alpha.4", features = ["http"] }
 rama-tls-boring = { version = "=0.3.0-alpha.4", features = ["http"] }
-rama-utils = { version = "=0.3.0-alpha.4" }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
