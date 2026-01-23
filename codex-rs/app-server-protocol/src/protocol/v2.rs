@@ -1789,10 +1789,20 @@ impl From<CoreUserInput> for UserInput {
 pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    UserMessage { id: String, content: Vec<UserInput> },
+    UserMessage {
+        id: String,
+        content: Vec<UserInput>,
+        #[ts(type = "number | null")]
+        elapsed_ms: Option<i64>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    AgentMessage { id: String, text: String },
+    AgentMessage {
+        id: String,
+        text: String,
+        #[ts(type = "number | null")]
+        elapsed_ms: Option<i64>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Reasoning {
@@ -1801,6 +1811,8 @@ pub enum ThreadItem {
         summary: Vec<String>,
         #[serde(default)]
         content: Vec<String>,
+        #[ts(type = "number | null")]
+        elapsed_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1824,6 +1836,8 @@ pub enum ThreadItem {
         /// The duration of the command execution in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
+        #[ts(type = "number | null")]
+        elapsed_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1831,6 +1845,8 @@ pub enum ThreadItem {
         id: String,
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
+        #[ts(type = "number | null")]
+        elapsed_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1845,6 +1861,8 @@ pub enum ThreadItem {
         /// The duration of the MCP tool call in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
+        #[ts(type = "number | null")]
+        elapsed_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -1864,19 +1882,41 @@ pub enum ThreadItem {
         prompt: Option<String>,
         /// Last known status of the target agents, when available.
         agents_states: HashMap<String, CollabAgentState>,
+        #[ts(type = "number | null")]
+        elapsed_ms: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    WebSearch { id: String, query: String },
+    WebSearch {
+        id: String,
+        query: String,
+        #[ts(type = "number | null")]
+        elapsed_ms: Option<i64>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ImageView { id: String, path: String },
+    ImageView {
+        id: String,
+        path: String,
+        #[ts(type = "number | null")]
+        elapsed_ms: Option<i64>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    EnteredReviewMode { id: String, review: String },
+    EnteredReviewMode {
+        id: String,
+        review: String,
+        #[ts(type = "number | null")]
+        elapsed_ms: Option<i64>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ExitedReviewMode { id: String, review: String },
+    ExitedReviewMode {
+        id: String,
+        review: String,
+        #[ts(type = "number | null")]
+        elapsed_ms: Option<i64>,
+    },
 }
 
 impl From<CoreTurnItem> for ThreadItem {
@@ -1885,6 +1925,7 @@ impl From<CoreTurnItem> for ThreadItem {
             CoreTurnItem::UserMessage(user) => ThreadItem::UserMessage {
                 id: user.id,
                 content: user.content.into_iter().map(UserInput::from).collect(),
+                elapsed_ms: None,
             },
             CoreTurnItem::AgentMessage(agent) => {
                 let text = agent
@@ -1894,16 +1935,22 @@ impl From<CoreTurnItem> for ThreadItem {
                         CoreAgentMessageContent::Text { text } => text,
                     })
                     .collect::<String>();
-                ThreadItem::AgentMessage { id: agent.id, text }
+                ThreadItem::AgentMessage {
+                    id: agent.id,
+                    text,
+                    elapsed_ms: None,
+                }
             }
             CoreTurnItem::Reasoning(reasoning) => ThreadItem::Reasoning {
                 id: reasoning.id,
                 summary: reasoning.summary_text,
                 content: reasoning.raw_content,
+                elapsed_ms: None,
             },
             CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch {
                 id: search.id,
                 query: search.query,
+                elapsed_ms: None,
             },
         }
     }
@@ -2548,6 +2595,7 @@ mod tests {
                         path: PathBuf::from("/repo/.codex/skills/skill-creator/SKILL.md"),
                     },
                 ],
+                elapsed_ms: None,
             }
         );
 
@@ -2568,6 +2616,7 @@ mod tests {
             ThreadItem::AgentMessage {
                 id: "agent-1".to_string(),
                 text: "Hello world".to_string(),
+                elapsed_ms: None,
             }
         );
 
@@ -2583,6 +2632,7 @@ mod tests {
                 id: "reasoning-1".to_string(),
                 summary: vec!["line one".to_string(), "line two".to_string()],
                 content: vec![],
+                elapsed_ms: None,
             }
         );
 
@@ -2596,6 +2646,7 @@ mod tests {
             ThreadItem::WebSearch {
                 id: "search-1".to_string(),
                 query: "docs".to_string(),
+                elapsed_ms: None,
             }
         );
     }

@@ -70,7 +70,11 @@ impl ThreadHistoryBuilder {
         let mut turn = self.new_turn();
         let id = self.next_item_id();
         let content = self.build_user_inputs(payload);
-        turn.items.push(ThreadItem::UserMessage { id, content });
+        turn.items.push(ThreadItem::UserMessage {
+            id,
+            content,
+            elapsed_ms: None,
+        });
         self.current_turn = Some(turn);
     }
 
@@ -80,9 +84,11 @@ impl ThreadHistoryBuilder {
         }
 
         let id = self.next_item_id();
-        self.ensure_turn()
-            .items
-            .push(ThreadItem::AgentMessage { id, text });
+        self.ensure_turn().items.push(ThreadItem::AgentMessage {
+            id,
+            text,
+            elapsed_ms: None,
+        });
     }
 
     fn handle_agent_reasoning(&mut self, payload: &AgentReasoningEvent) {
@@ -102,6 +108,7 @@ impl ThreadHistoryBuilder {
             id,
             summary: vec![payload.text.clone()],
             content: Vec::new(),
+            elapsed_ms: None,
         });
     }
 
@@ -122,6 +129,7 @@ impl ThreadHistoryBuilder {
             id,
             summary: Vec::new(),
             content: vec![payload.text.clone()],
+            elapsed_ms: None,
         });
     }
 
@@ -296,6 +304,7 @@ mod tests {
                         url: "https://example.com/one.png".into(),
                     }
                 ],
+                elapsed_ms: None,
             }
         );
         assert_eq!(
@@ -303,6 +312,7 @@ mod tests {
             ThreadItem::AgentMessage {
                 id: "item-2".into(),
                 text: "Hi there".into(),
+                elapsed_ms: None,
             }
         );
         assert_eq!(
@@ -311,6 +321,7 @@ mod tests {
                 id: "item-3".into(),
                 summary: vec!["thinking".into()],
                 content: vec!["full reasoning".into()],
+                elapsed_ms: None,
             }
         );
 
@@ -325,6 +336,7 @@ mod tests {
                     text: "Second turn".into(),
                     text_elements: Vec::new(),
                 }],
+                elapsed_ms: None,
             }
         );
         assert_eq!(
@@ -332,6 +344,7 @@ mod tests {
             ThreadItem::AgentMessage {
                 id: "item-5".into(),
                 text: "Reply two".into(),
+                elapsed_ms: None,
             }
         );
     }
@@ -370,6 +383,7 @@ mod tests {
                 id: "item-2".into(),
                 summary: vec!["first summary".into()],
                 content: vec!["first content".into()],
+                elapsed_ms: None,
             }
         );
         assert_eq!(
@@ -378,6 +392,7 @@ mod tests {
                 id: "item-4".into(),
                 summary: vec!["second summary".into()],
                 content: Vec::new(),
+                elapsed_ms: None,
             }
         );
     }
@@ -422,6 +437,7 @@ mod tests {
                     text: "Please do the thing".into(),
                     text_elements: Vec::new(),
                 }],
+                elapsed_ms: None,
             }
         );
         assert_eq!(
@@ -429,6 +445,7 @@ mod tests {
             ThreadItem::AgentMessage {
                 id: "item-2".into(),
                 text: "Working...".into(),
+                elapsed_ms: None,
             }
         );
 
@@ -443,6 +460,7 @@ mod tests {
                     text: "Let's try again".into(),
                     text_elements: Vec::new(),
                 }],
+                elapsed_ms: None,
             }
         );
         assert_eq!(
@@ -450,6 +468,7 @@ mod tests {
             ThreadItem::AgentMessage {
                 id: "item-4".into(),
                 text: "Second attempt complete.".into(),
+                elapsed_ms: None,
             }
         );
     }
@@ -500,10 +519,12 @@ mod tests {
                             text: "First".into(),
                             text_elements: Vec::new(),
                         }],
+                        elapsed_ms: None,
                     },
                     ThreadItem::AgentMessage {
                         id: "item-2".into(),
                         text: "A1".into(),
+                        elapsed_ms: None,
                     },
                 ],
             },
@@ -518,10 +539,12 @@ mod tests {
                             text: "Third".into(),
                             text_elements: Vec::new(),
                         }],
+                        elapsed_ms: None,
                     },
                     ThreadItem::AgentMessage {
                         id: "item-4".into(),
                         text: "A3".into(),
+                        elapsed_ms: None,
                     },
                 ],
             },
