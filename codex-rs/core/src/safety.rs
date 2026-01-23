@@ -86,7 +86,7 @@ pub fn assess_patch_safety(
 }
 
 pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType> {
-    let sandbox = if cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos") {
         Some(SandboxType::MacosSeatbelt)
     } else if cfg!(target_os = "linux") {
         Some(SandboxType::LinuxSeccomp)
@@ -98,8 +98,7 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
         }
     } else {
         None
-    };
-    sandbox
+    }
 }
 
 fn is_write_patch_constrained_to_writable_paths(
