@@ -17,6 +17,8 @@ use crate::config_types::CollaborationMode;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
+use crate::external_events::ExternalEvent;
+use crate::external_events::ExternalEventEvent;
 use crate::items::TurnItem;
 use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
@@ -135,6 +137,13 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
     },
+
+    /// Record an external event for this thread.
+    ///
+    /// This is intended for asynchronous "world context" (CI/build events, cross-agent messages,
+    /// background scripts, etc.). UIs can separately decide whether to steer an in-flight turn or
+    /// queue these events to be included in the next model call.
+    ExternalEvent { event: ExternalEvent },
 
     /// Override parts of the persistent turn context for subsequent turns.
     ///
@@ -759,6 +768,9 @@ pub enum EventMsg {
     DeprecationNotice(DeprecationNoticeEvent),
 
     BackgroundEvent(BackgroundEventEvent),
+
+    /// An external event received asynchronously for this thread.
+    ExternalEvent(ExternalEventEvent),
 
     UndoStarted(UndoStartedEvent),
 

@@ -938,6 +938,9 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
             }
+            AppEvent::ExternalEventReceived(event) => {
+                self.chat_widget.on_external_event_received(event);
+            }
             AppEvent::ExternalApprovalRequest { thread_id, event } => {
                 self.handle_external_approval_request(thread_id, event);
             }
