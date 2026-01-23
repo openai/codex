@@ -42,30 +42,24 @@ pub fn run_main() -> ! {
 
     if probe_bind_mounts_flag {
         let status = probe_bind_mounts();
-        match status {
+        #[allow(clippy::print_stderr)]
+        let exit_code = match status {
             BindMountProbeStatus::Supported => {
-                let _ = writeln!(
-                    std::io::stderr(),
-                    "codex-linux-sandbox: bind-mount probe supported"
-                );
-                std::process::exit(0);
+                eprintln!("codex-linux-sandbox: bind-mount probe supported");
+                0
             }
             BindMountProbeStatus::Unsupported { reason } => {
-                let _ = writeln!(
-                    std::io::stderr(),
-                    "codex-linux-sandbox: bind-mount probe unsupported: {reason}"
-                );
-                std::process::exit(1);
+                eprintln!("codex-linux-sandbox: bind-mount probe unsupported: {reason}");
+                1
             }
-        }
+        };
+        std::process::exit(exit_code);
     }
 
-    let sandbox_policy_cwd = sandbox_policy_cwd.unwrap_or_else(|| {
-        panic!("--sandbox-policy-cwd is required unless --probe-bind-mounts is set")
-    });
-    let sandbox_policy = sandbox_policy.unwrap_or_else(|| {
-        panic!("--sandbox-policy is required unless --probe-bind-mounts is set")
-    });
+    let sandbox_policy_cwd = sandbox_policy_cwd
+        .expect("--sandbox-policy-cwd is required unless --probe-bind-mounts is set");
+    let sandbox_policy =
+        sandbox_policy.expect("--sandbox-policy is required unless --probe-bind-mounts is set");
 
     if let Err(e) = apply_sandbox_policy_to_current_thread(
         &sandbox_policy,

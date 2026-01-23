@@ -53,7 +53,8 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
                     Ok(()) => {
                         if let Err(err) = write_user_namespace_maps(original_euid, original_egid) {
                             if is_permission_denied(&err) {
-                                return Err(err);
+                                log_namespace_fallback(&err);
+                                return Ok(());
                             }
                             return Err(err);
                         }
@@ -76,7 +77,8 @@ pub(crate) fn apply_read_only_mounts(sandbox_policy: &SandboxPolicy, cwd: &Path)
             Ok(()) => {
                 if let Err(err) = write_user_namespace_maps(original_euid, original_egid) {
                     if is_permission_denied(&err) {
-                        return Err(err);
+                        log_namespace_fallback(&err);
+                        return Ok(());
                     }
                     return Err(err);
                 }
@@ -769,10 +771,12 @@ mod tests {
             exclude_slash_tmp: true,
         };
 
-        let err = apply_read_only_mounts(&sandbox_policy, tempdir.path())
-            .expect_err("expected permission denied error");
+        let result = apply_read_only_mounts(&sandbox_policy, tempdir.path());
 
-        assert!(is_permission_denied(&err));
+        assert!(
+            result.is_ok(),
+            "expected Landlock-only fallback when user namespace map writes are denied"
+        );
     }
 
     #[test]
