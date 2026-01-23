@@ -121,7 +121,7 @@ use tracing::debug;
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
-const PLAN_IMPLEMENTATION_NO: &str = "No, and tell the model what to do differently";
+const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_EXECUTE_MESSAGE: &str = "Implement the plan.";
 
 use crate::app_event::AppEvent;
@@ -961,7 +961,7 @@ impl ChatWidget {
             },
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_NO.to_string(),
-                description: Some("Keep planning and share adjustments.".to_string()),
+                description: Some("Continue planning with the model.".to_string()),
                 selected_description: None,
                 is_current: false,
                 actions: Vec::new(),
