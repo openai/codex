@@ -2,7 +2,6 @@ use crate::config::Config;
 use crate::config::NetworkMode;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
-use crate::policy::method_allowed;
 use crate::policy::normalize_host;
 use crate::state::NetworkProxyConstraints;
 use crate::state::build_config_state;
@@ -28,6 +27,35 @@ use tracing::warn;
 
 const MAX_BLOCKED_EVENTS: usize = 200;
 const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostBlockReason {
+    Denied,
+    NotAllowed,
+    NotAllowedLocal,
+}
+
+impl HostBlockReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Denied => "denied",
+            Self::NotAllowed => "not_allowed",
+            Self::NotAllowedLocal => "not_allowed_local",
+        }
+    }
+}
+
+impl std::fmt::Display for HostBlockReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostBlockDecision {
+    Allowed,
+    Blocked(HostBlockReason),
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BlockedRequest {
@@ -139,7 +167,7 @@ impl AppState {
         }
     }
 
-    pub async fn host_blocked(&self, host: &str, port: u16) -> Result<(bool, String)> {
+    pub async fn host_blocked(&self, host: &str, port: u16) -> Result<HostBlockDecision> {
         self.reload_if_needed().await?;
         let (deny_set, allow_set, allow_local_binding, allowed_domains_empty, allowed_domains) = {
             let guard = self.state.read().await;
@@ -157,7 +185,7 @@ impl AppState {
         //  2) local/private networking is opt-in (defense-in-depth)
         //  3) allowlist is enforced when configured
         if deny_set.is_match(host) {
-            return Ok((true, "denied".to_string()));
+            return Ok(HostBlockDecision::Blocked(HostBlockReason::Denied));
         }
 
         let is_allowlisted = allow_set.is_match(host);
@@ -184,21 +212,21 @@ impl AppState {
 
             if local_literal {
                 if !is_explicit_local_allowlisted(&allowed_domains, host) {
-                    return Ok((true, "not_allowed_local".to_string()));
+                    return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
                 }
             } else if host_resolves_to_non_public_ip(host, port).await? {
-                return Ok((true, "not_allowed_local".to_string()));
+                return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
             }
         }
 
         if allowed_domains_empty {
-            return Ok((true, "not_allowed".to_string()));
+            return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed));
         }
 
         if !is_allowlisted {
-            return Ok((true, "not_allowed".to_string()));
+            return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed));
         }
-        Ok((false, String::new()))
+        Ok(HostBlockDecision::Allowed)
     }
 
     pub async fn record_blocked(&self, entry: BlockedRequest) -> Result<()> {
@@ -254,7 +282,7 @@ impl AppState {
     pub async fn method_allowed(&self, method: &str) -> Result<bool> {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
-        Ok(method_allowed(guard.config.network_proxy.mode, method))
+        Ok(guard.config.network_proxy.mode.allows_method(method))
     }
 
     pub async fn allow_upstream_proxy(&self) -> Result<bool> {
@@ -438,7 +466,7 @@ mod tests {
 
         assert_eq!(
             state.host_blocked("example.com", 80).await.unwrap(),
-            (true, "denied".to_string())
+            HostBlockDecision::Blocked(HostBlockReason::Denied)
         );
     }
 
@@ -451,13 +479,13 @@ mod tests {
 
         assert_eq!(
             state.host_blocked("example.com", 80).await.unwrap(),
-            (false, String::new())
+            HostBlockDecision::Allowed
         );
         assert_eq!(
             // Use a public IP literal to avoid relying on ambient DNS behavior (some networks
             // resolve unknown hostnames to private IPs, which would trigger `not_allowed_local`).
             state.host_blocked("8.8.8.8", 80).await.unwrap(),
-            (true, "not_allowed".to_string())
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
         );
     }
 
@@ -470,11 +498,11 @@ mod tests {
 
         assert_eq!(
             state.host_blocked("api.openai.com", 80).await.unwrap(),
-            (false, String::new())
+            HostBlockDecision::Allowed
         );
         assert_eq!(
             state.host_blocked("openai.com", 80).await.unwrap(),
-            (true, "not_allowed".to_string())
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
         );
     }
 
@@ -488,11 +516,11 @@ mod tests {
 
         assert_eq!(
             state.host_blocked("127.0.0.1", 80).await.unwrap(),
-            (true, "not_allowed_local".to_string())
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
         assert_eq!(
             state.host_blocked("localhost", 80).await.unwrap(),
-            (true, "not_allowed_local".to_string())
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
 
@@ -506,7 +534,7 @@ mod tests {
 
         assert_eq!(
             state.host_blocked("127.0.0.1", 80).await.unwrap(),
-            (true, "not_allowed_local".to_string())
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
 
@@ -520,7 +548,7 @@ mod tests {
 
         assert_eq!(
             state.host_blocked("10.0.0.1", 80).await.unwrap(),
-            (true, "not_allowed_local".to_string())
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
 
@@ -534,7 +562,7 @@ mod tests {
 
         assert_eq!(
             state.host_blocked("localhost", 80).await.unwrap(),
-            (false, String::new())
+            HostBlockDecision::Allowed
         );
     }
 
@@ -548,7 +576,7 @@ mod tests {
 
         assert_eq!(
             state.host_blocked("10.0.0.1", 80).await.unwrap(),
-            (false, String::new())
+            HostBlockDecision::Allowed
         );
     }
 
@@ -562,7 +590,7 @@ mod tests {
 
         assert_eq!(
             state.host_blocked("fe80::1%lo0", 80).await.unwrap(),
-            (true, "not_allowed_local".to_string())
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
 
@@ -576,7 +604,7 @@ mod tests {
 
         assert_eq!(
             state.host_blocked("fe80::1%lo0", 80).await.unwrap(),
-            (false, String::new())
+            HostBlockDecision::Allowed
         );
     }
 
@@ -590,7 +618,7 @@ mod tests {
 
         assert_eq!(
             state.host_blocked("10.0.0.1", 80).await.unwrap(),
-            (true, "not_allowed_local".to_string())
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
 
@@ -604,7 +632,7 @@ mod tests {
 
         assert_eq!(
             state.host_blocked("127.0.0.1", 80).await.unwrap(),
-            (true, "not_allowed_local".to_string())
+            HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal)
         );
     }
 

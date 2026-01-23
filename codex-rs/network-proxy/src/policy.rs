@@ -1,3 +1,4 @@
+#[cfg(test)]
 use crate::config::NetworkMode;
 use anyhow::Context;
 use anyhow::Result;
@@ -8,14 +9,11 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
+use url::Host;
 
-pub fn method_allowed(mode: NetworkMode, method: &str) -> bool {
-    match mode {
-        NetworkMode::Full => true,
-        NetworkMode::Limited => matches!(method, "GET" | "HEAD" | "OPTIONS"),
-    }
-}
-
+/// Returns true if the host string is a loopback hostname or IP literal.
+///
+/// Expects a host (optionally with a trailing dot), not a full URL.
 pub fn is_loopback_host(host: &str) -> bool {
     let host = host.to_ascii_lowercase();
     if host == "localhost" || host == "localhost." {
@@ -61,6 +59,7 @@ fn is_non_public_ipv6(ip: Ipv6Addr) -> bool {
         || ip.is_unicast_link_local()
 }
 
+/// Normalize host fragments for policy matching (trim whitespace, strip ports/brackets, lowercase).
 pub fn normalize_host(host: &str) -> String {
     let host = host.trim();
     if host.starts_with('[')
@@ -141,16 +140,50 @@ pub(crate) enum DomainPattern {
 }
 
 impl DomainPattern {
+    /// Parse a policy pattern for constraint comparisons.
+    ///
+    /// Validation of glob syntax happens when building the globset; here we only
+    /// decode the wildcard prefixes to keep constraint checks lightweight.
     pub(crate) fn parse(input: &str) -> Self {
+        let input = input.trim();
+        if input.is_empty() {
+            return Self::Exact(String::new());
+        }
         if input == "*" {
             Self::Any
         } else if let Some(domain) = input.strip_prefix("**.") {
-            Self::ApexAndSubdomains(domain.to_string())
+            Self::parse_domain(domain, Self::ApexAndSubdomains)
         } else if let Some(domain) = input.strip_prefix("*.") {
-            Self::SubdomainsOnly(domain.to_string())
+            Self::parse_domain(domain, Self::SubdomainsOnly)
         } else {
             Self::Exact(input.to_string())
         }
+    }
+
+    /// Parse a policy pattern for constraint comparisons, validating domain parts with `url`.
+    pub(crate) fn parse_for_constraints(input: &str) -> Self {
+        let input = input.trim();
+        if input.is_empty() {
+            return Self::Exact(String::new());
+        }
+        if input == "*" {
+            return Self::Any;
+        }
+        if let Some(domain) = input.strip_prefix("**.") {
+            return Self::ApexAndSubdomains(parse_domain_for_constraints(domain));
+        }
+        if let Some(domain) = input.strip_prefix("*.") {
+            return Self::SubdomainsOnly(parse_domain_for_constraints(domain));
+        }
+        Self::Exact(parse_domain_for_constraints(input))
+    }
+
+    fn parse_domain(domain: &str, build: impl FnOnce(String) -> Self) -> Self {
+        let domain = domain.trim();
+        if domain.is_empty() {
+            return Self::Exact(String::new());
+        }
+        build(domain.to_string())
     }
 
     pub(crate) fn allows(&self, candidate: &DomainPattern) -> bool {
@@ -181,6 +214,25 @@ impl DomainPattern {
                 }
             },
         }
+    }
+}
+
+fn parse_domain_for_constraints(domain: &str) -> String {
+    let domain = domain.trim().trim_end_matches('.');
+    if domain.is_empty() {
+        return String::new();
+    }
+    let host = if domain.starts_with('[') && domain.ends_with(']') {
+        &domain[1..domain.len().saturating_sub(1)]
+    } else {
+        domain
+    };
+    if host.contains('*') || host.contains('?') || host.contains('%') {
+        return domain.to_string();
+    }
+    match Host::parse(host) {
+        Ok(host) => host.to_string(),
+        Err(_) => String::new(),
     }
 }
 
@@ -228,18 +280,18 @@ mod tests {
 
     #[test]
     fn method_allowed_full_allows_everything() {
-        assert!(method_allowed(NetworkMode::Full, "GET"));
-        assert!(method_allowed(NetworkMode::Full, "POST"));
-        assert!(method_allowed(NetworkMode::Full, "CONNECT"));
+        assert!(NetworkMode::Full.allows_method("GET"));
+        assert!(NetworkMode::Full.allows_method("POST"));
+        assert!(NetworkMode::Full.allows_method("CONNECT"));
     }
 
     #[test]
     fn method_allowed_limited_allows_only_safe_methods() {
-        assert!(method_allowed(NetworkMode::Limited, "GET"));
-        assert!(method_allowed(NetworkMode::Limited, "HEAD"));
-        assert!(method_allowed(NetworkMode::Limited, "OPTIONS"));
-        assert!(!method_allowed(NetworkMode::Limited, "POST"));
-        assert!(!method_allowed(NetworkMode::Limited, "CONNECT"));
+        assert!(NetworkMode::Limited.allows_method("GET"));
+        assert!(NetworkMode::Limited.allows_method("HEAD"));
+        assert!(NetworkMode::Limited.allows_method("OPTIONS"));
+        assert!(!NetworkMode::Limited.allows_method("POST"));
+        assert!(!NetworkMode::Limited.allows_method("CONNECT"));
     }
 
     #[test]

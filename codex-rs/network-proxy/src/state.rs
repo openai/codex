@@ -10,6 +10,7 @@ use codex_core::config::CONFIG_TOML_FILE;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
+use codex_core::config::find_codex_home;
 use codex_core::config_loader::RequirementSource;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -22,7 +23,10 @@ pub(crate) use crate::runtime::app_state_for_policy;
 pub(crate) async fn build_config_state() -> Result<ConfigState> {
     // Load config through `codex-core` so we inherit the same layer ordering and semantics as the
     // rest of Codex (system/managed layers, user layers, session flags, etc.).
+    let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
     let codex_cfg = ConfigBuilder::default()
+        .codex_home(codex_home.clone())
+        .fallback_cwd(Some(codex_home))
         .build()
         .await
         .context("failed to load Codex config")?;
@@ -295,14 +299,14 @@ pub(crate) fn validate_policy_against_constraints(
     if let Some(allowed_domains) = &constraints.allowed_domains {
         let managed_patterns: Vec<DomainPattern> = allowed_domains
             .iter()
-            .map(|entry| DomainPattern::parse(entry))
+            .map(|entry| DomainPattern::parse_for_constraints(entry))
             .collect();
         let _ = Constrained::new(
             config.network_proxy.policy.allowed_domains.clone(),
             move |candidate| {
                 let mut invalid = Vec::new();
                 for entry in candidate {
-                    let candidate_pattern = DomainPattern::parse(entry);
+                    let candidate_pattern = DomainPattern::parse_for_constraints(entry);
                     if !managed_patterns
                         .iter()
                         .any(|managed| managed.allows(&candidate_pattern))

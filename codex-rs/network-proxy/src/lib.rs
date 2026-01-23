@@ -1,3 +1,5 @@
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 mod admin;
 mod config;
 mod http_proxy;
@@ -20,6 +22,7 @@ pub use proxy::NetworkProxyBuilder;
 pub use proxy::NetworkProxyHandle;
 
 pub async fn run_main(args: Args) -> Result<()> {
-    let proxy = NetworkProxy::from_cli_args(args).await?;
+    let _ = args;
+    let proxy = NetworkProxy::builder().build().await?;
     proxy.run().await?.wait().await
 }

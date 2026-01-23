@@ -1,3 +1,5 @@
+use crate::runtime::HostBlockDecision;
+use crate::runtime::HostBlockReason;
 use crate::state::AppState;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -24,7 +26,6 @@ pub struct NetworkPolicyRequest {
 }
 
 impl NetworkPolicyRequest {
-    #[must_use]
     pub fn new(
         protocol: NetworkProtocol,
         host: String,
@@ -53,7 +54,6 @@ pub enum NetworkDecision {
 }
 
 impl NetworkDecision {
-    #[must_use]
     pub fn deny(reason: impl Into<String>) -> Self {
         let reason = reason.into();
         let reason = if reason.is_empty() {
@@ -98,18 +98,17 @@ pub(crate) async fn evaluate_host_policy(
     decider: Option<&Arc<dyn NetworkPolicyDecider>>,
     request: &NetworkPolicyRequest,
 ) -> Result<NetworkDecision> {
-    let (blocked, reason) = state.host_blocked(&request.host, request.port).await?;
-    if !blocked {
-        return Ok(NetworkDecision::Allow);
+    match state.host_blocked(&request.host, request.port).await? {
+        HostBlockDecision::Allowed => Ok(NetworkDecision::Allow),
+        HostBlockDecision::Blocked(HostBlockReason::NotAllowed) => {
+            if let Some(decider) = decider {
+                Ok(decider.decide(request.clone()).await)
+            } else {
+                Ok(NetworkDecision::deny(HostBlockReason::NotAllowed.as_str()))
+            }
+        }
+        HostBlockDecision::Blocked(reason) => Ok(NetworkDecision::deny(reason.as_str())),
     }
-
-    if reason == "not_allowed"
-        && let Some(decider) = decider
-    {
-        return Ok(decider.decide(request.clone()).await);
-    }
-
-    Ok(NetworkDecision::deny(reason))
 }
 
 #[cfg(test)]
@@ -131,6 +130,8 @@ mod tests {
             let calls = calls.clone();
             move |_req| {
                 calls.fetch_add(1, Ordering::SeqCst);
+                // The default policy denies all; the decider is consulted for not_allowed
+                // requests and can override that decision.
                 async { NetworkDecision::Allow }
             }
         });

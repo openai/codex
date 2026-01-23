@@ -3,6 +3,7 @@ use crate::config;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::state::AppState;
+use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
 use std::net::SocketAddr;
@@ -23,25 +24,21 @@ pub struct NetworkProxyBuilder {
 }
 
 impl NetworkProxyBuilder {
-    #[must_use]
     pub fn state(mut self, state: Arc<AppState>) -> Self {
         self.state = Some(state);
         self
     }
 
-    #[must_use]
     pub fn http_addr(mut self, addr: SocketAddr) -> Self {
         self.http_addr = Some(addr);
         self
     }
 
-    #[must_use]
     pub fn admin_addr(mut self, addr: SocketAddr) -> Self {
         self.admin_addr = Some(addr);
         self
     }
 
-    #[must_use]
     pub fn policy_decider<D>(mut self, decider: D) -> Self
     where
         D: NetworkPolicyDecider,
@@ -50,7 +47,6 @@ impl NetworkProxyBuilder {
         self
     }
 
-    #[must_use]
     pub fn policy_decider_arc(mut self, decider: Arc<dyn NetworkPolicyDecider>) -> Self {
         self.policy_decider = Some(decider);
         self
@@ -61,8 +57,8 @@ impl NetworkProxyBuilder {
             Some(state) => state,
             None => Arc::new(AppState::new().await?),
         };
-        let runtime = config::resolve_runtime(&state.current_cfg().await?);
         let current_cfg = state.current_cfg().await?;
+        let runtime = config::resolve_runtime(&current_cfg)?;
         // Reapply bind clamping for caller overrides so unix-socket proxying stays loopback-only.
         let (http_addr, admin_addr) = config::clamp_bind_addrs(
             self.http_addr.unwrap_or(runtime.http_addr),
@@ -88,14 +84,8 @@ pub struct NetworkProxy {
 }
 
 impl NetworkProxy {
-    #[must_use]
     pub fn builder() -> NetworkProxyBuilder {
         NetworkProxyBuilder::default()
-    }
-
-    pub async fn from_cli_args(_args: Args) -> Result<Self> {
-        let builder = Self::builder();
-        builder.build().await
     }
 
     pub async fn run(&self) -> Result<NetworkProxyHandle> {
@@ -117,36 +107,71 @@ impl NetworkProxy {
         let admin_task = tokio::spawn(admin::run_admin_api(self.state.clone(), self.admin_addr));
 
         Ok(NetworkProxyHandle {
-            http_task,
-            admin_task,
+            http_task: Some(http_task),
+            admin_task: Some(admin_task),
+            completed: false,
         })
     }
 }
 
 pub struct NetworkProxyHandle {
-    http_task: JoinHandle<Result<()>>,
-    admin_task: JoinHandle<Result<()>>,
+    http_task: Option<JoinHandle<Result<()>>>,
+    admin_task: Option<JoinHandle<Result<()>>>,
+    completed: bool,
 }
 
 impl NetworkProxyHandle {
     fn noop() -> Self {
         Self {
-            http_task: tokio::spawn(async { Ok(()) }),
-            admin_task: tokio::spawn(async { Ok(()) }),
+            http_task: Some(tokio::spawn(async { Ok(()) })),
+            admin_task: Some(tokio::spawn(async { Ok(()) })),
+            completed: true,
         }
     }
 
-    pub async fn wait(self) -> Result<()> {
-        self.http_task.await??;
-        self.admin_task.await??;
+    pub async fn wait(mut self) -> Result<()> {
+        let http_task = self.http_task.take().context("missing http proxy task")?;
+        let admin_task = self.admin_task.take().context("missing admin proxy task")?;
+        let http_result = http_task.await;
+        let admin_result = admin_task.await;
+        self.completed = true;
+        http_result??;
+        admin_result??;
         Ok(())
     }
 
-    pub async fn shutdown(self) -> Result<()> {
-        self.http_task.abort();
-        self.admin_task.abort();
-        let _ = self.http_task.await;
-        let _ = self.admin_task.await;
+    pub async fn shutdown(mut self) -> Result<()> {
+        if let Some(http_task) = self.http_task.take() {
+            http_task.abort();
+            let _ = http_task.await;
+        }
+        if let Some(admin_task) = self.admin_task.take() {
+            admin_task.abort();
+            let _ = admin_task.await;
+        }
+        self.completed = true;
         Ok(())
+    }
+}
+
+impl Drop for NetworkProxyHandle {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        let http_running = self
+            .http_task
+            .as_ref()
+            .map(|task| !task.is_finished())
+            .unwrap_or(false);
+        let admin_running = self
+            .admin_task
+            .as_ref()
+            .map(|task| !task.is_finished())
+            .unwrap_or(false);
+        if !http_running && !admin_running {
+            return;
+        }
+        warn!("network proxy dropped without shutdown; tasks may still be running");
     }
 }
