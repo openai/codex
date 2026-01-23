@@ -595,40 +595,28 @@ async fn run_ratatui_app(
         _ => None,
     };
 
-    let selected_cwd = if cli.cwd.is_none() {
-        history_cwd_if_resume_or_fork
-            .as_ref()
-            .and_then(|(history_cwd, prompt_action)| {
-                history_cwd
-                    .as_ref()
-                    .filter(|cwd| should_prompt_for_cwd(&current_cwd, cwd))
-                    .map(|cwd| (cwd, *prompt_action))
-            })
-    } else {
-        None
-    };
-
-    let selected_cwd = match selected_cwd {
-        Some((history_cwd, prompt_action)) => Some(
-            cwd_prompt::run_cwd_selection_prompt(
-                &mut tui,
-                prompt_action,
-                &current_cwd,
-                history_cwd,
+    let selected_cwd = match history_cwd_if_resume_or_fork.as_ref() {
+        Some((Some(history_cwd), prompt_action))
+            if cli.cwd.is_none() && should_prompt_for_cwd(&current_cwd, history_cwd) =>
+        {
+            Some(
+                cwd_prompt::run_cwd_selection_prompt(
+                    &mut tui,
+                    *prompt_action,
+                    &current_cwd,
+                    history_cwd,
+                )
+                .await?,
             )
-            .await?,
-        ),
-        None => None,
+        }
+        _ => None,
     };
 
     let fallback_cwd = match selected_cwd {
         Some(CwdSelection::Current) => Some(current_cwd.clone()),
-        Some(CwdSelection::Session) => history_cwd_if_resume_or_fork
-            .as_ref()
-            .and_then(|(cwd, _)| cwd.clone()),
-        // None when no prompt was shown (e.g. --cd provided, not resuming/forking,
+        // None when no cwd prompt was shown (e.g. --cd provided, not resuming/forking,
         // no cwd in rollout, or cwd already matches).
-        None => history_cwd_if_resume_or_fork
+        Some(CwdSelection::Session) | None => history_cwd_if_resume_or_fork
             .as_ref()
             .and_then(|(cwd, _)| cwd.clone()),
     };
