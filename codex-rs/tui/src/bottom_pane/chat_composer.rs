@@ -388,7 +388,6 @@ impl ChatComposer {
     fn image_paste_enabled(&self) -> bool {
         self.config.image_paste_enabled
     }
-
     #[cfg(target_os = "windows")]
     pub fn set_windows_degraded_sandbox_active(&mut self, enabled: bool) {
         self.windows_degraded_sandbox_active = enabled;

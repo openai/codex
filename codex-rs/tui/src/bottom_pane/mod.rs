@@ -208,6 +208,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    #[cfg(target_os = "windows")]
     pub fn set_windows_degraded_sandbox_active(&mut self, enabled: bool) {
         self.composer.set_windows_degraded_sandbox_active(enabled);
         self.request_redraw();
