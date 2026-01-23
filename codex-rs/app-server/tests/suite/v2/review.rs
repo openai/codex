@@ -16,6 +16,7 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStatus;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -87,7 +88,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         let started: ItemStartedNotification =
             serde_json::from_value(item_started.params.expect("params must be present"))?;
         match started.item {
-            ThreadItem::EnteredReviewMode { id, review } => {
+            ThreadItem::EnteredReviewMode { id, review, .. } => {
                 assert_eq!(id, turn_id);
                 assert_eq!(review, "commit 1234567: Tidy UI colors");
                 saw_entered_review_mode = true;
@@ -101,10 +102,10 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         "did not observe enteredReviewMode item"
     );
 
-    // Confirm we see the ExitedReviewMode marker (with review text)
-    // on the same turn. Ignore any other items the stream surfaces.
+    // Confirm we see the EnteredReviewMode + ExitedReviewMode markers on the same turn.
+    let mut saw_entered_completed = false;
     let mut review_body: Option<String> = None;
-    for _ in 0..10 {
+    for _ in 0..12 {
         let review_notif: JSONRPCNotification = timeout(
             DEFAULT_READ_TIMEOUT,
             mcp.read_stream_until_notification_message("item/completed"),
@@ -113,15 +114,28 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
         let completed: ItemCompletedNotification =
             serde_json::from_value(review_notif.params.expect("params must be present"))?;
         match completed.item {
-            ThreadItem::ExitedReviewMode { id, review } => {
+            ThreadItem::EnteredReviewMode { id, elapsed_ms, .. } => {
                 assert_eq!(id, turn_id);
+                assert_eq!(elapsed_ms.is_some(), true);
+                saw_entered_completed = true;
+            }
+            ThreadItem::ExitedReviewMode {
+                id,
+                review,
+                elapsed_ms,
+            } => {
+                assert_eq!(id, turn_id);
+                assert_eq!(elapsed_ms.is_some(), true);
                 review_body = Some(review);
-                break;
             }
             _ => continue,
         }
+        if saw_entered_completed && review_body.is_some() {
+            break;
+        }
     }
 
+    assert_eq!(saw_entered_completed, true);
     let review = review_body.expect("did not observe a code review item");
     assert!(review.contains("Prefer Stylize helpers"));
     assert!(review.contains("/tmp/file.rs:10-20"));

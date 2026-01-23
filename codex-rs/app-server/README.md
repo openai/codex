@@ -403,6 +403,8 @@ Today both notifications carry an empty `items` array even when item events were
 - `exitedReviewMode` — `{id, review}` emitted when the reviewer finishes; `review` is the full plain-text review (usually, overall notes plus bullet point findings).
 - `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically.
 
+Each item also includes `elapsedMs?`, the elapsed milliseconds since the turn started. This is populated on `item/completed` notifications (and omitted/`null` on `item/started` and history-loaded items).
+
 All items emit two shared lifecycle events:
 
 - `item/started` — emits the full `item` when a new unit of work begins so the UI can render it immediately; the `item.id` in this payload matches the `itemId` used by deltas.

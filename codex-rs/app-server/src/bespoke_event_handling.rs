@@ -93,6 +93,7 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::oneshot;
 use tracing::error;
 
@@ -115,6 +116,22 @@ pub(crate) async fn apply_bespoke_event_handling(
         msg,
     } = event;
     match msg {
+        EventMsg::TurnStarted(_ev) => {
+            if let ApiVersion::V2 = api_version {
+                let mut map = turn_summary_store.lock().await;
+                let summary = map.entry(conversation_id).or_default();
+                summary.file_change_started.clear();
+                summary.last_error = None;
+                let is_same_turn =
+                    summary.active_turn_id.as_deref() == Some(event_turn_id.as_str());
+                if !is_same_turn {
+                    summary.active_turn_id = Some(event_turn_id);
+                    summary.turn_started_at = Some(Instant::now());
+                } else if summary.turn_started_at.is_none() {
+                    summary.turn_started_at = Some(Instant::now());
+                }
+            }
+        }
         EventMsg::TurnComplete(_ev) => {
             handle_turn_complete(
                 conversation_id,
@@ -162,6 +179,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         id: item_id.clone(),
                         changes: patch_changes.clone(),
                         status: PatchApplyStatus::InProgress,
+                        elapsed_ms: None,
                     };
                     let notification = ItemStartedNotification {
                         thread_id: conversation_id.to_string(),
@@ -251,6 +269,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         params,
                     ))
                     .await;
+                let turn_summary_store = turn_summary_store.clone();
                 tokio::spawn(async move {
                     on_command_execution_request_approval_response(
                         event_turn_id,
@@ -262,6 +281,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         rx,
                         conversation,
                         outgoing,
+                        turn_summary_store,
                     )
                     .await;
                 });
@@ -331,10 +351,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::McpToolCallEnd(end_event) => {
+            let elapsed_ms =
+                turn_elapsed_ms(conversation_id, &event_turn_id, &turn_summary_store).await;
             let notification = construct_mcp_tool_call_end_notification(
                 end_event,
                 conversation_id.to_string(),
                 event_turn_id.clone(),
+                elapsed_ms,
             )
             .await;
             outgoing
@@ -350,6 +373,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 receiver_thread_ids: Vec::new(),
                 prompt: Some(begin_event.prompt),
                 agents_states: HashMap::new(),
+                elapsed_ms: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -361,6 +385,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::CollabAgentSpawnEnd(end_event) => {
+            let elapsed_ms =
+                turn_elapsed_ms(conversation_id, &event_turn_id, &turn_summary_store).await;
             let has_receiver = end_event.new_thread_id.is_some();
             let status = match &end_event.status {
                 codex_protocol::protocol::AgentStatus::Errored(_)
@@ -387,6 +413,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 receiver_thread_ids,
                 prompt: Some(end_event.prompt),
                 agents_states,
+                elapsed_ms,
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -407,6 +434,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 receiver_thread_ids,
                 prompt: Some(begin_event.prompt),
                 agents_states: HashMap::new(),
+                elapsed_ms: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -418,6 +446,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::CollabAgentInteractionEnd(end_event) => {
+            let elapsed_ms =
+                turn_elapsed_ms(conversation_id, &event_turn_id, &turn_summary_store).await;
             let status = match &end_event.status {
                 codex_protocol::protocol::AgentStatus::Errored(_)
                 | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
@@ -433,6 +463,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 receiver_thread_ids: vec![receiver_id.clone()],
                 prompt: Some(end_event.prompt),
                 agents_states: [(receiver_id, received_status)].into_iter().collect(),
+                elapsed_ms,
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -457,6 +488,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 receiver_thread_ids,
                 prompt: None,
                 agents_states: HashMap::new(),
+                elapsed_ms: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -468,6 +500,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::CollabWaitingEnd(end_event) => {
+            let elapsed_ms =
+                turn_elapsed_ms(conversation_id, &event_turn_id, &turn_summary_store).await;
             let status = if end_event.statuses.values().any(|status| {
                 matches!(
                     status,
@@ -493,6 +527,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 receiver_thread_ids,
                 prompt: None,
                 agents_states,
+                elapsed_ms,
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -512,6 +547,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 receiver_thread_ids: vec![begin_event.receiver_thread_id.to_string()],
                 prompt: None,
                 agents_states: HashMap::new(),
+                elapsed_ms: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -523,6 +559,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::CollabCloseEnd(end_event) => {
+            let elapsed_ms =
+                turn_elapsed_ms(conversation_id, &event_turn_id, &turn_summary_store).await;
             let status = match &end_event.status {
                 codex_protocol::protocol::AgentStatus::Errored(_)
                 | codex_protocol::protocol::AgentStatus::NotFound => V2CollabToolCallStatus::Failed,
@@ -543,6 +581,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 receiver_thread_ids: vec![receiver_id],
                 prompt: None,
                 agents_states,
+                elapsed_ms,
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -682,6 +721,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let item = ThreadItem::ImageView {
                 id: view_image_event.call_id.clone(),
                 path: view_image_event.path.to_string_lossy().into_owned(),
+                elapsed_ms: None,
             };
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -691,6 +731,10 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::ItemStarted(started))
                 .await;
+            let elapsed_ms =
+                turn_elapsed_ms(conversation_id, &event_turn_id, &turn_summary_store).await;
+            let mut item = item;
+            set_elapsed_ms(&mut item, elapsed_ms);
             let completed = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
@@ -707,6 +751,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let item = ThreadItem::EnteredReviewMode {
                 id: event_turn_id.clone(),
                 review,
+                elapsed_ms: None,
             };
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -716,6 +761,10 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::ItemStarted(started))
                 .await;
+            let elapsed_ms =
+                turn_elapsed_ms(conversation_id, &event_turn_id, &turn_summary_store).await;
+            let mut item = item;
+            set_elapsed_ms(&mut item, elapsed_ms);
             let completed = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
@@ -737,7 +786,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::ItemCompleted(item_completed_event) => {
-            let item: ThreadItem = item_completed_event.item.clone().into();
+            let elapsed_ms =
+                turn_elapsed_ms(conversation_id, &event_turn_id, &turn_summary_store).await;
+            let mut item: ThreadItem = item_completed_event.item.clone().into();
+            set_elapsed_ms(&mut item, elapsed_ms);
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
@@ -755,6 +807,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             let item = ThreadItem::ExitedReviewMode {
                 id: event_turn_id.clone(),
                 review,
+                elapsed_ms: None,
             };
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -764,6 +817,10 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::ItemStarted(started))
                 .await;
+            let elapsed_ms =
+                turn_elapsed_ms(conversation_id, &event_turn_id, &turn_summary_store).await;
+            let mut item = item;
+            set_elapsed_ms(&mut item, elapsed_ms);
             let completed = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
@@ -798,6 +855,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     id: item_id.clone(),
                     changes: convert_patch_changes(&patch_begin_event.changes),
                     status: PatchApplyStatus::InProgress,
+                    elapsed_ms: None,
                 };
                 let notification = ItemStartedNotification {
                     thread_id: conversation_id.to_string(),
@@ -852,6 +910,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 aggregated_output: None,
                 exit_code: None,
                 duration_ms: None,
+                elapsed_ms: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -946,6 +1005,8 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
 
             let duration_ms = i64::try_from(duration.as_millis()).unwrap_or(i64::MAX);
+            let elapsed_ms =
+                turn_elapsed_ms(conversation_id, &event_turn_id, &turn_summary_store).await;
 
             let item = ThreadItem::CommandExecution {
                 id: call_id,
@@ -957,6 +1018,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 aggregated_output,
                 exit_code: Some(exit_code),
                 duration_ms: Some(duration_ms),
+                elapsed_ms,
             };
 
             let notification = ItemCompletedNotification {
@@ -1140,6 +1202,65 @@ async fn emit_turn_completed_with_status(
         .await;
 }
 
+async fn turn_elapsed_ms(
+    conversation_id: ThreadId,
+    turn_id: &str,
+    turn_summary_store: &TurnSummaryStore,
+) -> Option<i64> {
+    let mut map = turn_summary_store.lock().await;
+    let summary = map.entry(conversation_id).or_default();
+    if summary
+        .active_turn_id
+        .as_deref()
+        .is_some_and(|active| active != turn_id)
+    {
+        return None;
+    }
+    if summary.active_turn_id.is_none() {
+        summary.active_turn_id = Some(turn_id.to_string());
+    }
+    let started_at = summary.turn_started_at.get_or_insert_with(Instant::now);
+    i64::try_from(started_at.elapsed().as_millis()).ok()
+}
+
+fn set_elapsed_ms(item: &mut ThreadItem, elapsed_ms: Option<i64>) {
+    match item {
+        ThreadItem::UserMessage {
+            elapsed_ms: field, ..
+        } => *field = elapsed_ms,
+        ThreadItem::AgentMessage {
+            elapsed_ms: field, ..
+        } => *field = elapsed_ms,
+        ThreadItem::Reasoning {
+            elapsed_ms: field, ..
+        } => *field = elapsed_ms,
+        ThreadItem::CommandExecution {
+            elapsed_ms: field, ..
+        } => *field = elapsed_ms,
+        ThreadItem::FileChange {
+            elapsed_ms: field, ..
+        } => *field = elapsed_ms,
+        ThreadItem::McpToolCall {
+            elapsed_ms: field, ..
+        } => *field = elapsed_ms,
+        ThreadItem::CollabAgentToolCall {
+            elapsed_ms: field, ..
+        } => *field = elapsed_ms,
+        ThreadItem::WebSearch {
+            elapsed_ms: field, ..
+        } => *field = elapsed_ms,
+        ThreadItem::ImageView {
+            elapsed_ms: field, ..
+        } => *field = elapsed_ms,
+        ThreadItem::EnteredReviewMode {
+            elapsed_ms: field, ..
+        } => *field = elapsed_ms,
+        ThreadItem::ExitedReviewMode {
+            elapsed_ms: field, ..
+        } => *field = elapsed_ms,
+    }
+}
+
 async fn complete_file_change_item(
     conversation_id: ThreadId,
     item_id: String,
@@ -1156,10 +1277,12 @@ async fn complete_file_change_item(
         }
     }
 
+    let elapsed_ms = turn_elapsed_ms(conversation_id, &turn_id, turn_summary_store).await;
     let item = ThreadItem::FileChange {
         id: item_id,
         changes,
         status,
+        elapsed_ms,
     };
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -1182,7 +1305,9 @@ async fn complete_command_execution_item(
     command_actions: Vec<V2ParsedCommand>,
     status: CommandExecutionStatus,
     outgoing: &OutgoingMessageSender,
+    turn_summary_store: &TurnSummaryStore,
 ) {
+    let elapsed_ms = turn_elapsed_ms(conversation_id, &turn_id, turn_summary_store).await;
     let item = ThreadItem::CommandExecution {
         id: item_id,
         command,
@@ -1193,6 +1318,7 @@ async fn complete_command_execution_item(
         aggregated_output: None,
         exit_code: None,
         duration_ms: None,
+        elapsed_ms,
     };
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -1612,6 +1738,7 @@ async fn on_command_execution_request_approval_response(
     receiver: oneshot::Receiver<JsonValue>,
     conversation: Arc<CodexThread>,
     outgoing: Arc<OutgoingMessageSender>,
+    turn_summary_store: TurnSummaryStore,
 ) {
     let response = receiver.await;
     let (decision, completion_status) = match response {
@@ -1667,6 +1794,7 @@ async fn on_command_execution_request_approval_response(
             command_actions.clone(),
             status,
             outgoing.as_ref(),
+            &turn_summary_store,
         )
         .await;
     }
@@ -1697,6 +1825,7 @@ async fn construct_mcp_tool_call_notification(
         result: None,
         error: None,
         duration_ms: None,
+        elapsed_ms: None,
     };
     ItemStartedNotification {
         thread_id,
@@ -1710,6 +1839,7 @@ async fn construct_mcp_tool_call_end_notification(
     end_event: McpToolCallEndEvent,
     thread_id: String,
     turn_id: String,
+    elapsed_ms: Option<i64>,
 ) -> ItemCompletedNotification {
     let status = if end_event.is_success() {
         McpToolCallStatus::Completed
@@ -1743,6 +1873,7 @@ async fn construct_mcp_tool_call_end_notification(
         result,
         error,
         duration_ms,
+        elapsed_ms,
     };
     ItemCompletedNotification {
         thread_id,
@@ -2134,6 +2265,7 @@ mod tests {
                 result: None,
                 error: None,
                 duration_ms: None,
+                elapsed_ms: None,
             },
         };
 
@@ -2292,6 +2424,7 @@ mod tests {
                 result: None,
                 error: None,
                 duration_ms: None,
+                elapsed_ms: None,
             },
         };
 
@@ -2324,10 +2457,12 @@ mod tests {
 
         let thread_id = ThreadId::new().to_string();
         let turn_id = "turn_3".to_string();
+        let elapsed_ms = Some(123);
         let notification = construct_mcp_tool_call_end_notification(
             end_event.clone(),
             thread_id.clone(),
             turn_id.clone(),
+            elapsed_ms,
         )
         .await;
 
@@ -2346,6 +2481,7 @@ mod tests {
                 }),
                 error: None,
                 duration_ms: Some(0),
+                elapsed_ms,
             },
         };
 
@@ -2367,10 +2503,12 @@ mod tests {
 
         let thread_id = ThreadId::new().to_string();
         let turn_id = "turn_4".to_string();
+        let elapsed_ms = Some(456);
         let notification = construct_mcp_tool_call_end_notification(
             end_event.clone(),
             thread_id.clone(),
             turn_id.clone(),
+            elapsed_ms,
         )
         .await;
 
@@ -2388,6 +2526,7 @@ mod tests {
                     message: "boom".to_string(),
                 }),
                 duration_ms: Some(1),
+                elapsed_ms,
             },
         };
 
