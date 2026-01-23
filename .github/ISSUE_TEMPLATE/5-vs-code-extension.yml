@@ -30,6 +30,11 @@ body:
     validations:
       required: true
   - type: input
+    id: locale
+    attributes:
+      label: What UI language/locale are you using?
+      description: Like `en-US`, `zh-CN`, etc.
+  - type: input
     id: platform
     attributes:
       label: What platform is your computer?
@@ -40,7 +45,7 @@ body:
     id: actual
     attributes:
       label: What issue are you seeing?
-      description: Please include the full error messages and prompts with PII redacted. If possible, please provide text instead of a screenshot. 
+      description: Please include the full error messages and prompts with PII redacted. If possible, please provide text instead of a screenshot. If this is a localization issue, include the message id/key and the exact rendered string.
     validations:
       required: true
   - type: textarea
