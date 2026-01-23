@@ -183,21 +183,6 @@ impl WidgetRef for &CwdPromptScreen {
             " this session".into(),
         ]));
         column.push("");
-        column.push(
-            Line::from(vec![
-                "Session directory: ".dim(),
-                self.session_cwd.clone().into(),
-            ])
-            .inset(Insets::tlbr(0, 2, 0, 0)),
-        );
-        column.push(
-            Line::from(vec![
-                "Current directory: ".dim(),
-                self.current_cwd.clone().into(),
-            ])
-            .inset(Insets::tlbr(0, 2, 0, 0)),
-        );
-        column.push("");
         column.push(selection_option_row(
             0,
             format!("Use current directory ({current_cwd})"),
