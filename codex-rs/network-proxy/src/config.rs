@@ -9,13 +9,13 @@ use tracing::warn;
 use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Config {
+pub struct NetworkProxyConfig {
     #[serde(default)]
-    pub network_proxy: NetworkProxyConfig,
+    pub network_proxy: NetworkProxySettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NetworkProxyConfig {
+pub struct NetworkProxySettings {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default = "default_proxy_url")]
@@ -34,7 +34,7 @@ pub struct NetworkProxyConfig {
     pub policy: NetworkPolicy,
 }
 
-impl Default for NetworkProxyConfig {
+impl Default for NetworkProxySettings {
     fn default() -> Self {
         Self {
             enabled: false,
@@ -111,7 +111,7 @@ fn clamp_non_loopback(addr: SocketAddr, allow_non_loopback: bool, name: &str) ->
 pub(crate) fn clamp_bind_addrs(
     http_addr: SocketAddr,
     admin_addr: SocketAddr,
-    cfg: &NetworkProxyConfig,
+    cfg: &NetworkProxySettings,
 ) -> (SocketAddr, SocketAddr) {
     let http_addr = clamp_non_loopback(
         http_addr,
@@ -152,7 +152,7 @@ pub struct RuntimeConfig {
     pub admin_addr: SocketAddr,
 }
 
-pub fn resolve_runtime(cfg: &Config) -> Result<RuntimeConfig> {
+pub fn resolve_runtime(cfg: &NetworkProxyConfig) -> Result<RuntimeConfig> {
     let http_addr = resolve_addr(&cfg.network_proxy.proxy_url, 3128).with_context(|| {
         format!(
             "invalid network_proxy.proxy_url: {}",
@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn clamp_bind_addrs_allows_non_loopback_when_enabled() {
-        let cfg = NetworkProxyConfig {
+        let cfg = NetworkProxySettings {
             dangerously_allow_non_loopback_proxy: true,
             dangerously_allow_non_loopback_admin: true,
             ..Default::default()
@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn clamp_bind_addrs_forces_loopback_when_unix_sockets_enabled() {
-        let cfg = NetworkProxyConfig {
+        let cfg = NetworkProxySettings {
             dangerously_allow_non_loopback_proxy: true,
             dangerously_allow_non_loopback_admin: true,
             policy: NetworkPolicy {

@@ -1,5 +1,5 @@
-use crate::config::Config;
 use crate::config::NetworkMode;
+use crate::config::NetworkProxyConfig;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
 use crate::policy::normalize_host;
@@ -91,7 +91,7 @@ impl BlockedRequest {
 
 #[derive(Clone)]
 pub(crate) struct ConfigState {
-    pub(crate) config: Config,
+    pub(crate) config: NetworkProxyConfig,
     pub(crate) mtime: Option<SystemTime>,
     pub(crate) allow_set: GlobSet,
     pub(crate) deny_set: GlobSet,
@@ -121,7 +121,7 @@ impl AppState {
         })
     }
 
-    pub async fn current_cfg(&self) -> Result<Config> {
+    pub async fn current_cfg(&self) -> Result<NetworkProxyConfig> {
         // Callers treat `AppState` as a live view of policy. We reload-on-demand so edits to
         // `config.toml` (including Codex-managed writes) take effect without a restart.
         self.reload_if_needed().await?;
@@ -356,7 +356,7 @@ async fn host_resolves_to_non_public_ip(host: &str, port: u16) -> Result<bool> {
     Ok(false)
 }
 
-fn log_policy_changes(previous: &Config, next: &Config) {
+fn log_policy_changes(previous: &NetworkProxyConfig, next: &NetworkProxyConfig) {
     log_domain_list_changes(
         "allowlist",
         &previous.network_proxy.policy.allowed_domains,
@@ -416,12 +416,12 @@ fn unix_timestamp() -> i64 {
 
 #[cfg(test)]
 pub(crate) fn app_state_for_policy(policy: crate::config::NetworkPolicy) -> AppState {
-    let config = Config {
-        network_proxy: crate::config::NetworkProxyConfig {
+    let config = NetworkProxyConfig {
+        network_proxy: crate::config::NetworkProxySettings {
             enabled: true,
             mode: NetworkMode::Full,
             policy,
-            ..crate::config::NetworkProxyConfig::default()
+            ..crate::config::NetworkProxySettings::default()
         },
     };
 
@@ -451,6 +451,7 @@ mod tests {
 
     use crate::config::NetworkPolicy;
     use crate::config::NetworkProxyConfig;
+    use crate::config::NetworkProxySettings;
     use crate::policy::compile_globset;
     use crate::state::NetworkProxyConstraints;
     use crate::state::validate_policy_against_constraints;
@@ -643,14 +644,14 @@ mod tests {
             ..NetworkProxyConstraints::default()
         };
 
-        let config = Config {
-            network_proxy: NetworkProxyConfig {
+        let config = NetworkProxyConfig {
+            network_proxy: NetworkProxySettings {
                 enabled: true,
                 policy: NetworkPolicy {
                     allowed_domains: vec!["example.com".to_string(), "evil.com".to_string()],
                     ..NetworkPolicy::default()
                 },
-                ..NetworkProxyConfig::default()
+                ..NetworkProxySettings::default()
             },
         };
 
@@ -664,11 +665,11 @@ mod tests {
             ..NetworkProxyConstraints::default()
         };
 
-        let config = Config {
-            network_proxy: NetworkProxyConfig {
+        let config = NetworkProxyConfig {
+            network_proxy: NetworkProxySettings {
                 enabled: true,
                 mode: NetworkMode::Full,
-                ..NetworkProxyConfig::default()
+                ..NetworkProxySettings::default()
             },
         };
 
@@ -682,14 +683,14 @@ mod tests {
             ..NetworkProxyConstraints::default()
         };
 
-        let config = Config {
-            network_proxy: NetworkProxyConfig {
+        let config = NetworkProxyConfig {
+            network_proxy: NetworkProxySettings {
                 enabled: true,
                 policy: NetworkPolicy {
                     allowed_domains: vec!["api.example.com".to_string()],
                     ..NetworkPolicy::default()
                 },
-                ..NetworkProxyConfig::default()
+                ..NetworkProxySettings::default()
             },
         };
 
@@ -703,14 +704,14 @@ mod tests {
             ..NetworkProxyConstraints::default()
         };
 
-        let config = Config {
-            network_proxy: NetworkProxyConfig {
+        let config = NetworkProxyConfig {
+            network_proxy: NetworkProxySettings {
                 enabled: true,
                 policy: NetworkPolicy {
                     allowed_domains: vec!["**.example.com".to_string()],
                     ..NetworkPolicy::default()
                 },
-                ..NetworkProxyConfig::default()
+                ..NetworkProxySettings::default()
             },
         };
 
@@ -724,14 +725,14 @@ mod tests {
             ..NetworkProxyConstraints::default()
         };
 
-        let config = Config {
-            network_proxy: NetworkProxyConfig {
+        let config = NetworkProxyConfig {
+            network_proxy: NetworkProxySettings {
                 enabled: true,
                 policy: NetworkPolicy {
                     denied_domains: vec![],
                     ..NetworkPolicy::default()
                 },
-                ..NetworkProxyConfig::default()
+                ..NetworkProxySettings::default()
             },
         };
 
@@ -745,10 +746,10 @@ mod tests {
             ..NetworkProxyConstraints::default()
         };
 
-        let config = Config {
-            network_proxy: NetworkProxyConfig {
+        let config = NetworkProxyConfig {
+            network_proxy: NetworkProxySettings {
                 enabled: true,
-                ..NetworkProxyConfig::default()
+                ..NetworkProxySettings::default()
             },
         };
 
@@ -762,14 +763,14 @@ mod tests {
             ..NetworkProxyConstraints::default()
         };
 
-        let config = Config {
-            network_proxy: NetworkProxyConfig {
+        let config = NetworkProxyConfig {
+            network_proxy: NetworkProxySettings {
                 enabled: true,
                 policy: NetworkPolicy {
                     allow_local_binding: true,
                     ..NetworkPolicy::default()
                 },
-                ..NetworkProxyConfig::default()
+                ..NetworkProxySettings::default()
             },
         };
 
@@ -783,11 +784,11 @@ mod tests {
             ..NetworkProxyConstraints::default()
         };
 
-        let config = Config {
-            network_proxy: NetworkProxyConfig {
+        let config = NetworkProxyConfig {
+            network_proxy: NetworkProxySettings {
                 enabled: true,
                 dangerously_allow_non_loopback_admin: true,
-                ..NetworkProxyConfig::default()
+                ..NetworkProxySettings::default()
             },
         };
 
@@ -801,11 +802,11 @@ mod tests {
             ..NetworkProxyConstraints::default()
         };
 
-        let config = Config {
-            network_proxy: NetworkProxyConfig {
+        let config = NetworkProxyConfig {
+            network_proxy: NetworkProxySettings {
                 enabled: true,
                 dangerously_allow_non_loopback_admin: true,
-                ..NetworkProxyConfig::default()
+                ..NetworkProxySettings::default()
             },
         };
 

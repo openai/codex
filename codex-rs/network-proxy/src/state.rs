@@ -1,5 +1,5 @@
-use crate::config::Config;
 use crate::config::NetworkMode;
+use crate::config::NetworkProxyConfig;
 use crate::policy::DomainPattern;
 use crate::policy::compile_globset;
 use crate::runtime::ConfigState;
@@ -36,7 +36,7 @@ pub(crate) async fn build_config_state() -> Result<ConfigState> {
     // Deserialize from the merged effective config, rather than parsing config.toml ourselves.
     // This avoids a second parser/merger implementation (and the drift that comes with it).
     let merged_toml = codex_cfg.config_layer_stack.effective_config();
-    let config: Config = merged_toml
+    let config: NetworkProxyConfig = merged_toml
         .try_into()
         .context("failed to deserialize network proxy config")?;
 
@@ -102,7 +102,7 @@ pub(crate) struct NetworkProxyConstraints {
 
 fn enforce_trusted_constraints(
     layers: &codex_core::config_loader::ConfigLayerStack,
-    config: &Config,
+    config: &NetworkProxyConfig,
 ) -> Result<NetworkProxyConstraints> {
     let constraints = network_proxy_constraints_from_trusted_layers(layers)?;
     validate_policy_against_constraints(config, &constraints)
@@ -177,7 +177,7 @@ fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {
 }
 
 pub(crate) fn validate_policy_against_constraints(
-    config: &Config,
+    config: &NetworkProxyConfig,
     constraints: &NetworkProxyConstraints,
 ) -> std::result::Result<(), ConstraintError> {
     fn invalid_value(
