@@ -1,6 +1,6 @@
 use crate::runtime::HostBlockDecision;
 use crate::runtime::HostBlockReason;
-use crate::state::AppState;
+use crate::state::NetworkProxyState;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::future::Future;
@@ -94,7 +94,7 @@ where
 }
 
 pub(crate) async fn evaluate_host_policy(
-    state: &AppState,
+    state: &NetworkProxyState,
     decider: Option<&Arc<dyn NetworkPolicyDecider>>,
     request: &NetworkPolicyRequest,
 ) -> Result<NetworkDecision> {
@@ -116,7 +116,7 @@ mod tests {
     use super::*;
 
     use crate::config::NetworkPolicy;
-    use crate::state::app_state_for_policy;
+    use crate::state::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
@@ -124,7 +124,7 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_host_policy_invokes_decider_for_not_allowed() {
-        let state = app_state_for_policy(NetworkPolicy::default());
+        let state = network_proxy_state_for_policy(NetworkPolicy::default());
         let calls = Arc::new(AtomicUsize::new(0));
         let decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
             let calls = calls.clone();
@@ -155,7 +155,7 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_host_policy_skips_decider_for_denied() {
-        let state = app_state_for_policy(NetworkPolicy {
+        let state = network_proxy_state_for_policy(NetworkPolicy {
             allowed_domains: vec!["example.com".to_string()],
             denied_domains: vec!["blocked.com".to_string()],
             ..NetworkPolicy::default()
@@ -193,7 +193,7 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_host_policy_skips_decider_for_not_allowed_local() {
-        let state = app_state_for_policy(NetworkPolicy {
+        let state = network_proxy_state_for_policy(NetworkPolicy {
             allowed_domains: vec!["example.com".to_string()],
             allow_local_binding: false,
             ..NetworkPolicy::default()

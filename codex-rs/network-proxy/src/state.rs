@@ -3,59 +3,84 @@ use crate::config::NetworkProxyConfig;
 use crate::policy::DomainPattern;
 use crate::policy::compile_globset;
 use crate::runtime::ConfigState;
+use crate::runtime::LayerMtime;
 use anyhow::Context;
 use anyhow::Result;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::config::CONFIG_TOML_FILE;
-use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
 use codex_core::config::find_codex_home;
+use codex_core::config_loader::ConfigLayerStack;
+use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::RequirementSource;
+use codex_core::config_loader::load_config_layers_state;
 use serde::Deserialize;
 use std::collections::HashSet;
 
-pub use crate::runtime::AppState;
 pub use crate::runtime::BlockedRequest;
+pub use crate::runtime::NetworkProxyState;
 #[cfg(test)]
-pub(crate) use crate::runtime::app_state_for_policy;
+pub(crate) use crate::runtime::network_proxy_state_for_policy;
 
 pub(crate) async fn build_config_state() -> Result<ConfigState> {
     // Load config through `codex-core` so we inherit the same layer ordering and semantics as the
     // rest of Codex (system/managed layers, user layers, session flags, etc.).
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
-    let codex_cfg = ConfigBuilder::default()
-        .codex_home(codex_home.clone())
-        .fallback_cwd(Some(codex_home))
-        .build()
+    let cli_overrides = Vec::new();
+    let overrides = LoaderOverrides::default();
+    let config_layer_stack = load_config_layers_state(&codex_home, None, &cli_overrides, overrides)
         .await
         .context("failed to load Codex config")?;
 
-    let cfg_path = codex_cfg.codex_home.join(CONFIG_TOML_FILE);
+    let cfg_path = codex_home.join(CONFIG_TOML_FILE);
 
     // Deserialize from the merged effective config, rather than parsing config.toml ourselves.
     // This avoids a second parser/merger implementation (and the drift that comes with it).
-    let merged_toml = codex_cfg.config_layer_stack.effective_config();
+    let merged_toml = config_layer_stack.effective_config();
     let config: NetworkProxyConfig = merged_toml
         .try_into()
         .context("failed to deserialize network proxy config")?;
 
     // Security boundary: user-controlled layers must not be able to widen restrictions set by
     // trusted/managed layers (e.g., MDM). Enforce this before building runtime state.
-    let constraints = enforce_trusted_constraints(&codex_cfg.config_layer_stack, &config)?;
+    let constraints = enforce_trusted_constraints(&config_layer_stack, &config)?;
 
-    let mtime = cfg_path.metadata().and_then(|m| m.modified()).ok();
+    let layer_mtimes = collect_layer_mtimes(&config_layer_stack);
     let deny_set = compile_globset(&config.network_proxy.policy.denied_domains)?;
     let allow_set = compile_globset(&config.network_proxy.policy.allowed_domains)?;
     Ok(ConfigState {
         config,
-        mtime,
         allow_set,
         deny_set,
         constraints,
+        layer_mtimes,
         cfg_path,
         blocked: std::collections::VecDeque::new(),
     })
+}
+
+fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
+    stack
+        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst)
+        .iter()
+        .filter_map(|layer| {
+            let path = match &layer.name {
+                ConfigLayerSource::System { file } => Some(file.as_path().to_path_buf()),
+                ConfigLayerSource::User { file } => Some(file.as_path().to_path_buf()),
+                ConfigLayerSource::Project { dot_codex_folder } => dot_codex_folder
+                    .join(CONFIG_TOML_FILE)
+                    .ok()
+                    .map(|p| p.as_path().to_path_buf()),
+                ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => {
+                    Some(file.as_path().to_path_buf())
+                }
+                _ => None,
+            };
+            path.map(LayerMtime::new)
+        })
+        .collect()
 }
 
 #[derive(Debug, Default, Deserialize)]

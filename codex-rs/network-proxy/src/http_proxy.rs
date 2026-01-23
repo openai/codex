@@ -7,8 +7,9 @@ use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
 use crate::responses::blocked_header_value;
 use crate::responses::json_response;
-use crate::state::AppState;
+use crate::runtime::unix_socket_permissions_supported;
 use crate::state::BlockedRequest;
+use crate::state::NetworkProxyState;
 use crate::upstream::UpstreamClient;
 use crate::upstream::proxy_for_connect;
 use anyhow::Context as _;
@@ -58,7 +59,7 @@ use tracing::info;
 use tracing::warn;
 
 pub async fn run_http_proxy(
-    state: Arc<AppState>,
+    state: Arc<NetworkProxyState>,
     addr: SocketAddr,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 ) -> Result<()> {
@@ -106,7 +107,7 @@ async fn http_connect_accept(
 ) -> Result<(Response, Request), Response> {
     let app_state = req
         .extensions()
-        .get::<Arc<AppState>>()
+        .get::<Arc<NetworkProxyState>>()
         .cloned()
         .ok_or_else(|| text_response(StatusCode::INTERNAL_SERVER_ERROR, "missing state"))?;
 
@@ -222,7 +223,11 @@ async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
     };
     let _host = normalize_host(&target.host.to_string());
 
-    let allow_upstream_proxy = match upgraded.extensions().get::<Arc<AppState>>().cloned() {
+    let allow_upstream_proxy = match upgraded
+        .extensions()
+        .get::<Arc<NetworkProxyState>>()
+        .cloned()
+    {
         Some(state) => match state.allow_upstream_proxy().await {
             Ok(allowed) => allowed,
             Err(err) => {
@@ -295,7 +300,7 @@ async fn http_plain_proxy(
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     req: Request,
 ) -> Result<Response, Infallible> {
-    let app_state = match req.extensions().get::<Arc<AppState>>().cloned() {
+    let app_state = match req.extensions().get::<Arc<NetworkProxyState>>().cloned() {
         Some(state) => state,
         None => {
             error!("missing app state");
@@ -356,7 +361,7 @@ async fn http_plain_proxy(
             return Ok(json_blocked("unix-socket", "method_not_allowed"));
         }
 
-        if !cfg!(target_os = "macos") {
+        if !unix_socket_permissions_supported() {
             warn!("unix socket proxy unsupported on this platform (path={socket_path})");
             return Ok(text_response(
                 StatusCode::NOT_IMPLEMENTED,
@@ -555,7 +560,7 @@ fn blocked_text(reason: &str) -> Response {
 }
 
 async fn proxy_disabled_response(
-    app_state: &AppState,
+    app_state: &NetworkProxyState,
     host: String,
     client: Option<String>,
     method: Option<String>,
@@ -600,7 +605,7 @@ mod tests {
 
     use crate::config::NetworkMode;
     use crate::config::NetworkPolicy;
-    use crate::runtime::app_state_for_policy;
+    use crate::runtime::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
     use rama_http::Method;
     use rama_http::Request;
@@ -612,7 +617,7 @@ mod tests {
             allowed_domains: vec!["example.com".to_string()],
             ..Default::default()
         };
-        let state = Arc::new(app_state_for_policy(policy));
+        let state = Arc::new(network_proxy_state_for_policy(policy));
         state.set_network_mode(NetworkMode::Limited).await.unwrap();
 
         let mut req = Request::builder()

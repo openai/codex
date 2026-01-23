@@ -2,7 +2,8 @@ use crate::admin;
 use crate::config;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
-use crate::state::AppState;
+use crate::runtime::unix_socket_permissions_supported;
+use crate::state::NetworkProxyState;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
@@ -17,14 +18,14 @@ pub struct Args {}
 
 #[derive(Clone, Default)]
 pub struct NetworkProxyBuilder {
-    state: Option<Arc<AppState>>,
+    state: Option<Arc<NetworkProxyState>>,
     http_addr: Option<SocketAddr>,
     admin_addr: Option<SocketAddr>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 }
 
 impl NetworkProxyBuilder {
-    pub fn state(mut self, state: Arc<AppState>) -> Self {
+    pub fn state(mut self, state: Arc<NetworkProxyState>) -> Self {
         self.state = Some(state);
         self
     }
@@ -55,7 +56,7 @@ impl NetworkProxyBuilder {
     pub async fn build(self) -> Result<NetworkProxy> {
         let state = match self.state {
             Some(state) => state,
-            None => Arc::new(AppState::new().await?),
+            None => Arc::new(NetworkProxyState::new().await?),
         };
         let current_cfg = state.current_cfg().await?;
         let runtime = config::resolve_runtime(&current_cfg)?;
@@ -77,7 +78,7 @@ impl NetworkProxyBuilder {
 
 #[derive(Clone)]
 pub struct NetworkProxy {
-    state: Arc<AppState>,
+    state: Arc<NetworkProxyState>,
     http_addr: SocketAddr,
     admin_addr: SocketAddr,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
@@ -95,7 +96,7 @@ impl NetworkProxy {
             return Ok(NetworkProxyHandle::noop());
         }
 
-        if cfg!(not(target_os = "macos")) {
+        if !unix_socket_permissions_supported() {
             warn!("allowUnixSockets is macOS-only; requests will be rejected on this platform");
         }
 
@@ -141,16 +142,23 @@ impl NetworkProxyHandle {
     }
 
     pub async fn shutdown(mut self) -> Result<()> {
-        if let Some(http_task) = self.http_task.take() {
-            http_task.abort();
-            let _ = http_task.await;
-        }
-        if let Some(admin_task) = self.admin_task.take() {
-            admin_task.abort();
-            let _ = admin_task.await;
-        }
+        abort_tasks(self.http_task.take(), self.admin_task.take()).await;
         self.completed = true;
         Ok(())
+    }
+}
+
+async fn abort_tasks(
+    http_task: Option<JoinHandle<Result<()>>>,
+    admin_task: Option<JoinHandle<Result<()>>>,
+) {
+    if let Some(http_task) = http_task {
+        http_task.abort();
+        let _ = http_task.await;
+    }
+    if let Some(admin_task) = admin_task {
+        admin_task.abort();
+        let _ = admin_task.await;
     }
 }
 
@@ -159,19 +167,10 @@ impl Drop for NetworkProxyHandle {
         if self.completed {
             return;
         }
-        let http_running = self
-            .http_task
-            .as_ref()
-            .map(|task| !task.is_finished())
-            .unwrap_or(false);
-        let admin_running = self
-            .admin_task
-            .as_ref()
-            .map(|task| !task.is_finished())
-            .unwrap_or(false);
-        if !http_running && !admin_running {
-            return;
-        }
-        warn!("network proxy dropped without shutdown; tasks may still be running");
+        let http_task = self.http_task.take();
+        let admin_task = self.admin_task.take();
+        tokio::spawn(async move {
+            abort_tasks(http_task, admin_task).await;
+        });
     }
 }

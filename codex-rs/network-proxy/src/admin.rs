@@ -1,7 +1,7 @@
 use crate::config::NetworkMode;
 use crate::responses::json_response;
 use crate::responses::text_response;
-use crate::state::AppState;
+use crate::state::NetworkProxyState;
 use anyhow::Context;
 use anyhow::Result;
 use rama_core::rt::Executor;
@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tracing::error;
 use tracing::info;
 
-pub async fn run_admin_api(state: Arc<AppState>, addr: SocketAddr) -> Result<()> {
+pub async fn run_admin_api(state: Arc<NetworkProxyState>, addr: SocketAddr) -> Result<()> {
     // Debug-only admin API (health/config/patterns/blocked + mode/reload). Policy is config-driven
     // and constraint-enforced; this endpoint should not become a second policy/approval plane.
     let listener = TcpListener::build()
@@ -41,7 +41,10 @@ pub async fn run_admin_api(state: Arc<AppState>, addr: SocketAddr) -> Result<()>
     Ok(())
 }
 
-async fn handle_admin_request(state: Arc<AppState>, req: Request) -> Result<Response, Infallible> {
+async fn handle_admin_request(
+    state: Arc<NetworkProxyState>,
+    req: Request,
+) -> Result<Response, Infallible> {
     const MODE_BODY_LIMIT: usize = 8 * 1024;
 
     let method = req.method().clone();
