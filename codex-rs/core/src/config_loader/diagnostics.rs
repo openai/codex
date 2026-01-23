@@ -1,3 +1,6 @@
+//! Helpers for mapping config parse/validation failures to file locations and
+//! rendering them in a user-friendly way.
+
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigToml;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -134,6 +137,9 @@ pub(crate) fn config_error_from_config_toml(
 }
 
 pub(crate) async fn first_layer_config_error(layers: &ConfigLayerStack) -> Option<ConfigError> {
+    // When the merged config fails schema validation, we surface the first concrete
+    // per-file error to point users at a specific file and range rather than an
+    // opaque merged-layer failure.
     first_layer_config_error_for_entries(
         layers.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst),
     )
