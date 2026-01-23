@@ -312,20 +312,7 @@ async fn exec_windows_sandbox(
         text: stderr_text,
         truncated_after_lines: None,
     };
-    // Best-effort aggregate: stdout then stderr (capped).
-    let mut aggregated = Vec::with_capacity(
-        stdout
-            .text
-            .len()
-            .saturating_add(stderr.text.len())
-            .min(EXEC_OUTPUT_MAX_BYTES),
-    );
-    append_capped(&mut aggregated, &stdout.text, EXEC_OUTPUT_MAX_BYTES);
-    append_capped(&mut aggregated, &stderr.text, EXEC_OUTPUT_MAX_BYTES);
-    let aggregated_output = StreamOutput {
-        text: aggregated,
-        truncated_after_lines: None,
-    };
+    let aggregated_output = aggregate_output(&stdout, &stderr);
 
     Ok(RawExecToolCallOutput {
         exit_status,
@@ -519,6 +506,26 @@ fn append_capped(dst: &mut Vec<u8>, src: &[u8], max_bytes: usize) {
     dst.extend_from_slice(&src[..take]);
 }
 
+fn aggregate_output(
+    stdout: &StreamOutput<Vec<u8>>,
+    stderr: &StreamOutput<Vec<u8>>,
+) -> StreamOutput<Vec<u8>> {
+    // Best-effort aggregate: stdout then stderr (capped).
+    let mut aggregated = Vec::with_capacity(
+        stdout
+            .text
+            .len()
+            .saturating_add(stderr.text.len())
+            .min(EXEC_OUTPUT_MAX_BYTES),
+    );
+    append_capped(&mut aggregated, &stdout.text, EXEC_OUTPUT_MAX_BYTES);
+    append_capped(&mut aggregated, &stderr.text, EXEC_OUTPUT_MAX_BYTES);
+    StreamOutput {
+        text: aggregated,
+        truncated_after_lines: None,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ExecToolCallOutput {
     pub exit_code: i32,
@@ -683,20 +690,7 @@ async fn consume_truncated_output(
         Duration::from_millis(IO_DRAIN_TIMEOUT_MS),
     )
     .await?;
-    // Best-effort aggregate: stdout then stderr (capped).
-    let mut aggregated = Vec::with_capacity(
-        stdout
-            .text
-            .len()
-            .saturating_add(stderr.text.len())
-            .min(EXEC_OUTPUT_MAX_BYTES),
-    );
-    append_capped(&mut aggregated, &stdout.text, EXEC_OUTPUT_MAX_BYTES);
-    append_capped(&mut aggregated, &stderr.text, EXEC_OUTPUT_MAX_BYTES * 2);
-    let aggregated_output = StreamOutput {
-        text: aggregated,
-        truncated_after_lines: None,
-    };
+    let aggregated_output = aggregate_output(&stdout, &stderr);
 
     Ok(RawExecToolCallOutput {
         exit_status,
@@ -771,6 +765,7 @@ fn synthetic_exit_status(code: i32) -> ExitStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use std::time::Duration;
     use tokio::io::AsyncWriteExt;
 
@@ -844,6 +839,35 @@ mod tests {
 
         let out = read_capped(reader, None, false).await.expect("read");
         assert_eq!(out.text.len(), EXEC_OUTPUT_MAX_BYTES);
+    }
+
+    #[test]
+    fn aggregate_output_caps_to_max_bytes() {
+        let stdout = StreamOutput {
+            text: vec![b'a'; EXEC_OUTPUT_MAX_BYTES],
+            truncated_after_lines: None,
+        };
+        let stderr = StreamOutput {
+            text: vec![b'b'; EXEC_OUTPUT_MAX_BYTES],
+            truncated_after_lines: None,
+        };
+        let aggregated = aggregate_output(&stdout, &stderr);
+        assert_eq!(aggregated.text.len(), EXEC_OUTPUT_MAX_BYTES);
+        assert!(aggregated.text.iter().all(|&byte| byte == b'a'));
+    }
+
+    #[test]
+    fn aggregate_output_appends_stderr_after_stdout() {
+        let stdout = StreamOutput {
+            text: vec![b'a'; 2],
+            truncated_after_lines: None,
+        };
+        let stderr = StreamOutput {
+            text: vec![b'b'; 3],
+            truncated_after_lines: None,
+        };
+        let aggregated = aggregate_output(&stdout, &stderr);
+        assert_eq!(aggregated.text, vec![b'a', b'a', b'b', b'b', b'b']);
     }
 
     #[cfg(unix)]
