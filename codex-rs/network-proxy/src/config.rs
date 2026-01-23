@@ -131,6 +131,7 @@ pub(crate) fn clamp_bind_addrs(
 
 pub struct RuntimeConfig {
     pub http_addr: SocketAddr,
+    pub socks_addr: SocketAddr,
     pub admin_addr: SocketAddr,
 }
 
@@ -138,9 +139,11 @@ pub fn resolve_runtime(cfg: &Config) -> RuntimeConfig {
     let http_addr = resolve_addr(&cfg.network_proxy.proxy_url, 3128);
     let admin_addr = resolve_addr(&cfg.network_proxy.admin_url, 8080);
     let (http_addr, admin_addr) = clamp_bind_addrs(http_addr, admin_addr, &cfg.network_proxy);
+    let socks_addr = SocketAddr::from(([127, 0, 0, 1], 8081));
 
     RuntimeConfig {
         http_addr,
+        socks_addr,
         admin_addr,
     }
 }

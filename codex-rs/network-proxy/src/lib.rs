@@ -6,6 +6,7 @@ mod policy;
 mod proxy;
 mod responses;
 mod runtime;
+mod socks5;
 mod state;
 mod upstream;
 

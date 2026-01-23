@@ -2,6 +2,7 @@ use crate::admin;
 use crate::config;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
+use crate::socks5;
 use crate::state::AppState;
 use anyhow::Result;
 use clap::Parser;
@@ -12,14 +13,20 @@ use tracing::warn;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "codex-network-proxy", about = "Codex network sandbox proxy")]
-pub struct Args {}
+pub struct Args {
+    /// Enable SOCKS5 UDP associate support (default: disabled).
+    #[arg(long, default_value_t = false)]
+    pub enable_socks5_udp: bool,
+}
 
 #[derive(Clone, Default)]
 pub struct NetworkProxyBuilder {
     state: Option<Arc<AppState>>,
     http_addr: Option<SocketAddr>,
+    socks_addr: Option<SocketAddr>,
     admin_addr: Option<SocketAddr>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    enable_socks5_udp: bool,
 }
 
 impl NetworkProxyBuilder {
@@ -32,6 +39,12 @@ impl NetworkProxyBuilder {
     #[must_use]
     pub fn http_addr(mut self, addr: SocketAddr) -> Self {
         self.http_addr = Some(addr);
+        self
+    }
+
+    #[must_use]
+    pub fn socks_addr(mut self, addr: SocketAddr) -> Self {
+        self.socks_addr = Some(addr);
         self
     }
 
@@ -56,6 +69,12 @@ impl NetworkProxyBuilder {
         self
     }
 
+    #[must_use]
+    pub fn enable_socks5_udp(mut self, enabled: bool) -> Self {
+        self.enable_socks5_udp = enabled;
+        self
+    }
+
     pub async fn build(self) -> Result<NetworkProxy> {
         let state = match self.state {
             Some(state) => state,
@@ -73,8 +92,10 @@ impl NetworkProxyBuilder {
         Ok(NetworkProxy {
             state,
             http_addr,
+            socks_addr: self.socks_addr.unwrap_or(runtime.socks_addr),
             admin_addr,
             policy_decider: self.policy_decider,
+            enable_socks5_udp: self.enable_socks5_udp,
         })
     }
 }
@@ -83,8 +104,10 @@ impl NetworkProxyBuilder {
 pub struct NetworkProxy {
     state: Arc<AppState>,
     http_addr: SocketAddr,
+    socks_addr: SocketAddr,
     admin_addr: SocketAddr,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
+    enable_socks5_udp: bool,
 }
 
 impl NetworkProxy {
@@ -93,8 +116,9 @@ impl NetworkProxy {
         NetworkProxyBuilder::default()
     }
 
-    pub async fn from_cli_args(_args: Args) -> Result<Self> {
-        let builder = Self::builder();
+    pub async fn from_cli_args(args: Args) -> Result<Self> {
+        let mut builder = Self::builder();
+        builder = builder.enable_socks5_udp(args.enable_socks5_udp);
         builder.build().await
     }
 
@@ -114,10 +138,17 @@ impl NetworkProxy {
             self.http_addr,
             self.policy_decider.clone(),
         ));
+        let socks_task = tokio::spawn(socks5::run_socks5(
+            self.state.clone(),
+            self.socks_addr,
+            self.policy_decider.clone(),
+            self.enable_socks5_udp,
+        ));
         let admin_task = tokio::spawn(admin::run_admin_api(self.state.clone(), self.admin_addr));
 
         Ok(NetworkProxyHandle {
             http_task,
+            socks_task,
             admin_task,
         })
     }
@@ -125,6 +156,7 @@ impl NetworkProxy {
 
 pub struct NetworkProxyHandle {
     http_task: JoinHandle<Result<()>>,
+    socks_task: JoinHandle<Result<()>>,
     admin_task: JoinHandle<Result<()>>,
 }
 
@@ -132,20 +164,24 @@ impl NetworkProxyHandle {
     fn noop() -> Self {
         Self {
             http_task: tokio::spawn(async { Ok(()) }),
+            socks_task: tokio::spawn(async { Ok(()) }),
             admin_task: tokio::spawn(async { Ok(()) }),
         }
     }
 
     pub async fn wait(self) -> Result<()> {
         self.http_task.await??;
+        self.socks_task.await??;
         self.admin_task.await??;
         Ok(())
     }
 
     pub async fn shutdown(self) -> Result<()> {
         self.http_task.abort();
+        self.socks_task.abort();
         self.admin_task.abort();
         let _ = self.http_task.await;
+        let _ = self.socks_task.await;
         let _ = self.admin_task.await;
         Ok(())
     }

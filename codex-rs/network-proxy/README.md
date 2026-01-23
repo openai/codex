@@ -3,6 +3,7 @@
 `codex-network-proxy` is Codex's local network policy enforcement proxy. It runs:
 
 - an HTTP proxy (default `127.0.0.1:3128`)
+- a SOCKS5 proxy (default `127.0.0.1:8081`)
 - an admin HTTP API (default `127.0.0.1:8080`)
 
 It enforces an allow/deny policy and a "limited" mode intended for read-only network access.
@@ -20,6 +21,7 @@ Example config:
 enabled = true
 proxy_url = "http://127.0.0.1:3128"
 admin_url = "http://127.0.0.1:8080"
+# SOCKS5 listens on 127.0.0.1:8081 by default. Override via `NetworkProxyBuilder::socks_addr`.
 # When `enabled` is false, the proxy no-ops and does not bind listeners.
 # When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests (HTTP(S) proxies only),
 # including CONNECT tunnels in full mode.
@@ -58,6 +60,18 @@ For HTTP(S) traffic:
 ```bash
 export HTTP_PROXY="http://127.0.0.1:3128"
 export HTTPS_PROXY="http://127.0.0.1:3128"
+```
+
+For SOCKS5 traffic:
+
+```bash
+export ALL_PROXY="socks5h://127.0.0.1:8081"
+```
+
+To enable SOCKS5 UDP associate support:
+
+```bash
+cargo run -p codex-network-proxy -- --enable-socks5-udp
 ```
 
 ### 4) Understand blocks / debugging
