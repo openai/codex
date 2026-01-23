@@ -2509,7 +2509,7 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
-            SlashCommand::Connectors => {
+            SlashCommand::Apps => {
                 self.add_connectors_output();
             }
             SlashCommand::Rollout => {

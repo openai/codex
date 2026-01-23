@@ -49,7 +49,7 @@ impl CommandPopup {
             .into_iter()
             .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
             .filter(|(_, cmd)| flags.collaboration_modes_enabled || *cmd != SlashCommand::Collab)
-            .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Connectors)
+            .filter(|(_, cmd)| flags.connectors_enabled || *cmd != SlashCommand::Apps)
             .collect();
         // Exclude prompts that collide with builtin command names and sort by name.
         let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();

@@ -2395,7 +2395,7 @@ impl ChatComposer {
             .into_iter()
             .filter(move |(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
             .filter(move |(_, cmd)| collaboration_modes_enabled || *cmd != SlashCommand::Collab)
-            .filter(move |(_, cmd)| connectors_enabled || *cmd != SlashCommand::Connectors)
+            .filter(move |(_, cmd)| connectors_enabled || *cmd != SlashCommand::Apps)
     }
 
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
