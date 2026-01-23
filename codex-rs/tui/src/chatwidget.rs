@@ -2123,6 +2123,7 @@ impl ChatWidget {
             retry_status_header: None,
             thread_id: None,
             forked_from: None,
+            saw_plan_update_this_turn: false,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,

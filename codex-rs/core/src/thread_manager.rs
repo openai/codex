@@ -58,7 +58,6 @@ pub struct ThreadManager {
 /// function to require an `Arc<&Self>`.
 pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
-    session_configured: Arc<RwLock<HashMap<ThreadId, SessionConfiguredEvent>>>,
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
@@ -80,7 +79,6 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
-                session_configured: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::new(
                     codex_home.clone(),
@@ -121,7 +119,6 @@ impl ThreadManager {
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
-                session_configured: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: Arc::new(ModelsManager::with_provider(
                     codex_home.clone(),
@@ -198,13 +195,6 @@ impl ThreadManager {
         self.state.get_thread(thread_id).await
     }
 
-    pub async fn get_session_configured(
-        &self,
-        thread_id: ThreadId,
-    ) -> CodexResult<SessionConfiguredEvent> {
-        self.state.get_session_configured(thread_id).await
-    }
-
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
         self.state
             .spawn_thread(
@@ -242,11 +232,6 @@ impl ThreadManager {
     /// as `Arc<CodexThread>`, it is possible that other references to it exist elsewhere.
     /// Returns the thread if the thread was found and removed.
     pub async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.state
-            .session_configured
-            .write()
-            .await
-            .remove(thread_id);
         self.state.threads.write().await.remove(thread_id)
     }
 
@@ -256,7 +241,6 @@ impl ThreadManager {
             thread.submit(Op::Shutdown).await?;
         }
         self.state.threads.write().await.clear();
-        self.state.session_configured.write().await.clear();
         Ok(())
     }
 
@@ -307,17 +291,6 @@ impl ThreadManagerState {
             .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))
     }
 
-    pub(crate) async fn get_session_configured(
-        &self,
-        thread_id: ThreadId,
-    ) -> CodexResult<SessionConfiguredEvent> {
-        let sessions = self.session_configured.read().await;
-        sessions
-            .get(&thread_id)
-            .cloned()
-            .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))
-    }
-
     /// Send an operation to a thread by ID.
     pub(crate) async fn send_op(&self, thread_id: ThreadId, op: Op) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
@@ -332,7 +305,6 @@ impl ThreadManagerState {
 
     /// Remove a thread from the manager by ID, returning it when present.
     pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
-        self.session_configured.write().await.remove(thread_id);
         self.threads.write().await.remove(thread_id)
     }
 
@@ -396,10 +368,6 @@ impl ThreadManagerState {
         ));
         let mut threads = self.threads.write().await;
         threads.insert(thread_id, thread.clone());
-        self.session_configured
-            .write()
-            .await
-            .insert(thread_id, session_configured.clone());
 
         Ok(NewThread {
             thread_id,

@@ -57,6 +57,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::SessionConfiguredEvent;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -203,6 +204,12 @@ impl ThreadEventStore {
         }
     }
 
+    fn new_with_session_configured(capacity: usize, event: Event) -> Self {
+        let mut store = Self::new(capacity);
+        store.session_configured = Some(event);
+        store
+    }
+
     fn push_event(&mut self, event: Event) {
         match &event.msg {
             EventMsg::SessionConfigured(_) => {
@@ -267,6 +274,17 @@ impl ThreadEventChannel {
             sender,
             receiver: Some(receiver),
             store: Arc::new(Mutex::new(ThreadEventStore::new(capacity))),
+        }
+    }
+
+    fn new_with_session_configured(capacity: usize, event: Event) -> Self {
+        let (sender, receiver) = mpsc::channel(capacity);
+        Self {
+            sender,
+            receiver: Some(receiver),
+            store: Arc::new(Mutex::new(ThreadEventStore::new_with_session_configured(
+                capacity, event,
+            ))),
         }
     }
 }
@@ -475,6 +493,7 @@ pub(crate) struct App {
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
     primary_thread_id: Option<ThreadId>,
+    primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
 }
 
@@ -603,6 +622,7 @@ impl App {
         if let EventMsg::SessionConfigured(session) = &event.msg {
             let thread_id = session.session_id;
             self.primary_thread_id = Some(thread_id);
+            self.primary_session_configured = Some(session.clone());
             self.ensure_thread_channel(thread_id);
             self.activate_thread_channel(thread_id).await;
 
@@ -934,6 +954,7 @@ impl App {
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
+            primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
         };
 
@@ -1903,15 +1924,12 @@ impl App {
                 return Ok(());
             }
         };
-        let channel = ThreadEventChannel::new(THREAD_EVENT_CHANNEL_CAPACITY);
-        if let Ok(session_configured) = self.server.get_session_configured(thread_id).await {
-            let event = Event {
-                id: String::new(),
-                msg: EventMsg::SessionConfigured(session_configured),
-            };
-            let mut store = channel.store.lock().await;
-            store.push_event(event);
-        }
+        let event = Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(self.session_configured_for_thread(thread_id)),
+        };
+        let channel =
+            ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
         let sender = channel.sender.clone();
         let store = Arc::clone(&channel.store);
         self.thread_event_channels.insert(thread_id, channel);
@@ -1936,6 +1954,33 @@ impl App {
             }
         });
         Ok(())
+    }
+
+    fn session_configured_for_thread(&self, thread_id: ThreadId) -> SessionConfiguredEvent {
+        let mut session_configured =
+            self.primary_session_configured
+                .clone()
+                .unwrap_or_else(|| SessionConfiguredEvent {
+                    session_id: thread_id,
+                    forked_from_id: None,
+                    model: self.chat_widget.current_model().to_string(),
+                    model_provider_id: self.config.model_provider_id.clone(),
+                    approval_policy: *self.config.approval_policy.get(),
+                    sandbox_policy: self.config.sandbox_policy.get().clone(),
+                    cwd: self.config.cwd.clone(),
+                    reasoning_effort: None,
+                    history_log_id: 0,
+                    history_entry_count: 0,
+                    initial_messages: None,
+                    rollout_path: PathBuf::new(),
+                });
+        session_configured.session_id = thread_id;
+        session_configured.forked_from_id = None;
+        session_configured.history_log_id = 0;
+        session_configured.history_entry_count = 0;
+        session_configured.initial_messages = None;
+        session_configured.rollout_path = PathBuf::new();
+        session_configured
     }
 
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
@@ -2204,6 +2249,7 @@ mod tests {
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
+            primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
         }
     }
@@ -2251,6 +2297,7 @@ mod tests {
                 active_thread_id: None,
                 active_thread_rx: None,
                 primary_thread_id: None,
+                primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
             },
             rx,
