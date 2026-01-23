@@ -34,6 +34,8 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_core::features::FEATURES;
+use codex_core::features::Feature;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
@@ -42,6 +44,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -55,7 +58,12 @@ async fn turn_start_sends_originator_header() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(
@@ -125,7 +133,12 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -212,7 +225,12 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -322,7 +340,12 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
     let response_mock = responses::mount_sse_once(&server, body).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -394,7 +417,12 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
     let response_mock = responses::mount_sse_once(&server, body).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -463,7 +491,12 @@ async fn turn_start_accepts_local_image_input() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -538,7 +571,12 @@ async fn turn_start_exec_approval_toggle_v2() -> Result<()> {
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     // Default approval is untrusted to force elicitation on first turn.
-    create_config_toml(codex_home.as_path(), &server.uri(), "untrusted")?;
+    create_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.as_path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -663,7 +701,12 @@ async fn turn_start_exec_approval_decline_v2() -> Result<()> {
         create_final_assistant_message_sse_response("done")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(codex_home.as_path(), &server.uri(), "untrusted")?;
+    create_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.as_path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -810,7 +853,12 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
         create_final_assistant_message_sse_response("done second")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&codex_home, &server.uri(), "untrusted")?;
+    create_config_toml(
+        &codex_home,
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -950,7 +998,12 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         create_final_assistant_message_sse_response("patch applied")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&codex_home, &server.uri(), "untrusted")?;
+    create_config_toml(
+        &codex_home,
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -1127,7 +1180,12 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
         create_final_assistant_message_sse_response("patch 2 applied")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&codex_home, &server.uri(), "untrusted")?;
+    create_config_toml(
+        &codex_home,
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -1303,7 +1361,12 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
         create_final_assistant_message_sse_response("patch declined")?,
     ];
     let server = create_mock_responses_server_sequence(responses).await;
-    create_config_toml(&codex_home, &server.uri(), "untrusted")?;
+    create_config_toml(
+        &codex_home,
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::default(),
+    )?;
 
     let mut mcp = McpProcess::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -1443,16 +1506,12 @@ async fn command_execution_notifications_include_process_id() -> Result<()> {
     ];
     let server = create_mock_responses_server_sequence(responses).await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let config_toml = codex_home.path().join("config.toml");
-    let mut config_contents = std::fs::read_to_string(&config_toml)?;
-    config_contents.push_str(
-        r#"
-[features]
-unified_exec = true
-"#,
-    );
-    std::fs::write(&config_toml, config_contents)?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::UnifiedExec, true)]),
+    )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -1576,7 +1635,24 @@ fn create_config_toml(
     codex_home: &Path,
     server_uri: &str,
     approval_policy: &str,
+    feature_flags: &BTreeMap<Feature, bool>,
 ) -> std::io::Result<()> {
+    let mut features = BTreeMap::from([(Feature::RemoteModels, false)]);
+    for (feature, enabled) in feature_flags {
+        features.insert(*feature, *enabled);
+    }
+    let feature_entries = features
+        .into_iter()
+        .map(|(feature, enabled)| {
+            let key = FEATURES
+                .iter()
+                .find(|spec| spec.id == feature)
+                .map(|spec| spec.key)
+                .unwrap_or_else(|| panic!("missing feature key for {feature:?}"));
+            format!("{key} = {enabled}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let config_toml = codex_home.join("config.toml");
     std::fs::write(
         config_toml,
@@ -1589,7 +1665,7 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 
 [features]
-remote_models = false
+{feature_entries}
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
