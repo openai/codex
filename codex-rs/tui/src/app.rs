@@ -2583,11 +2583,6 @@ mod tests {
                 app.chat_widget.current_model(),
                 event,
                 is_first,
-                app.chat_widget
-                    .config_ref()
-                    .features
-                    .enabled(codex_core::features::Feature::CollaborationModes),
-                app.chat_widget.stored_collaboration_mode().clone(),
             )) as Arc<dyn HistoryCell>
         };
 
