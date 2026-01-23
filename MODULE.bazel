@@ -39,19 +39,14 @@ single_version_override(
     patches = [
         "//patches:rules_rust.patch",
         "//patches:rules_rust_windows_gnu.patch",
-        "//patches:rules_rust_musl_load.patch",
-        "//patches:rules_rust_musl_triple_aarch64.patch",
-        "//patches:rules_rust_musl_triple_x86_64.patch",
         "//patches:rules_rust_musl.patch",
     ],
 )
 
 RUST_TRIPLES = [
-    "aarch64-unknown-linux-gnu",
     "aarch64-unknown-linux-musl",
     "aarch64-apple-darwin",
     "aarch64-pc-windows-gnullvm",
-    "x86_64-unknown-linux-gnu",
     "x86_64-unknown-linux-musl",
     "x86_64-apple-darwin",
     "x86_64-pc-windows-gnullvm",
@@ -68,14 +63,6 @@ use_repo(rust, "rust_toolchains")
 register_toolchains("@rust_toolchains//:all")
 
 bazel_dep(name = "rules_rs", version = "0.0.23")
-single_version_override(
-    module_name = "rules_rs",
-    patch_strip = 1,
-    patches = [
-        "//patches:rules_rs_platform.patch",
-        "//patches:rules_rs_repository_utils.patch",
-    ],
-)
 
 crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
 crate.from_cargo(

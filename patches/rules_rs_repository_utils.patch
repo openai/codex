@@ -1,7 +1,0 @@
-diff -uNr rs/private/repository_utils.bzl rs/private/repository_utils.bzl
---- a/rs/private/repository_utils.bzl
-+++ b/rs/private/repository_utils.bzl
-@@ -4,2 +4,2 @@
- def _platform(triple):
--    return "@rules_rust//rust/platform:" + triple.replace("-musl", "-gnu").replace("-gnullvm", "-msvc")
-+    return "@rules_rust//rust/platform:" + triple.replace("-gnullvm", "-msvc")
