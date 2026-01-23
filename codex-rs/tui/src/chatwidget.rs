@@ -3937,6 +3937,7 @@ impl ChatWidget {
 
         #[cfg(target_os = "windows")]
         let windows_sandbox_mode = WindowsSandboxMode::from_config(&self.config);
+        #[cfg(target_os = "windows")]
         let windows_degraded_sandbox_enabled =
             matches!(windows_sandbox_mode, WindowsSandboxMode::RestrictedToken);
         #[cfg(not(target_os = "windows"))]
