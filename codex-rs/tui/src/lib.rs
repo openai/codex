@@ -27,13 +27,17 @@ use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::format_config_error_with_source;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::get_platform_sandbox;
+use codex_core::path_utils;
 use codex_core::protocol::AskForApproval;
 use codex_core::read_session_meta_line;
 use codex_core::terminal::Multiplexer;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use cwd_prompt::CwdPromptAction;
+use cwd_prompt::CwdSelection;
 use std::fs::OpenOptions;
+use std::path::Path;
 use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
@@ -54,6 +58,7 @@ mod collab;
 mod collaboration_modes;
 mod color;
 pub mod custom_terminal;
+mod cwd_prompt;
 mod diff_render;
 mod exec_cell;
 mod exec_command;
@@ -577,25 +582,46 @@ async fn run_ratatui_app(
         resume_picker::SessionSelection::StartFresh
     };
 
+    let current_cwd = config.cwd.clone();
+    let (history_cwd, prompt_action) = match &session_selection {
+        resume_picker::SessionSelection::Resume(path) => {
+            (read_session_cwd(path).await, Some(CwdPromptAction::Resume))
+        }
+        resume_picker::SessionSelection::Fork(path) => {
+            (read_session_cwd(path).await, Some(CwdPromptAction::Fork))
+        }
+        _ => (None, None),
+    };
+
+    let selected_cwd = match (cli.cwd.is_none(), history_cwd.as_ref(), prompt_action) {
+        (true, Some(history_cwd), Some(prompt_action))
+            if should_prompt_for_cwd(&current_cwd, history_cwd) =>
+        {
+            Some(
+                cwd_prompt::run_cwd_selection_prompt(
+                    &mut tui,
+                    prompt_action,
+                    &current_cwd,
+                    history_cwd,
+                )
+                .await?,
+            )
+        }
+        _ => None,
+    };
+
+    let fallback_cwd = match selected_cwd {
+        Some(CwdSelection::Current) => Some(current_cwd.clone()),
+        Some(CwdSelection::Session) => history_cwd.clone(),
+        None => history_cwd.clone(),
+    };
+
     let config = match &session_selection {
-        resume_picker::SessionSelection::Resume(path)
-        | resume_picker::SessionSelection::Fork(path) => {
-            let history_cwd = match read_session_meta_line(path).await {
-                Ok(meta_line) => Some(meta_line.meta.cwd),
-                Err(err) => {
-                    let rollout_path = path.display().to_string();
-                    tracing::warn!(
-                        %rollout_path,
-                        %err,
-                        "Failed to read session metadata from rollout"
-                    );
-                    None
-                }
-            };
+        resume_picker::SessionSelection::Resume(_) | resume_picker::SessionSelection::Fork(_) => {
             load_config_or_exit_with_fallback_cwd(
                 cli_kv_overrides.clone(),
                 overrides.clone(),
-                history_cwd,
+                fallback_cwd,
             )
             .await
         }
@@ -633,6 +659,31 @@ async fn run_ratatui_app(
     session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead
     app_result
+}
+
+async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
+    match read_session_meta_line(path).await {
+        Ok(meta_line) => Some(meta_line.meta.cwd),
+        Err(err) => {
+            let rollout_path = path.display().to_string();
+            tracing::warn!(
+                %rollout_path,
+                %err,
+                "Failed to read session metadata from rollout"
+            );
+            None
+        }
+    }
+}
+
+fn should_prompt_for_cwd(current_cwd: &Path, session_cwd: &Path) -> bool {
+    match (
+        path_utils::normalize_for_path_comparison(current_cwd),
+        path_utils::normalize_for_path_comparison(session_cwd),
+    ) {
+        (Ok(current), Ok(session)) => current != session,
+        _ => current_cwd != session_cwd,
+    }
 }
 
 #[expect(
