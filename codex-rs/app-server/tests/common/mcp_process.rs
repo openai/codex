@@ -12,6 +12,7 @@ use tokio::process::ChildStdout;
 
 use anyhow::Context;
 use codex_app_server_protocol::AddConversationListenerParams;
+use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginChatGptParams;
@@ -397,6 +398,12 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("model/list", params).await
+    }
+
+    /// Send an `app/list` JSON-RPC request.
+    pub async fn send_apps_list_request(&mut self, params: AppsListParams) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("app/list", params).await
     }
 
     /// Send a `collaborationMode/list` JSON-RPC request.
