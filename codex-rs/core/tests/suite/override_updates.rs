@@ -118,6 +118,7 @@ async fn override_turn_context_records_permissions_update() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -160,6 +161,7 @@ async fn override_turn_context_records_environment_update() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -196,6 +198,7 @@ async fn override_turn_context_records_collaboration_update() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: Some(collaboration_mode),
+            personality: None,
         })
         .await?;
 

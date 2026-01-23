@@ -137,6 +137,7 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
                 reasoning_effort: None,
                 developer_instructions: None,
             })),
+            personality: None,
         })
         .await?;
 
@@ -249,6 +250,7 @@ where
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: Some(collaboration_mode),
+            personality: None,
         })
         .await?;
 

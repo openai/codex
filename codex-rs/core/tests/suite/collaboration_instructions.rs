@@ -104,6 +104,7 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
             effort: None,
             summary: None,
             collaboration_mode: Some(collaboration_mode),
+            personality: None,
         })
         .await?;
 
@@ -151,6 +152,7 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
             summary: test.config.model_reasoning_summary,
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
+            personality: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -183,6 +185,7 @@ async fn override_then_user_turn_uses_updated_collaboration_instructions() -> Re
             effort: None,
             summary: None,
             collaboration_mode: Some(collaboration_mode),
+            personality: None,
         })
         .await?;
 
@@ -200,6 +203,7 @@ async fn override_then_user_turn_uses_updated_collaboration_instructions() -> Re
             summary: test.config.model_reasoning_summary,
             collaboration_mode: None,
             final_output_json_schema: None,
+            personality: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -234,6 +238,7 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             effort: None,
             summary: None,
             collaboration_mode: Some(base_mode),
+            personality: None,
         })
         .await?;
 
@@ -251,6 +256,7 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             summary: test.config.model_reasoning_summary,
             collaboration_mode: Some(turn_mode),
             final_output_json_schema: None,
+            personality: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -286,6 +292,7 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(first_text))),
+            personality: None,
         })
         .await?;
 
@@ -309,6 +316,7 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(second_text))),
+            personality: None,
         })
         .await?;
 
@@ -353,6 +361,7 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
+            personality: None,
         })
         .await?;
 
@@ -376,6 +385,7 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
+            personality: None,
         })
         .await?;
 
@@ -422,6 +432,7 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
+            personality: None,
         })
         .await?;
 
@@ -476,6 +487,7 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(""))),
+            personality: None,
         })
         .await?;
 

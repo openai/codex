@@ -225,6 +225,13 @@ impl DeveloperInstructions {
         Self { text }
     }
 
+    pub fn personality_spec_message(spec: String) -> Self {
+        let message = format!(
+            "<personality_spec> The user has requested a new communication style. Future messages should adhere to the following personality: \n{spec} </personality_spec>"
+        );
+        DeveloperInstructions::new(message)
+    }
+
     pub fn from_policy(
         sandbox_policy: &SandboxPolicy,
         approval_policy: AskForApproval,

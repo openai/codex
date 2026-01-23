@@ -14,6 +14,7 @@ use std::time::Duration;
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::CollaborationMode;
+use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
 use crate::items::TurnItem;
@@ -129,6 +130,10 @@ pub enum Op {
         /// Takes precedence over model, effort, and developer instructions if set.
         #[serde(skip_serializing_if = "Option::is_none")]
         collaboration_mode: Option<CollaborationMode>,
+
+        /// Optional personality override for this turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        personality: Option<Personality>,
     },
 
     /// Override parts of the persistent turn context for subsequent turns.
@@ -170,6 +175,10 @@ pub enum Op {
         /// Takes precedence over model, effort, and developer instructions if set.
         #[serde(skip_serializing_if = "Option::is_none")]
         collaboration_mode: Option<CollaborationMode>,
+
+        /// Updated personality preference.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        personality: Option<Personality>,
     },
 
     /// Approve a command execution
@@ -1618,6 +1627,8 @@ pub struct TurnContextItem {
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
     pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personality: Option<Personality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collaboration_mode: Option<CollaborationMode>,
     #[serde(skip_serializing_if = "Option::is_none")]

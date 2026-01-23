@@ -907,6 +907,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             summary: config.model_reasoning_summary,
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
+            personality: None,
         })
         .await?;
 

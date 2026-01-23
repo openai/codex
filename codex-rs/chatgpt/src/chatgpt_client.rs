@@ -5,6 +5,7 @@ use crate::chatgpt_token::get_chatgpt_token_data;
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
 
 use anyhow::Context;
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 /// Make a GET request to the ChatGPT backend API.
@@ -32,6 +33,40 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
         .bearer_auth(&token.access_token)
         .header("chatgpt-account-id", account_id?)
         .header("Content-Type", "application/json")
+        .send()
+        .await
+        .context("Failed to send request")?;
+
+    if response.status().is_success() {
+        let result: T = response
+            .json()
+            .await
+            .context("Failed to parse JSON response")?;
+        Ok(result)
+    } else {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Request failed with status {status}: {body}")
+    }
+}
+
+pub(crate) async fn chatgpt_post_request<T: DeserializeOwned, P: Serialize>(
+    config: &Config,
+    access_token: &str,
+    account_id: &str,
+    path: &str,
+    payload: &P,
+) -> anyhow::Result<T> {
+    let chatgpt_base_url = &config.chatgpt_base_url;
+    let client = create_client();
+    let url = format!("{chatgpt_base_url}{path}");
+
+    let response = client
+        .post(&url)
+        .bearer_auth(access_token)
+        .header("chatgpt-account-id", account_id)
+        .header("Content-Type", "application/json")
+        .json(payload)
         .send()
         .await
         .context("Failed to send request")?;

@@ -101,6 +101,8 @@ pub enum Feature {
     EnableRequestCompression,
     /// Enable collab tools.
     Collab,
+    /// Enable connectors (apps).
+    Connectors,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Enable collaboration modes (Plan, Pair Programming, Execute).
@@ -437,6 +439,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Allow Codex to spawn and collaborate with other agents on request (formerly named `collab`).",
             announcement: "NEW! Codex can now spawn other agents and work with them to solve your problems. Enable in /experimental!",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Connectors,
+        key: "connectors",
+        stage: Stage::Beta,
         default_enabled: false,
     },
     FeatureSpec {

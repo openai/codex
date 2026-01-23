@@ -119,6 +119,10 @@ use tokio::task::JoinHandle;
 use tracing::debug;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
+const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
+const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
+const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
+const PLAN_IMPLEMENTATION_EXECUTE_MESSAGE: &str = "Implement the plan.";
 
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
@@ -493,6 +497,8 @@ pub(crate) struct ChatWidget {
     // This gates rendering of the "Worked for …" separator so purely conversational turns don't
     // show an empty divider. It is reset when the separator is emitted.
     had_work_activity: bool,
+    // Whether the current turn emitted a plan update.
+    saw_plan_update_this_turn: bool,
     // Status-indicator elapsed seconds captured at the last emitted final-message separator.
     //
     // This lets the separator show per-chunk work time (since the previous separator) rather than
@@ -858,6 +864,7 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
+        self.saw_plan_update_this_turn = false;
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
@@ -870,7 +877,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_task_complete(&mut self, last_agent_message: Option<String>) {
+    fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         self.flush_unified_exec_wait_streak();
@@ -884,6 +891,9 @@ impl ChatWidget {
         self.clear_unified_exec_processes();
         self.request_redraw();
 
+        if !from_replay && self.queued_user_messages.is_empty() {
+            self.maybe_prompt_plan_implementation(last_agent_message.as_deref());
+        }
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
@@ -892,6 +902,81 @@ impl ChatWidget {
         });
 
         self.maybe_show_pending_rate_limit_prompt();
+    }
+
+    fn maybe_prompt_plan_implementation(&mut self, last_agent_message: Option<&str>) {
+        if !self.collaboration_modes_enabled() {
+            return;
+        }
+        if !self.queued_user_messages.is_empty() {
+            return;
+        }
+        if !matches!(self.stored_collaboration_mode, CollaborationMode::Plan(_)) {
+            return;
+        }
+        let has_message = last_agent_message.is_some_and(|message| !message.trim().is_empty());
+        if !has_message && !self.saw_plan_update_this_turn {
+            return;
+        }
+        if !self.bottom_pane.no_modal_or_popup_active() {
+            return;
+        }
+
+        if matches!(
+            self.rate_limit_switch_prompt,
+            RateLimitSwitchPromptState::Pending
+        ) {
+            return;
+        }
+
+        self.open_plan_implementation_prompt();
+    }
+
+    fn open_plan_implementation_prompt(&mut self) {
+        let execute_mode = collaboration_modes::execute_mode(self.models_manager.as_ref());
+        let (implement_actions, implement_disabled_reason) = match execute_mode {
+            Some(collaboration_mode) => {
+                let user_text = PLAN_IMPLEMENTATION_EXECUTE_MESSAGE.to_string();
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::SubmitUserMessageWithMode {
+                        text: user_text.clone(),
+                        collaboration_mode: collaboration_mode.clone(),
+                    });
+                })];
+                (actions, None)
+            }
+            None => (Vec::new(), Some("Execute mode unavailable".to_string())),
+        };
+
+        let items = vec![
+            SelectionItem {
+                name: PLAN_IMPLEMENTATION_YES.to_string(),
+                description: Some("Switch to Execute and start coding.".to_string()),
+                selected_description: None,
+                is_current: false,
+                actions: implement_actions,
+                disabled_reason: implement_disabled_reason,
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: PLAN_IMPLEMENTATION_NO.to_string(),
+                description: Some("Continue planning with the model.".to_string()),
+                selected_description: None,
+                is_current: false,
+                actions: Vec::new(),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(PLAN_IMPLEMENTATION_TITLE.to_string()),
+            subtitle: None,
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -1190,6 +1275,7 @@ impl ChatWidget {
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
+        self.saw_plan_update_this_turn = true;
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
@@ -1924,6 +2010,7 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
+            saw_plan_update_this_turn: false,
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -2043,6 +2130,7 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
+            saw_plan_update_this_turn: false,
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -2611,6 +2699,7 @@ impl ChatWidget {
             collaboration_mode: self
                 .collaboration_modes_enabled()
                 .then(|| self.stored_collaboration_mode.clone()),
+            personality: None,
         };
 
         self.codex_op_tx.send(op).unwrap_or_else(|e| {
@@ -2698,7 +2787,7 @@ impl ChatWidget {
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TurnStarted(_) => self.on_task_started(),
             EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
-                self.on_task_complete(last_agent_message)
+                self.on_task_complete(last_agent_message, from_replay)
             }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
@@ -3062,6 +3151,7 @@ impl ChatWidget {
                 effort: Some(Some(default_effort)),
                 summary: None,
                 collaboration_mode: None,
+                personality: None,
             }));
             tx.send(AppEvent::UpdateModel(switch_model.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
@@ -3380,6 +3470,7 @@ impl ChatWidget {
                 effort: Some(effort_for_action),
                 summary: None,
                 collaboration_mode: None,
+                personality: None,
             }));
             tx.send(AppEvent::UpdateModel(model_for_action.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
@@ -3552,6 +3643,7 @@ impl ChatWidget {
                 effort: Some(effort),
                 summary: None,
                 collaboration_mode: None,
+                personality: None,
             }));
         self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
         self.app_event_tx
@@ -3735,6 +3827,7 @@ impl ChatWidget {
                 effort: None,
                 summary: None,
                 collaboration_mode: None,
+                personality: None,
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
@@ -4646,6 +4739,17 @@ impl ChatWidget {
 
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.bottom_pane.composer_is_empty()
+    }
+
+    pub(crate) fn submit_user_message_with_mode(
+        &mut self,
+        text: String,
+        collaboration_mode: CollaborationMode,
+    ) {
+        let model = collaboration_mode.model().to_string();
+        self.set_collaboration_mode(collaboration_mode);
+        self.set_model(&model);
+        self.submit_user_message(text.into());
     }
 
     /// True when the UI is in the regular composer state with no running task,
