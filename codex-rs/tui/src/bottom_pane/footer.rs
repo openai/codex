@@ -56,18 +56,23 @@ pub(crate) enum CollaborationModeIndicator {
 const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
 
 impl CollaborationModeIndicator {
-    fn label(self) -> String {
+    fn label(self, show_cycle_hint: bool) -> String {
+        let suffix = if show_cycle_hint {
+            format!(" ({MODE_CYCLE_HINT})")
+        } else {
+            String::new()
+        };
         match self {
-            CollaborationModeIndicator::Plan => format!("Plan mode ({MODE_CYCLE_HINT})"),
+            CollaborationModeIndicator::Plan => format!("Plan mode{suffix}"),
             CollaborationModeIndicator::PairProgramming => {
-                format!("Pair Programming mode ({MODE_CYCLE_HINT})")
+                format!("Pair Programming mode{suffix}")
             }
-            CollaborationModeIndicator::Execute => format!("Execute mode ({MODE_CYCLE_HINT})"),
+            CollaborationModeIndicator::Execute => format!("Execute mode{suffix}"),
         }
     }
 
-    fn styled_span(self) -> Span<'static> {
-        let label = self.label();
+    fn styled_span(self, show_cycle_hint: bool) -> Span<'static> {
+        let label = self.label(show_cycle_hint);
         match self {
             CollaborationModeIndicator::Plan => Span::from(label).magenta(),
             CollaborationModeIndicator::PairProgramming => Span::from(label).cyan(),
@@ -138,6 +143,7 @@ pub(crate) fn render_mode_indicator(
     area: Rect,
     buf: &mut Buffer,
     indicator: Option<CollaborationModeIndicator>,
+    show_cycle_hint: bool,
     left_content_width: Option<u16>,
 ) {
     let Some(indicator) = indicator else {
@@ -147,7 +153,7 @@ pub(crate) fn render_mode_indicator(
         return;
     }
 
-    let span = indicator.styled_span();
+    let span = indicator.styled_span(show_cycle_hint);
     let label_width = span.width() as u16;
     if label_width == 0 || label_width > area.width {
         return;
@@ -633,6 +639,7 @@ mod tests {
                     area,
                     f.buffer_mut(),
                     indicator,
+                    !props.is_task_running,
                     Some(footer_line_width(props)),
                 );
             })
@@ -829,6 +836,25 @@ mod tests {
         snapshot_footer_with_indicator(
             "footer_mode_indicator_narrow_overlap_hides",
             50,
+            props,
+            Some(CollaborationModeIndicator::Plan),
+        );
+
+        let props = FooterProps {
+            mode: FooterMode::ShortcutSummary,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: true,
+            steer_enabled: false,
+            collaboration_modes_enabled: true,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: None,
+            context_window_used_tokens: None,
+        };
+
+        snapshot_footer_with_indicator(
+            "footer_mode_indicator_running_hides_hint",
+            120,
             props,
             Some(CollaborationModeIndicator::Plan),
         );

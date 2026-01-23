@@ -114,6 +114,7 @@ Start a fresh thread when you need a new Codex conversation.
     "cwd": "/Users/me/project",
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
+    "personality": "friendly"
 } }
 { "id": 10, "result": {
     "thread": {
@@ -126,10 +127,13 @@ Start a fresh thread when you need a new Codex conversation.
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
 
-To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted:
+To continue a stored session, call `thread/resume` with the `thread.id` you previously recorded. The response shape matches `thread/start`, and no additional notifications are emitted. You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
 
 ```json
-{ "method": "thread/resume", "id": 11, "params": { "threadId": "thr_123" } }
+{ "method": "thread/resume", "id": 11, "params": {
+    "threadId": "thr_123",
+    "personality": "friendly"
+} }
 { "id": 11, "result": { "thread": { "id": "thr_123", … } } }
 ```
 
@@ -231,6 +235,7 @@ You can optionally specify config overrides on the new turn. If specified, these
     "model": "gpt-5.1-codex",
     "effort": "medium",
     "summary": "concise",
+    "personality": "friendly",
     // Optional JSON Schema to constrain the final assistant message for this turn.
     "outputSchema": {
         "type": "object",

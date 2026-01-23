@@ -2541,6 +2541,7 @@ impl Renderable for ChatComposer {
                     hint_rect,
                     buf,
                     self.collaboration_mode_indicator,
+                    !footer_props.is_task_running,
                     left_content_width,
                 );
             }
