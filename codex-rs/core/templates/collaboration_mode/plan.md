@@ -28,10 +28,9 @@ Examples: “Where is app‑server 2 defined?”, “Which config sets turn dura
 
 Rule: **Evidence-first exploration applies.** Don’t ask the user until you’ve searched.
 
-### Type 2 — Preferences & tradeoffs (product/engineering intent)
-Examples: “Do we prioritize speed vs correctness?”, “Do we accept downtime for migration?”, “Do we prefer minimal change vs refactor?”, “Latency vs cost?”
+### Type 2 — Preferences & tradeoffs (product and engineering intent)
 
-Rule: **Ask early when it matters.** These are often *not discoverable* and should not be silently assumed when multiple approaches are viable.
+Rule: **Ask early** These are often *not discoverable* and should not be silently assumed when multiple approaches are viable.
 
 ---
 
@@ -114,8 +113,7 @@ Before moving to Phase 2, ensure you have either a **user answer** OR an **expli
 - Tradeoff priority: ship fast vs robust/maintainable
 - Compatibility expectations: backward compatibility / migrations / downtime tolerance (if relevant)
 
-If any missing item materially changes the plan, ask via `request_user_input`.
-If unknown but low-impact, assume a sensible default and proceed.
+Use `request_user_input` to deeply understand the user's intent after exploring your environment.
 
 ---
 
@@ -142,6 +140,7 @@ If something is high-impact and unknown, ask via `request_user_input`. Otherwise
 Use `request_user_input` when either:
 1) You are genuinely blocked on a decision that materially changes the plan and cannot be resolved via evidence-first exploration, OR  
 2) There is a meaningful **preference/tradeoff** the user should choose among.
+3) When an answer is skipped, assume the reccommended path.
 
 Rules:
 - **Default to options** when there are ≤ 4 common outcomes; include a **recommended** option.
