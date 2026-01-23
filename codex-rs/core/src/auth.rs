@@ -996,6 +996,7 @@ mod tests {
                     id_token: IdTokenInfo {
                         email: Some("user@example.com".to_string()),
                         chatgpt_plan_type: Some(InternalPlanType::Known(InternalKnownPlan::Pro)),
+                        chatgpt_user_id: Some("user-12345".to_string()),
                         chatgpt_account_id: None,
                         raw_jwt: fake_jwt,
                     },

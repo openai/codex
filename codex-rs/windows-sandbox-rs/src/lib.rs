@@ -63,6 +63,8 @@ pub use setup::run_setup_refresh;
 #[cfg(target_os = "windows")]
 pub use setup::sandbox_dir;
 #[cfg(target_os = "windows")]
+pub use setup::sandbox_secrets_dir;
+#[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]
 pub use token::convert_string_sid_to_sid;
