@@ -89,8 +89,6 @@ def codex_rust_crate(
 
     binaries = DEP_DATA.get(native.package_name())["binaries"]
 
-    # TODO(zbarsky): cargo_build_script support?
-
     lib_srcs = crate_srcs or native.glob(["src/**/*.rs"], exclude = binaries.values(), allow_empty = True)
 
     if native.glob(["build.rs"], allow_empty = True):
