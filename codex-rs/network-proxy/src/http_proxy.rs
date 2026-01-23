@@ -183,6 +183,22 @@ async fn http_connect_accept(
         .await
         .map_err(|err| internal_error("failed to read network mode", err))?;
 
+    if mode == NetworkMode::Limited {
+        let _ = app_state
+            .record_blocked(BlockedRequest::new(
+                host.clone(),
+                "method_not_allowed".to_string(),
+                client.clone(),
+                Some("CONNECT".to_string()),
+                Some(NetworkMode::Limited),
+                "http-connect".to_string(),
+            ))
+            .await;
+        let client = client.as_deref().unwrap_or_default();
+        warn!("CONNECT blocked by method policy (client={client}, host={host}, mode=limited)");
+        return Err(blocked_text("method_not_allowed"));
+    }
+
     req.extensions_mut().insert(ProxyTarget(authority));
     req.extensions_mut().insert(mode);
 
@@ -576,4 +592,42 @@ struct BlockedResponse<'a> {
     status: &'static str,
     host: &'a str,
     reason: &'a str,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::config::NetworkMode;
+    use crate::config::NetworkPolicy;
+    use crate::runtime::app_state_for_policy;
+    use pretty_assertions::assert_eq;
+    use rama_http::Method;
+    use rama_http::Request;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn http_connect_accept_blocks_in_limited_mode() {
+        let policy = NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            ..Default::default()
+        };
+        let state = Arc::new(app_state_for_policy(policy));
+        state.set_network_mode(NetworkMode::Limited).await.unwrap();
+
+        let mut req = Request::builder()
+            .method(Method::CONNECT)
+            .uri("https://example.com:443")
+            .header("host", "example.com:443")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(state);
+
+        let response = http_connect_accept(None, req).await.unwrap_err();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response.headers().get("x-proxy-error").unwrap(),
+            "blocked-by-method-policy"
+        );
+    }
 }
