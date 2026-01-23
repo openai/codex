@@ -181,6 +181,7 @@ fn parse_double_quoted_string(node: Node, src: &str) -> Option<String> {
     if node.kind() != "string" {
         return None;
     }
+
     let mut cursor = node.walk();
     for part in node.named_children(&mut cursor) {
         if part.kind() != "string_content" {
@@ -198,6 +199,7 @@ fn parse_raw_string(node: Node, src: &str) -> Option<String> {
     if node.kind() != "raw_string" {
         return None;
     }
+
     let raw_string = node.utf8_text(src.as_bytes()).ok()?;
     let stripped = raw_string
         .strip_prefix('\'')
