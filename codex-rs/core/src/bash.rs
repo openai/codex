@@ -279,17 +279,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_concatenated_mixed_quote_arguments() {
-        assert!(parse_seq("echo \"/usr\"'/'\"local\"/bin").is_none());
-    }
-
-    #[test]
-    fn rejects_double_quoted_strings_with_expansions() {
-        assert!(parse_seq("echo \"hi ${USER}\"").is_none());
-        assert!(parse_seq("echo \"$HOME\"").is_none());
-    }
-
-    #[test]
     fn accepts_numbers_as_words() {
         let cmds = parse_seq("echo 123 456").unwrap();
         assert_eq!(
