@@ -452,7 +452,6 @@ mod tests {
             rx_event: rx_events,
             agent_status,
             session: Arc::clone(&session),
-            created_at: 0,
         });
 
         let (tx_out, rx_out) = bounded(1);

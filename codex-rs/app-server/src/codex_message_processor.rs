@@ -1802,8 +1802,7 @@ impl CodexMessageProcessor {
             build_ephemeral_thread(thread_uuid, &config_snapshot)
         };
 
-        if include_turns {
-            let rollout_path = rollout_path.as_ref().expect("rollout path required");
+        if include_turns && let Some(rollout_path) = rollout_path.as_ref() {
             match read_event_msgs_from_rollout(rollout_path).await {
                 Ok(events) => {
                     thread.turns = build_turns_from_event_msgs(&events);

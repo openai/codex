@@ -182,7 +182,6 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
-use time::OffsetDateTime;
 use tokio::sync::watch;
 
 /// The high-level interface to the Codex system.
