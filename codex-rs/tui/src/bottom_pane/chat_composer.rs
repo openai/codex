@@ -3,7 +3,7 @@
 //! It is responsible for:
 //!
 //! - Editing the input buffer (a [`TextArea`]), including placeholder "elements" for attachments.
-//! - Routing keys to the active popup (slash commands, file search, skill/connector mentions).
+//! - Routing keys to the active popup (slash commands, file search, skill/apps mentions).
 //! - Handling submit vs newline on Enter.
 //! - Turning raw key streams into explicit paste operations on platforms where terminals
 //!   don't provide reliable bracketed paste (notably Windows).
