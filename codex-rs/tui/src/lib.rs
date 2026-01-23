@@ -585,37 +585,52 @@ async fn run_ratatui_app(
     };
 
     let current_cwd = config.cwd.clone();
-    let (history_cwd, prompt_action) = match &session_selection {
+    let history_cwd_if_resume_or_fork = match &session_selection {
         resume_picker::SessionSelection::Resume(path) => {
-            (read_session_cwd(path).await, Some(CwdPromptAction::Resume))
+            Some((read_session_cwd(path).await, CwdPromptAction::Resume))
         }
         resume_picker::SessionSelection::Fork(path) => {
-            (read_session_cwd(path).await, Some(CwdPromptAction::Fork))
-        }
-        _ => (None, None),
-    };
-
-    let selected_cwd = match (cli.cwd.is_none(), history_cwd.as_ref(), prompt_action) {
-        (true, Some(history_cwd), Some(prompt_action))
-            if should_prompt_for_cwd(&current_cwd, history_cwd) =>
-        {
-            Some(
-                cwd_prompt::run_cwd_selection_prompt(
-                    &mut tui,
-                    prompt_action,
-                    &current_cwd,
-                    history_cwd,
-                )
-                .await?,
-            )
+            Some((read_session_cwd(path).await, CwdPromptAction::Fork))
         }
         _ => None,
     };
 
+    let selected_cwd = if cli.cwd.is_none() {
+        history_cwd_if_resume_or_fork
+            .as_ref()
+            .and_then(|(history_cwd, prompt_action)| {
+                history_cwd
+                    .as_ref()
+                    .filter(|cwd| should_prompt_for_cwd(&current_cwd, cwd))
+                    .map(|cwd| (cwd, *prompt_action))
+            })
+    } else {
+        None
+    };
+
+    let selected_cwd = match selected_cwd {
+        Some((history_cwd, prompt_action)) => Some(
+            cwd_prompt::run_cwd_selection_prompt(
+                &mut tui,
+                prompt_action,
+                &current_cwd,
+                history_cwd,
+            )
+            .await?,
+        ),
+        None => None,
+    };
+
     let fallback_cwd = match selected_cwd {
         Some(CwdSelection::Current) => Some(current_cwd.clone()),
-        Some(CwdSelection::Session) => history_cwd.clone(),
-        None => history_cwd.clone(),
+        Some(CwdSelection::Session) => history_cwd_if_resume_or_fork
+            .as_ref()
+            .and_then(|(cwd, _)| cwd.clone()),
+        // None when no prompt was shown (e.g. --cd provided, not resuming/forking,
+        // no cwd in rollout, or cwd already matches).
+        None => history_cwd_if_resume_or_fork
+            .as_ref()
+            .and_then(|(cwd, _)| cwd.clone()),
     };
 
     let config = match &session_selection {
@@ -664,7 +679,12 @@ async fn run_ratatui_app(
 }
 
 async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
-    if let Some(cwd) = read_latest_turn_context_cwd(path).await {
+    // Prefer the latest TurnContext cwd so resume/fork reflects the most recent
+    // session directory (for the changed-cwd prompt). The alternative would be
+    // mutating the SessionMeta line when the session cwd changes, but the rollout
+    // is an append-only JSONL log and rewriting the head would be error-prone.
+    // When rollouts move to SQLite, we can drop this scan.
+    if let Some(cwd) = parse_latest_turn_context_cwd(path).await {
         return Some(cwd);
     }
     match read_session_meta_line(path).await {
@@ -681,7 +701,7 @@ async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
     }
 }
 
-async fn read_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
+async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
     let text = tokio::fs::read_to_string(path).await.ok()?;
     for line in text.lines().rev() {
         let trimmed = line.trim();
