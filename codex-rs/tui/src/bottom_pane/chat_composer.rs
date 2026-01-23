@@ -153,7 +153,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
-#[cfg(not(target_env = "musl"))]
+#[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
 use std::sync::Mutex;
 use tokio::runtime::Handle;
 
@@ -253,9 +253,9 @@ pub(crate) struct ChatComposer {
     steer_enabled: bool,
     collaboration_modes_enabled: bool,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
     voice: Option<crate::voice::VoiceCapture>,
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
     recording_placeholder_id: Option<String>,
 }
 
@@ -324,9 +324,9 @@ impl ChatComposer {
             steer_enabled: false,
             collaboration_modes_enabled: false,
             collaboration_mode_indicator: None,
-            #[cfg(not(target_env = "musl"))]
+            #[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
             voice: None,
-            #[cfg(not(target_env = "musl"))]
+            #[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
             recording_placeholder_id: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
@@ -425,7 +425,7 @@ impl ChatComposer {
         }
 
         // Hide the cursor while recording voice input.
-        #[cfg(not(target_env = "musl"))]
+        #[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
         if self.voice.is_some() {
             return None;
         }
@@ -480,7 +480,7 @@ impl ChatComposer {
     /// In all cases, clears any paste-burst Enter suppression state so a real paste cannot affect
     /// the next user Enter key, then syncs popup state.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
-        #[cfg(not(target_env = "musl"))]
+        #[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
         if self.voice.is_some() {
             return false;
         }
@@ -861,7 +861,7 @@ impl ChatComposer {
         // Timer-based conversion is handled in the pre-draw tick.
         // If recording, attempt to stop on Space release, or on the next key press
         // (some terminals do not emit Release events).
-        #[cfg(not(target_env = "musl"))]
+        #[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
         if self.voice.is_some() {
             let should_stop = match key_event.kind {
                 KeyEventKind::Release => matches!(key_event.code, KeyCode::Char(' ')),
@@ -2027,7 +2027,7 @@ impl ChatComposer {
                 }
                 // If textarea is empty, start recording immediately without inserting a space
                 if self.textarea.text().is_empty() {
-                    #[cfg(not(target_env = "musl"))]
+                    #[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
                     if self.start_recording_with_placeholder() {
                         return (InputResult::None, true);
                     }
@@ -2623,7 +2623,7 @@ impl ChatComposer {
         self.has_focus = has_focus;
     }
 
-    #[cfg(not(target_env = "musl"))]
+    #[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
     pub(crate) fn is_recording(&self) -> bool {
         self.voice.is_some()
     }
@@ -2686,7 +2686,7 @@ impl ChatComposer {
     }
 }
 
-#[cfg(not(target_env = "musl"))]
+#[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
 impl ChatComposer {
     pub(crate) fn process_space_hold_trigger(&mut self) {
         if let Some(flag) = self.space_hold_trigger.as_ref()

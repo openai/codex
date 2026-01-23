@@ -261,16 +261,6 @@ jobs:
             /var/cache/apt
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' }}
-        name: Install ALSA build dependencies
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get -y update -o Acquire::Retries=3
-          sudo apt-get -y install --no-install-recommends libasound2-dev pkg-config
-
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
         env:
@@ -429,16 +419,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.92
         with:
           targets: ${{ matrix.target }}
-
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' }}
-        name: Install ALSA build dependencies
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get -y update -o Acquire::Retries=3
-          sudo apt-get -y install --no-install-recommends libasound2-dev pkg-config
 
       - name: Compute lockfile hash
         id: lockhash

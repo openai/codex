@@ -26,13 +26,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.92
 
-      - name: Install ALSA build dependencies
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
-          sudo rm -rf /var/lib/apt/lists/*
-
       - name: build codex
         run: cargo build --bin codex
         working-directory: codex-rs

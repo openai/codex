@@ -92,7 +92,7 @@ pub mod update_action;
 mod update_prompt;
 mod updates;
 mod version;
-#[cfg(not(target_env = "musl"))]
+#[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
 mod voice;
 mod wrapping;
 
