@@ -154,7 +154,7 @@ impl OtelManager {
         Self::push_metadata_tag(&mut tags, "auth_mode", self.metadata.auth_mode.as_deref())?;
         Self::push_metadata_tag(
             &mut tags,
-            "session.source",
+            "session_source",
             Some(self.metadata.session_source.as_str()),
         )?;
         Self::push_metadata_tag(&mut tags, "model", Some(self.metadata.model.as_str()))?;
