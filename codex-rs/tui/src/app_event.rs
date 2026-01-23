@@ -25,7 +25,6 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
-use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,12 +88,6 @@ pub(crate) enum AppEvent {
 
     /// Result of refreshing rate limits
     RateLimitSnapshotFetched(RateLimitSnapshot),
-
-    /// Result of fetching model metadata.
-    ModelInfoFetched {
-        model: String,
-        info: ModelInfo,
-    },
 
     /// Result of computing a `/diff` command.
     DiffResult(String),

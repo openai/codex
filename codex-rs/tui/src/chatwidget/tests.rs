@@ -801,7 +801,7 @@ async fn make_chatwidget_manual(
         auth_manager,
         models_manager,
         otel_manager,
-        session_header: SessionHeader::new(resolved_model),
+        session_header: SessionHeader::new(resolved_model.clone()),
         initial_user_message: None,
         token_info: None,
         rate_limit_snapshot: None,
@@ -844,9 +844,9 @@ async fn make_chatwidget_manual(
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
-        current_model_info: None,
-        pending_personality_popup_model: None,
+        current_model: CurrentModel::new(resolved_model.clone(), false),
     };
+    widget.update_current_model_state(resolved_model);
     (widget, rx, op_rx)
 }
 
@@ -2424,9 +2424,6 @@ async fn user_turn_includes_personality_from_config() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_model("gpt-5.2-codex");
-    let model_info =
-        ModelsManager::construct_model_info_offline("gpt-5.2-codex", chat.config_ref());
-    chat.update_model_info("gpt-5.2-codex".to_string(), model_info);
     chat.set_personality(Personality::Friendly);
 
     chat.bottom_pane
@@ -2989,9 +2986,6 @@ async fn model_selection_popup_snapshot() {
 async fn personality_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
     chat.thread_id = Some(ThreadId::new());
-    let model_info =
-        ModelsManager::construct_model_info_offline("gpt-5.2-codex", chat.config_ref());
-    chat.update_model_info("gpt-5.2-codex".to_string(), model_info);
     chat.open_personality_popup();
 
     let popup = render_bottom_popup(&chat, 80);
@@ -3012,6 +3006,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
             effort: ReasoningEffortConfig::Medium,
             description: "medium".to_string(),
         }],
+        supports_personality: false,
         is_default: false,
         upgrade: None,
         show_in_picker,
@@ -3224,6 +3219,7 @@ async fn single_reasoning_option_skips_selection() {
         description: "".to_string(),
         default_reasoning_effort: ReasoningEffortConfig::High,
         supported_reasoning_efforts: single_effort,
+        supports_personality: false,
         is_default: false,
         upgrade: None,
         show_in_picker: true,

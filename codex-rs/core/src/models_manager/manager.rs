@@ -275,6 +275,8 @@ impl ModelsManager {
         merged_presets = ModelPreset::filter_by_auth(merged_presets, chatgpt_mode);
 
         for preset in &mut merged_presets {
+            preset.supports_personality =
+                model_info::find_model_info_for_slug(&preset.model).supports_personality();
             preset.is_default = false;
         }
         if let Some(default) = merged_presets

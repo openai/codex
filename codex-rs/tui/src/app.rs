@@ -933,14 +933,10 @@ impl App {
 
         let auth = auth_manager.auth().await;
         let auth_ref = auth.as_ref();
-        let model_info = thread_manager
-            .get_models_manager()
-            .get_model_info(model.as_str(), &config)
-            .await;
         let otel_manager = OtelManager::new(
             ThreadId::new(),
             model.as_str(),
-            model_info.slug.as_str(),
+            model.as_str(),
             auth_ref.and_then(CodexAuth::get_account_id),
             auth_ref.and_then(CodexAuth::get_account_email),
             auth_ref.map(|auth| auth.mode),
@@ -1496,9 +1492,6 @@ impl App {
             }
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
-            }
-            AppEvent::ModelInfoFetched { model, info } => {
-                self.chat_widget.update_model_info(model, info);
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
@@ -2770,7 +2763,7 @@ mod tests {
             };
             Arc::new(new_session_info(
                 app.chat_widget.config_ref(),
-                app.chat_widget.current_model(),
+                app.chat_widget.current_model().model(),
                 event,
                 is_first,
             )) as Arc<dyn HistoryCell>
