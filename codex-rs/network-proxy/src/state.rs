@@ -1,11 +1,14 @@
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
+use crate::mitm::MitmState;
 use crate::policy::DomainPattern;
 use crate::policy::compile_globset;
 use crate::runtime::ConfigState;
 use serde::Deserialize;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub use crate::runtime::BlockedRequest;
 pub use crate::runtime::BlockedRequestArgs;
@@ -50,20 +53,43 @@ pub struct PartialNetworkConfig {
 }
 
 pub fn build_config_state(
-    config: NetworkProxyConfig,
+    mut config: NetworkProxyConfig,
     constraints: NetworkProxyConstraints,
     cfg_path: PathBuf,
 ) -> anyhow::Result<ConfigState> {
+    resolve_mitm_paths(&mut config, &cfg_path);
     let deny_set = compile_globset(&config.network.denied_domains)?;
     let allow_set = compile_globset(&config.network.allowed_domains)?;
+    let mitm = if config.network.mitm.enabled {
+        Some(Arc::new(MitmState::new(
+            &config.network.mitm,
+            config.network.allow_upstream_proxy,
+        )?))
+    } else {
+        None
+    };
     Ok(ConfigState {
         config,
         allow_set,
         deny_set,
+        mitm,
         constraints,
         cfg_path,
         blocked: std::collections::VecDeque::new(),
     })
+}
+
+fn resolve_mitm_paths(config: &mut NetworkProxyConfig, cfg_path: &Path) {
+    let mitm = &mut config.network.mitm;
+    let Some(config_dir) = cfg_path.parent() else {
+        return;
+    };
+    if mitm.ca_cert_path.is_relative() {
+        mitm.ca_cert_path = config_dir.join(&mitm.ca_cert_path);
+    }
+    if mitm.ca_key_path.is_relative() {
+        mitm.ca_key_path = config_dir.join(&mitm.ca_key_path);
+    }
 }
 
 pub fn validate_policy_against_constraints(

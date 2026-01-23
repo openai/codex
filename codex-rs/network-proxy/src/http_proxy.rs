@@ -1,4 +1,5 @@
 use crate::config::NetworkMode;
+use crate::mitm;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkDecisionSource;
 use crate::network_policy::NetworkPolicyDecider;
@@ -9,6 +10,7 @@ use crate::network_policy::NetworkProtocol;
 use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
+use crate::reasons::REASON_MITM_REQUIRED;
 use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_PROXY_DISABLED;
 use crate::responses::PolicyDecisionDetails;
@@ -208,35 +210,47 @@ async fn http_connect_accept(
         .await
         .map_err(|err| internal_error("failed to read network mode", err))?;
 
-    if mode == NetworkMode::Limited {
-        let details = PolicyDecisionDetails {
-            decision: NetworkPolicyDecision::Deny,
-            reason: REASON_METHOD_NOT_ALLOWED,
-            source: NetworkDecisionSource::ModeGuard,
-            protocol: NetworkProtocol::HttpsConnect,
-            host: &host,
-            port: authority.port,
-        };
+    let mitm_state = match app_state.mitm_state().await {
+        Ok(state) => state,
+        Err(err) => {
+            error!("failed to load MITM state: {err}");
+            return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
+        }
+    };
+
+    if mode == NetworkMode::Limited && mitm_state.is_none() {
+        // Limited mode is designed to be read-only. Without MITM, a CONNECT tunnel would hide the
+        // inner HTTP method/headers from the proxy, effectively bypassing method policy.
         let _ = app_state
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: host.clone(),
-                reason: REASON_METHOD_NOT_ALLOWED.to_string(),
+                reason: REASON_MITM_REQUIRED.to_string(),
                 client: client.clone(),
                 method: Some("CONNECT".to_string()),
                 mode: Some(NetworkMode::Limited),
                 protocol: "http-connect".to_string(),
             }))
             .await;
+        let details = PolicyDecisionDetails {
+            decision: NetworkPolicyDecision::Deny,
+            reason: REASON_MITM_REQUIRED,
+            source: NetworkDecisionSource::ModeGuard,
+            protocol: NetworkProtocol::HttpsConnect,
+            host: &host,
+            port: authority.port,
+        };
         let client = client.as_deref().unwrap_or_default();
-        warn!("CONNECT blocked by method policy (client={client}, host={host}, mode=limited)");
-        return Err(blocked_text_with_details(
-            REASON_METHOD_NOT_ALLOWED,
-            &details,
-        ));
+        warn!(
+            "CONNECT blocked; MITM required for read-only HTTPS in limited mode (client={client}, host={host}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
+        );
+        return Err(blocked_text_with_details(REASON_MITM_REQUIRED, &details));
     }
 
     req.extensions_mut().insert(ProxyTarget(authority));
     req.extensions_mut().insert(mode);
+    if let Some(mitm_state) = mitm_state {
+        req.extensions_mut().insert(mitm_state);
+    }
 
     Ok((
         Response::builder()
@@ -248,8 +262,33 @@ async fn http_connect_accept(
 }
 
 async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
-    if upgraded.extensions().get::<ProxyTarget>().is_none() {
+    let mode = upgraded
+        .extensions()
+        .get::<NetworkMode>()
+        .copied()
+        .unwrap_or(NetworkMode::Full);
+
+    let Some(target) = upgraded
+        .extensions()
+        .get::<ProxyTarget>()
+        .map(|t| t.0.clone())
+    else {
         warn!("CONNECT missing proxy target");
+        return Ok(());
+    };
+
+    if mode == NetworkMode::Limited
+        && upgraded
+            .extensions()
+            .get::<Arc<mitm::MitmState>>()
+            .is_some()
+    {
+        let host = normalize_host(&target.host.to_string());
+        let port = target.port;
+        info!("CONNECT MITM enabled (host={host}, port={port}, mode={mode:?})");
+        if let Err(err) = mitm::mitm_tunnel(upgraded).await {
+            warn!("MITM tunnel error: {err}");
+        }
         return Ok(());
     }
 
@@ -718,7 +757,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             response.headers().get("x-proxy-error").unwrap(),
-            "blocked-by-method-policy"
+            "blocked-by-mitm-required"
         );
     }
 }
