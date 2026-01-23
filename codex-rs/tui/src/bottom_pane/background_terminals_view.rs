@@ -147,6 +147,11 @@ impl BackgroundTerminalsState {
         }
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.processes.clear();
+        self.call_id_to_process.clear();
+    }
+
     pub(crate) fn on_exec_begin(&mut self, ev: &ExecCommandBeginEvent) -> bool {
         if !is_unified_exec_source(ev.source) {
             return false;

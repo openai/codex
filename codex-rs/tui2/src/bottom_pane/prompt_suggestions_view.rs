@@ -59,16 +59,13 @@ impl PromptSuggestionsView {
         });
     }
 
-    fn wrapped_suggestion_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let text = self
-            .suggestion_text()
-            .unwrap_or("No prompt suggestion available yet.");
+    fn wrapped_lines(text: &str, width: u16, indent: &'static str) -> Vec<Line<'static>> {
         let wrap_width = width.max(1) as usize;
         wrap(text, wrap_width)
             .into_iter()
             .map(|line| {
                 let text = line.into_owned();
-                Line::from(vec!["  ".into(), text.into()])
+                Line::from(vec![indent.into(), text.into()])
             })
             .collect()
     }
@@ -80,9 +77,42 @@ impl PromptSuggestionsView {
             "Off".red()
         };
         vec![
-            Line::from("Prompt suggestion".bold()),
-            Line::from(vec!["Suggestions: ".dim(), status]),
+            Line::from("Prompt suggestions".bold()),
+            Line::from(vec!["Status: ".dim(), status]),
         ]
+    }
+
+    fn content_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines = self.header_lines();
+        lines.push(Line::from(""));
+
+        if !self.enabled {
+            lines.push("Suggestions are off.".italic().into());
+            lines.push(
+                Line::from(vec![
+                    "Press ".into(),
+                    key_hint::plain(KeyCode::Char('t')).into(),
+                    " to enable.".into(),
+                ])
+                .dim(),
+            );
+            return lines;
+        }
+
+        if let Some(text) = self.suggestion_text() {
+            lines.push("Suggested reply".bold().into());
+            lines.push(Line::from(""));
+            lines.extend(Self::wrapped_lines(
+                text,
+                width.saturating_sub(2),
+                "  ",
+            ));
+        } else {
+            lines.push("Waiting for a suggestion...".italic().into());
+            lines.push("Send another message or wait for the next response.".dim().into());
+        }
+
+        lines
     }
 }
 
@@ -160,10 +190,7 @@ impl Renderable for PromptSuggestionsView {
             return;
         }
 
-        let mut lines = self.header_lines();
-        lines.push(Line::from(""));
-        let suggestion_lines = self.wrapped_suggestion_lines(inner.width.saturating_sub(2));
-        lines.extend(suggestion_lines);
+        let lines = self.content_lines(inner.width);
 
         Paragraph::new(lines).render(inner, buf);
 
@@ -175,7 +202,7 @@ impl Renderable for PromptSuggestionsView {
                 height: footer_area.height,
             };
             let has_suggestion = self.suggestion_text().is_some();
-            prompt_suggestions_hint_line(has_suggestion)
+            prompt_suggestions_hint_line(self.enabled, has_suggestion)
                 .dim()
                 .render(hint_area, buf);
         }
@@ -185,25 +212,23 @@ impl Renderable for PromptSuggestionsView {
         if width == 0 {
             return 0;
         }
-        let wrap_width = width.saturating_sub(6).max(1);
-        let suggestion_lines = self.wrapped_suggestion_lines(wrap_width).len() as u16;
-        let header_lines = 2;
+        let content_lines = self.content_lines(width.saturating_sub(4)).len() as u16;
         let padding = 2;
         let footer = 1;
-        header_lines + 1 + suggestion_lines + padding + footer
+        content_lines + padding + footer
     }
 }
 
-fn prompt_suggestions_hint_line(has_suggestion: bool) -> Line<'static> {
+fn prompt_suggestions_hint_line(enabled: bool, has_suggestion: bool) -> Line<'static> {
     let mut spans = Vec::new();
-    if has_suggestion {
+    if enabled && has_suggestion {
         spans.push(key_hint::plain(KeyCode::Enter).into());
         spans.push(" send / ".into());
         spans.push(key_hint::plain(KeyCode::Tab).into());
         spans.push(" edit / ".into());
     }
     spans.push(key_hint::plain(KeyCode::Char('t')).into());
-    spans.push(" toggle / ".into());
+    spans.push(if enabled { " toggle / " } else { " enable / " }.into());
     spans.push(key_hint::plain(KeyCode::Esc).into());
     spans.push(" dismiss".into());
     Line::from(spans)

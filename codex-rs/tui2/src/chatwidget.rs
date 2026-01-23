@@ -61,6 +61,7 @@ use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
+use codex_core::protocol::ToolsListResponseEvent;
 use codex_core::protocol::McpStartupCompleteEvent;
 use codex_core::protocol::McpStartupStatus;
 use codex_core::protocol::McpStartupUpdateEvent;
@@ -396,6 +397,8 @@ pub(crate) struct ChatWidget {
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     /// Whether the next MCP tool list response should be rendered in history.
     pending_mcp_list_output: bool,
+    /// Whether the next tool list response should be rendered in history.
+    pending_tools_list_output: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -1612,6 +1615,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             pending_mcp_list_output: false,
+            pending_tools_list_output: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -1712,6 +1716,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             pending_mcp_list_output: false,
+            pending_tools_list_output: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2004,6 +2009,9 @@ impl ChatWidget {
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
+            }
+            SlashCommand::Tools => {
+                self.add_tools_output();
             }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
@@ -2328,6 +2336,7 @@ impl ChatWidget {
             EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
+            EventMsg::ToolsListResponse(ev) => self.on_list_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
             EventMsg::SkillsUpdateAvailable => {
@@ -3833,9 +3842,18 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn add_tools_output(&mut self) {
+        self.request_tools(true);
+    }
+
     pub(crate) fn request_mcp_tools(&mut self, show_in_history: bool) {
         self.pending_mcp_list_output = show_in_history;
         self.submit_op(Op::ListMcpTools);
+    }
+
+    pub(crate) fn request_tools(&mut self, show_in_history: bool) {
+        self.pending_tools_list_output = show_in_history;
+        self.submit_op(Op::ListTools);
     }
 
     /// Forward file-search results to the bottom pane.
@@ -4048,6 +4066,15 @@ impl ChatWidget {
             ));
         } else {
             self.pending_mcp_list_output = false;
+        }
+    }
+
+    fn on_list_tools(&mut self, ev: ToolsListResponseEvent) {
+        if self.pending_tools_list_output {
+            self.pending_tools_list_output = false;
+            self.add_to_history(history_cell::new_tools_output(ev.tools));
+        } else {
+            self.pending_tools_list_output = false;
         }
     }
 

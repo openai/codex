@@ -79,6 +79,7 @@ use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TerminalInteractionEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
+use codex_core::protocol::ToolsListResponseEvent;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnCompleteEvent;
 use codex_core::protocol::TurnDiffEvent;
@@ -459,6 +460,8 @@ pub(crate) struct ChatWidget {
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     /// Whether the next MCP tool list response should be rendered in history.
     pending_mcp_list_output: bool,
+    /// Whether the next tool list response should be rendered in history.
+    pending_tools_list_output: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -675,8 +678,13 @@ impl ChatWidget {
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
     /// both the agent turn lifecycle and MCP startup lifecycle.
     fn update_task_running_state(&mut self) {
-        self.bottom_pane
-            .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+        let has_background = self
+            .background_terminals_state
+            .lock()
+            .is_ok_and(|state| !state.list_items().is_empty());
+        self.bottom_pane.set_task_running(
+            self.agent_turn_running || self.mcp_startup_status.is_some() || has_background,
+        );
     }
 
     fn restore_reasoning_status_header(&mut self) {
@@ -1227,6 +1235,17 @@ impl ChatWidget {
     fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
+        let mut cleared_background = false;
+        if let Ok(mut state) = self.background_terminals_state.lock() {
+            if !state.list_items().is_empty() {
+                state.clear();
+                cleared_background = true;
+            }
+        }
+        if cleared_background {
+            self.sync_unified_exec_footer();
+            self.update_task_running_state();
+        }
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
@@ -1381,7 +1400,11 @@ impl ChatWidget {
 
     fn on_terminal_interaction(&mut self, ev: TerminalInteractionEvent) {
         if !self.bottom_pane.is_task_running() {
-            return;
+            // Refresh running state in case unified exec started without a turn.
+            self.update_task_running_state();
+            if !self.bottom_pane.is_task_running() {
+                return;
+            }
         }
         self.flush_answer_stream_with_separator();
         let (command_display, log_changed) =
@@ -1471,7 +1494,7 @@ impl ChatWidget {
                 self.flush_unified_exec_wait_streak();
             }
             self.track_unified_exec_process_end(&ev);
-            if !self.bottom_pane.is_task_running() {
+            if !self.agent_turn_running && self.mcp_startup_status.is_none() {
                 return;
             }
         }
@@ -1486,6 +1509,7 @@ impl ChatWidget {
         }
         if changed {
             self.sync_unified_exec_footer();
+            self.update_task_running_state();
             self.request_redraw();
         }
     }
@@ -1497,6 +1521,7 @@ impl ChatWidget {
         }
         if changed {
             self.sync_unified_exec_footer();
+            self.update_task_running_state();
             self.request_redraw();
         }
     }
@@ -2026,6 +2051,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             pending_mcp_list_output: false,
+            pending_tools_list_output: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2154,6 +2180,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             pending_mcp_list_output: false,
+            pending_tools_list_output: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2283,6 +2310,7 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             pending_mcp_list_output: false,
+            pending_tools_list_output: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2666,6 +2694,9 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
+            SlashCommand::Tools => {
+                self.add_tools_output();
+            }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
                     self.add_info_message(
@@ -3046,6 +3077,7 @@ impl ChatWidget {
             EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
+            EventMsg::ToolsListResponse(ev) => self.on_list_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
             EventMsg::SkillsUpdateAvailable => {
@@ -5017,9 +5049,18 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn add_tools_output(&mut self) {
+        self.request_tools(true);
+    }
+
     pub(crate) fn request_mcp_tools(&mut self, show_in_history: bool) {
         self.pending_mcp_list_output = show_in_history;
         self.submit_op(Op::ListMcpTools);
+    }
+
+    pub(crate) fn request_tools(&mut self, show_in_history: bool) {
+        self.pending_tools_list_output = show_in_history;
+        self.submit_op(Op::ListTools);
     }
 
     /// Forward file-search results to the bottom pane.
@@ -5172,7 +5213,11 @@ impl ChatWidget {
             return;
         }
         self.latest_prompt_suggestion = None;
-        self.queue_user_message(trimmed.to_string().into());
+        self.queue_user_message(UserMessage {
+            text: trimmed.to_string(),
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        });
     }
 
     pub(crate) fn prefill_prompt_suggestion(&mut self, text: String) {
@@ -5216,6 +5261,15 @@ impl ChatWidget {
             ));
         } else {
             self.pending_mcp_list_output = false;
+        }
+    }
+
+    fn on_list_tools(&mut self, ev: ToolsListResponseEvent) {
+        if self.pending_tools_list_output {
+            self.pending_tools_list_output = false;
+            self.add_to_history(history_cell::new_tools_output(ev.tools));
+        } else {
+            self.pending_tools_list_output = false;
         }
     }
 

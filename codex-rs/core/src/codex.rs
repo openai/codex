@@ -2205,6 +2205,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ListMcpTools => {
                 handlers::list_mcp_tools(&sess, &config, sub.id.clone()).await;
             }
+            Op::ListTools => {
+                handlers::list_tools(&sess, sub.id.clone()).await;
+            }
             Op::RefreshMcpServers { config } => {
                 handlers::refresh_mcp_servers(&sess, config).await;
             }
@@ -2273,6 +2276,7 @@ mod handlers {
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
+    use crate::tools::spec::build_specs;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
@@ -2286,6 +2290,7 @@ mod handlers {
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::SkillsListEntry;
     use codex_protocol::protocol::ThreadRolledBackEvent;
+    use codex_protocol::protocol::ToolsListResponseEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
     use codex_protocol::request_user_input::RequestUserInputResponse;
@@ -2622,6 +2627,31 @@ mod handlers {
         let event = Event {
             id: sub_id,
             msg: EventMsg::McpListToolsResponse(snapshot),
+        };
+        sess.send_event_raw(event).await;
+    }
+
+    pub async fn list_tools(sess: &Session, sub_id: String) {
+        let turn_context = sess.new_default_turn().await;
+        let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
+        let mcp_tools = mcp_connection_manager
+            .list_all_tools()
+            .await
+            .into_iter()
+            .map(|(name, tool)| (name, tool.tool))
+            .collect();
+        let builder = build_specs(&turn_context.tools_config, Some(mcp_tools));
+        let (specs, _registry) = builder.build();
+        let mut tools: Vec<String> = specs
+            .into_iter()
+            .map(|spec| spec.spec.name().to_string())
+            .collect();
+        tools.sort();
+        tools.dedup();
+
+        let event = Event {
+            id: sub_id,
+            msg: EventMsg::ToolsListResponse(ToolsListResponseEvent { tools }),
         };
         sess.send_event_raw(event).await;
     }

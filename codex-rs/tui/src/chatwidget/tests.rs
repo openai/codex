@@ -822,6 +822,7 @@ async fn make_chatwidget_manual(
         agent_turn_running: false,
         mcp_startup_status: None,
         pending_mcp_list_output: false,
+        pending_tools_list_output: false,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
@@ -3724,7 +3725,7 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 }
 
 #[tokio::test]
-async fn interrupt_keeps_background_terminals() {
+async fn interrupt_clears_background_terminals() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
@@ -3751,7 +3752,7 @@ async fn interrupt_keeps_background_terminals() {
             .expect("background terminal state")
             .list_items()
             .len(),
-        2
+        0
     );
 
     let _ = drain_insert_history(&mut rx);
@@ -3787,6 +3788,40 @@ async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
         .join("\n");
     let snapshot = format!("cells={}\n{combined}", cells.len());
     assert_snapshot!("interrupt_clears_unified_exec_wait_streak", snapshot);
+}
+
+#[tokio::test]
+async fn turn_aborted_clears_background_terminals() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
+    begin_unified_exec_startup(&mut chat, "call-2", "process-2", "sleep 6");
+    assert_eq!(
+        chat.background_terminals_state
+            .lock()
+            .expect("background terminal state")
+            .list_items()
+            .len(),
+        2
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert_eq!(
+        chat.background_terminals_state
+            .lock()
+            .expect("background terminal state")
+            .list_items()
+            .len(),
+        0
+    );
+
+    let _ = drain_insert_history(&mut rx);
 }
 
 #[tokio::test]

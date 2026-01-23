@@ -1517,6 +1517,28 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
     PlainHistoryCell { lines }
 }
 
+/// Render all tools available to the agent (built-in + MCP).
+pub(crate) fn new_tools_output(mut tools: Vec<String>) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = vec![
+        "/tools".magenta().into(),
+        "".into(),
+        "Tools".bold().into(),
+        "".into(),
+    ];
+
+    if tools.is_empty() {
+        lines.push("  • No tools available.".italic().into());
+        return PlainHistoryCell { lines };
+    }
+
+    tools.sort();
+    for name in tools {
+        lines.push(vec!["  • ".into(), name.into()].into());
+    }
+
+    PlainHistoryCell { lines }
+}
+
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // Use a hair space (U+200A) to create a subtle, near-invisible separation
     // before the text. VS16 is intentionally omitted to keep spacing tighter

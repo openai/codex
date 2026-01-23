@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::time::Duration;
 use tokio::select;
@@ -34,7 +35,11 @@ model_provider = "ollama"
     );
     std::fs::write(codex_home.join("config.toml"), config_contents)?;
 
-    let CodexCliOutput { exit_code, output } = run_codex_cli(codex_home, cwd).await?;
+    let CodexCliOutput { exit_code, output } = match run_codex_cli(codex_home, cwd).await {
+        Ok(output) => output,
+        Err(err) if is_pty_permission_denied(&err) => return Ok(()),
+        Err(err) => return Err(err),
+    };
     assert_ne!(0, exit_code, "Codex CLI should exit nonzero.");
     assert!(
         output.contains("ERROR: Failed to initialize codex:"),
@@ -116,4 +121,17 @@ async fn run_codex_cli(
         exit_code,
         output: output.to_string(),
     })
+}
+
+fn is_pty_permission_denied(err: &anyhow::Error) -> bool {
+    if err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|err| err.kind() == ErrorKind::PermissionDenied)
+    }) {
+        return true;
+    }
+
+    let message = err.to_string();
+    message.contains("openpty") && message.contains("Permission denied")
 }
