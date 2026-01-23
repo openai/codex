@@ -19,11 +19,15 @@ use tokio::sync::oneshot;
 use tracing::info;
 use tracing::warn;
 
+use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use super::list::Cursor;
+use super::list::ThreadListConfig;
+use super::list::ThreadListLayout;
 use super::list::ThreadSortKey;
 use super::list::ThreadsPage;
 use super::list::get_threads;
+use super::list::get_threads_in_root;
 use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::default_client::originator;
@@ -115,6 +119,32 @@ impl RolloutRecorder {
             allowed_sources,
             model_providers,
             default_provider,
+        )
+        .await
+    }
+
+    /// List archived threads (rollout files) under the archived sessions directory.
+    pub async fn list_archived_threads(
+        codex_home: &Path,
+        page_size: usize,
+        cursor: Option<&Cursor>,
+        sort_key: ThreadSortKey,
+        allowed_sources: &[SessionSource],
+        model_providers: Option<&[String]>,
+        default_provider: &str,
+    ) -> std::io::Result<ThreadsPage> {
+        let root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
+        get_threads_in_root(
+            root,
+            page_size,
+            cursor,
+            sort_key,
+            ThreadListConfig {
+                allowed_sources,
+                model_providers,
+                default_provider,
+                layout: ThreadListLayout::Flat,
+            },
         )
         .await
     }

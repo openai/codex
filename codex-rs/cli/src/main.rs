@@ -696,11 +696,20 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     overrides,
                 )
                 .await?;
+                let mut rows = Vec::with_capacity(codex_core::features::FEATURES.len());
+                let mut name_width = 0;
+                let mut stage_width = 0;
                 for def in codex_core::features::FEATURES.iter() {
                     let name = def.key;
                     let stage = stage_str(def.stage);
                     let enabled = config.features.enabled(def.id);
-                    println!("{name}\t{stage}\t{enabled}");
+                    name_width = name_width.max(name.len());
+                    stage_width = stage_width.max(stage.len());
+                    rows.push((name, stage, enabled));
+                }
+
+                for (name, stage, enabled) in rows {
+                    println!("{name:<name_width$}  {stage:<stage_width$}  {enabled}");
                 }
             }
         },

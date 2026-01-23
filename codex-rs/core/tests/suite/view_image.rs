@@ -89,6 +89,7 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -182,6 +183,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -314,6 +316,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -388,6 +391,7 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -481,6 +485,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -563,6 +568,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 

@@ -1,5 +1,5 @@
 ## Multi agents
-You have the possibility to spawn and user other agents to complete a task. For example, this can be use for:
+You have the possibility to spawn and use other agents to complete a task. For example, this can be use for:
 * Very large tasks with multiple well-defined scopes
 * When you want a review from another agent. This can review your own work or the work of another agent.
 * If you need to interact with another agent to debate an idea and have insight from a fresh context

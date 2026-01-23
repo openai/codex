@@ -256,6 +256,7 @@ impl Session {
                         "{TURN_ABORTED_OPEN_TAG}\n  <turn_id>{sub_id}</turn_id>\n  <reason>interrupted</reason>\n  <guidance>{TURN_ABORTED_INTERRUPTED_GUIDANCE}</guidance>\n</turn_aborted>"
                     ),
                 }],
+                end_turn: None,
             };
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;
