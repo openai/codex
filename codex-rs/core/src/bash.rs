@@ -181,6 +181,7 @@ fn parse_double_quoted_string(node: Node, src: &str) -> Option<String> {
     if node.kind() != "string" {
         return None;
     }
+
     let mut cursor = node.walk();
     for part in node.named_children(&mut cursor) {
         if part.kind() != "string_content" {
@@ -198,6 +199,7 @@ fn parse_raw_string(node: Node, src: &str) -> Option<String> {
     if node.kind() != "raw_string" {
         return None;
     }
+
     let raw_string = node.utf8_text(src.as_bytes()).ok()?;
     let stripped = raw_string
         .strip_prefix('\'')
@@ -265,17 +267,20 @@ mod tests {
 
     #[test]
     fn accepts_mixed_quote_concatenation() {
-        let cmds = parse_seq("echo \"/usr\"'/'\"local\"/bin").unwrap();
         assert_eq!(
-            cmds,
+            parse_seq(r#"echo "/usr"'/'"local"/bin"#).unwrap(),
+            vec![vec!["echo".to_string(), "/usr/local/bin".to_string()]]
+        );
+        assert_eq!(
+            parse_seq(r#"echo '/usr'"/"'local'/bin"#).unwrap(),
             vec![vec!["echo".to_string(), "/usr/local/bin".to_string()]]
         );
     }
 
     #[test]
     fn rejects_double_quoted_strings_with_expansions() {
-        assert!(parse_seq("echo \"hi ${USER}\"").is_none());
-        assert!(parse_seq("echo \"$HOME\"").is_none());
+        assert!(parse_seq(r#"echo "hi ${USER}""#).is_none());
+        assert!(parse_seq(r#"echo "$HOME""#).is_none());
     }
 
     #[test]
