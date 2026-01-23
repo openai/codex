@@ -64,6 +64,7 @@ pub struct ExecParams {
     pub expiration: ExecExpiration,
     pub env: HashMap<String, String>,
     pub sandbox_permissions: SandboxPermissions,
+    pub windows_sandbox_mode: codex_protocol::config_types::WindowsSandboxMode,
     pub justification: Option<String>,
     pub arg0: Option<String>,
 }
@@ -141,11 +142,13 @@ pub async fn process_exec_tool_call(
     codex_linux_sandbox_exe: &Option<PathBuf>,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
+    let windows_sandbox_mode = params.windows_sandbox_mode;
     let sandbox_type = match &sandbox_policy {
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
             SandboxType::None
         }
-        _ => get_platform_sandbox().unwrap_or(SandboxType::None),
+        _ => get_platform_sandbox(windows_sandbox_mode != codex_protocol::config_types::WindowsSandboxMode::Disabled)
+            .unwrap_or(SandboxType::None),
     };
     tracing::debug!("Sandbox type: {sandbox_type:?}");
 
@@ -155,6 +158,7 @@ pub async fn process_exec_tool_call(
         expiration,
         env,
         sandbox_permissions,
+        windows_sandbox_mode,
         justification,
         arg0: _,
     } = params;
@@ -184,6 +188,7 @@ pub async fn process_exec_tool_call(
             sandbox_type,
             sandbox_cwd,
             codex_linux_sandbox_exe.as_ref(),
+            windows_sandbox_mode,
         )
         .map_err(CodexErr::from)?;
 
@@ -202,6 +207,7 @@ pub(crate) async fn execute_exec_env(
         env,
         expiration,
         sandbox,
+        windows_sandbox_mode,
         sandbox_permissions,
         justification,
         arg0,
@@ -213,6 +219,7 @@ pub(crate) async fn execute_exec_env(
         expiration,
         env,
         sandbox_permissions,
+        windows_sandbox_mode,
         justification,
         arg0,
     };
@@ -229,7 +236,7 @@ async fn exec_windows_sandbox(
     sandbox_policy: &SandboxPolicy,
 ) -> Result<RawExecToolCallOutput> {
     use crate::config::find_codex_home;
-    use crate::safety::is_windows_elevated_sandbox_enabled;
+    use codex_protocol::config_types::WindowsSandboxMode;
     use codex_windows_sandbox::run_windows_sandbox_capture;
     use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
 
@@ -238,6 +245,7 @@ async fn exec_windows_sandbox(
         cwd,
         env,
         expiration,
+        windows_sandbox_mode,
         ..
     } = params;
     // TODO(iceweasel-oai): run_windows_sandbox_capture should support all
@@ -255,7 +263,7 @@ async fn exec_windows_sandbox(
             "windows sandbox: failed to resolve codex_home: {err}"
         )))
     })?;
-    let use_elevated = is_windows_elevated_sandbox_enabled();
+    let use_elevated = matches!(windows_sandbox_mode, WindowsSandboxMode::Elevated);
     let spawn_res = tokio::task::spawn_blocking(move || {
         if use_elevated {
             run_windows_sandbox_capture_elevated(
@@ -564,6 +572,7 @@ async fn exec(
         env,
         arg0,
         expiration,
+        windows_sandbox_mode: _,
         ..
     } = params;
 
@@ -878,6 +887,7 @@ mod tests {
             expiration: 500.into(),
             env,
             sandbox_permissions: SandboxPermissions::UseDefault,
+            windows_sandbox_mode: codex_protocol::config_types::WindowsSandboxMode::Disabled,
             justification: None,
             arg0: None,
         };
@@ -923,6 +933,7 @@ mod tests {
             expiration: ExecExpiration::Cancellation(cancel_token),
             env,
             sandbox_permissions: SandboxPermissions::UseDefault,
+            windows_sandbox_mode: codex_protocol::config_types::WindowsSandboxMode::Disabled,
             justification: None,
             arg0: None,
         };

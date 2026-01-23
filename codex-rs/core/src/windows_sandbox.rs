@@ -1,4 +1,8 @@
+use crate::config::Config;
+use crate::features::Feature;
+use crate::features::Features;
 use crate::protocol::SandboxPolicy;
+use codex_protocol::config_types::WindowsSandboxMode;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -7,6 +11,36 @@ use std::path::Path;
 /// When false, revert to the previous sandbox NUX, which only
 /// prompts users to enable the legacy sandbox feature.
 pub const ELEVATED_SANDBOX_NUX_ENABLED: bool = true;
+
+pub trait WindowsSandboxModeExt {
+    fn from_config(config: &Config) -> WindowsSandboxMode;
+    fn from_features(features: &Features) -> WindowsSandboxMode;
+}
+
+impl WindowsSandboxModeExt for WindowsSandboxMode {
+    fn from_config(config: &Config) -> WindowsSandboxMode {
+        Self::from_features(&config.features)
+    }
+
+    fn from_features(features: &Features) -> WindowsSandboxMode {
+        if !features.enabled(Feature::WindowsSandbox) {
+            return WindowsSandboxMode::Disabled;
+        }
+        if features.enabled(Feature::WindowsSandboxElevated) {
+            WindowsSandboxMode::Elevated
+        } else {
+            WindowsSandboxMode::RestrictedToken
+        }
+    }
+}
+
+pub fn windows_sandbox_mode_from_config(config: &Config) -> WindowsSandboxMode {
+    WindowsSandboxMode::from_config(config)
+}
+
+pub fn windows_sandbox_mode_from_features(features: &Features) -> WindowsSandboxMode {
+    WindowsSandboxMode::from_features(features)
+}
 
 #[cfg(target_os = "windows")]
 pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {

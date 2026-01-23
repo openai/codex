@@ -28,6 +28,7 @@ use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
+use crate::windows_sandbox::WindowsSandboxModeExt;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
@@ -48,6 +49,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::Verbosity;
+use codex_protocol::config_types::WindowsSandboxMode;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
@@ -1050,6 +1052,7 @@ impl ConfigToml {
         &self,
         sandbox_mode_override: Option<SandboxMode>,
         profile_sandbox_mode: Option<SandboxMode>,
+        windows_sandbox_mode: WindowsSandboxMode,
         resolved_cwd: &Path,
     ) -> SandboxPolicyResolution {
         let resolved_sandbox_mode = sandbox_mode_override
@@ -1088,7 +1091,7 @@ impl ConfigToml {
         if cfg!(target_os = "windows")
             && matches!(resolved_sandbox_mode, SandboxMode::WorkspaceWrite)
             // If the experimental Windows sandbox is enabled, do not force a downgrade.
-            && crate::safety::get_platform_sandbox().is_none()
+            && windows_sandbox_mode == codex_protocol::config_types::WindowsSandboxMode::Disabled
         {
             sandbox_policy = SandboxPolicy::new_read_only_policy();
             forced_auto_mode_downgraded_on_windows = true;
@@ -1279,16 +1282,6 @@ impl Config {
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features);
-        #[cfg(target_os = "windows")]
-        {
-            // Base flag controls sandbox on/off; elevated only applies when base is enabled.
-            let sandbox_enabled = features.enabled(Feature::WindowsSandbox);
-            crate::safety::set_windows_sandbox_enabled(sandbox_enabled);
-            let elevated_enabled =
-                sandbox_enabled && features.enabled(Feature::WindowsSandboxElevated);
-            crate::safety::set_windows_elevated_sandbox_enabled(elevated_enabled);
-        }
-
         let resolved_cwd = {
             use std::env;
 
@@ -1315,10 +1308,16 @@ impl Config {
             .get_active_project(&resolved_cwd)
             .unwrap_or(ProjectConfig { trust_level: None });
 
+        let windows_sandbox_mode = WindowsSandboxMode::from_features(&features);
         let SandboxPolicyResolution {
             policy: mut sandbox_policy,
             forced_auto_mode_downgraded_on_windows,
-        } = cfg.derive_sandbox_policy(sandbox_mode, config_profile.sandbox_mode, &resolved_cwd);
+        } = cfg.derive_sandbox_policy(
+            sandbox_mode,
+            config_profile.sandbox_mode,
+            windows_sandbox_mode,
+            &resolved_cwd,
+        );
         if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
             for path in additional_writable_roots {
                 if !writable_roots.iter().any(|existing| existing == &path) {
@@ -1658,7 +1657,6 @@ impl Config {
     }
 
     pub fn set_windows_sandbox_globally(&mut self, value: bool) {
-        crate::safety::set_windows_sandbox_enabled(value);
         if value {
             self.features.enable(Feature::WindowsSandbox);
         } else {
@@ -1668,7 +1666,6 @@ impl Config {
     }
 
     pub fn set_windows_elevated_sandbox_globally(&mut self, value: bool) {
-        crate::safety::set_windows_elevated_sandbox_enabled(value);
         if value {
             self.features.enable(Feature::WindowsSandboxElevated);
         } else {
@@ -1862,6 +1859,7 @@ network_access = false  # This should be ignored.
         let resolution = sandbox_full_access_cfg.derive_sandbox_policy(
             sandbox_mode_override,
             None,
+            WindowsSandboxMode::Disabled,
             &PathBuf::from("/tmp/test"),
         );
         assert_eq!(
@@ -1885,6 +1883,7 @@ network_access = true  # This should be ignored.
         let resolution = sandbox_read_only_cfg.derive_sandbox_policy(
             sandbox_mode_override,
             None,
+            WindowsSandboxMode::Disabled,
             &PathBuf::from("/tmp/test"),
         );
         assert_eq!(
@@ -1916,6 +1915,7 @@ exclude_slash_tmp = true
         let resolution = sandbox_workspace_write_cfg.derive_sandbox_policy(
             sandbox_mode_override,
             None,
+            WindowsSandboxMode::Disabled,
             &PathBuf::from("/tmp/test"),
         );
         if cfg!(target_os = "windows") {
@@ -1964,6 +1964,7 @@ trust_level = "trusted"
         let resolution = sandbox_workspace_write_cfg.derive_sandbox_policy(
             sandbox_mode_override,
             None,
+            WindowsSandboxMode::Disabled,
             &PathBuf::from("/tmp/test"),
         );
         if cfg!(target_os = "windows") {
@@ -4174,7 +4175,12 @@ trust_level = "untrusted"
         let cfg = toml::from_str::<ConfigToml>(config_with_untrusted)
             .expect("TOML deserialization should succeed");
 
-        let resolution = cfg.derive_sandbox_policy(None, None, &PathBuf::from("/tmp/test"));
+        let resolution = cfg.derive_sandbox_policy(
+            None,
+            None,
+            WindowsSandboxMode::Disabled,
+            &PathBuf::from("/tmp/test"),
+        );
 
         // Verify that untrusted projects get WorkspaceWrite (or ReadOnly on Windows due to downgrade)
         if cfg!(target_os = "windows") {

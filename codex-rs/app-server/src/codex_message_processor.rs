@@ -172,11 +172,13 @@ use codex_core::sandboxing::SandboxPermissions;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
+use codex_core::windows_sandbox::WindowsSandboxModeExt;
 use codex_login::run_login_server;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
+use codex_protocol::config_types::WindowsSandboxMode;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
@@ -1259,12 +1261,15 @@ impl CodexMessageProcessor {
         let timeout_ms = params
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
+        let windows_sandbox_mode =
+            WindowsSandboxMode::from_config(&self.config);
         let exec_params = ExecParams {
             command: params.command,
             cwd,
             expiration: timeout_ms.into(),
             env,
             sandbox_permissions: SandboxPermissions::UseDefault,
+            windows_sandbox_mode,
             justification: None,
             arg0: None,
         };
@@ -3887,6 +3892,7 @@ impl CodexMessageProcessor {
                     cwd: params.cwd,
                     approval_policy: params.approval_policy.map(AskForApproval::to_core),
                     sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
+                    windows_sandbox_mode: None,
                     model: params.model,
                     effort: params.effort.map(Some),
                     summary: params.summary,

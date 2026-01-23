@@ -254,6 +254,7 @@ pub(crate) struct ChatComposer {
     config: ChatComposerConfig,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     personality_command_enabled: bool,
+    windows_degraded_sandbox_active: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -339,6 +340,7 @@ impl ChatComposer {
             config,
             collaboration_mode_indicator: None,
             personality_command_enabled: false,
+            windows_degraded_sandbox_active: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -385,6 +387,11 @@ impl ChatComposer {
 
     fn image_paste_enabled(&self) -> bool {
         self.config.image_paste_enabled
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn set_windows_degraded_sandbox_active(&mut self, enabled: bool) {
+        self.windows_degraded_sandbox_active = enabled;
     }
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let footer_props = self.footer_props();
@@ -1699,6 +1706,7 @@ impl ChatComposer {
                     name,
                     self.collaboration_modes_enabled,
                     self.personality_command_enabled,
+                    self.windows_degraded_sandbox_active,
                 )
                 .is_some();
                 let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
@@ -1875,6 +1883,7 @@ impl ChatComposer {
                 name,
                 self.collaboration_modes_enabled,
                 self.personality_command_enabled,
+                self.windows_degraded_sandbox_active,
             )
         {
             self.textarea.set_text_clearing_elements("");
@@ -1902,6 +1911,7 @@ impl ChatComposer {
                     name,
                     self.collaboration_modes_enabled,
                     self.personality_command_enabled,
+                    self.windows_degraded_sandbox_active,
                 )
                 && cmd == SlashCommand::Review
             {
@@ -2345,6 +2355,7 @@ impl ChatComposer {
             name,
             self.collaboration_modes_enabled,
             self.personality_command_enabled,
+            self.windows_degraded_sandbox_active,
         ) {
             return true;
         }
@@ -2401,6 +2412,7 @@ impl ChatComposer {
                         CommandPopupFlags {
                             collaboration_modes_enabled,
                             personality_command_enabled,
+                            windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
                         },
                     );
                     command_popup.on_composer_text_change(first_line.to_string());

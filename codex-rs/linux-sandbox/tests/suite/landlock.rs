@@ -8,6 +8,7 @@ use codex_core::exec::process_exec_tool_call;
 use codex_core::exec_env::create_env;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_protocol::config_types::WindowsSandboxMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -60,6 +61,7 @@ async fn run_cmd_output(
         expiration: timeout_ms.into(),
         env: create_env_from_core_vars(),
         sandbox_permissions: SandboxPermissions::UseDefault,
+        windows_sandbox_mode: WindowsSandboxMode::Disabled,
         justification: None,
         arg0: None,
     };
@@ -177,6 +179,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
         expiration: NETWORK_TIMEOUT_MS.into(),
         env: create_env_from_core_vars(),
         sandbox_permissions: SandboxPermissions::UseDefault,
+        windows_sandbox_mode: WindowsSandboxMode::Disabled,
         justification: None,
         arg0: None,
     };

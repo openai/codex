@@ -87,6 +87,7 @@ impl EscalateServer {
                 expiration: ExecExpiration::Cancellation(cancel_rx),
                 env,
                 sandbox_permissions: SandboxPermissions::UseDefault,
+                windows_sandbox_mode: codex_protocol::config_types::WindowsSandboxMode::Disabled,
                 justification: None,
                 arg0: None,
             },

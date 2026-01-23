@@ -34,6 +34,8 @@ use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
+#[cfg(target_os = "windows")]
+use codex_core::windows_sandbox::WindowsSandboxModeExt;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -67,6 +69,8 @@ use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_utils_absolute_path::AbsolutePathBuf;
+#[cfg(target_os = "windows")]
+use codex_protocol::config_types::WindowsSandboxMode;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -1072,7 +1076,8 @@ impl App {
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
-            let should_check = codex_core::get_platform_sandbox().is_some()
+            let should_check = WindowsSandboxMode::from_config(&app.config)
+                != WindowsSandboxMode::Disabled
                 && matches!(
                     app.config.sandbox_policy.get(),
                     codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. }
@@ -1668,9 +1673,24 @@ impl App {
                                 elevated_enabled,
                             );
                             self.chat_widget.clear_forced_auto_mode_downgrade();
+                            let windows_sandbox_mode =
+                                WindowsSandboxMode::from_config(&self.config);
                             if let Some((sample_paths, extra_count, failed_scan)) =
                                 self.chat_widget.world_writable_warning_details()
                             {
+                                self.app_event_tx.send(AppEvent::CodexOp(
+                                    Op::OverrideTurnContext {
+                                        cwd: None,
+                                        approval_policy: None,
+                                        sandbox_policy: None,
+                                        windows_sandbox_mode: Some(windows_sandbox_mode),
+                                        model: None,
+                                        effort: None,
+                                        summary: None,
+                                        collaboration_mode: None,
+                                        personality: None,
+                                    },
+                                ));
                                 self.app_event_tx.send(
                                     AppEvent::OpenWorldWritableWarningConfirmation {
                                         preset: Some(preset.clone()),
@@ -1685,6 +1705,7 @@ impl App {
                                         cwd: None,
                                         approval_policy: Some(preset.approval),
                                         sandbox_policy: Some(preset.sandbox.clone()),
+                                        windows_sandbox_mode: Some(windows_sandbox_mode),
                                         model: None,
                                         effort: None,
                                         summary: None,
@@ -1823,7 +1844,8 @@ impl App {
                 }
                 #[cfg(target_os = "windows")]
                 if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
-                    || codex_core::get_platform_sandbox().is_some()
+                    || WindowsSandboxMode::from_config(&self.config)
+                        != WindowsSandboxMode::Disabled
                 {
                     self.config.forced_auto_mode_downgraded_on_windows = false;
                 }
@@ -1845,7 +1867,8 @@ impl App {
                         return Ok(AppRunControl::Continue);
                     }
 
-                    let should_check = codex_core::get_platform_sandbox().is_some()
+                    let should_check = WindowsSandboxMode::from_config(&self.config)
+                        != WindowsSandboxMode::Disabled
                         && policy_is_workspace_write_or_ro
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
@@ -1869,6 +1892,12 @@ impl App {
                 if updates.is_empty() {
                     return Ok(AppRunControl::Continue);
                 }
+                let windows_sandbox_changed = updates.iter().any(|(feature, _)| {
+                    matches!(
+                        feature,
+                        Feature::WindowsSandbox | Feature::WindowsSandboxElevated
+                    )
+                });
                 let mut builder = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(self.active_profile.as_deref());
                 for (feature, enabled) in &updates {
@@ -1892,6 +1921,25 @@ impl App {
                                 segments: vec!["features".to_string(), feature_key.to_string()],
                             }]);
                         }
+                    }
+                }
+                if windows_sandbox_changed {
+                    #[cfg(target_os = "windows")]
+                    {
+                        let windows_sandbox_mode = WindowsSandboxMode::from_config(&self.config);
+                        self.app_event_tx.send(AppEvent::CodexOp(
+                            Op::OverrideTurnContext {
+                                cwd: None,
+                                approval_policy: None,
+                                sandbox_policy: None,
+                                windows_sandbox_mode: Some(windows_sandbox_mode),
+                                model: None,
+                                effort: None,
+                                summary: None,
+                                collaboration_mode: None,
+                                personality: None,
+                            },
+                        ));
                     }
                 }
                 if let Err(err) = builder.apply().await {
