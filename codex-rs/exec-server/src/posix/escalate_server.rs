@@ -10,8 +10,8 @@ use path_absolutize::Absolutize as _;
 
 use codex_core::SandboxState;
 use codex_core::exec::process_exec_tool_call;
-use codex_core::sandboxing::SandboxPermissions;
 use codex_core::protocol_config_types::WindowsSandboxMode;
+use codex_core::sandboxing::SandboxPermissions;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
