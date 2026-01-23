@@ -20,7 +20,6 @@ use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::connectors::ConnectorInfo;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::JsonObject;
@@ -71,18 +70,18 @@ async fn list_apps_returns_empty_when_connectors_disabled() -> Result<()> {
 #[tokio::test]
 async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
     let connectors = vec![
-        ConnectorInfo {
-            connector_id: "alpha".to_string(),
-            connector_name: "Alpha".to_string(),
-            connector_description: Some("Alpha connector".to_string()),
+        AppInfo {
+            id: "alpha".to_string(),
+            name: "Alpha".to_string(),
+            description: Some("Alpha connector".to_string()),
             logo_url: Some("https://example.com/alpha.png".to_string()),
             install_url: None,
             is_accessible: false,
         },
-        ConnectorInfo {
-            connector_id: "beta".to_string(),
-            connector_name: "beta".to_string(),
-            connector_description: None,
+        AppInfo {
+            id: "beta".to_string(),
+            name: "beta".to_string(),
+            description: None,
             logo_url: None,
             install_url: None,
             is_accessible: false,
@@ -150,18 +149,18 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
 #[tokio::test]
 async fn list_apps_paginates_results() -> Result<()> {
     let connectors = vec![
-        ConnectorInfo {
-            connector_id: "alpha".to_string(),
-            connector_name: "Alpha".to_string(),
-            connector_description: Some("Alpha connector".to_string()),
+        AppInfo {
+            id: "alpha".to_string(),
+            name: "Alpha".to_string(),
+            description: Some("Alpha connector".to_string()),
             logo_url: None,
             install_url: None,
             is_accessible: false,
         },
-        ConnectorInfo {
-            connector_id: "beta".to_string(),
-            connector_name: "beta".to_string(),
-            connector_description: None,
+        AppInfo {
+            id: "beta".to_string(),
+            name: "beta".to_string(),
+            description: None,
             logo_url: None,
             install_url: None,
             is_accessible: false,
@@ -289,7 +288,7 @@ impl ServerHandler for AppListMcpServer {
 }
 
 async fn start_apps_server(
-    connectors: Vec<ConnectorInfo>,
+    connectors: Vec<AppInfo>,
     tools: Vec<Tool>,
 ) -> Result<(String, JoinHandle<()>)> {
     let state = AppsServerState {

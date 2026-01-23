@@ -4721,13 +4721,13 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn open_connectors_popup(&mut self, connectors: &[connectors::ConnectorInfo]) {
+    fn open_connectors_popup(&mut self, connectors: &[connectors::AppInfo]) {
         let mut items: Vec<SelectionItem> = Vec::with_capacity(connectors.len());
         for connector in connectors {
             let connector_label = connectors::connector_display_label(connector);
             let connector_title = connector_label.clone();
             let description = Self::connector_brief_description(connector);
-            let search_value = format!("{connector_label} {}", connector.connector_id);
+            let search_value = format!("{connector_label} {}", connector.id);
             let mut item = SelectionItem {
                 name: connector_label,
                 description: Some(description),
@@ -4793,7 +4793,7 @@ impl ChatWidget {
         ])
     }
 
-    fn connector_brief_description(connector: &connectors::ConnectorInfo) -> String {
+    fn connector_brief_description(connector: &connectors::AppInfo) -> String {
         let status_label = if connector.is_accessible {
             "Connected"
         } else {
@@ -4805,9 +4805,9 @@ impl ChatWidget {
         }
     }
 
-    fn connector_description(connector: &connectors::ConnectorInfo) -> Option<String> {
+    fn connector_description(connector: &connectors::AppInfo) -> Option<String> {
         connector
-            .connector_description
+            .description
             .as_deref()
             .map(str::trim)
             .filter(|description| !description.is_empty())

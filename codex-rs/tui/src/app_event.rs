@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use codex_chatgpt::connectors::ConnectorInfo;
+use codex_chatgpt::connectors::AppInfo;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
@@ -42,7 +42,7 @@ pub(crate) enum WindowsSandboxFallbackReason {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectorsSnapshot {
-    pub(crate) connectors: Vec<ConnectorInfo>,
+    pub(crate) connectors: Vec<AppInfo>,
 }
 
 #[allow(clippy::large_enum_variant)]

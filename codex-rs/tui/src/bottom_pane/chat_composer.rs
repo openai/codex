@@ -141,7 +141,7 @@ use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_chatgpt::connectors;
-use codex_chatgpt::connectors::ConnectorInfo;
+use codex_chatgpt::connectors::AppInfo;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
@@ -2496,7 +2496,7 @@ impl ChatComposer {
                 }
                 let display_name = connectors::connector_display_label(connector);
                 let description = Some(Self::connector_brief_description(connector));
-                let search_terms = vec![display_name.clone(), connector.connector_id.clone()];
+                let search_terms = vec![display_name.clone(), connector.id.clone()];
                 mentions.push(MentionItem {
                     display_name: display_name.clone(),
                     description,
@@ -2509,7 +2509,7 @@ impl ChatComposer {
         mentions
     }
 
-    fn connector_brief_description(connector: &ConnectorInfo) -> String {
+    fn connector_brief_description(connector: &AppInfo) -> String {
         let status_label = if connector.is_accessible {
             "Connected"
         } else {
@@ -2521,9 +2521,9 @@ impl ChatComposer {
         }
     }
 
-    fn connector_description(connector: &ConnectorInfo) -> Option<String> {
+    fn connector_description(connector: &AppInfo) -> Option<String> {
         connector
-            .connector_description
+            .description
             .as_deref()
             .map(str::trim)
             .filter(|description| !description.is_empty())

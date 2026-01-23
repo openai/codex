@@ -3024,9 +3024,9 @@ async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) 
 }
 
 fn filter_connectors_for_input(
-    connectors: Vec<connectors::ConnectorInfo>,
+    connectors: Vec<connectors::AppInfo>,
     input: &[ResponseItem],
-) -> Vec<connectors::ConnectorInfo> {
+) -> Vec<connectors::AppInfo> {
     let user_messages = collect_user_messages(input);
     if user_messages.is_empty() {
         return Vec::new();
@@ -3039,7 +3039,7 @@ fn filter_connectors_for_input(
 }
 
 fn connector_inserted_in_messages(
-    connector: &connectors::ConnectorInfo,
+    connector: &connectors::AppInfo,
     user_messages: &[String],
 ) -> bool {
     let label = connectors::connector_display_label(connector);
@@ -3053,11 +3053,11 @@ fn connector_inserted_in_messages(
 
 fn filter_codex_apps_mcp_tools(
     mut mcp_tools: HashMap<String, crate::mcp_connection_manager::ToolInfo>,
-    connectors: &[connectors::ConnectorInfo],
+    connectors: &[connectors::AppInfo],
 ) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
     let allowed: HashSet<&str> = connectors
         .iter()
-        .map(|connector| connector.connector_id.as_str())
+        .map(|connector| connector.id.as_str())
         .collect();
 
     mcp_tools.retain(|_, tool| {

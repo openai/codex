@@ -7,7 +7,7 @@ use crate::chatgpt_client::chatgpt_post_request;
 use crate::chatgpt_token::get_chatgpt_token_data;
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
 
-pub use codex_core::connectors::ConnectorInfo;
+pub use codex_core::connectors::AppInfo;
 pub use codex_core::connectors::connector_display_label;
 use codex_core::connectors::connector_install_url;
 pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools;
@@ -33,10 +33,10 @@ enum PrincipalType {
 
 #[derive(Debug, Deserialize)]
 struct ListConnectorsResponse {
-    connectors: Vec<ConnectorInfo>,
+    connectors: Vec<AppInfo>,
 }
 
-pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<ConnectorInfo>> {
+pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     if !config.features.enabled(Feature::Connectors) {
         return Ok(Vec::new());
     }
@@ -49,7 +49,7 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<ConnectorInf
     Ok(merge_connectors(connectors, accessible))
 }
 
-pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<ConnectorInfo>> {
+pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     if !config.features.enabled(Feature::Connectors) {
         return Ok(Vec::new());
     }
@@ -91,19 +91,17 @@ pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<Connecto
     for connector in &mut connectors {
         let install_url = match connector.install_url.take() {
             Some(install_url) => install_url,
-            None => connector_install_url(&connector.connector_name, &connector.connector_id),
+            None => connector_install_url(&connector.name, &connector.id),
         };
-        connector.connector_name =
-            normalize_connector_name(&connector.connector_name, &connector.connector_id);
-        connector.connector_description =
-            normalize_connector_value(connector.connector_description.as_deref());
+        connector.name = normalize_connector_name(&connector.name, &connector.id);
+        connector.description = normalize_connector_value(connector.description.as_deref());
         connector.install_url = Some(install_url);
         connector.is_accessible = false;
     }
     connectors.sort_by(|left, right| {
-        left.connector_name
-            .cmp(&right.connector_name)
-            .then_with(|| left.connector_id.cmp(&right.connector_id))
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.id.cmp(&right.id))
     });
     Ok(connectors)
 }
