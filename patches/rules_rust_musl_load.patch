@@ -1,0 +1,11 @@
+diff -uNr rust/platform/triple_mappings.bzl rust/platform/triple_mappings.bzl
+--- a/rust/platform/triple_mappings.bzl
++++ b/rust/platform/triple_mappings.bzl
+@@ -1,6 +1,7 @@
+ """Helpers for constructing supported Rust platform triples"""
+ 
+ load("//rust/platform:triple.bzl", "triple")
++load("@@toolchains_llvm_bootstrapped+//constraints/libc:libc_versions.bzl", "DEFAULT_LIBC")
+ 
+ def _support(*, std = False, host_tools = False):
+     """Identify the type of support an associated platform triple has.

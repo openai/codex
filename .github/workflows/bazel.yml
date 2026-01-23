@@ -56,6 +56,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
           sudo rm -rf /var/lib/apt/lists/*
 
+      - name: Set LIBCLANG_PATH (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          echo "LIBCLANG_PATH=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
+
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
       - name: Install DotSlash

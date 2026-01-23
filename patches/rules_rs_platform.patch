@@ -1,0 +1,7 @@
+diff -uNr rs/extensions.bzl rs/extensions.bzl
+--- a/rs/extensions.bzl
++++ b/rs/extensions.bzl
+@@ -25,2 +25,2 @@
+ def _platform(triple):
+-    return "@rules_rust//rust/platform:" + triple.replace("-musl", "-gnu").replace("-gnullvm", "-msvc")
++    return "@rules_rust//rust/platform:" + triple.replace("-gnullvm", "-msvc")
