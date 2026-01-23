@@ -142,6 +142,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -178,6 +179,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -369,6 +371,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -386,6 +389,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 

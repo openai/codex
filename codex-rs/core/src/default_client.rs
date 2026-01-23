@@ -169,8 +169,7 @@ pub fn build_reqwest_client() -> reqwest::Client {
     let mut builder = reqwest::Client::builder()
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
-        .default_headers(headers)
-        .use_rustls_tls();
+        .default_headers(headers);
     if is_sandboxed() {
         builder = builder.no_proxy();
     }

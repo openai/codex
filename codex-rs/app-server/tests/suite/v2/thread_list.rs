@@ -12,9 +12,11 @@ use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadSortKey;
+use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use pretty_assertions::assert_eq;
 use std::cmp::Reverse;
+use std::fs;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
 use std::path::Path;
@@ -36,8 +38,9 @@ async fn list_threads(
     cursor: Option<String>,
     limit: Option<u32>,
     providers: Option<Vec<String>>,
+    archived: Option<bool>,
 ) -> Result<ThreadListResponse> {
-    list_threads_with_sort(mcp, cursor, limit, providers, None).await
+    list_threads_with_sort(mcp, cursor, limit, providers, None, archived).await
 }
 
 async fn list_threads_with_sort(
@@ -46,6 +49,7 @@ async fn list_threads_with_sort(
     limit: Option<u32>,
     providers: Option<Vec<String>>,
     sort_key: Option<ThreadSortKey>,
+    archived: Option<bool>,
 ) -> Result<ThreadListResponse> {
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
@@ -53,6 +57,7 @@ async fn list_threads_with_sort(
             limit,
             sort_key,
             model_providers: providers,
+            archived,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -125,6 +130,7 @@ async fn thread_list_basic_empty() -> Result<()> {
         None,
         Some(10),
         Some(vec!["mock_provider".to_string()]),
+        None,
     )
     .await?;
     assert!(data.is_empty());
@@ -187,6 +193,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         None,
         Some(2),
         Some(vec!["mock_provider".to_string()]),
+        None,
     )
     .await?;
     assert_eq!(data1.len(), 2);
@@ -211,6 +218,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         Some(cursor1),
         Some(2),
         Some(vec!["mock_provider".to_string()]),
+        None,
     )
     .await?;
     assert!(data2.len() <= 2);
@@ -260,6 +268,7 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
         None,
         Some(10),
         Some(vec!["other_provider".to_string()]),
+        None,
     )
     .await?;
     assert_eq!(data.len(), 1);
@@ -309,6 +318,7 @@ async fn thread_list_fetches_until_limit_or_exhausted() -> Result<()> {
         None,
         Some(8),
         Some(vec!["target_provider".to_string()]),
+        None,
     )
     .await?;
     assert_eq!(
@@ -353,6 +363,7 @@ async fn thread_list_enforces_max_limit() -> Result<()> {
         None,
         Some(200),
         Some(vec!["mock_provider".to_string()]),
+        None,
     )
     .await?;
     assert_eq!(
@@ -398,6 +409,7 @@ async fn thread_list_stops_when_not_enough_filtered_results_exist() -> Result<()
         None,
         Some(10),
         Some(vec!["target_provider".to_string()]),
+        None,
     )
     .await?;
     assert_eq!(
@@ -444,6 +456,7 @@ async fn thread_list_includes_git_info() -> Result<()> {
         None,
         Some(10),
         Some(vec!["mock_provider".to_string()]),
+        None,
     )
     .await?;
     let thread = data
@@ -501,6 +514,7 @@ async fn thread_list_default_sorts_by_created_at() -> Result<()> {
         None,
         Some(10),
         Some(vec!["mock_provider".to_string()]),
+        None,
         None,
     )
     .await?;
@@ -562,6 +576,7 @@ async fn thread_list_sort_updated_at_orders_by_mtime() -> Result<()> {
         Some(10),
         Some(vec!["mock_provider".to_string()]),
         Some(ThreadSortKey::UpdatedAt),
+        None,
     )
     .await?;
 
@@ -625,6 +640,7 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
         Some(2),
         Some(vec!["mock_provider".to_string()]),
         Some(ThreadSortKey::UpdatedAt),
+        None,
     )
     .await?;
     let ids_page1: Vec<_> = page1.iter().map(|thread| thread.id.as_str()).collect();
@@ -640,6 +656,7 @@ async fn thread_list_updated_at_paginates_with_cursor() -> Result<()> {
         Some(2),
         Some(vec!["mock_provider".to_string()]),
         Some(ThreadSortKey::UpdatedAt),
+        None,
     )
     .await?;
     let ids_page2: Vec<_> = page2.iter().map(|thread| thread.id.as_str()).collect();
@@ -678,6 +695,7 @@ async fn thread_list_created_at_tie_breaks_by_uuid() -> Result<()> {
         None,
         Some(10),
         Some(vec!["mock_provider".to_string()]),
+        None,
     )
     .await?;
 
@@ -730,6 +748,7 @@ async fn thread_list_updated_at_tie_breaks_by_uuid() -> Result<()> {
         Some(10),
         Some(vec!["mock_provider".to_string()]),
         Some(ThreadSortKey::UpdatedAt),
+        None,
     )
     .await?;
 
@@ -769,6 +788,7 @@ async fn thread_list_updated_at_uses_mtime() -> Result<()> {
         Some(10),
         Some(vec!["mock_provider".to_string()]),
         Some(ThreadSortKey::UpdatedAt),
+        None,
     )
     .await?;
 
@@ -787,6 +807,65 @@ async fn thread_list_updated_at_uses_mtime() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_list_archived_filter() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+
+    let active_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-03-01T10-00-00",
+        "2025-03-01T10:00:00Z",
+        "Active",
+        Some("mock_provider"),
+        None,
+    )?;
+    let archived_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-03-01T09-00-00",
+        "2025-03-01T09:00:00Z",
+        "Archived",
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let archived_dir = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
+    fs::create_dir_all(&archived_dir)?;
+    let archived_source = rollout_path(codex_home.path(), "2025-03-01T09-00-00", &archived_id);
+    let archived_dest = archived_dir.join(
+        archived_source
+            .file_name()
+            .expect("archived rollout should have a file name"),
+    );
+    fs::rename(&archived_source, &archived_dest)?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+
+    let ThreadListResponse { data, .. } = list_threads(
+        &mut mcp,
+        None,
+        Some(10),
+        Some(vec!["mock_provider".to_string()]),
+        None,
+    )
+    .await?;
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].id, active_id);
+
+    let ThreadListResponse { data, .. } = list_threads(
+        &mut mcp,
+        None,
+        Some(10),
+        Some(vec!["mock_provider".to_string()]),
+        Some(true),
+    )
+    .await?;
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0].id, archived_id);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;
@@ -799,6 +878,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
             limit: Some(2),
             sort_key: None,
             model_providers: Some(vec!["mock_provider".to_string()]),
+            archived: None,
         })
         .await?;
     let error: JSONRPCError = timeout(

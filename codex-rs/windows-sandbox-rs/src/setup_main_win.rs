@@ -14,6 +14,7 @@ use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
 use codex_windows_sandbox::sandbox_dir;
+use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::LOG_FILE_NAME;
@@ -51,6 +52,8 @@ use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+
+const DENY_ACCESS: i32 = 3;
 
 mod read_acl_mutex;
 mod sandbox_users;
@@ -225,6 +228,7 @@ fn lock_sandbox_dir(
     dir: &Path,
     real_user: &str,
     sandbox_group_sid: &[u8],
+    sandbox_group_access_mode: i32,
     _log: &mut File,
 ) -> Result<()> {
     std::fs::create_dir_all(dir)?;
@@ -233,26 +237,30 @@ fn lock_sandbox_dir(
     let real_sid = resolve_sid(real_user)?;
     let entries = [
         (
+            sandbox_group_sid.to_vec(),
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+            sandbox_group_access_mode,
+        ),
+        (
             system_sid,
             FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+            GRANT_ACCESS,
         ),
         (
             admins_sid,
             FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+            GRANT_ACCESS,
         ),
         (
             real_sid,
             FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
-        ),
-        (
-            sandbox_group_sid.to_vec(),
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+            GRANT_ACCESS,
         ),
     ];
     unsafe {
         let mut eas: Vec<EXPLICIT_ACCESS_W> = Vec::new();
         let mut sids: Vec<*mut c_void> = Vec::new();
-        for (sid_bytes, mask) in entries.iter().map(|(s, m)| (s, *m)) {
+        for (sid_bytes, mask, access_mode) in entries.iter().map(|(s, m, a)| (s, *m, *a)) {
             let sid_str = string_from_sid_bytes(sid_bytes).map_err(anyhow::Error::msg)?;
             let sid_w = to_wide(OsStr::new(&sid_str));
             let mut psid: *mut c_void = std::ptr::null_mut();
@@ -265,7 +273,7 @@ fn lock_sandbox_dir(
             sids.push(psid);
             eas.push(EXPLICIT_ACCESS_W {
                 grfAccessPermissions: mask,
-                grfAccessMode: GRANT_ACCESS,
+                grfAccessMode: access_mode,
                 grfInheritance: OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
                 Trustee: TRUSTEE_W {
                     pMultipleTrustee: std::ptr::null_mut(),
@@ -605,8 +613,20 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             &sandbox_dir(&payload.codex_home),
             &payload.real_user,
             &sandbox_group_sid,
+            GRANT_ACCESS,
             log,
         )?;
+        lock_sandbox_dir(
+            &sandbox_secrets_dir(&payload.codex_home),
+            &payload.real_user,
+            &sandbox_group_sid,
+            DENY_ACCESS,
+            log,
+        )?;
+        let legacy_users = sandbox_dir(&payload.codex_home).join("sandbox_users.json");
+        if legacy_users.exists() {
+            let _ = std::fs::remove_file(&legacy_users);
+        }
     }
     unsafe {
         if !sandbox_group_psid.is_null() {

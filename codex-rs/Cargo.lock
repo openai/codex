@@ -625,6 +625,8 @@ dependencies = [
  "pin-project-lite",
  "rustversion",
  "serde",
+ "serde_json",
+ "serde_path_to_error",
  "sync_wrapper",
  "tokio",
  "tower",
@@ -1000,11 +1002,13 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "app_test_support",
+ "axum",
  "base64",
  "chrono",
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-backend-client",
+ "codex-chatgpt",
  "codex-common",
  "codex-core",
  "codex-feedback",
@@ -1018,6 +1022,7 @@ dependencies = [
  "mcp-types",
  "os_info",
  "pretty_assertions",
+ "rmcp",
  "serde",
  "serde_json",
  "serial_test",
@@ -3359,7 +3364,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.2",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -5532,7 +5537,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
- "webpki-roots 1.0.2",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -7023,7 +7028,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tungstenite",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -7882,15 +7886,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee3e3b5f5e80bc89f30ce8d0343bf4e5f12341c51f3e26cbeecbc7c85443e85b"
 dependencies = [
  "rustls-pki-types",
-]
-
-[[package]]
-name = "webpki-roots"
-version = "0.26.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
-dependencies = [
- "webpki-roots 1.0.2",
 ]
 
 [[package]]

@@ -240,6 +240,12 @@ pub(crate) enum AppEvent {
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
 
+    /// Submit a user message with an explicit collaboration mode.
+    SubmitUserMessageWithMode {
+        text: String,
+        collaboration_mode: CollaborationMode,
+    },
+
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
 
