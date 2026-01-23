@@ -32,6 +32,7 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Suggestions,
     Mcp,
     Logout,
     Quit,
@@ -59,7 +60,8 @@ impl SlashCommand {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
-            SlashCommand::Ps => "list background terminals",
+            SlashCommand::Suggestions => "open prompt suggestions",
+            SlashCommand::Ps => "view background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Personality => "choose a communication style for responses",
             SlashCommand::Collab => "change collaboration mode (experimental)",
@@ -102,6 +104,7 @@ impl SlashCommand {
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status
+            | SlashCommand::Suggestions
             | SlashCommand::Ps
             | SlashCommand::Mcp
             | SlashCommand::Feedback

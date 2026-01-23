@@ -198,9 +198,13 @@ impl CommandPopup {
         matches
             .into_iter()
             .map(|(item, indices)| {
-                let (name, description) = match item {
+                let (name, description, selected_description) = match item {
                     CommandItem::Builtin(cmd) => {
-                        (format!("/{}", cmd.command()), cmd.description().to_string())
+                        let name = format!("/{}", cmd.command());
+                        let description = cmd.description().to_string();
+                        let selected_description =
+                            Some(format!("{description} · enter inserts {name}"));
+                        (name, description, selected_description)
                     }
                     CommandItem::UserPrompt(i) => {
                         let prompt = &self.prompts[i];
@@ -208,10 +212,10 @@ impl CommandPopup {
                             .description
                             .clone()
                             .unwrap_or_else(|| "send saved prompt".to_string());
-                        (
-                            format!("/{PROMPTS_CMD_PREFIX}:{}", prompt.name),
-                            description,
-                        )
+                        let name = format!("/{PROMPTS_CMD_PREFIX}:{}", prompt.name);
+                        let selected_description =
+                            Some(format!("{description} · enter inserts {name}"));
+                        (name, description, selected_description)
                     }
                 };
                 GenericDisplayRow {
@@ -219,6 +223,7 @@ impl CommandPopup {
                     match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                     display_shortcut: None,
                     description: Some(description),
+                    selected_description,
                     wrap_indent: None,
                     is_disabled: false,
                     disabled_reason: None,

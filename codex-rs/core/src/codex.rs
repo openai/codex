@@ -72,6 +72,7 @@ use mcp_types::ListResourcesResult;
 use mcp_types::ReadResourceRequestParams;
 use mcp_types::ReadResourceResult;
 use mcp_types::RequestId;
+use mcp_types::Tool as McpTool;
 use serde_json;
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -86,6 +87,7 @@ use tracing::info;
 use tracing::instrument;
 use tracing::trace_span;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::ModelProviderInfo;
 use crate::WireApi;
@@ -111,8 +113,10 @@ use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp::ExplicitMcpToolCall;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::effective_mcp_servers;
+use crate::mcp::extract_explicit_mcp_tool_calls;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
@@ -2228,6 +2232,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 )
                 .await;
             }
+            Op::TerminateUnifiedExec { process_id } => {
+                handlers::terminate_unified_exec(&sess, sub.id.clone(), process_id).await;
+            }
             Op::ResolveElicitation {
                 server_name,
                 request_id,
@@ -2450,6 +2457,23 @@ mod handlers {
         )
         .await;
         *previous_context = Some(turn_context);
+    }
+
+    pub async fn terminate_unified_exec(sess: &Arc<Session>, sub_id: String, process_id: String) {
+        if let Err(err) = sess
+            .services
+            .unified_exec_manager
+            .terminate_process(&process_id)
+            .await
+        {
+            let message = format!("Failed to terminate background terminal {process_id}: {err}");
+            warn!("{message}");
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Warning(WarningEvent { message }),
+            })
+            .await;
+        }
     }
 
     pub async fn resolve_elicitation(
@@ -2950,6 +2974,8 @@ pub(crate) async fn run_turn(
     input: Vec<UserInput>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
+    let (input, explicit_mcp_calls, explicit_mcp_warnings) =
+        extract_explicit_mcp_calls_from_input(input);
     if input.is_empty() {
         return None;
     }
@@ -2982,6 +3008,10 @@ pub(crate) async fn run_turn(
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
             .await;
     }
+    for message in explicit_mcp_warnings {
+        sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
+            .await;
+    }
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
@@ -2995,10 +3025,23 @@ pub(crate) async fn run_turn(
 
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
         .await;
-    let mut last_agent_message: Option<String> = None;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+    if !explicit_mcp_calls.is_empty() {
+        let explicit_items = run_explicit_mcp_tool_calls(
+            &sess,
+            &turn_context,
+            &turn_diff_tracker,
+            explicit_mcp_calls,
+        )
+        .await;
+        if !explicit_items.is_empty() {
+            sess.record_conversation_items(&turn_context, &explicit_items)
+                .await;
+        }
+    }
+    let mut last_agent_message: Option<String> = None;
 
     let mut client_session = turn_context.client.new_session();
 
@@ -3097,6 +3140,329 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+fn extract_explicit_mcp_calls_from_input(
+    input: Vec<UserInput>,
+) -> (Vec<UserInput>, Vec<ExplicitMcpToolCall>, Vec<String>) {
+    let mut cleaned_items = Vec::with_capacity(input.len());
+    let mut explicit_calls = Vec::new();
+    let mut warnings = Vec::new();
+
+    for item in input {
+        match item {
+            UserInput::Text {
+                text,
+                text_elements,
+            } => {
+                let parsed = extract_explicit_mcp_tool_calls(&text);
+                explicit_calls.extend(parsed.calls);
+                warnings.extend(parsed.warnings);
+
+                let cleaned_text = parsed.cleaned_text;
+                if cleaned_text.trim().is_empty() {
+                    continue;
+                }
+
+                if cleaned_text == text {
+                    cleaned_items.push(UserInput::Text {
+                        text,
+                        text_elements,
+                    });
+                } else {
+                    cleaned_items.push(UserInput::Text {
+                        text: cleaned_text,
+                        text_elements: Vec::new(),
+                    });
+                }
+            }
+            other => cleaned_items.push(other),
+        }
+    }
+
+    let has_non_text = cleaned_items
+        .iter()
+        .any(|item| !matches!(item, UserInput::Text { .. }));
+    let has_non_empty_text = cleaned_items
+        .iter()
+        .any(|item| matches!(item, UserInput::Text { text, .. } if !text.trim().is_empty()));
+    if !has_non_text && !has_non_empty_text && !explicit_calls.is_empty() {
+        cleaned_items.push(UserInput::Text {
+            text: "Please use the MCP tool outputs above.".to_string(),
+            text_elements: Vec::new(),
+        });
+    }
+
+    (cleaned_items, explicit_calls, warnings)
+}
+
+async fn run_explicit_mcp_tool_calls(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    turn_diff_tracker: &SharedTurnDiffTracker,
+    calls: Vec<ExplicitMcpToolCall>,
+) -> Vec<ResponseItem> {
+    let mcp_tools = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .await
+        .into_iter()
+        .map(|(name, tool)| (name, tool.tool))
+        .collect::<HashMap<_, _>>();
+
+    let router = ToolRouter::from_config(&turn_context.tools_config, Some(mcp_tools.clone()));
+    let mut items = Vec::new();
+
+    for call in calls {
+        let tool = mcp_tools.get(&call.qualified_name);
+        let arguments = match coerce_explicit_mcp_arguments(&call, tool) {
+            ExplicitMcpArgsOutcome::Ready(arguments) => arguments,
+            ExplicitMcpArgsOutcome::NeedsInput(message) => {
+                sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                    .await;
+                continue;
+            }
+        };
+        let call_id = Uuid::new_v4().to_string();
+        items.push(ResponseItem::FunctionCall {
+            id: None,
+            name: call.qualified_name.clone(),
+            arguments: arguments.clone(),
+            call_id: call_id.clone(),
+        });
+
+        let tool_call = crate::tools::router::ToolCall {
+            tool_name: call.qualified_name,
+            call_id: call_id.clone(),
+            payload: crate::tools::context::ToolPayload::Mcp {
+                server: call.server,
+                tool: call.tool,
+                raw_arguments: arguments,
+            },
+        };
+
+        match router
+            .dispatch_tool_call(
+                Arc::clone(sess),
+                Arc::clone(turn_context),
+                Arc::clone(turn_diff_tracker),
+                tool_call,
+            )
+            .await
+        {
+            Ok(output) => items.push(ResponseItem::from(output)),
+            Err(err) => items.push(ResponseItem::FunctionCallOutput {
+                call_id,
+                output: codex_protocol::models::FunctionCallOutputPayload {
+                    content: err.to_string(),
+                    success: Some(false),
+                    ..Default::default()
+                },
+            }),
+        }
+    }
+
+    items
+}
+
+enum ExplicitMcpArgsOutcome {
+    Ready(String),
+    NeedsInput(String),
+}
+
+fn coerce_explicit_mcp_arguments(
+    call: &ExplicitMcpToolCall,
+    tool: Option<&McpTool>,
+) -> ExplicitMcpArgsOutcome {
+    let raw = call.raw_arguments.trim();
+    if raw.is_empty() {
+        return ExplicitMcpArgsOutcome::Ready("{}".to_string());
+    }
+    if serde_json::from_str::<Value>(raw).is_ok() {
+        return ExplicitMcpArgsOutcome::Ready(raw.to_string());
+    }
+    let Some(tool) = tool else {
+        return ExplicitMcpArgsOutcome::NeedsInput(format!(
+            "Unknown MCP tool {name}. Type @mcp to browse available tools.",
+            name = call.qualified_name
+        ));
+    };
+
+    match coerce_mcp_shorthand_arguments(raw, tool) {
+        ShorthandCoercion::Ready(arguments) => ExplicitMcpArgsOutcome::Ready(arguments),
+        ShorthandCoercion::NeedsFields { key, missing } => {
+            ExplicitMcpArgsOutcome::NeedsInput(build_missing_fields_error(call, &key, raw, missing))
+        }
+        ShorthandCoercion::Unsupported => {
+            ExplicitMcpArgsOutcome::NeedsInput(build_mcp_args_error(call, tool, None, None))
+        }
+    }
+}
+
+enum ShorthandCoercion {
+    Ready(String),
+    NeedsFields { key: String, missing: Vec<String> },
+    Unsupported,
+}
+
+fn coerce_mcp_shorthand_arguments(raw: &str, tool: &McpTool) -> ShorthandCoercion {
+    let required = tool_required_fields(tool);
+    let properties = tool_property_keys(tool);
+    let candidate = pick_shorthand_key(&required, &properties);
+    let Some(key) = candidate else {
+        return ShorthandCoercion::Unsupported;
+    };
+
+    if required.is_empty() || required == vec![key.clone()] {
+        let arguments = serde_json::to_string(&serde_json::json!({ key: raw }))
+            .unwrap_or_else(|_| "{}".to_string());
+        return ShorthandCoercion::Ready(arguments);
+    }
+
+    let missing = required
+        .into_iter()
+        .filter(|field| field != &key)
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        let arguments = serde_json::to_string(&serde_json::json!({ key: raw }))
+            .unwrap_or_else(|_| "{}".to_string());
+        ShorthandCoercion::Ready(arguments)
+    } else {
+        ShorthandCoercion::NeedsFields { key, missing }
+    }
+}
+
+fn tool_required_fields(tool: &McpTool) -> Vec<String> {
+    tool.input_schema
+        .required
+        .as_ref()
+        .map(|fields| {
+            let mut fields = fields.clone();
+            fields.sort();
+            fields
+        })
+        .unwrap_or_default()
+}
+
+fn tool_property_keys(tool: &McpTool) -> Vec<String> {
+    tool.input_schema
+        .properties
+        .as_ref()
+        .and_then(|value| value.as_object())
+        .map(|map| {
+            let mut keys: Vec<String> = map.keys().cloned().collect();
+            keys.sort();
+            keys
+        })
+        .unwrap_or_default()
+}
+
+fn pick_shorthand_key(required: &[String], properties: &[String]) -> Option<String> {
+    if required.len() == 1 {
+        return required.first().cloned();
+    }
+    let preferred = [
+        "question", "query", "prompt", "input", "text", "url", "path",
+    ];
+    for key in preferred {
+        if required.contains(&key.to_string()) {
+            return Some(key.to_string());
+        }
+    }
+    if properties.len() == 1 {
+        return properties.first().cloned();
+    }
+    for key in preferred {
+        if properties.contains(&key.to_string()) {
+            return Some(key.to_string());
+        }
+    }
+    None
+}
+
+fn build_mcp_args_error(
+    call: &ExplicitMcpToolCall,
+    tool: &McpTool,
+    known_key: Option<&str>,
+    shorthand: Option<&str>,
+) -> String {
+    let required = tool_required_fields(tool);
+    let properties = tool_property_keys(tool);
+
+    let (field_label, example_fields) = if !required.is_empty() {
+        (
+            format!("Required fields: {}.", required.join(", ")),
+            required,
+        )
+    } else if !properties.is_empty() {
+        (
+            format!(
+                "Expected JSON object with keys like: {}.",
+                properties.join(", ")
+            ),
+            properties,
+        )
+    } else {
+        ("Expected JSON object arguments.".to_string(), Vec::new())
+    };
+
+    let mut example_map = serde_json::Map::new();
+    let example_fields: Vec<String> = example_fields.into_iter().take(4).collect();
+    if example_fields.is_empty() {
+        example_map.insert("input".to_string(), Value::String("value".to_string()));
+    } else {
+        for field in example_fields {
+            let value = if known_key.is_some_and(|key| key == field)
+                && let Some(shorthand) = shorthand
+            {
+                Value::String(shorthand.to_string())
+            } else {
+                example_value_for_key(&field)
+            };
+            example_map.insert(field, value);
+        }
+    }
+    let example_json = serde_json::to_string(&Value::Object(example_map))
+        .unwrap_or_else(|_| "{\"input\":\"value\"}".to_string());
+
+    format!(
+        "Invalid MCP tool arguments for {name}. {field_label} Example: @{name} {example_json}. Plain-text shorthand only works for tools that accept a single string field.",
+        name = call.qualified_name
+    )
+}
+
+fn build_missing_fields_error(
+    call: &ExplicitMcpToolCall,
+    key: &str,
+    shorthand: &str,
+    missing: Vec<String>,
+) -> String {
+    let mut example_map = serde_json::Map::new();
+    example_map.insert(key.to_string(), Value::String(shorthand.to_string()));
+    for field in &missing {
+        example_map.insert(field.clone(), example_value_for_key(field));
+    }
+    let example_json = serde_json::to_string(&Value::Object(example_map))
+        .unwrap_or_else(|_| "{\"input\":\"value\"}".to_string());
+    let missing_label = missing.join(", ");
+    format!(
+        "Missing required fields for {name}: {missing_label}. I used your text as `{key}`. Example: @{name} {example_json}.",
+        name = call.qualified_name
+    )
+}
+
+fn example_value_for_key(key: &str) -> Value {
+    let value = match key {
+        "repo" | "repoName" | "repository" => "owner/repo",
+        "url" | "uri" => "https://example.com",
+        "path" | "file" | "filename" => "path/to/file",
+        "query" | "question" | "prompt" | "input" | "text" => "value",
+        _ => "value",
+    };
+    Value::String(value.to_string())
 }
 
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {

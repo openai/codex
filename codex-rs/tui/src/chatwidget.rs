@@ -25,6 +25,7 @@ use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -69,6 +70,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::PromptSuggestionEvent;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
@@ -133,6 +135,9 @@ use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::BackgroundTerminalsState;
+use crate::bottom_pane::BackgroundTerminalsView;
+use crate::bottom_pane::BetaFeatureItem;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
@@ -142,6 +147,7 @@ use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
+use crate::bottom_pane::PromptSuggestionsView;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
@@ -155,7 +161,6 @@ use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
-use crate::exec_command::strip_bash_lc_and_escape;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::AgentMessageCell;
@@ -210,11 +215,6 @@ struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
     source: ExecCommandSource,
-}
-
-struct UnifiedExecProcessSummary {
-    key: String,
-    command_display: String,
 }
 
 struct UnifiedExecWaitState {
@@ -443,7 +443,9 @@ pub(crate) struct ChatWidget {
     last_unified_wait: Option<UnifiedExecWaitState>,
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     task_complete_pending: bool,
-    unified_exec_processes: Vec<UnifiedExecProcessSummary>,
+    last_completed_turn_id: Option<String>,
+    latest_prompt_suggestion: Option<String>,
+    background_terminals_state: Arc<Mutex<BackgroundTerminalsState>>,
     /// Tracks whether codex-core currently considers an agent turn to be in progress.
     ///
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
@@ -455,6 +457,8 @@ pub(crate) struct ChatWidget {
     /// bottom pane is treated as "running" while this is populated, even if no agent turn is
     /// currently executing.
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
+    /// Whether the next MCP tool list response should be rendered in history.
+    pending_mcp_list_output: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -886,7 +890,6 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
-        self.clear_unified_exec_processes();
         self.request_redraw();
 
         if !from_replay && self.queued_user_messages.is_empty() {
@@ -975,6 +978,36 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+    }
+
+    fn on_prompt_suggestion(
+        &mut self,
+        event_turn_id: Option<String>,
+        event: PromptSuggestionEvent,
+    ) {
+        if !self.config.features.enabled(Feature::PromptSuggestions) {
+            return;
+        }
+        let Some(event_turn_id) = event_turn_id else {
+            return;
+        };
+        if self
+            .last_completed_turn_id
+            .as_ref()
+            .is_some_and(|turn_id| turn_id != &event_turn_id)
+        {
+            return;
+        }
+        let suggestion = event.suggestion;
+        self.latest_prompt_suggestion = Some(suggestion.clone());
+        if self.is_review_mode
+            || self.bottom_pane.is_task_running()
+            || !self.bottom_pane.composer_is_empty()
+            || !self.bottom_pane.no_modal_or_popup_active()
+        {
+            return;
+        }
+        self.open_prompt_suggestions_view(Some(suggestion));
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -1102,7 +1135,6 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
-        self.clear_unified_exec_processes();
         self.stream_controller = None;
         self.maybe_show_pending_rate_limit_prompt();
     }
@@ -1324,16 +1356,25 @@ impl ChatWidget {
     }
 
     fn on_exec_command_output_delta(&mut self, ev: ExecCommandOutputDeltaEvent) {
+        let mut background_changed = false;
+        if let Ok(mut state) = self.background_terminals_state.lock() {
+            background_changed = state.on_exec_output_delta(&ev);
+        }
         let Some(cell) = self
             .active_cell
             .as_mut()
             .and_then(|c| c.as_any_mut().downcast_mut::<ExecCell>())
         else {
+            if background_changed {
+                self.request_redraw();
+            }
             return;
         };
 
         if cell.append_output(&ev.call_id, std::str::from_utf8(&ev.chunk).unwrap_or("")) {
             self.bump_active_cell_revision();
+            self.request_redraw();
+        } else if background_changed {
             self.request_redraw();
         }
     }
@@ -1343,11 +1384,14 @@ impl ChatWidget {
             return;
         }
         self.flush_answer_stream_with_separator();
-        let command_display = self
-            .unified_exec_processes
-            .iter()
-            .find(|process| process.key == ev.process_id)
-            .map(|process| process.command_display.clone());
+        let (command_display, log_changed) =
+            if let Ok(mut state) = self.background_terminals_state.lock() {
+                let changed = state.on_terminal_interaction(&ev);
+                let display = state.command_display_for_process(&ev.process_id);
+                (display, changed)
+            } else {
+                (None, false)
+            };
         if ev.stdin.is_empty() {
             // Empty stdin means we are polling for background output.
             // Surface this in the status header (single "waiting" surface) instead of the transcript.
@@ -1386,6 +1430,9 @@ impl ChatWidget {
                 command_display,
                 ev.stdin,
             ));
+            if log_changed {
+                self.request_redraw();
+            }
         }
     }
 
@@ -1433,51 +1480,34 @@ impl ChatWidget {
     }
 
     fn track_unified_exec_process_begin(&mut self, ev: &ExecCommandBeginEvent) {
-        if ev.source != ExecCommandSource::UnifiedExecStartup {
-            return;
+        let mut changed = false;
+        if let Ok(mut state) = self.background_terminals_state.lock() {
+            changed = state.on_exec_begin(ev);
         }
-        let key = ev.process_id.clone().unwrap_or(ev.call_id.to_string());
-        let command_display = strip_bash_lc_and_escape(&ev.command);
-        if let Some(existing) = self
-            .unified_exec_processes
-            .iter_mut()
-            .find(|process| process.key == key)
-        {
-            existing.command_display = command_display;
-        } else {
-            self.unified_exec_processes.push(UnifiedExecProcessSummary {
-                key,
-                command_display,
-            });
+        if changed {
+            self.sync_unified_exec_footer();
+            self.request_redraw();
         }
-        self.sync_unified_exec_footer();
     }
 
     fn track_unified_exec_process_end(&mut self, ev: &ExecCommandEndEvent) {
-        let key = ev.process_id.clone().unwrap_or(ev.call_id.to_string());
-        let before = self.unified_exec_processes.len();
-        self.unified_exec_processes
-            .retain(|process| process.key != key);
-        if self.unified_exec_processes.len() != before {
+        let mut changed = false;
+        if let Ok(mut state) = self.background_terminals_state.lock() {
+            changed = state.on_exec_end(ev);
+        }
+        if changed {
             self.sync_unified_exec_footer();
+            self.request_redraw();
         }
     }
 
     fn sync_unified_exec_footer(&mut self) {
-        let processes = self
-            .unified_exec_processes
-            .iter()
-            .map(|process| process.command_display.clone())
-            .collect();
+        let processes = if let Ok(state) = self.background_terminals_state.lock() {
+            state.running_command_displays()
+        } else {
+            Vec::new()
+        };
         self.bottom_pane.set_unified_exec_processes(processes);
-    }
-
-    fn clear_unified_exec_processes(&mut self) {
-        if self.unified_exec_processes.is_empty() {
-            return;
-        }
-        self.unified_exec_processes.clear();
-        self.sync_unified_exec_footer();
     }
 
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
@@ -1990,9 +2020,12 @@ impl ChatWidget {
             last_unified_wait: None,
             unified_exec_wait_streak: None,
             task_complete_pending: false,
-            unified_exec_processes: Vec::new(),
+            last_completed_turn_id: None,
+            latest_prompt_suggestion: None,
+            background_terminals_state: Arc::new(Mutex::new(BackgroundTerminalsState::new())),
             agent_turn_running: false,
             mcp_startup_status: None,
+            pending_mcp_list_output: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2115,9 +2148,12 @@ impl ChatWidget {
             last_unified_wait: None,
             unified_exec_wait_streak: None,
             task_complete_pending: false,
-            unified_exec_processes: Vec::new(),
+            last_completed_turn_id: None,
+            latest_prompt_suggestion: None,
+            background_terminals_state: Arc::new(Mutex::new(BackgroundTerminalsState::new())),
             agent_turn_running: false,
             mcp_startup_status: None,
+            pending_mcp_list_output: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2241,9 +2277,12 @@ impl ChatWidget {
             last_unified_wait: None,
             unified_exec_wait_streak: None,
             task_complete_pending: false,
-            unified_exec_processes: Vec::new(),
+            last_completed_turn_id: None,
+            latest_prompt_suggestion: None,
+            background_terminals_state: Arc::new(Mutex::new(BackgroundTerminalsState::new())),
             agent_turn_running: false,
             mcp_startup_status: None,
+            pending_mcp_list_output: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -2618,8 +2657,11 @@ impl ChatWidget {
             SlashCommand::Status => {
                 self.add_status_output();
             }
+            SlashCommand::Suggestions => {
+                self.open_prompt_suggestions_view(self.latest_prompt_suggestion.clone());
+            }
             SlashCommand::Ps => {
-                self.add_ps_output();
+                self.show_background_terminals_view();
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -2948,7 +2990,15 @@ impl ChatWidget {
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TurnStarted(_) => self.on_task_started(),
             EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
+                if let Some(turn_id) = id {
+                    self.last_completed_turn_id = Some(turn_id);
+                }
                 self.on_task_complete(last_agent_message, from_replay)
+            }
+            EventMsg::PromptSuggestion(ev) => {
+                if !from_replay {
+                    self.on_prompt_suggestion(id, ev);
+                }
             }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
@@ -3222,13 +3272,12 @@ impl ChatWidget {
         ));
     }
 
-    pub(crate) fn add_ps_output(&mut self) {
-        let processes = self
-            .unified_exec_processes
-            .iter()
-            .map(|process| process.command_display.clone())
-            .collect();
-        self.add_to_history(history_cell::new_unified_exec_processes_output(processes));
+    pub(crate) fn show_background_terminals_view(&mut self) {
+        let view = BackgroundTerminalsView::new(
+            Arc::clone(&self.background_terminals_state),
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     fn stop_rate_limit_poller(&mut self) {
@@ -4047,6 +4096,12 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
+    pub(crate) fn open_prompt_suggestions_view(&mut self, suggestion: Option<String>) {
+        let enabled = self.config.features.enabled(Feature::PromptSuggestions);
+        let view = PromptSuggestionsView::new(suggestion, enabled, self.app_event_tx.clone());
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
     fn approval_preset_actions(
         approval: AskForApproval,
         sandbox: SandboxPolicy,
@@ -4654,6 +4709,9 @@ impl ChatWidget {
             self.refresh_model_display();
             self.request_redraw();
         }
+        if feature == Feature::PromptSuggestions && !enabled {
+            self.latest_prompt_suggestion = None;
+        }
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
@@ -4955,8 +5013,13 @@ impl ChatWidget {
         if self.config.mcp_servers.is_empty() {
             self.add_to_history(history_cell::empty_mcp_output());
         } else {
-            self.submit_op(Op::ListMcpTools);
+            self.request_mcp_tools(true);
         }
+    }
+
+    pub(crate) fn request_mcp_tools(&mut self, show_in_history: bool) {
+        self.pending_mcp_list_output = show_in_history;
+        self.submit_op(Op::ListMcpTools);
     }
 
     /// Forward file-search results to the bottom pane.
@@ -5103,6 +5166,24 @@ impl ChatWidget {
             .set_composer_text(text, text_elements, local_image_paths);
     }
 
+    pub(crate) fn submit_prompt_suggestion(&mut self, text: String) {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        self.latest_prompt_suggestion = None;
+        self.queue_user_message(trimmed.to_string().into());
+    }
+
+    pub(crate) fn prefill_prompt_suggestion(&mut self, text: String) {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        self.latest_prompt_suggestion = None;
+        self.set_composer_text(trimmed.to_string(), Vec::new(), Vec::new());
+    }
+
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.bottom_pane.show_esc_backtrack_hint();
     }
@@ -5123,13 +5204,19 @@ impl ChatWidget {
     }
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
-        self.add_to_history(history_cell::new_mcp_tools_output(
-            &self.config,
-            ev.tools,
-            ev.resources,
-            ev.resource_templates,
-            &ev.auth_statuses,
-        ));
+        self.bottom_pane.set_mcp_tools(ev.tools.clone());
+        if self.pending_mcp_list_output {
+            self.pending_mcp_list_output = false;
+            self.add_to_history(history_cell::new_mcp_tools_output(
+                &self.config,
+                ev.tools,
+                ev.resources,
+                ev.resource_templates,
+                &ev.auth_statuses,
+            ));
+        } else {
+            self.pending_mcp_list_output = false;
+        }
     }
 
     fn on_list_custom_prompts(&mut self, ev: ListCustomPromptsResponseEvent) {

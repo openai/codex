@@ -20,6 +20,7 @@ use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::models_manager::manager::ModelsManager;
+use crate::prompt_suggestions;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
@@ -192,8 +193,15 @@ impl Session {
         if should_close_processes {
             self.close_unified_exec_processes().await;
         }
-        let event = EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message });
+        let event = EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: last_agent_message.clone(),
+        });
         self.send_event(turn_context.as_ref(), event).await;
+        prompt_suggestions::maybe_spawn_prompt_suggestion(
+            Arc::clone(self),
+            Arc::clone(&turn_context),
+            last_agent_message,
+        );
     }
 
     async fn register_new_active_task(&self, task: RunningTask) {

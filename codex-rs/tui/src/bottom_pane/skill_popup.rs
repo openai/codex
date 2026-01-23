@@ -91,13 +91,16 @@ impl SkillPopup {
                 let skill = &self.skills[idx];
                 let name = truncated_skill_display_name(skill);
                 let description = skill_description(skill).to_string();
+                let selected_description =
+                    Some(format!("{description} · enter inserts ${}", skill.name));
                 GenericDisplayRow {
                     name,
                     match_indices: indices,
                     display_shortcut: None,
                     description: Some(description),
-                    is_disabled: false,
+                    selected_description,
                     disabled_reason: None,
+                    is_disabled: false,
                     wrap_indent: None,
                 }
             })

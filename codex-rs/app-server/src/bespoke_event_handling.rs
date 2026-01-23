@@ -44,6 +44,7 @@ use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind as V2PatchChangeKind;
+use codex_app_server_protocol::PromptSuggestionNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
 use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
@@ -125,6 +126,16 @@ pub(crate) async fn apply_bespoke_event_handling(
                 &turn_summary_store,
             )
             .await;
+        }
+        EventMsg::PromptSuggestion(ev) => {
+            let notification = PromptSuggestionNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id,
+                suggestion: ev.suggestion,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::PromptSuggestion(notification))
+                .await;
         }
         EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
             call_id,

@@ -86,11 +86,20 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
+    /// Request MCP tool metadata for the composer popup without emitting a history entry.
+    RequestMcpToolsForPopup,
+
     /// Result of refreshing rate limits
     RateLimitSnapshotFetched(RateLimitSnapshot),
 
     /// Result of computing a `/diff` command.
     DiffResult(String),
+
+    /// Submit a prompt suggestion as a user message.
+    SubmitPromptSuggestion(String),
+
+    /// Prefill the composer with a prompt suggestion for editing.
+    PrefillPromptSuggestion(String),
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 

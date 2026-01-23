@@ -106,6 +106,8 @@ use super::footer::render_footer_hint_items;
 use super::footer::render_mode_indicator;
 use super::footer::reset_mode_after_activity;
 use super::footer::toggle_shortcut_mode;
+use super::mcp_tool_popup::McpToolItem;
+use super::mcp_tool_popup::McpToolPopup;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use super::skill_popup::SkillPopup;
@@ -209,6 +211,10 @@ pub(crate) struct ChatComposer {
     use_shift_enter_hint: bool,
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
+    dismissed_mcp_tool_popup_token: Option<String>,
+    mcp_tools: Vec<McpToolItem>,
+    mcp_tools_loaded: bool,
+    mcp_tools_request_in_flight: bool,
     pending_pastes: Vec<(String, String)>,
     large_paste_counters: HashMap<usize, usize>,
     has_focus: bool,
@@ -250,6 +256,7 @@ enum ActivePopup {
     Command(CommandPopup),
     File(FileSearchPopup),
     Skill(SkillPopup),
+    McpTool(McpToolPopup),
 }
 
 const FOOTER_SPACING_HEIGHT: u16 = 0;
@@ -276,6 +283,10 @@ impl ChatComposer {
             use_shift_enter_hint,
             dismissed_file_popup_token: None,
             current_file_query: None,
+            dismissed_mcp_tool_popup_token: None,
+            mcp_tools: Vec::new(),
+            mcp_tools_loaded: false,
+            mcp_tools_request_in_flight: false,
             pending_pastes: Vec::new(),
             large_paste_counters: HashMap::new(),
             has_focus: has_input_focus,
@@ -306,6 +317,15 @@ impl ChatComposer {
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
+    }
+
+    pub fn set_mcp_tools(&mut self, tools: Vec<McpToolItem>) {
+        self.mcp_tools = tools;
+        self.mcp_tools_loaded = true;
+        self.mcp_tools_request_in_flight = false;
+        if let ActivePopup::McpTool(popup) = &mut self.active_popup {
+            popup.set_tools(self.mcp_tools.clone());
+        }
     }
 
     /// Enables or disables "Steer" behavior for submission keys.
@@ -346,6 +366,9 @@ impl ChatComposer {
             }
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
             ActivePopup::Skill(popup) => {
+                Constraint::Max(popup.calculate_required_height(area.width))
+            }
+            ActivePopup::McpTool(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
             ActivePopup::None => Constraint::Max(footer_total_height),
@@ -794,6 +817,7 @@ impl ChatComposer {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
             ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
+            ActivePopup::McpTool(_) => self.handle_key_event_with_mcp_tool_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
 
@@ -1278,6 +1302,68 @@ impl ChatComposer {
         }
     }
 
+    fn handle_key_event_with_mcp_tool_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if self.handle_shortcut_overlay_key(&key_event) {
+            return (InputResult::None, true);
+        }
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+
+        let ActivePopup::McpTool(popup) = &mut self.active_popup else {
+            unreachable!();
+        };
+
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Up, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                popup.move_up();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                popup.move_down();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                if let Some(tok) = self.current_mcp_tool_token() {
+                    self.dismissed_mcp_tool_popup_token = Some(tok);
+                }
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                let selected = popup.selected_tool().cloned();
+                if let Some(tool) = selected {
+                    self.insert_selected_mcp_tool(&tool);
+                }
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
+            }
+            input => self.handle_input_basic(input),
+        }
+    }
+
     fn is_image_path(path: &str) -> bool {
         let lower = path.to_ascii_lowercase();
         lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")
@@ -1516,6 +1602,24 @@ impl ChatComposer {
         Self::current_prefixed_token(&self.textarea, '$', true)
     }
 
+    fn current_mcp_tool_token(&self) -> Option<String> {
+        let token = Self::current_at_token(&self.textarea)?;
+        Self::mcp_tool_query_from_token(&token)
+    }
+
+    fn mcp_tool_query_from_token(token: &str) -> Option<String> {
+        if token == "mcp" {
+            return Some(String::new());
+        }
+        if let Some(rest) = token.strip_prefix("mcp:") {
+            return Some(rest.to_string());
+        }
+        if let Some(rest) = token.strip_prefix("mcp__") {
+            return Some(rest.to_string());
+        }
+        None
+    }
+
     /// Replace the active `@token` (the one under the cursor) with `path`.
     ///
     /// The algorithm mirrors `current_at_token` so replacement works no matter
@@ -1568,6 +1672,44 @@ impl ChatComposer {
         self.textarea.set_cursor(new_cursor);
     }
 
+    fn insert_selected_mcp_tool(&mut self, tool: &McpToolItem) {
+        let cursor_offset = self.textarea.cursor();
+        let text = self.textarea.text();
+        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+
+        let before_cursor = &text[..safe_cursor];
+        let after_cursor = &text[safe_cursor..];
+
+        let start_idx = before_cursor
+            .char_indices()
+            .rfind(|(_, c)| c.is_whitespace())
+            .map(|(idx, c)| idx + c.len_utf8())
+            .unwrap_or(0);
+
+        let end_rel_idx = after_cursor
+            .char_indices()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(idx, _)| idx)
+            .unwrap_or(after_cursor.len());
+        let end_idx = safe_cursor + end_rel_idx;
+
+        let (inserted, cursor_rel) = Self::build_mcp_tool_insertion(tool);
+
+        let mut new_text =
+            String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
+        new_text.push_str(&text[..start_idx]);
+        new_text.push_str(&inserted);
+        new_text.push(' ');
+        new_text.push_str(&text[end_idx..]);
+
+        self.textarea.set_text_clearing_elements(&new_text);
+        let new_cursor = cursor_rel.map_or_else(
+            || start_idx.saturating_add(inserted.len()).saturating_add(1),
+            |rel| start_idx.saturating_add(rel),
+        );
+        self.textarea.set_cursor(new_cursor);
+    }
+
     fn insert_selected_skill(&mut self, skill_name: &str) {
         let cursor_offset = self.textarea.cursor();
         let text = self.textarea.text();
@@ -1602,6 +1744,30 @@ impl ChatComposer {
         self.textarea.set_text_clearing_elements(&new_text);
         let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
         self.textarea.set_cursor(new_cursor);
+    }
+
+    fn build_mcp_tool_insertion(tool: &McpToolItem) -> (String, Option<usize>) {
+        if tool.required_fields.is_empty() {
+            return (format!("@{}", tool.qualified_name), None);
+        }
+
+        let mut insertion = format!("@{} ", tool.qualified_name);
+        insertion.push('{');
+        let mut cursor_rel = None;
+        for (idx, field) in tool.required_fields.iter().enumerate() {
+            if idx > 0 {
+                insertion.push_str(", ");
+            }
+            insertion.push('"');
+            insertion.push_str(field);
+            insertion.push_str("\":\"");
+            if cursor_rel.is_none() {
+                cursor_rel = Some(insertion.len());
+            }
+            insertion.push('"');
+        }
+        insertion.push('}');
+        (insertion, cursor_rel)
     }
 
     /// Prepare text for submission/queuing. Returns None if submission should be suppressed.
@@ -2189,6 +2355,12 @@ impl ChatComposer {
 
     fn sync_popups(&mut self) {
         let file_token = Self::current_at_token(&self.textarea);
+        let mcp_tool_token = self.current_mcp_tool_token();
+        let file_token = if mcp_tool_token.is_some() {
+            None
+        } else {
+            file_token
+        };
         let browsing_history = self
             .history
             .should_handle_navigation(self.textarea.text(), self.textarea.cursor());
@@ -2200,12 +2372,14 @@ impl ChatComposer {
         }
         let skill_token = self.current_skill_token();
 
-        let allow_command_popup = file_token.is_none() && skill_token.is_none();
+        let allow_command_popup =
+            file_token.is_none() && skill_token.is_none() && mcp_tool_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
         if matches!(self.active_popup, ActivePopup::Command(_)) {
             self.dismissed_file_popup_token = None;
             self.dismissed_skill_popup_token = None;
+            self.dismissed_mcp_tool_popup_token = None;
             return;
         }
 
@@ -2215,6 +2389,12 @@ impl ChatComposer {
         }
         self.dismissed_skill_popup_token = None;
 
+        if let Some(token) = mcp_tool_token {
+            self.sync_mcp_tool_popup(token);
+            return;
+        }
+        self.dismissed_mcp_tool_popup_token = None;
+
         if let Some(token) = file_token {
             self.sync_file_search_popup(token);
             return;
@@ -2223,7 +2403,7 @@ impl ChatComposer {
         self.dismissed_file_popup_token = None;
         if matches!(
             self.active_popup,
-            ActivePopup::File(_) | ActivePopup::Skill(_)
+            ActivePopup::File(_) | ActivePopup::Skill(_) | ActivePopup::McpTool(_)
         ) {
             self.active_popup = ActivePopup::None;
         }
@@ -2420,6 +2600,39 @@ impl ChatComposer {
         }
     }
 
+    fn sync_mcp_tool_popup(&mut self, query: String) {
+        if self.dismissed_mcp_tool_popup_token.as_ref() == Some(&query) {
+            return;
+        }
+
+        if !self.mcp_tools_loaded && !self.mcp_tools_request_in_flight {
+            self.app_event_tx.send(AppEvent::RequestMcpToolsForPopup);
+            self.mcp_tools_request_in_flight = true;
+        }
+
+        let tools_loaded = self.mcp_tools_loaded;
+        match &mut self.active_popup {
+            ActivePopup::McpTool(popup) => {
+                popup.set_query(&query);
+                if tools_loaded {
+                    popup.set_tools(self.mcp_tools.clone());
+                } else {
+                    popup.set_waiting(true);
+                }
+            }
+            _ => {
+                let mut popup = McpToolPopup::new(self.mcp_tools.clone());
+                popup.set_query(&query);
+                if tools_loaded {
+                    popup.set_tools(self.mcp_tools.clone());
+                } else {
+                    popup.set_waiting(true);
+                }
+                self.active_popup = ActivePopup::McpTool(popup);
+            }
+        }
+    }
+
     fn set_has_focus(&mut self, has_focus: bool) {
         self.has_focus = has_focus;
     }
@@ -2485,6 +2698,7 @@ impl Renderable for ChatComposer {
                 ActivePopup::Command(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
                 ActivePopup::Skill(c) => c.calculate_required_height(width),
+                ActivePopup::McpTool(c) => c.calculate_required_height(width),
             }
     }
 
@@ -2498,6 +2712,9 @@ impl Renderable for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::Skill(popup) => {
+                popup.render_ref(popup_rect, buf);
+            }
+            ActivePopup::McpTool(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
@@ -3178,6 +3395,47 @@ mod tests {
             assert_eq!(
                 result, expected,
                 "Failed for whitespace boundary case: {description} - input: '{input}', cursor: {cursor_pos}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_current_mcp_tool_token() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let test_cases = vec![
+            ("@mcp", 2, Some("".to_string()), "Bare mcp prefix"),
+            ("@mcp:", 3, Some("".to_string()), "mcp with colon"),
+            (
+                "@mcp:firecrawl",
+                7,
+                Some("firecrawl".to_string()),
+                "mcp query",
+            ),
+            (
+                "@mcp__exa__search",
+                8,
+                Some("exa__search".to_string()),
+                "mcp qualified name",
+            ),
+            ("@file.txt", 4, None, "non mcp token"),
+        ];
+
+        for (input, cursor_pos, expected, description) in test_cases {
+            composer.set_text_content(input.to_string(), Vec::new(), Vec::new());
+            composer.textarea.set_cursor(cursor_pos);
+            let result = composer.current_mcp_tool_token();
+            assert_eq!(
+                result, expected,
+                "Failed for mcp token case: {description} - input: '{input}', cursor: {cursor_pos}"
             );
         }
     }

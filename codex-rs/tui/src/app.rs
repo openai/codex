@@ -1486,6 +1486,12 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::SubmitPromptSuggestion(text) => {
+                self.chat_widget.submit_prompt_suggestion(text);
+            }
+            AppEvent::PrefillPromptSuggestion(text) => {
+                self.chat_widget.prefill_prompt_suggestion(text);
+            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);
@@ -1493,6 +1499,9 @@ impl App {
             }
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
+            }
+            AppEvent::RequestMcpToolsForPopup => {
+                self.chat_widget.request_mcp_tools(false);
             }
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));

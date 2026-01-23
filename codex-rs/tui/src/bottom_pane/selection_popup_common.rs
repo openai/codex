@@ -22,6 +22,7 @@ pub(crate) struct GenericDisplayRow {
     pub display_shortcut: Option<KeyBinding>,
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
+    pub selected_description: Option<String>, // optional description when selected
     pub disabled_reason: Option<String>,   // optional disabled message
     pub is_disabled: bool,
     pub wrap_indent: Option<usize>, // optional indent for wrapped lines
@@ -139,11 +140,26 @@ fn compute_desc_col(
     desc_col
 }
 
+fn row_description(row: &GenericDisplayRow, is_selected: bool) -> Option<&str> {
+    if is_selected {
+        row.selected_description
+            .as_deref()
+            .or(row.description.as_deref())
+    } else {
+        row.description.as_deref()
+    }
+}
+
 /// Determine how many spaces to indent wrapped lines for a row.
-fn wrap_indent(row: &GenericDisplayRow, desc_col: usize, max_width: u16) -> usize {
+fn wrap_indent(
+    row: &GenericDisplayRow,
+    desc_col: usize,
+    max_width: u16,
+    is_selected: bool,
+) -> usize {
     let max_indent = max_width.saturating_sub(1) as usize;
     let indent = row.wrap_indent.unwrap_or_else(|| {
-        if row.description.is_some() || row.disabled_reason.is_some() {
+        if row_description(row, is_selected).is_some() || row.disabled_reason.is_some() {
             desc_col
         } else {
             0
@@ -155,10 +171,11 @@ fn wrap_indent(row: &GenericDisplayRow, desc_col: usize, max_width: u16) -> usiz
 /// Build the full display line for a row with the description padded to start
 /// at `desc_col`. Applies fuzzy-match bolding when indices are present and
 /// dims the description.
-fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
-    let combined_description = match (&row.description, &row.disabled_reason) {
+fn build_full_line(row: &GenericDisplayRow, desc_col: usize, is_selected: bool) -> Line<'static> {
+    let description = row_description(row, is_selected).map(str::to_string);
+    let combined_description = match (description, &row.disabled_reason) {
         (Some(desc), Some(reason)) => Some(format!("{desc} (disabled: {reason})")),
-        (Some(desc), None) => Some(desc.clone()),
+        (Some(desc), None) => Some(desc),
         (None, Some(reason)) => Some(format!("disabled: {reason}")),
         (None, None) => None,
     };
@@ -282,8 +299,9 @@ pub(crate) fn render_rows(
             break;
         }
 
-        let mut full_line = build_full_line(row, desc_col);
-        if Some(i) == state.selected_idx && !row.is_disabled {
+        let is_selected = Some(i) == state.selected_idx;
+        let mut full_line = build_full_line(row, desc_col, is_selected);
+        if is_selected && !row.is_disabled {
             // Match previous behavior: cyan + bold for the selected row.
             // Reset the style first to avoid inheriting dim from keyboard shortcuts.
             full_line.spans.iter_mut().for_each(|span| {
@@ -299,7 +317,7 @@ pub(crate) fn render_rows(
         // Wrap with subsequent indent aligned to the description column.
         use crate::wrapping::RtOptions;
         use crate::wrapping::word_wrap_line;
-        let continuation_indent = wrap_indent(row, desc_col, area.width);
+        let continuation_indent = wrap_indent(row, desc_col, area.width, is_selected);
         let options = RtOptions::new(area.width as usize)
             .initial_indent(Line::from(""))
             .subsequent_indent(Line::from(" ".repeat(continuation_indent)));
@@ -369,8 +387,9 @@ pub(crate) fn render_rows_single_line(
             break;
         }
 
-        let mut full_line = build_full_line(row, desc_col);
-        if Some(i) == state.selected_idx && !row.is_disabled {
+        let is_selected = Some(i) == state.selected_idx;
+        let mut full_line = build_full_line(row, desc_col, is_selected);
+        if is_selected && !row.is_disabled {
             full_line.spans.iter_mut().for_each(|span| {
                 span.style = Style::default().fg(Color::Cyan).bold();
             });
@@ -429,15 +448,15 @@ pub(crate) fn measure_rows_height(
     use crate::wrapping::RtOptions;
     use crate::wrapping::word_wrap_line;
     let mut total: u16 = 0;
-    for row in rows_all
+    for (idx, row) in rows_all
         .iter()
         .enumerate()
         .skip(start_idx)
         .take(visible_items)
-        .map(|(_, r)| r)
     {
-        let full_line = build_full_line(row, desc_col);
-        let continuation_indent = wrap_indent(row, desc_col, content_width);
+        let is_selected = Some(idx) == state.selected_idx;
+        let full_line = build_full_line(row, desc_col, is_selected);
+        let continuation_indent = wrap_indent(row, desc_col, content_width, is_selected);
         let opts = RtOptions::new(content_width as usize)
             .initial_indent(Line::from(""))
             .subsequent_indent(Line::from(" ".repeat(continuation_indent)));

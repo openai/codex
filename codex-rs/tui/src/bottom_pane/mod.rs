@@ -13,6 +13,7 @@
 //!
 //! Some UI is time-based rather than input-based, such as the transient "press again to quit"
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::app_event_sender::AppEventSender;
@@ -32,6 +33,7 @@ use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use mcp_types::Tool as McpTool;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::time::Duration;
@@ -41,6 +43,7 @@ mod request_user_input;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use request_user_input::RequestUserInputOverlay;
+mod background_terminals_view;
 mod bottom_pane_view;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,7 +59,9 @@ mod experimental_features_view;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
+mod mcp_tool_popup;
 mod prompt_args;
+mod prompt_suggestions_view;
 mod skill_popup;
 mod skills_toggle_view;
 pub(crate) use footer::CollaborationModeIndicator;
@@ -74,6 +79,8 @@ mod scroll_state;
 mod selection_popup_common;
 mod textarea;
 mod unified_exec_footer;
+pub(crate) use background_terminals_view::BackgroundTerminalsState;
+pub(crate) use background_terminals_view::BackgroundTerminalsView;
 pub(crate) use feedback_view::FeedbackNoteView;
 
 /// How long the "press again to quit" hint stays visible.
@@ -112,6 +119,7 @@ pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
+pub(crate) use prompt_suggestions_view::PromptSuggestionsView;
 
 /// Pane displayed in the lower half of the chat UI.
 ///
@@ -195,6 +203,12 @@ impl BottomPane {
 
     pub fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.composer.set_skill_mentions(skills);
+        self.request_redraw();
+    }
+
+    pub fn set_mcp_tools(&mut self, tools: HashMap<String, McpTool>) {
+        let items = mcp_tool_popup::build_mcp_tool_items(&tools);
+        self.composer.set_mcp_tools(items);
         self.request_redraw();
     }
 

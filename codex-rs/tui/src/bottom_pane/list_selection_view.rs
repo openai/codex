@@ -224,6 +224,7 @@ impl ListSelectionView {
                         display_shortcut: item.display_shortcut,
                         match_indices: None,
                         description,
+                        selected_description: None,
                         wrap_indent,
                         is_disabled,
                         disabled_reason: item.disabled_reason.clone(),

@@ -291,6 +291,12 @@ pub enum Op {
         command: String,
     },
 
+    /// Terminate a background unified exec session.
+    TerminateUnifiedExec {
+        /// Process id associated with the running command.
+        process_id: String,
+    },
+
     /// Request the list of available models.
     ListModels,
 }
@@ -698,6 +704,9 @@ pub enum EventMsg {
     #[serde(rename = "task_complete", alias = "turn_complete")]
     TurnComplete(TurnCompleteEvent),
 
+    /// Suggested follow-up prompt after a turn completes.
+    PromptSuggestion(PromptSuggestionEvent),
+
     /// Usage update for the current session, including totals and last turn.
     /// Optional means unknown — UIs should not display when `None`.
     TokenCount(TokenCountEvent),
@@ -1081,6 +1090,11 @@ pub struct ContextCompactedEvent;
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnCompleteEvent {
     pub last_agent_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct PromptSuggestionEvent {
+    pub suggestion: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

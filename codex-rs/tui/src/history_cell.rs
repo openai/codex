@@ -19,7 +19,6 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
-use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
@@ -70,7 +69,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
-use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 /// Represents an event to display in the conversation history. Returns its
@@ -552,106 +550,6 @@ pub(crate) fn new_unified_exec_interaction(
     stdin: String,
 ) -> UnifiedExecInteractionCell {
     UnifiedExecInteractionCell::new(command_display, stdin)
-}
-
-#[derive(Debug)]
-struct UnifiedExecProcessesCell {
-    processes: Vec<String>,
-}
-
-impl UnifiedExecProcessesCell {
-    fn new(processes: Vec<String>) -> Self {
-        Self { processes }
-    }
-}
-
-impl HistoryCell for UnifiedExecProcessesCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        if width == 0 {
-            return Vec::new();
-        }
-
-        let wrap_width = width as usize;
-        let max_processes = 16usize;
-        let mut out: Vec<Line<'static>> = Vec::new();
-        out.push(vec!["Background terminals".bold()].into());
-        out.push("".into());
-
-        if self.processes.is_empty() {
-            out.push("  • No background terminals running.".italic().into());
-            return out;
-        }
-
-        let prefix = "  • ";
-        let prefix_width = UnicodeWidthStr::width(prefix);
-        let truncation_suffix = " [...]";
-        let truncation_suffix_width = UnicodeWidthStr::width(truncation_suffix);
-        let mut shown = 0usize;
-        for command in &self.processes {
-            if shown >= max_processes {
-                break;
-            }
-            let (snippet, snippet_truncated) = {
-                let (first_line, has_more_lines) = match command.split_once('\n') {
-                    Some((first, _)) => (first, true),
-                    None => (command.as_str(), false),
-                };
-                let max_graphemes = 80;
-                let mut graphemes = first_line.grapheme_indices(true);
-                if let Some((byte_index, _)) = graphemes.nth(max_graphemes) {
-                    (first_line[..byte_index].to_string(), true)
-                } else {
-                    (first_line.to_string(), has_more_lines)
-                }
-            };
-            if wrap_width <= prefix_width {
-                out.push(Line::from(prefix.dim()));
-                shown += 1;
-                continue;
-            }
-            let budget = wrap_width.saturating_sub(prefix_width);
-            let mut needs_suffix = snippet_truncated;
-            if !needs_suffix {
-                let (_, remainder, _) = take_prefix_by_width(&snippet, budget);
-                if !remainder.is_empty() {
-                    needs_suffix = true;
-                }
-            }
-            if needs_suffix && budget > truncation_suffix_width {
-                let available = budget.saturating_sub(truncation_suffix_width);
-                let (truncated, _, _) = take_prefix_by_width(&snippet, available);
-                out.push(vec![prefix.dim(), truncated.cyan(), truncation_suffix.dim()].into());
-            } else {
-                let (truncated, _, _) = take_prefix_by_width(&snippet, budget);
-                out.push(vec![prefix.dim(), truncated.cyan()].into());
-            }
-            shown += 1;
-        }
-
-        let remaining = self.processes.len().saturating_sub(shown);
-        if remaining > 0 {
-            let more_text = format!("... and {remaining} more running");
-            if wrap_width <= prefix_width {
-                out.push(Line::from(prefix.dim()));
-            } else {
-                let budget = wrap_width.saturating_sub(prefix_width);
-                let (truncated, _, _) = take_prefix_by_width(&more_text, budget);
-                out.push(vec![prefix.dim(), truncated.dim()].into());
-            }
-        }
-
-        out
-    }
-
-    fn desired_height(&self, width: u16) -> u16 {
-        self.display_lines(width).len() as u16
-    }
-}
-
-pub(crate) fn new_unified_exec_processes_output(processes: Vec<String>) -> CompositeHistoryCell {
-    let command = PlainHistoryCell::new(vec!["/ps".magenta().into()]);
-    let summary = UnifiedExecProcessesCell::new(processes);
-    CompositeHistoryCell::new(vec![Box::new(command), Box::new(summary)])
 }
 
 fn truncate_exec_snippet(full_cmd: &str) -> String {
@@ -1897,41 +1795,6 @@ mod tests {
             lines,
             vec!["↳ Interacted with background terminal", "  └ (waited)"],
         );
-    }
-
-    #[test]
-    fn ps_output_empty_snapshot() {
-        let cell = new_unified_exec_processes_output(Vec::new());
-        let rendered = render_lines(&cell.display_lines(60)).join("\n");
-        insta::assert_snapshot!(rendered);
-    }
-
-    #[test]
-    fn ps_output_multiline_snapshot() {
-        let cell = new_unified_exec_processes_output(vec![
-            "echo hello\nand then some extra text".to_string(),
-            "rg \"foo\" src".to_string(),
-        ]);
-        let rendered = render_lines(&cell.display_lines(40)).join("\n");
-        insta::assert_snapshot!(rendered);
-    }
-
-    #[test]
-    fn ps_output_long_command_snapshot() {
-        let cell = new_unified_exec_processes_output(vec![String::from(
-            "rg \"foo\" src --glob '**/*.rs' --max-count 1000 --no-ignore --hidden --follow --glob '!target/**'",
-        )]);
-        let rendered = render_lines(&cell.display_lines(36)).join("\n");
-        insta::assert_snapshot!(rendered);
-    }
-
-    #[test]
-    fn ps_output_many_sessions_snapshot() {
-        let cell = new_unified_exec_processes_output(
-            (0..20).map(|idx| format!("command {idx}")).collect(),
-        );
-        let rendered = render_lines(&cell.display_lines(32)).join("\n");
-        insta::assert_snapshot!(rendered);
     }
 
     #[tokio::test]

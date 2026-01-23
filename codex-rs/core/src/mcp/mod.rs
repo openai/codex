@@ -194,6 +194,78 @@ pub fn split_qualified_tool_name(qualified_name: &str) -> Option<(String, String
     Some((server_name.to_string(), tool_name))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExplicitMcpToolCall {
+    pub qualified_name: String,
+    pub server: String,
+    pub tool: String,
+    pub raw_arguments: String,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ExplicitMcpToolParseResult {
+    pub cleaned_text: String,
+    pub calls: Vec<ExplicitMcpToolCall>,
+    pub warnings: Vec<String>,
+}
+
+pub(crate) fn extract_explicit_mcp_tool_calls(text: &str) -> ExplicitMcpToolParseResult {
+    let mut cleaned_lines = Vec::new();
+    let mut calls = Vec::new();
+    let warnings = Vec::new();
+
+    for line in text.lines() {
+        let mut cursor = 0usize;
+        let mut output = String::new();
+        let mut line_had_tool = false;
+
+        while let Some(rel_start) = line[cursor..].find("@mcp__") {
+            let start = cursor + rel_start;
+            output.push_str(&line[cursor..start]);
+
+            let without_at = &line[start + 1..];
+            let token_end = without_at
+                .find(char::is_whitespace)
+                .unwrap_or(without_at.len());
+            let token = &without_at[..token_end];
+
+            let Some((server, tool)) = split_qualified_tool_name(token) else {
+                output.push('@');
+                cursor = start + 1;
+                continue;
+            };
+
+            line_had_tool = true;
+            let args_start = start + 1 + token_end;
+            let next_token_rel = line[args_start..].find("@mcp__");
+            let args_end = next_token_rel.map_or(line.len(), |pos| args_start + pos);
+            let args_str = line[args_start..args_end].trim();
+            let raw_arguments = if args_str.is_empty() { "{}" } else { args_str };
+
+            calls.push(ExplicitMcpToolCall {
+                qualified_name: token.to_string(),
+                server,
+                tool,
+                raw_arguments: raw_arguments.to_string(),
+            });
+
+            cursor = args_end;
+        }
+
+        output.push_str(&line[cursor..]);
+        let trimmed_output = output.trim_end();
+        if !trimmed_output.trim().is_empty() || !line_had_tool {
+            cleaned_lines.push(trimmed_output.to_string());
+        }
+    }
+
+    ExplicitMcpToolParseResult {
+        cleaned_text: cleaned_lines.join("\n"),
+        calls,
+        warnings,
+    }
+}
+
 pub fn group_tools_by_server(
     tools: &HashMap<String, McpTool>,
 ) -> HashMap<String, HashMap<String, McpTool>> {
@@ -292,5 +364,91 @@ mod tests {
         expected.insert("beta".to_string(), expected_beta);
 
         assert_eq!(group_tools_by_server(&tools), expected);
+    }
+
+    #[test]
+    fn extract_explicit_mcp_tool_calls_filters_lines_and_parses_args() {
+        let input = "@mcp__alpha__do_thing {\"query\":\"hi\"}\ntext line\n@mcp__beta__ping";
+        let result = extract_explicit_mcp_tool_calls(input);
+        assert_eq!(result.cleaned_text, "text line");
+        assert_eq!(result.warnings, Vec::<String>::new());
+        assert_eq!(result.calls.len(), 2);
+        assert_eq!(
+            result.calls[0],
+            ExplicitMcpToolCall {
+                qualified_name: "mcp__alpha__do_thing".to_string(),
+                server: "alpha".to_string(),
+                tool: "do_thing".to_string(),
+                raw_arguments: "{\"query\":\"hi\"}".to_string(),
+            }
+        );
+        assert_eq!(
+            result.calls[1],
+            ExplicitMcpToolCall {
+                qualified_name: "mcp__beta__ping".to_string(),
+                server: "beta".to_string(),
+                tool: "ping".to_string(),
+                raw_arguments: "{}".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn extract_explicit_mcp_tool_calls_accepts_non_json_args() {
+        let input = "@mcp__alpha__do_thing {not json}\nplain";
+        let result = extract_explicit_mcp_tool_calls(input);
+        assert_eq!(result.cleaned_text, "plain");
+        assert_eq!(result.warnings, Vec::<String>::new());
+        assert_eq!(
+            result.calls,
+            vec![ExplicitMcpToolCall {
+                qualified_name: "mcp__alpha__do_thing".to_string(),
+                server: "alpha".to_string(),
+                tool: "do_thing".to_string(),
+                raw_arguments: "{not json}".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn extract_explicit_mcp_tool_calls_defaults_missing_args_to_empty_object() {
+        let input = "@mcp__alpha__do_thing\nstill here";
+        let result = extract_explicit_mcp_tool_calls(input);
+        assert_eq!(result.cleaned_text, "still here");
+        assert_eq!(result.warnings, Vec::<String>::new());
+        assert_eq!(
+            result.calls,
+            vec![ExplicitMcpToolCall {
+                qualified_name: "mcp__alpha__do_thing".to_string(),
+                server: "alpha".to_string(),
+                tool: "do_thing".to_string(),
+                raw_arguments: "{}".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn extract_explicit_mcp_tool_calls_supports_multiple_tools_on_one_line() {
+        let input = "before @mcp__alpha__do_thing hello @mcp__beta__ping {\"ok\":true}\nnext";
+        let result = extract_explicit_mcp_tool_calls(input);
+        assert_eq!(result.cleaned_text, "before\nnext");
+        assert_eq!(result.warnings, Vec::<String>::new());
+        assert_eq!(
+            result.calls,
+            vec![
+                ExplicitMcpToolCall {
+                    qualified_name: "mcp__alpha__do_thing".to_string(),
+                    server: "alpha".to_string(),
+                    tool: "do_thing".to_string(),
+                    raw_arguments: "hello".to_string(),
+                },
+                ExplicitMcpToolCall {
+                    qualified_name: "mcp__beta__ping".to_string(),
+                    server: "beta".to_string(),
+                    tool: "ping".to_string(),
+                    raw_arguments: "{\"ok\":true}".to_string(),
+                },
+            ]
+        );
     }
 }

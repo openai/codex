@@ -817,9 +817,11 @@ async fn make_chatwidget_manual(
         last_unified_wait: None,
         unified_exec_wait_streak: None,
         task_complete_pending: false,
-        unified_exec_processes: Vec::new(),
+        latest_prompt_suggestion: None,
+        background_terminals_state: Arc::new(Mutex::new(BackgroundTerminalsState::new())),
         agent_turn_running: false,
         mcp_startup_status: None,
+        pending_mcp_list_output: false,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
@@ -844,6 +846,7 @@ async fn make_chatwidget_manual(
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
+        last_completed_turn_id: None,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)
@@ -2028,10 +2031,7 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
 async fn unified_exec_wait_status_header_updates_on_late_command_display() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
-    chat.unified_exec_processes.push(UnifiedExecProcessSummary {
-        key: "proc-1".to_string(),
-        command_display: "sleep 5".to_string(),
-    });
+    begin_unified_exec_startup(&mut chat, "call-1", "proc-1", "sleep 5");
 
     chat.on_terminal_interaction(TerminalInteractionEvent {
         call_id: "call-1".to_string(),
@@ -3724,12 +3724,19 @@ async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
 }
 
 #[tokio::test]
-async fn interrupt_clears_unified_exec_processes() {
+async fn interrupt_keeps_background_terminals() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
     begin_unified_exec_startup(&mut chat, "call-2", "process-2", "sleep 6");
-    assert_eq!(chat.unified_exec_processes.len(), 2);
+    assert_eq!(
+        chat.background_terminals_state
+            .lock()
+            .expect("background terminal state")
+            .list_items()
+            .len(),
+        2
+    );
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
@@ -3738,7 +3745,14 @@ async fn interrupt_clears_unified_exec_processes() {
         }),
     });
 
-    assert!(chat.unified_exec_processes.is_empty());
+    assert_eq!(
+        chat.background_terminals_state
+            .lock()
+            .expect("background terminal state")
+            .list_items()
+            .len(),
+        2
+    );
 
     let _ = drain_insert_history(&mut rx);
 }
@@ -3776,12 +3790,19 @@ async fn interrupt_clears_unified_exec_wait_streak_snapshot() {
 }
 
 #[tokio::test]
-async fn turn_complete_clears_unified_exec_processes() {
+async fn turn_complete_keeps_background_terminals() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     begin_unified_exec_startup(&mut chat, "call-1", "process-1", "sleep 5");
     begin_unified_exec_startup(&mut chat, "call-2", "process-2", "sleep 6");
-    assert_eq!(chat.unified_exec_processes.len(), 2);
+    assert_eq!(
+        chat.background_terminals_state
+            .lock()
+            .expect("background terminal state")
+            .list_items()
+            .len(),
+        2
+    );
 
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
@@ -3790,7 +3811,14 @@ async fn turn_complete_clears_unified_exec_processes() {
         }),
     });
 
-    assert!(chat.unified_exec_processes.is_empty());
+    assert_eq!(
+        chat.background_terminals_state
+            .lock()
+            .expect("background terminal state")
+            .list_items()
+            .len(),
+        2
+    );
 
     let _ = drain_insert_history(&mut rx);
 }

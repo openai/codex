@@ -182,6 +182,47 @@ There are two distinct “Enter becomes newline” mechanisms:
 Both are disabled inside slash-command context (command popup is active or the first line begins
 with `/`) so Enter keeps its normal “submit/execute” semantics while composing commands.
 
+### Prompt suggestions
+
+When a prompt suggestion arrives after a turn completes, the UI opens a prompt suggestion pane (if
+enabled):
+
+- The pane opens only when the composer is empty, no task is running, and no modal/popup is active.
+- `Enter` submits the suggestion immediately.
+- `Tab` prefills the suggestion into the textarea for editing.
+- `T` toggles prompt suggestions on or off.
+- `Esc` dismisses the pane.
+
+You can also open the pane manually with `/suggestions`. The pane shows the most recent suggestion
+when one is available.
+
+This behavior is kept in sync between `codex-rs/tui` and `codex-rs/tui2`.
+
+### MCP tool mentions
+
+The composer supports `@mcp__server__tool` mentions for MCP tools. When a line starts with a
+qualified MCP tool name, the core interprets it as an explicit tool invocation and runs
+the tool before the model responds.
+
+Examples:
+
+```
+@mcp__exa__web_search_exa {"query":"rust tool_choice"}
+@mcp__firecrawl__firecrawl_search {"query":"OpenAI tools"}
+```
+
+Each line is executed in order; results are added to the turn as MCP tool call events and outputs.
+Multiple MCP tool mentions can appear on the same line; arguments for each tool run until the next
+`@mcp__` token (or the end of the line). Any non-tool text on the line is preserved in the user
+message. If no JSON arguments are provided, `{}` is used as the default payload. Non-JSON text
+after the tool name is treated as shorthand and mapped to a single string argument when the tool
+schema is unambiguous. If the tool requires multiple fields, the invocation is rejected with a
+warning that includes the required keys and an example JSON payload.
+
+When selecting a tool from the MCP picker, if the tool declares required fields, the composer
+inserts a JSON skeleton with those fields and places the cursor in the first value so you can
+fill it in immediately.
+
 ### Non-char keys / Ctrl+modified input
 
 Non-char input must not leak burst state across unrelated actions:

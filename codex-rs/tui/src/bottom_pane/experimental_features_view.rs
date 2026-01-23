@@ -80,20 +80,26 @@ impl ExperimentalFeaturesView {
         self.features.len()
     }
 
+    fn visible_rows(&self) -> usize {
+        let len = self.visible_len();
+        if len == 0 { 0 } else { MAX_POPUP_ROWS.min(len) }
+    }
+
     fn build_rows(&self) -> Vec<GenericDisplayRow> {
         let mut rows = Vec::with_capacity(self.features.len());
-        let selected_idx = self.state.selected_idx;
         for (idx, item) in self.features.iter().enumerate() {
-            let prefix = if selected_idx == Some(idx) {
+            let prefix = if self.state.selected_idx == Some(idx) {
                 '›'
             } else {
                 ' '
             };
             let marker = if item.enabled { 'x' } else { ' ' };
             let name = format!("{prefix} [{marker}] {}", item.name);
+            let description = Some(item.description.clone());
             rows.push(GenericDisplayRow {
                 name,
-                description: Some(item.description.clone()),
+                description,
+                selected_description: Some(format!("{} · enter toggles", item.description)),
                 ..Default::default()
             });
         }
@@ -107,7 +113,7 @@ impl ExperimentalFeaturesView {
             return;
         }
         self.state.move_up_wrap(len);
-        self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
+        self.state.ensure_visible(len, self.visible_rows());
     }
 
     fn move_down(&mut self) {
@@ -116,7 +122,47 @@ impl ExperimentalFeaturesView {
             return;
         }
         self.state.move_down_wrap(len);
-        self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
+        self.state.ensure_visible(len, self.visible_rows());
+    }
+
+    fn page_up(&mut self) {
+        let len = self.visible_len();
+        if len == 0 {
+            return;
+        }
+        let step = self.visible_rows().saturating_sub(1).max(1);
+        let selected = self.state.selected_idx.unwrap_or(0);
+        self.state.selected_idx = Some(selected.saturating_sub(step));
+        self.state.ensure_visible(len, self.visible_rows());
+    }
+
+    fn page_down(&mut self) {
+        let len = self.visible_len();
+        if len == 0 {
+            return;
+        }
+        let step = self.visible_rows().saturating_sub(1).max(1);
+        let selected = self.state.selected_idx.unwrap_or(0);
+        self.state.selected_idx = Some((selected + step).min(len - 1));
+        self.state.ensure_visible(len, self.visible_rows());
+    }
+
+    fn jump_start(&mut self) {
+        let len = self.visible_len();
+        if len == 0 {
+            return;
+        }
+        self.state.selected_idx = Some(0);
+        self.state.scroll_top = 0;
+    }
+
+    fn jump_end(&mut self) {
+        let len = self.visible_len();
+        if len == 0 {
+            return;
+        }
+        self.state.selected_idx = Some(len - 1);
+        self.state.ensure_visible(len, self.visible_rows());
     }
 
     fn toggle_selected(&mut self) {
@@ -174,6 +220,21 @@ impl BottomPaneView for ExperimentalFeaturesView {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => self.move_down(),
+            KeyEvent {
+                code: KeyCode::PageUp,
+                ..
+            } => self.page_up(),
+            KeyEvent {
+                code: KeyCode::PageDown,
+                ..
+            } => self.page_down(),
+            KeyEvent {
+                code: KeyCode::Home,
+                ..
+            } => self.jump_start(),
+            KeyEvent {
+                code: KeyCode::End, ..
+            } => self.jump_end(),
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
@@ -286,10 +347,17 @@ impl Renderable for ExperimentalFeaturesView {
 
 fn experimental_popup_hint_line() -> Line<'static> {
     Line::from(vec![
-        "Press ".into(),
         key_hint::plain(KeyCode::Enter).into(),
-        " to toggle or ".into(),
+        " toggle · ".into(),
+        key_hint::plain(KeyCode::PageUp).into(),
+        "/".into(),
+        key_hint::plain(KeyCode::PageDown).into(),
+        " scroll · ".into(),
+        key_hint::plain(KeyCode::Home).into(),
+        "/".into(),
+        key_hint::plain(KeyCode::End).into(),
+        " jump · ".into(),
         key_hint::plain(KeyCode::Esc).into(),
-        " to save for next conversation".into(),
+        " save".into(),
     ])
 }

@@ -2150,6 +2150,15 @@ pub struct TurnCompletedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct PromptSuggestionNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub suggestion: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 /// Notification that the turn-level unified diff has changed.
 /// Contains the latest aggregated diff across all file changes in the turn.
 pub struct TurnDiffUpdatedNotification {

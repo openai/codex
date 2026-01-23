@@ -30,10 +30,13 @@ pub(crate) async fn handle_mcp_tool_call(
             Ok(value) => Some(value),
             Err(e) => {
                 error!("failed to parse tool call arguments: {e}");
+                let hint = format!(
+                    "Invalid MCP tool arguments for {server}::{tool_name}. MCP tools require JSON. Example: @mcp__{server}__{tool_name} {{\"key\":\"value\"}}."
+                );
                 return ResponseInputItem::FunctionCallOutput {
                     call_id: call_id.clone(),
                     output: FunctionCallOutputPayload {
-                        content: format!("err: {e}"),
+                        content: hint,
                         success: Some(false),
                         ..Default::default()
                     },

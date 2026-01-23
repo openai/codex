@@ -109,6 +109,10 @@ pub enum Feature {
     CollaborationModes,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
+    /// Suggest follow-up prompts after turns complete.
+    PromptSuggestions,
+    /// Enable the next-generation TUI experience.
+    Tui2,
 }
 
 impl Feature {
@@ -335,6 +339,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::PromptSuggestions,
+        key: "prompt_suggestions",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
         id: Feature::WebSearchRequest,
         key: "web_search_request",
         stage: Stage::Stable,
@@ -435,6 +445,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Collab,
         key: "collab",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Tui2,
+        key: "tui2",
+        stage: Stage::Experimental {
+            name: "TUI 2",
+            menu_description: "Try the next-generation TUI interface.",
+            announcement: "NEW! TUI 2 is available. Enable in /experimental!",
+        },
         default_enabled: false,
     },
     FeatureSpec {

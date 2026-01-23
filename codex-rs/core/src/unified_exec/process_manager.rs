@@ -663,6 +663,20 @@ impl UnifiedExecProcessManager {
             entry.process.terminate();
         }
     }
+
+    pub(crate) async fn terminate_process(&self, process_id: &str) -> Result<(), UnifiedExecError> {
+        let entry = {
+            let mut store = self.process_store.lock().await;
+            store.remove(process_id)
+        };
+        let Some(entry) = entry else {
+            return Err(UnifiedExecError::UnknownProcessId {
+                process_id: process_id.to_string(),
+            });
+        };
+        entry.process.terminate();
+        Ok(())
+    }
 }
 
 enum ProcessStatus {

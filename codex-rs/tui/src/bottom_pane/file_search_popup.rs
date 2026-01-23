@@ -131,6 +131,7 @@ impl WidgetRef for &FileSearchPopup {
                         .map(|v| v.iter().map(|&i| i as usize).collect()),
                     display_shortcut: None,
                     description: None,
+                    selected_description: Some("enter inserts path".to_string()),
                     wrap_indent: None,
                     is_disabled: false,
                     disabled_reason: None,

@@ -18,6 +18,11 @@ You can also install via Homebrew (`brew install --cask codex`) or download a pl
 - First run with Codex? Start with [`docs/getting-started.md`](../docs/getting-started.md) (links to the walkthrough for prompts, keyboard shortcuts, and session management).
 - Want deeper control? See [`docs/config.md`](../docs/config.md) and [`docs/install.md`](../docs/install.md).
 
+## Faster Linux linking (mold)
+
+On Linux, the workspace opts into the `mold` linker via `-fuse-ld=mold`. Ensure `mold` is installed
+and available on `PATH` when building the Rust workspace.
+
 ## What's new in the Rust CLI
 
 The Rust implementation is now the maintained Codex CLI and serves as the default experience. It includes a number of features that the legacy TypeScript CLI never supported.

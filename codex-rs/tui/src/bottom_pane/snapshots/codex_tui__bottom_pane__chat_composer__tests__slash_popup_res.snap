@@ -1,6 +1,5 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
-assertion_line: 2385
 expression: terminal.backend()
 ---
 "                                                            "
@@ -8,4 +7,4 @@ expression: terminal.backend()
 "                                                            "
 "                                                            "
 "                                                            "
-"  /resume  resume a saved chat                              "
+"  /resume  resume a saved chat · enter inserts /resume      "
