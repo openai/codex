@@ -47,6 +47,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Install Linux audio build dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
+          sudo rm -rf /var/lib/apt/lists/*
+
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
       - name: Install DotSlash
