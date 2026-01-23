@@ -5,6 +5,8 @@ use crate::error::Result as CodexResult;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -44,7 +46,13 @@ impl AgentControl {
         let reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
 
         // The same `AgentControl` is sent to spawn the thread.
-        let new_thread = state.spawn_new_thread(config, self.clone()).await?;
+        let new_thread = state
+            .spawn_new_thread_with_source(
+                config,
+                self.clone(),
+                SessionSource::SubAgent(SubAgentSource::Other("spawn_agent".to_string())),
+            )
+            .await?;
         reservation.commit(new_thread.thread_id);
 
         // Notify a new thread has been created. This notification will be processed by clients
@@ -137,9 +145,13 @@ mod tests {
     use crate::agent::agent_status_from_event;
     use crate::config::Config;
     use crate::config::ConfigBuilder;
+    use crate::rollout::RolloutRecorder;
     use assert_matches::assert_matches;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use codex_protocol::protocol::TurnCompleteEvent;
@@ -394,6 +406,35 @@ mod tests {
             .into_iter()
             .find(|entry| *entry == expected);
         assert_eq!(captured, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_sets_subagent_session_source() {
+        let harness = AgentControlHarness::new().await;
+        let thread_id = harness
+            .control
+            .spawn_agent(harness.config.clone(), "spawned".to_string())
+            .await
+            .expect("spawn_agent should succeed");
+        let thread = harness
+            .manager
+            .get_thread(thread_id)
+            .await
+            .expect("thread should be registered");
+        let history = RolloutRecorder::get_rollout_history(&thread.rollout_path())
+            .await
+            .expect("rollout history should load");
+        let items = history.get_rollout_items();
+        let meta = items.iter().find_map(|item| match item {
+            RolloutItem::SessionMeta(meta_line) => Some(&meta_line.meta),
+            _ => None,
+        });
+        assert_eq!(
+            meta.map(|meta| meta.source.clone()),
+            Some(SessionSource::SubAgent(SubAgentSource::Other(
+                "spawn_agent".to_string()
+            )))
+        );
     }
 
     #[tokio::test]
