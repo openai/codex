@@ -675,11 +675,84 @@
     "ProjectConfig": {
       "additionalProperties": false,
       "properties": {
+        "hooks": {
+          "items": {
+            "$ref": "#/definitions/ProjectHookConfig"
+          },
+          "type": "array"
+        },
         "trust_level": {
           "$ref": "#/definitions/TrustLevel"
         }
       },
       "type": "object"
+    },
+    "ProjectHookCommand": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "ProjectHookConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "event": {
+          "$ref": "#/definitions/ProjectHookEvent"
+        },
+        "name": {
+          "type": "string"
+        },
+        "run": {
+          "$ref": "#/definitions/ProjectHookCommand"
+        },
+        "run_in_background": {
+          "default": false,
+          "type": "boolean"
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event",
+        "run"
+      ],
+      "type": "object"
+    },
+    "ProjectHookEvent": {
+      "enum": [
+        "session.start",
+        "session.end",
+        "tool.before",
+        "tool.after",
+        "file.before_write",
+        "file.after_write",
+        "stop",
+        "subagent.stop",
+        "user.prompt_submit",
+        "pre.compact",
+        "post.compact",
+        "notification"
+      ],
+      "type": "string"
     },
     "RawMcpServerConfig": {
       "additionalProperties": false,
@@ -1255,6 +1328,14 @@
       ],
       "default": null,
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
+    },
+    "hooks": {
+      "default": null,
+      "description": "Global hooks configuration. These hooks run for every session. Hook scripts are expected in ~/.codex/hooks/ directory.",
+      "items": {
+        "$ref": "#/definitions/ProjectHookConfig"
+      },
+      "type": "array"
     },
     "instructions": {
       "description": "System instructions.",

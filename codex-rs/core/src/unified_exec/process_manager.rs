@@ -20,6 +20,7 @@ use crate::tools::events::ToolEventStage;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ToolCtx;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
@@ -129,6 +130,7 @@ impl UnifiedExecProcessManager {
                 request.sandbox_permissions,
                 request.justification,
                 request.tty,
+                request.exec_approval_requirement.clone(),
                 context,
             )
             .await;
@@ -491,24 +493,12 @@ impl UnifiedExecProcessManager {
         sandbox_permissions: SandboxPermissions,
         justification: Option<String>,
         tty: bool,
+        exec_approval_requirement: ExecApprovalRequirement,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
-        let features = context.session.features();
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
-        let exec_approval_requirement = context
-            .session
-            .services
-            .exec_policy
-            .create_exec_approval_requirement_for_command(
-                &features,
-                command,
-                context.turn.approval_policy,
-                &context.turn.sandbox_policy,
-                sandbox_permissions,
-            )
-            .await;
         let req = UnifiedExecToolRequest::new(
             command.to_vec(),
             cwd,

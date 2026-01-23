@@ -9,6 +9,8 @@ use crate::codex::get_last_assistant_message_from_turn;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
+use crate::hooks::run_post_compact_hooks;
+use crate::hooks::run_pre_compact_hooks;
 use crate::protocol::CompactedItem;
 use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
@@ -28,6 +30,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
 use tracing::error;
+use tracing::warn;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
@@ -44,6 +47,7 @@ pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) {
+    let reason = "auto-local";
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
         text: prompt,
@@ -51,7 +55,10 @@ pub(crate) async fn run_inline_auto_compact_task(
         text_elements: Vec::new(),
     }];
 
-    run_compact_task_inner(sess, turn_context, input).await;
+    if let Err(err) = run_pre_compact_hooks(sess.as_ref(), turn_context.as_ref(), reason).await {
+        warn!("pre compact hook execution failed: {err}");
+    }
+    run_compact_task_inner(sess, turn_context, input, reason).await;
 }
 
 pub(crate) async fn run_compact_task(
@@ -59,17 +66,22 @@ pub(crate) async fn run_compact_task(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
 ) {
+    let reason = "manual-local";
+    if let Err(err) = run_pre_compact_hooks(sess.as_ref(), turn_context.as_ref(), reason).await {
+        warn!("pre compact hook execution failed: {err}");
+    }
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, start_event).await;
-    run_compact_task_inner(sess.clone(), turn_context, input).await;
+    run_compact_task_inner(sess.clone(), turn_context, input, reason).await;
 }
 
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
+    reason: &str,
 ) {
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
@@ -200,6 +212,10 @@ async fn run_compact_task_inner(
         message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
     });
     sess.send_event(&turn_context, warning).await;
+
+    if let Err(err) = run_post_compact_hooks(sess.as_ref(), turn_context.as_ref(), reason).await {
+        warn!("post compact hook execution failed: {err}");
+    }
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {

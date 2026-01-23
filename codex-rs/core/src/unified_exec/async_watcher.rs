@@ -14,6 +14,8 @@ use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::MAX_EXEC_OUTPUT_DELTAS_PER_CALL;
 use crate::exec::StreamOutput;
+use crate::hooks::ToolHookContext;
+use crate::hooks::run_post_tool_hooks;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecCommandSource;
@@ -196,6 +198,16 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
         duration,
         timed_out: false,
     };
+    let hook_ctx = ToolHookContext {
+        session: session_ref.as_ref(),
+        turn: turn_ref.as_ref(),
+        call_id: &call_id,
+        tool_name: "exec_command",
+        command: &command,
+        cwd: &cwd,
+        timeout_ms: None,
+    };
+    let _ = run_post_tool_hooks(&hook_ctx, &output).await;
     let event_ctx = ToolEventCtx::new(session_ref.as_ref(), turn_ref.as_ref(), &call_id, None);
     let emitter = ToolEmitter::unified_exec(
         &command,

@@ -307,6 +307,56 @@ pub enum HistoryPersistence {
     None,
 }
 
+// ===== Project hook configuration =====
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema)]
+pub enum ProjectHookEvent {
+    #[serde(rename = "session.start", alias = "SessionStart")]
+    SessionStart,
+    #[serde(rename = "session.end", alias = "SessionEnd")]
+    SessionEnd,
+    #[serde(rename = "tool.before", alias = "PreToolUse")]
+    PreToolUse,
+    #[serde(rename = "tool.after", alias = "PostToolUse")]
+    PostToolUse,
+    #[serde(rename = "file.before_write", alias = "FileBeforeWrite")]
+    FileBeforeWrite,
+    #[serde(rename = "file.after_write", alias = "FileAfterWrite")]
+    FileAfterWrite,
+    #[serde(rename = "stop", alias = "Stop")]
+    Stop,
+    #[serde(rename = "subagent.stop", alias = "SubagentStop")]
+    SubagentStop,
+    #[serde(rename = "user.prompt_submit", alias = "UserPromptSubmit")]
+    UserPromptSubmit,
+    #[serde(rename = "pre.compact", alias = "PreCompact")]
+    PreCompact,
+    #[serde(rename = "post.compact", alias = "PostCompact")]
+    PostCompact,
+    #[serde(rename = "notification", alias = "Notification")]
+    Notification,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub enum ProjectHookCommand {
+    String(String),
+    List(Vec<String>),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ProjectHookConfig {
+    pub name: Option<String>,
+    pub event: ProjectHookEvent,
+    pub run: ProjectHookCommand,
+    pub cwd: Option<PathBuf>,
+    pub env: Option<HashMap<String, String>>,
+    pub timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub run_in_background: bool,
+}
+
 // ===== Analytics configuration =====
 
 /// Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.

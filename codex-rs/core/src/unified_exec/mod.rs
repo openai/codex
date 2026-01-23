@@ -34,6 +34,7 @@ use tokio::sync::Mutex;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::sandboxing::SandboxPermissions;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 
 mod async_watcher;
 mod errors;
@@ -82,6 +83,7 @@ pub(crate) struct ExecCommandRequest {
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
+    pub exec_approval_requirement: ExecApprovalRequirement,
 }
 
 #[derive(Debug)]
@@ -165,6 +167,7 @@ mod tests {
     use crate::codex::make_session_and_context;
     use crate::protocol::AskForApproval;
     use crate::protocol::SandboxPolicy;
+    use crate::tools::sandboxing::default_exec_approval_requirement;
     use crate::unified_exec::ExecCommandRequest;
     use crate::unified_exec::WriteStdinRequest;
     use core_test_support::skip_if_sandbox;
@@ -205,6 +208,10 @@ mod tests {
                     tty: true,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     justification: None,
+                    exec_approval_requirement: default_exec_approval_requirement(
+                        turn.approval_policy,
+                        &turn.sandbox_policy,
+                    ),
                 },
                 &context,
             )

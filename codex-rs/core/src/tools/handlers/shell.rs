@@ -7,6 +7,10 @@ use crate::codex::TurnContext;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
+use crate::hooks::HookPermissionDecision;
+use crate::hooks::ToolHookContext;
+use crate::hooks::run_post_tool_hooks;
+use crate::hooks::run_pre_tool_hooks;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
@@ -22,6 +26,7 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ToolCtx;
 
 pub struct ShellHandler;
@@ -203,6 +208,9 @@ impl ShellHandler {
         call_id: String,
         freeform: bool,
     ) -> Result<ToolOutput, FunctionCallError> {
+        let mut hook_requested_approval = false;
+        let mut hook_approval_reason: Option<String> = None;
+
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params
             .sandbox_permissions
@@ -234,6 +242,43 @@ impl ShellHandler {
             return Ok(output);
         }
 
+        let hook_ctx = ToolHookContext {
+            session: session.as_ref(),
+            turn: turn.as_ref(),
+            call_id: &call_id,
+            tool_name,
+            command: &exec_params.command,
+            cwd: &exec_params.cwd,
+            timeout_ms: exec_params.expiration.timeout_ms(),
+        };
+
+        // Run PreToolUse hooks
+        if let Ok(hook_result) = run_pre_tool_hooks(&hook_ctx).await {
+            // Check permission decision from hooks
+            match hook_result.permission_decision {
+                Some(HookPermissionDecision::Deny) => {
+                    let reason = hook_result
+                        .system_message
+                        .unwrap_or_else(|| "blocked by hook".to_string());
+                    return Err(FunctionCallError::RespondToModel(reason));
+                }
+                Some(HookPermissionDecision::Ask) => {
+                    hook_requested_approval = true;
+                    hook_approval_reason = hook_result.system_message.clone();
+                }
+                Some(HookPermissionDecision::Allow) | None => {
+                    // Continue processing
+                }
+            }
+            // Exit early if hook says to stop processing
+            if !hook_result.continue_processing {
+                let reason = hook_result
+                    .system_message
+                    .unwrap_or_else(|| "stopped by hook".to_string());
+                return Err(FunctionCallError::RespondToModel(reason));
+            }
+        }
+
         let source = ExecCommandSource::Agent;
         let emitter = ToolEmitter::shell(
             exec_params.command.clone(),
@@ -256,6 +301,20 @@ impl ShellHandler {
                 exec_params.sandbox_permissions,
             )
             .await;
+        let exec_approval_requirement = if hook_requested_approval {
+            match &exec_approval_requirement {
+                ExecApprovalRequirement::Forbidden { .. } => exec_approval_requirement,
+                _ => ExecApprovalRequirement::NeedsApproval {
+                    reason: hook_approval_reason
+                        .or_else(|| Some("Command requires approval (hook)".to_string())),
+                    proposed_execpolicy_amendment: exec_approval_requirement
+                        .proposed_execpolicy_amendment()
+                        .cloned(),
+                },
+            }
+        } else {
+            exec_approval_requirement
+        };
 
         let req = ShellRequest {
             command: exec_params.command.clone(),
@@ -277,6 +336,12 @@ impl ShellHandler {
         let out = orchestrator
             .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
             .await;
+
+        // Run PostToolUse hooks if execution succeeded
+        if let Ok(ref exec_output) = out {
+            let _ = run_post_tool_hooks(&hook_ctx, exec_output).await;
+        }
+
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         let content = emitter.finish(event_ctx, out).await?;
         Ok(ToolOutput::Function {

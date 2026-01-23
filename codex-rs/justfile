@@ -1,0 +1,56 @@
+# Codex CLI justfile
+
+default:
+    @just --list
+
+# Build debug binary
+build:
+    cargo build
+
+# Build release binary
+build-release:
+    cargo build --release
+
+# Run codex in debug mode
+run *args:
+    cargo run -p codex-cli -- {{args}}
+
+# Run codex in release mode
+run-release *args:
+    ./target/release/codex {{args}}
+
+# Run tests
+test:
+    cargo test
+
+# Run tests with output
+test-verbose:
+    cargo test -- --nocapture
+
+# Clean build artifacts
+clean:
+    cargo clean
+
+# Format code
+fmt:
+    cargo fmt
+
+# Format code --check
+fmt-check:
+    cargo fmt --check
+
+# Run clippy
+clippy:
+    cargo clippy -- -D warnings
+
+# Check code without building
+check:
+    cargo check
+
+# Update dependencies
+update:
+    cargo update
+
+# Run codex exec (non-interactive)
+exec +prompt:
+    cargo run --release -p codex-cli -- exec {{prompt}}

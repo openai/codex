@@ -11,6 +11,9 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::hooks::HookPermissionDecision;
+use crate::hooks::run_file_after_write_hooks;
+use crate::hooks::run_file_before_write_hooks;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -23,6 +26,7 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::apply_patch::ApplyPatchRequest;
 use crate::tools::runtimes::apply_patch::ApplyPatchRuntime;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::spec::ApplyPatchToolArgs;
 use crate::tools::spec::JsonSchema;
@@ -114,9 +118,64 @@ impl ToolHandler for ApplyPatchHandler {
                             success: Some(true),
                         })
                     }
-                    InternalApplyPatchInvocation::DelegateToExec(apply) => {
+                    InternalApplyPatchInvocation::DelegateToExec(mut apply) => {
                         let changes = convert_apply_patch_to_protocol(&apply.action);
                         let file_paths = file_paths_for_action(&apply.action);
+                        // Store cwd before consuming apply.action
+                        let action_cwd = apply.action.cwd.clone();
+                        let mut hook_requested_approval = false;
+                        let mut hook_approval_reason: Option<String> = None;
+
+                        // Run FileBeforeWrite hooks
+                        if let Ok(hook_result) = run_file_before_write_hooks(
+                            session.as_ref(),
+                            turn.as_ref(),
+                            &call_id,
+                            &tool_name,
+                            &action_cwd,
+                            &changes,
+                        )
+                        .await
+                        {
+                            // Check permission decision from hooks
+                            match hook_result.permission_decision {
+                                Some(HookPermissionDecision::Deny) => {
+                                    let reason = hook_result
+                                        .system_message
+                                        .unwrap_or_else(|| "blocked by hook".to_string());
+                                    return Err(FunctionCallError::RespondToModel(reason));
+                                }
+                                Some(HookPermissionDecision::Ask) => {
+                                    hook_requested_approval = true;
+                                    hook_approval_reason = hook_result.system_message.clone();
+                                }
+                                Some(HookPermissionDecision::Allow) | None => {
+                                    // Continue processing
+                                }
+                            }
+                            // Exit early if hook says to stop processing
+                            if !hook_result.continue_processing {
+                                let reason = hook_result
+                                    .system_message
+                                    .unwrap_or_else(|| "stopped by hook".to_string());
+                                return Err(FunctionCallError::RespondToModel(reason));
+                            }
+                        }
+
+                        if hook_requested_approval {
+                            let proposed_execpolicy_amendment = apply
+                                .exec_approval_requirement
+                                .proposed_execpolicy_amendment()
+                                .cloned();
+                            apply.exec_approval_requirement =
+                                ExecApprovalRequirement::NeedsApproval {
+                                    reason: hook_approval_reason.or_else(|| {
+                                        Some("Patch requires approval (hook)".to_string())
+                                    }),
+                                    proposed_execpolicy_amendment,
+                                };
+                        }
+
                         let emitter =
                             ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                         let event_ctx = ToolEventCtx::new(
@@ -130,7 +189,7 @@ impl ToolHandler for ApplyPatchHandler {
                         let req = ApplyPatchRequest {
                             action: apply.action,
                             file_paths,
-                            changes,
+                            changes: changes.clone(),
                             exec_approval_requirement: apply.exec_approval_requirement,
                             timeout_ms: None,
                             codex_exe: turn.codex_linux_sandbox_exe.clone(),
@@ -147,6 +206,21 @@ impl ToolHandler for ApplyPatchHandler {
                         let out = orchestrator
                             .run(&mut runtime, &req, &tool_ctx, &turn, turn.approval_policy)
                             .await;
+
+                        // Run FileAfterWrite hooks if execution succeeded
+                        if let Ok(ref exec_output) = out {
+                            let _ = run_file_after_write_hooks(
+                                session.as_ref(),
+                                turn.as_ref(),
+                                &call_id,
+                                &tool_name,
+                                &action_cwd,
+                                &changes,
+                                exec_output,
+                            )
+                            .await;
+                        }
+
                         let event_ctx = ToolEventCtx::new(
                             session.as_ref(),
                             turn.as_ref(),
@@ -210,9 +284,62 @@ pub(crate) async fn intercept_apply_patch(
                         success: Some(true),
                     }))
                 }
-                InternalApplyPatchInvocation::DelegateToExec(apply) => {
+                InternalApplyPatchInvocation::DelegateToExec(mut apply) => {
                     let changes = convert_apply_patch_to_protocol(&apply.action);
                     let approval_keys = file_paths_for_action(&apply.action);
+                    // Store cwd before consuming apply.action
+                    let action_cwd = apply.action.cwd.clone();
+                    let mut hook_requested_approval = false;
+                    let mut hook_approval_reason: Option<String> = None;
+
+                    // Run FileBeforeWrite hooks
+                    if let Ok(hook_result) = run_file_before_write_hooks(
+                        session,
+                        turn,
+                        call_id,
+                        tool_name,
+                        &action_cwd,
+                        &changes,
+                    )
+                    .await
+                    {
+                        // Check permission decision from hooks
+                        match hook_result.permission_decision {
+                            Some(HookPermissionDecision::Deny) => {
+                                let reason = hook_result
+                                    .system_message
+                                    .unwrap_or_else(|| "blocked by hook".to_string());
+                                return Err(FunctionCallError::RespondToModel(reason));
+                            }
+                            Some(HookPermissionDecision::Ask) => {
+                                hook_requested_approval = true;
+                                hook_approval_reason = hook_result.system_message.clone();
+                            }
+                            Some(HookPermissionDecision::Allow) | None => {
+                                // Continue processing
+                            }
+                        }
+                        // Exit early if hook says to stop processing
+                        if !hook_result.continue_processing {
+                            let reason = hook_result
+                                .system_message
+                                .unwrap_or_else(|| "stopped by hook".to_string());
+                            return Err(FunctionCallError::RespondToModel(reason));
+                        }
+                    }
+
+                    if hook_requested_approval {
+                        let proposed_execpolicy_amendment = apply
+                            .exec_approval_requirement
+                            .proposed_execpolicy_amendment()
+                            .cloned();
+                        apply.exec_approval_requirement = ExecApprovalRequirement::NeedsApproval {
+                            reason: hook_approval_reason
+                                .or_else(|| Some("Patch requires approval (hook)".to_string())),
+                            proposed_execpolicy_amendment,
+                        };
+                    }
+
                     let emitter = ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
                     let event_ctx =
                         ToolEventCtx::new(session, turn, call_id, tracker.as_ref().copied());
@@ -221,7 +348,7 @@ pub(crate) async fn intercept_apply_patch(
                     let req = ApplyPatchRequest {
                         action: apply.action,
                         file_paths: approval_keys,
-                        changes,
+                        changes: changes.clone(),
                         exec_approval_requirement: apply.exec_approval_requirement,
                         timeout_ms,
                         codex_exe: turn.codex_linux_sandbox_exe.clone(),
@@ -238,6 +365,21 @@ pub(crate) async fn intercept_apply_patch(
                     let out = orchestrator
                         .run(&mut runtime, &req, &tool_ctx, turn, turn.approval_policy)
                         .await;
+
+                    // Run FileAfterWrite hooks if execution succeeded
+                    if let Ok(ref exec_output) = out {
+                        let _ = run_file_after_write_hooks(
+                            session,
+                            turn,
+                            call_id,
+                            tool_name,
+                            &action_cwd,
+                            &changes,
+                            exec_output,
+                        )
+                        .await;
+                    }
+
                     let event_ctx =
                         ToolEventCtx::new(session, turn, call_id, tracker.as_ref().copied());
                     let content = emitter.finish(event_ctx, out).await?;

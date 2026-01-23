@@ -19,6 +19,7 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::hooks::run_stop_hooks;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnAbortReason;
@@ -32,6 +33,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
+use serde_json::json;
 
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
@@ -179,6 +181,15 @@ impl Session {
         turn_context: Arc<TurnContext>,
         last_agent_message: Option<String>,
     ) {
+        // Run stop hooks before completing the task
+        let stop_details = json!({
+            "last_agent_message": last_agent_message,
+            "turn_id": turn_context.sub_id,
+        });
+        if let Err(err) = run_stop_hooks(self, &turn_context, "task_complete", &stop_details).await
+        {
+            warn!("stop hook execution failed: {err}");
+        }
         let mut active = self.active_turn.lock().await;
         let should_close_processes = if let Some(at) = active.as_mut()
             && at.remove_task(&turn_context.sub_id)

@@ -11,6 +11,7 @@ use crate::config::types::Notifications;
 use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
+use crate::config::types::ProjectHookConfig;
 use crate::config::types::SandboxWorkspaceWrite;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
@@ -36,6 +37,7 @@ use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use crate::model_provider_info::built_in_model_providers;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
+use crate::project_hooks::ProjectHooks;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use codex_app_server_protocol::Tools;
@@ -319,6 +321,9 @@ pub struct Config {
     /// The currently active project config, resolved by checking if cwd:
     /// is (1) part of a git repo, (2) a git worktree, or (3) just using the cwd
     pub active_project: ProjectConfig,
+
+    /// Hooks configured for the active project.
+    pub project_hooks: ProjectHooks,
 
     /// Tracks whether the Windows onboarding screen has been acknowledged.
     pub windows_wsl_setup_acknowledged: bool,
@@ -937,6 +942,11 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio", "ollama", or "ollama-chat".
     pub oss_provider: Option<String>,
+
+    /// Global hooks configuration. These hooks run for every session.
+    /// Hook scripts are expected in ~/.codex/hooks/ directory.
+    #[serde(default)]
+    pub hooks: Option<Vec<ProjectHookConfig>>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -964,10 +974,17 @@ impl From<ConfigToml> for UserSavedConfig {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ProjectConfig {
     pub trust_level: Option<TrustLevel>,
+    pub hooks: Option<Vec<ProjectHookConfig>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveProject {
+    pub root: PathBuf,
+    pub config: ProjectConfig,
 }
 
 impl ProjectConfig {
@@ -1086,11 +1103,14 @@ impl ConfigToml {
 
     /// Resolves the cwd to an existing project, or returns None if ConfigToml
     /// does not contain a project corresponding to cwd or a git repo for cwd
-    pub fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
+    pub fn get_active_project_with_root(&self, resolved_cwd: &Path) -> Option<ActiveProject> {
         let projects = self.projects.clone().unwrap_or_default();
 
         if let Some(project_config) = projects.get(&resolved_cwd.to_string_lossy().to_string()) {
-            return Some(project_config.clone());
+            return Some(ActiveProject {
+                root: resolved_cwd.to_path_buf(),
+                config: project_config.clone(),
+            });
         }
 
         // If cwd lives inside a git repo/worktree, check whether the root git project
@@ -1100,10 +1120,18 @@ impl ConfigToml {
             && let Some(project_config_for_root) =
                 projects.get(&repo_root.to_string_lossy().to_string_lossy().to_string())
         {
-            return Some(project_config_for_root.clone());
+            return Some(ActiveProject {
+                root: repo_root,
+                config: project_config_for_root.clone(),
+            });
         }
 
         None
+    }
+
+    pub fn get_active_project(&self, resolved_cwd: &Path) -> Option<ProjectConfig> {
+        self.get_active_project_with_root(resolved_cwd)
+            .map(|project| project.config)
     }
 
     pub fn get_config_profile(
@@ -1294,9 +1322,23 @@ impl Config {
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, &resolved_cwd))
             .collect::<Result<Vec<_>, _>>()?;
-        let active_project = cfg
-            .get_active_project(&resolved_cwd)
-            .unwrap_or(ProjectConfig { trust_level: None });
+        let active_project_with_root = cfg.get_active_project_with_root(&resolved_cwd);
+        let active_project = active_project_with_root
+            .as_ref()
+            .map(|project| project.config.clone())
+            .unwrap_or_default();
+        let project_root = active_project_with_root
+            .as_ref()
+            .map(|project| project.root.as_path())
+            .unwrap_or(resolved_cwd.as_path());
+        // Global hooks use codex_home as their root
+        let global_hooks_root = codex_home.as_path();
+        let project_hooks = ProjectHooks::from_global_and_project_configs(
+            cfg.hooks.as_deref(),
+            global_hooks_root,
+            active_project.hooks.as_deref(),
+            project_root,
+        );
 
         let SandboxPolicyResolution {
             policy: mut sandbox_policy,
@@ -1548,6 +1590,7 @@ impl Config {
             features,
             active_profile: active_profile_name,
             active_project,
+            project_hooks,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
             notices: cfg.notice.unwrap_or_default(),
             check_for_update_on_startup,
@@ -3700,7 +3743,8 @@ model_verbosity = "high"
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
                 active_profile: Some("o3".to_string()),
-                active_project: ProjectConfig { trust_level: None },
+                active_project: ProjectConfig::default(),
+                project_hooks: ProjectHooks::default(),
                 windows_wsl_setup_acknowledged: false,
                 notices: Default::default(),
                 check_for_update_on_startup: true,
@@ -3781,7 +3825,8 @@ model_verbosity = "high"
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("gpt3".to_string()),
-            active_project: ProjectConfig { trust_level: None },
+            active_project: ProjectConfig::default(),
+            project_hooks: ProjectHooks::default(),
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -3877,7 +3922,8 @@ model_verbosity = "high"
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("zdr".to_string()),
-            active_project: ProjectConfig { trust_level: None },
+            active_project: ProjectConfig::default(),
+            project_hooks: ProjectHooks::default(),
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -3959,7 +4005,8 @@ model_verbosity = "high"
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
             active_profile: Some("gpt5".to_string()),
-            active_project: ProjectConfig { trust_level: None },
+            active_project: ProjectConfig::default(),
+            project_hooks: ProjectHooks::default(),
             windows_wsl_setup_acknowledged: false,
             notices: Default::default(),
             check_for_update_on_startup: true,
@@ -4277,6 +4324,7 @@ mcp_oauth_callback_port = 5678
                     test_path.to_string_lossy().to_string(),
                     ProjectConfig {
                         trust_level: Some(TrustLevel::Untrusted),
+                        hooks: None,
                     },
                 )])),
                 ..Default::default()

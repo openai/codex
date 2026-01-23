@@ -4,35 +4,55 @@ use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::Result as CodexResult;
+use crate::hooks::run_post_compact_hooks;
+use crate::hooks::run_pre_compact_hooks;
 use crate::protocol::CompactedItem;
 use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TurnStartedEvent;
 use codex_protocol::models::ResponseItem;
+use tracing::warn;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) {
-    run_remote_compact_task_inner(&sess, &turn_context).await;
+    let reason = "auto-remote";
+    if let Err(err) = run_pre_compact_hooks(sess.as_ref(), turn_context.as_ref(), reason).await {
+        warn!("pre compact hook execution failed: {err}");
+    }
+    run_remote_compact_task_inner(&sess, &turn_context, reason).await;
 }
 
 pub(crate) async fn run_remote_compact_task(sess: Arc<Session>, turn_context: Arc<TurnContext>) {
+    let reason = "manual-remote";
+    if let Err(err) = run_pre_compact_hooks(sess.as_ref(), turn_context.as_ref(), reason).await {
+        warn!("pre compact hook execution failed: {err}");
+    }
     let start_event = EventMsg::TurnStarted(TurnStartedEvent {
         model_context_window: turn_context.client.get_model_context_window(),
     });
     sess.send_event(&turn_context, start_event).await;
 
-    run_remote_compact_task_inner(&sess, &turn_context).await;
+    run_remote_compact_task_inner(&sess, &turn_context, reason).await;
 }
 
-async fn run_remote_compact_task_inner(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
+async fn run_remote_compact_task_inner(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    reason: &str,
+) {
     if let Err(err) = run_remote_compact_task_inner_impl(sess, turn_context).await {
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
         );
         sess.send_event(turn_context, event).await;
+        return;
+    }
+
+    if let Err(err) = run_post_compact_hooks(sess.as_ref(), turn_context.as_ref(), reason).await {
+        warn!("post compact hook execution failed: {err}");
     }
 }
 

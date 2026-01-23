@@ -34,6 +34,7 @@ async fn make_config_for_test(
                 project_path.to_string_lossy().to_string(),
                 ProjectConfig {
                     trust_level: Some(trust_level),
+                    hooks: None,
                 },
             )])),
             project_root_markers,

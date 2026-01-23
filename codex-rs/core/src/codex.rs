@@ -103,6 +103,8 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
+use crate::hooks::run_notification_hooks;
+use crate::hooks::run_session_start_hooks;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
@@ -204,6 +206,7 @@ pub struct CodexSpawnOk {
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
+const SESSION_START_SUB_ID: &str = "session-start";
 pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 64;
 static CHAT_WIRE_API_DEPRECATION_EMITTED: AtomicBool = AtomicBool::new(false);
 
@@ -839,6 +842,13 @@ impl Session {
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
 
+        let session_start_context = sess
+            .new_default_turn_with_sub_id(SESSION_START_SUB_ID.to_string())
+            .await;
+        if let Err(err) = run_session_start_hooks(sess.as_ref(), &session_start_context).await {
+            warn!("session start hook execution failed: {err}");
+        }
+
         Ok(sess)
     }
 
@@ -1288,6 +1298,34 @@ impl Session {
             }),
         )
         .await;
+    }
+
+    /// Returns the session's conversation/thread ID.
+    pub(crate) fn conversation_id(&self) -> ThreadId {
+        self.conversation_id
+    }
+
+    /// Returns the rollout path if available.
+    pub(crate) async fn rollout_path(&self) -> Option<PathBuf> {
+        let guard = self.services.rollout.lock().await;
+        guard.as_ref().map(|r| r.rollout_path.clone())
+    }
+
+    /// Returns hooks configured for the given event.
+    pub(crate) async fn get_hooks_for_event(
+        &self,
+        event: crate::config::types::ProjectHookEvent,
+    ) -> Vec<crate::project_hooks::ProjectHook> {
+        let state = self.state.lock().await;
+        state
+            .session_configuration
+            .original_config_do_not_use
+            .project_hooks
+            .hooks()
+            .iter()
+            .filter(|h| h.event == event)
+            .cloned()
+            .collect()
     }
 
     /// Adds an execpolicy amendment to both the in-memory and on-disk policies so future
@@ -2207,6 +2245,7 @@ mod handlers {
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
+    use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SkillsListEntry;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use codex_protocol::protocol::TurnAbortReason;
@@ -2214,12 +2253,16 @@ mod handlers {
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
+    use crate::hooks::run_session_end_hooks;
+    use crate::hooks::run_subagent_stop_hooks;
+    use crate::hooks::run_user_prompt_submit_hooks;
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::Settings;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
     use mcp_types::RequestId;
+    use serde_json::json;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tracing::info;
@@ -2277,7 +2320,7 @@ mod handlers {
         op: Op,
         previous_context: &mut Option<Arc<TurnContext>>,
     ) {
-        let (items, updates) = match op {
+        let (mut items, updates) = match op {
             Op::UserTurn {
                 cwd,
                 approval_policy,
@@ -2335,6 +2378,46 @@ mod handlers {
             // new_turn_with_sub_id already emits the error event.
             return;
         };
+
+        match run_user_prompt_submit_hooks(
+            sess.as_ref(),
+            &current_context,
+            &user_prompt_text(&items),
+        )
+        .await
+        {
+            Ok(hook_result) => {
+                if !hook_result.continue_processing {
+                    let message = hook_result
+                        .system_message
+                        .unwrap_or_else(|| "blocked by hook".to_string());
+                    sess.send_event_raw(Event {
+                        id: current_context.sub_id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message,
+                            codex_error_info: Some(CodexErrorInfo::BadRequest),
+                        }),
+                    })
+                    .await;
+                    return;
+                }
+
+                if let Some(updated_prompt) = hook_result.updated_prompt {
+                    items = apply_updated_prompt(items, updated_prompt);
+                }
+
+                if let Some(message) = hook_result.system_message {
+                    sess.send_event(
+                        &current_context,
+                        EventMsg::Warning(WarningEvent { message }),
+                    )
+                    .await;
+                }
+            }
+            Err(err) => {
+                warn!("user prompt hook execution failed: {err}");
+            }
+        }
         current_context
             .client
             .get_otel_manager()
@@ -2359,6 +2442,48 @@ mod handlers {
                 .await;
             *previous_context = Some(current_context);
         }
+    }
+
+    fn user_prompt_text(items: &[UserInput]) -> String {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                UserInput::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>()
+    }
+
+    // Replace any text inputs with the updated prompt, preserving non-text items.
+    fn apply_updated_prompt(items: Vec<UserInput>, updated_prompt: String) -> Vec<UserInput> {
+        let mut pending_prompt = Some(updated_prompt);
+        let mut updated = Vec::with_capacity(items.len() + 1);
+
+        for item in items {
+            match item {
+                UserInput::Text { .. } => {
+                    if let Some(text) = pending_prompt.take() {
+                        updated.push(UserInput::Text {
+                            text,
+                            text_elements: Vec::new(),
+                        });
+                    }
+                }
+                other => updated.push(other),
+            }
+        }
+
+        if let Some(text) = pending_prompt {
+            updated.insert(
+                0,
+                UserInput::Text {
+                    text,
+                    text_elements: Vec::new(),
+                },
+            );
+        }
+
+        updated
     }
 
     pub async fn run_user_shell_command(
@@ -2639,6 +2764,22 @@ mod handlers {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id.clone()).await;
+        let session_source = {
+            let state = sess.state.lock().await;
+            state.session_configuration.session_source.clone()
+        };
+        if matches!(session_source, SessionSource::SubAgent(_)) {
+            let details = json!({ "session_source": session_source.to_string() });
+            if let Err(err) =
+                run_subagent_stop_hooks(sess.as_ref(), &turn_context, "shutdown", &details).await
+            {
+                warn!("subagent stop hook execution failed: {err}");
+            }
+        }
+        if let Err(err) = run_session_end_hooks(sess.as_ref(), &turn_context).await {
+            warn!("session end hook execution failed: {err}");
+        }
         info!("Shutting down Codex instance");
         let history = sess.clone_history().await;
         let turn_count = history
@@ -2970,14 +3111,20 @@ pub(crate) async fn run_turn(
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
-                    sess.notifier()
-                        .notify(&UserNotification::AgentTurnComplete {
-                            thread_id: sess.conversation_id.to_string(),
-                            turn_id: turn_context.sub_id.clone(),
-                            cwd: turn_context.cwd.display().to_string(),
-                            input_messages: sampling_request_input_messages,
-                            last_assistant_message: last_agent_message.clone(),
-                        });
+                    let notification = UserNotification::AgentTurnComplete {
+                        thread_id: sess.conversation_id.to_string(),
+                        turn_id: turn_context.sub_id.clone(),
+                        cwd: turn_context.cwd.display().to_string(),
+                        input_messages: sampling_request_input_messages,
+                        last_assistant_message: last_agent_message.clone(),
+                    };
+                    // Run notification hooks
+                    if let Err(err) =
+                        run_notification_hooks(&sess, &turn_context, &notification).await
+                    {
+                        warn!("notification hook failed: {err}");
+                    }
+                    sess.notifier().notify(&notification);
                     break;
                 }
                 continue;

@@ -1,4 +1,7 @@
 use crate::function_tool::FunctionCallError;
+use crate::hooks::HookPermissionDecision;
+use crate::hooks::ToolHookContext;
+use crate::hooks::run_pre_tool_hooks;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
 use crate::protocol::TerminalInteractionEvent;
@@ -12,6 +15,7 @@ use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
@@ -155,6 +159,8 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
                 let cwd = workdir.clone().unwrap_or_else(|| context.turn.cwd.clone());
+                let mut hook_requested_approval = false;
+                let mut hook_approval_reason: Option<String> = None;
 
                 if let Some(output) = intercept_apply_patch(
                     &command,
@@ -172,6 +178,69 @@ impl ToolHandler for UnifiedExecHandler {
                     return Ok(output);
                 }
 
+                let hook_ctx = ToolHookContext {
+                    session: session.as_ref(),
+                    turn: turn.as_ref(),
+                    call_id: &call_id,
+                    tool_name: tool_name.as_str(),
+                    command: &command,
+                    cwd: &cwd,
+                    timeout_ms: Some(yield_time_ms),
+                };
+
+                if let Ok(hook_result) = run_pre_tool_hooks(&hook_ctx).await {
+                    match hook_result.permission_decision {
+                        Some(HookPermissionDecision::Deny) => {
+                            manager.release_process_id(&process_id).await;
+                            let reason = hook_result
+                                .system_message
+                                .unwrap_or_else(|| "blocked by hook".to_string());
+                            return Err(FunctionCallError::RespondToModel(reason));
+                        }
+                        Some(HookPermissionDecision::Ask) => {
+                            hook_requested_approval = true;
+                            hook_approval_reason = hook_result.system_message.clone();
+                        }
+                        Some(HookPermissionDecision::Allow) | None => {
+                            // Continue processing
+                        }
+                    }
+                    if !hook_result.continue_processing {
+                        manager.release_process_id(&process_id).await;
+                        let reason = hook_result
+                            .system_message
+                            .unwrap_or_else(|| "stopped by hook".to_string());
+                        return Err(FunctionCallError::RespondToModel(reason));
+                    }
+                }
+
+                let features = session.features();
+                let exec_approval_requirement = session
+                    .services
+                    .exec_policy
+                    .create_exec_approval_requirement_for_command(
+                        &features,
+                        &command,
+                        context.turn.approval_policy,
+                        &context.turn.sandbox_policy,
+                        sandbox_permissions,
+                    )
+                    .await;
+                let exec_approval_requirement = if hook_requested_approval {
+                    match &exec_approval_requirement {
+                        ExecApprovalRequirement::Forbidden { .. } => exec_approval_requirement,
+                        _ => ExecApprovalRequirement::NeedsApproval {
+                            reason: hook_approval_reason
+                                .or_else(|| Some("Command requires approval (hook)".to_string())),
+                            proposed_execpolicy_amendment: exec_approval_requirement
+                                .proposed_execpolicy_amendment()
+                                .cloned(),
+                        },
+                    }
+                } else {
+                    exec_approval_requirement
+                };
+
                 manager
                     .exec_command(
                         ExecCommandRequest {
@@ -183,6 +252,7 @@ impl ToolHandler for UnifiedExecHandler {
                             tty,
                             sandbox_permissions,
                             justification,
+                            exec_approval_requirement,
                         },
                         &context,
                     )

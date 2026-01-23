@@ -88,6 +88,10 @@ fn summarize_interaction_input(input: &str) -> String {
     preview
 }
 
+fn is_hook_call(call: &ExecCall) -> bool {
+    call.call_id.contains("_hook_")
+}
+
 #[derive(Clone)]
 pub(crate) struct OutputLines {
     pub(crate) lines: Vec<Line<'static>>,
@@ -389,7 +393,11 @@ impl ExecCell {
         } else {
             strip_bash_lc_and_escape(&call.command)
         };
-        let highlighted_lines = highlight_bash_to_lines(&cmd_display);
+        let highlighted_lines = if is_hook_call(call) {
+            vec![Line::from(vec![Span::from(cmd_display).green()])]
+        } else {
+            highlight_bash_to_lines(&cmd_display)
+        };
 
         let continuation_wrap_width = layout.command_continuation.wrap_width(width);
         let continuation_opts =
