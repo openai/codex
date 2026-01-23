@@ -97,7 +97,7 @@ impl SlashCommand {
     pub fn supports_inline_args(self) -> bool {
         matches!(
             self,
-            SlashCommand::Review | SlashCommand::Rename | SlashCommand::Plan
+            SlashCommand::Review | SlashCommand::Rename | SlashCommand::Plan | SlashCommand::Fork
         )
     }
 

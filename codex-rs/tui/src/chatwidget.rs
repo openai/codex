@@ -157,6 +157,7 @@ const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
+use crate::app_event::ForkPanePlacement;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
@@ -3226,7 +3227,8 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
             SlashCommand::Fork => {
-                self.app_event_tx.send(AppEvent::ForkCurrentSession);
+                self.app_event_tx
+                    .send(AppEvent::ForkCurrentSession { placement: None });
             }
             SlashCommand::Init => {
                 let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
@@ -3515,6 +3517,22 @@ impl ChatWidget {
                     self.queue_user_message(user_message);
                 }
             }
+            SlashCommand::Fork => {
+                if trimmed.is_empty() {
+                    self.app_event_tx
+                        .send(AppEvent::ForkCurrentSession { placement: None });
+                    return;
+                }
+                let mut parts = trimmed.split_whitespace();
+                let placement = parts.next().and_then(Self::parse_fork_pane_placement);
+                if placement.is_none() || parts.next().is_some() {
+                    let message = "Usage: /fork [up|down|left|right|float]".to_string();
+                    self.add_error_message(message);
+                    return;
+                }
+                self.app_event_tx
+                    .send(AppEvent::ForkCurrentSession { placement });
+            }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) =
                     self.bottom_pane.prepare_inline_args_submission(false)
@@ -3565,6 +3583,17 @@ impl ChatWidget {
         );
 
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn parse_fork_pane_placement(arg: &str) -> Option<ForkPanePlacement> {
+        match arg.to_ascii_lowercase().as_str() {
+            "left" => Some(ForkPanePlacement::Left),
+            "right" => Some(ForkPanePlacement::Right),
+            "up" => Some(ForkPanePlacement::Up),
+            "down" => Some(ForkPanePlacement::Down),
+            "float" => Some(ForkPanePlacement::Float),
+            _ => None,
+        }
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
