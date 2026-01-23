@@ -106,6 +106,9 @@ pub enum CodexErr {
     #[error("{0}")]
     InvalidRequest(String),
 
+    #[error("OpenAI authentication required.")]
+    AuthRequired,
+
     /// Invalid image.
     #[error("Image poisoning")]
     InvalidImageRequest(),
@@ -205,7 +208,8 @@ impl CodexErr {
             | CodexErr::AgentLimitReached { .. }
             | CodexErr::Spawn
             | CodexErr::SessionConfiguredNotFirstEvent
-            | CodexErr::UsageLimitReached(_) => false,
+            | CodexErr::UsageLimitReached(_)
+            | CodexErr::AuthRequired => false,
             CodexErr::Stream(..)
             | CodexErr::Timeout
             | CodexErr::UnexpectedStatus(_)

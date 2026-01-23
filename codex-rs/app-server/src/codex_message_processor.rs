@@ -1387,10 +1387,13 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error creating conversation: {err}"),
-                    data: None,
+                let error = match err {
+                    CodexErr::AuthRequired => Self::auth_required_error(),
+                    _ => JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("error creating conversation: {err}"),
+                        data: None,
+                    },
                 };
                 self.outgoing.send_error(request_id, error).await;
             }
@@ -1500,10 +1503,13 @@ impl CodexMessageProcessor {
                     .await;
             }
             Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error creating thread: {err}"),
-                    data: None,
+                let error = match err {
+                    CodexErr::AuthRequired => Self::auth_required_error(),
+                    _ => JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("error creating thread: {err}"),
+                        data: None,
+                    },
                 };
                 self.outgoing.send_error(request_id, error).await;
             }
@@ -2015,10 +2021,13 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error resuming thread: {err}"),
-                    data: None,
+                let error = match err {
+                    CodexErr::AuthRequired => Self::auth_required_error(),
+                    _ => JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("error resuming thread: {err}"),
+                        data: None,
+                    },
                 };
                 self.outgoing.send_error(request_id, error).await;
             }
@@ -2147,18 +2156,26 @@ impl CodexMessageProcessor {
         {
             Ok(thread) => thread,
             Err(err) => {
-                let (code, message) = match err {
-                    CodexErr::Io(_) | CodexErr::Json(_) => (
-                        INVALID_REQUEST_ERROR_CODE,
-                        format!("failed to load rollout `{}`: {err}", rollout_path.display()),
-                    ),
-                    CodexErr::InvalidRequest(message) => (INVALID_REQUEST_ERROR_CODE, message),
-                    _ => (INTERNAL_ERROR_CODE, format!("error forking thread: {err}")),
-                };
-                let error = JSONRPCErrorError {
-                    code,
-                    message,
-                    data: None,
+                let error = match err {
+                    CodexErr::AuthRequired => Self::auth_required_error(),
+                    CodexErr::Io(_) | CodexErr::Json(_) => JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!(
+                            "failed to load rollout `{}`: {err}",
+                            rollout_path.display()
+                        ),
+                        data: None,
+                    },
+                    CodexErr::InvalidRequest(message) => JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message,
+                        data: None,
+                    },
+                    _ => JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("error forking thread: {err}"),
+                        data: None,
+                    },
                 };
                 self.outgoing.send_error(request_id, error).await;
                 return;
@@ -2946,10 +2963,13 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error resuming conversation: {err}"),
-                    data: None,
+                let error = match err {
+                    CodexErr::AuthRequired => Self::auth_required_error(),
+                    _ => JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("error resuming conversation: {err}"),
+                        data: None,
+                    },
                 };
                 self.outgoing.send_error(request_id, error).await;
             }
@@ -3096,21 +3116,26 @@ impl CodexMessageProcessor {
         {
             Ok(thread) => thread,
             Err(err) => {
-                let (code, message) = match err {
-                    CodexErr::Io(_) | CodexErr::Json(_) => (
-                        INVALID_REQUEST_ERROR_CODE,
-                        format!("failed to load rollout `{}`: {err}", rollout_path.display()),
-                    ),
-                    CodexErr::InvalidRequest(message) => (INVALID_REQUEST_ERROR_CODE, message),
-                    _ => (
-                        INTERNAL_ERROR_CODE,
-                        format!("error forking conversation: {err}"),
-                    ),
-                };
-                let error = JSONRPCErrorError {
-                    code,
-                    message,
-                    data: None,
+                let error = match err {
+                    CodexErr::AuthRequired => Self::auth_required_error(),
+                    CodexErr::Io(_) | CodexErr::Json(_) => JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!(
+                            "failed to load rollout `{}`: {err}",
+                            rollout_path.display()
+                        ),
+                        data: None,
+                    },
+                    CodexErr::InvalidRequest(message) => JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message,
+                        data: None,
+                    },
+                    _ => JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("error forking conversation: {err}"),
+                        data: None,
+                    },
                 };
                 self.outgoing.send_error(request_id, error).await;
                 return;
@@ -3151,6 +3176,15 @@ impl CodexMessageProcessor {
             data: None,
         };
         self.outgoing.send_error(request_id, error).await;
+    }
+
+    fn auth_required_error() -> JSONRPCErrorError {
+        JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            message: "OpenAI authentication required. Please login via account/login/start (chatgpt or apiKey)."
+                .to_string(),
+            data: None,
+        }
     }
 
     async fn send_internal_error(&self, request_id: RequestId, message: String) {
@@ -3349,12 +3383,24 @@ impl CodexMessageProcessor {
             .collect();
 
         // Submit user input to the conversation.
-        let _ = conversation
+        if let Err(err) = conversation
             .submit(Op::UserInput {
                 items: mapped_items,
                 final_output_json_schema: None,
             })
-            .await;
+            .await
+        {
+            let error = match err {
+                CodexErr::AuthRequired => Self::auth_required_error(),
+                _ => JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to send message: {err}"),
+                    data: None,
+                },
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
 
         // Acknowledge with an empty result.
         self.outgoing
@@ -3400,7 +3446,7 @@ impl CodexMessageProcessor {
             })
             .collect();
 
-        let _ = conversation
+        if let Err(err) = conversation
             .submit(Op::UserTurn {
                 items: mapped_items,
                 cwd,
@@ -3413,7 +3459,19 @@ impl CodexMessageProcessor {
                 collaboration_mode: None,
                 personality: None,
             })
-            .await;
+            .await
+        {
+            let error = match err {
+                CodexErr::AuthRequired => Self::auth_required_error(),
+                _ => JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to start turn: {err}"),
+                    data: None,
+                },
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
 
         self.outgoing
             .send_response(request_id, SendUserTurnResponse {})
@@ -3671,10 +3729,13 @@ impl CodexMessageProcessor {
                     .await;
             }
             Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to start turn: {err}"),
-                    data: None,
+                let error = match err {
+                    CodexErr::AuthRequired => Self::auth_required_error(),
+                    _ => JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to start turn: {err}"),
+                        data: None,
+                    },
                 };
                 self.outgoing.send_error(request_id, error).await;
             }
@@ -3749,10 +3810,13 @@ impl CodexMessageProcessor {
                 .await;
                 Ok(())
             }
-            Err(err) => Err(JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to start review: {err}"),
-                data: None,
+            Err(err) => Err(match err {
+                CodexErr::AuthRequired => Self::auth_required_error(),
+                _ => JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to start review: {err}"),
+                    data: None,
+                },
             }),
         }
     }
@@ -3792,10 +3856,13 @@ impl CodexMessageProcessor {
             .thread_manager
             .fork_thread(usize::MAX, config, rollout_path)
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("error creating detached review thread: {err}"),
-                data: None,
+            .map_err(|err| match err {
+                CodexErr::AuthRequired => Self::auth_required_error(),
+                _ => JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("error creating detached review thread: {err}"),
+                    data: None,
+                },
             })?;
 
         if let Err(err) = self
@@ -3831,10 +3898,13 @@ impl CodexMessageProcessor {
         let turn_id = review_thread
             .submit(Op::Review { review_request })
             .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to start detached review turn: {err}"),
-                data: None,
+            .map_err(|err| match err {
+                CodexErr::AuthRequired => Self::auth_required_error(),
+                _ => JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to start detached review turn: {err}"),
+                    data: None,
+                },
             })?;
 
         let turn = Self::build_review_turn(turn_id, display_text);
