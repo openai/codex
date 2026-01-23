@@ -33,6 +33,8 @@ use codex_core::read_session_meta_line;
 use codex_core::terminal::Multiplexer;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use cwd_prompt::CwdPromptAction;
 use cwd_prompt::CwdSelection;
@@ -662,6 +664,9 @@ async fn run_ratatui_app(
 }
 
 async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
+    if let Some(cwd) = read_latest_turn_context_cwd(path).await {
+        return Some(cwd);
+    }
     match read_session_meta_line(path).await {
         Ok(meta_line) => Some(meta_line.meta.cwd),
         Err(err) => {
@@ -674,6 +679,23 @@ async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
             None
         }
     }
+}
+
+async fn read_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
+    let text = tokio::fs::read_to_string(path).await.ok()?;
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
+            continue;
+        };
+        if let RolloutItem::TurnContext(item) = rollout_line.item {
+            return Some(item.cwd);
+        }
+    }
+    None
 }
 
 fn should_prompt_for_cwd(current_cwd: &Path, session_cwd: &Path) -> bool {
@@ -824,6 +846,11 @@ mod tests {
     use super::*;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ProjectConfig;
+    use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::RolloutLine;
+    use codex_protocol::protocol::SessionMeta;
+    use codex_protocol::protocol::SessionMetaLine;
+    use codex_protocol::protocol::TurnContextItem;
     use serial_test::serial;
     use tempfile::TempDir;
 
@@ -895,6 +922,89 @@ mod tests {
             !should_show,
             "Trust prompt should not be shown for projects explicitly marked as untrusted"
         );
+        Ok(())
+    }
+
+    fn build_turn_context(config: &Config, cwd: PathBuf) -> TurnContextItem {
+        let model = config
+            .model
+            .clone()
+            .unwrap_or_else(|| "gpt-5.1".to_string());
+        TurnContextItem {
+            cwd,
+            approval_policy: config.approval_policy.value(),
+            sandbox_policy: config.sandbox_policy.get().clone(),
+            model,
+            personality: None,
+            collaboration_mode: None,
+            effort: config.model_reasoning_effort,
+            summary: config.model_reasoning_summary,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn read_session_cwd_prefers_latest_turn_context() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let first = temp_dir.path().join("first");
+        let second = temp_dir.path().join("second");
+        std::fs::create_dir_all(&first)?;
+        std::fs::create_dir_all(&second)?;
+
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        let lines = vec![
+            RolloutLine {
+                timestamp: "t0".to_string(),
+                item: RolloutItem::TurnContext(build_turn_context(&config, first)),
+            },
+            RolloutLine {
+                timestamp: "t1".to_string(),
+                item: RolloutItem::TurnContext(build_turn_context(&config, second.clone())),
+            },
+        ];
+        let mut text = String::new();
+        for line in lines {
+            text.push_str(&serde_json::to_string(&line).expect("serialize rollout"));
+            text.push('\n');
+        }
+        std::fs::write(&rollout_path, text)?;
+
+        let cwd = read_session_cwd(&rollout_path).await.expect("expected cwd");
+        assert_eq!(cwd, second);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_session_cwd_falls_back_to_session_meta() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let _config = build_config(&temp_dir).await?;
+        let session_cwd = temp_dir.path().join("session");
+        std::fs::create_dir_all(&session_cwd)?;
+
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        let session_meta = SessionMeta {
+            cwd: session_cwd.clone(),
+            ..SessionMeta::default()
+        };
+        let meta_line = RolloutLine {
+            timestamp: "t0".to_string(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: session_meta,
+                git: None,
+            }),
+        };
+        let text = format!(
+            "{}\n",
+            serde_json::to_string(&meta_line).expect("serialize meta")
+        );
+        std::fs::write(&rollout_path, text)?;
+
+        let cwd = read_session_cwd(&rollout_path).await.expect("expected cwd");
+        assert_eq!(cwd, session_cwd);
         Ok(())
     }
 }

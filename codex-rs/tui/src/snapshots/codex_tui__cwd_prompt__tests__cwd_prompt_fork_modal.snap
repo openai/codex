@@ -1,0 +1,14 @@
+---
+source: tui/src/cwd_prompt.rs
+expression: terminal.backend()
+---
+
+Choose working directory to fork this session
+
+  Session directory: /Users/example/session
+  Current directory: /Users/example/current
+
+› 1. Use current directory (/Users/example/current)                             
+  2. Use session directory (/Users/example/session)
+
+  Press enter to continue
