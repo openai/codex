@@ -386,25 +386,28 @@ fn build_authorize_url(
     forced_chatgpt_workspace_id: Option<&str>,
 ) -> String {
     let mut query = vec![
-        ("response_type".to_owned(), "code".to_owned()),
-        ("client_id".to_owned(), client_id.to_owned()),
-        ("redirect_uri".to_owned(), redirect_uri.to_owned()),
+        ("response_type".to_string(), "code".to_string()),
+        ("client_id".to_string(), client_id.to_string()),
+        ("redirect_uri".to_string(), redirect_uri.to_string()),
         (
-            "scope".to_owned(),
-            "openid profile email offline_access api.model.audio.request".to_owned(),
+            "scope".to_string(),
+            "openid profile email offline_access api.model.audio.request".to_string(),
         ),
-        ("code_challenge".to_owned(), pkce.code_challenge.to_string()),
-        ("code_challenge_method".to_owned(), "S256".to_owned()),
-        ("id_token_add_organizations".to_owned(), "true".to_owned()),
-        ("codex_cli_simplified_flow".to_owned(), "true".to_owned()),
-        ("state".to_owned(), state.to_owned()),
         (
-            "originator".to_owned(),
-            originator().value.as_str().to_owned(),
+            "code_challenge".to_string(),
+            pkce.code_challenge.to_string(),
+        ),
+        ("code_challenge_method".to_string(), "S256".to_string()),
+        ("id_token_add_organizations".to_string(), "true".to_string()),
+        ("codex_cli_simplified_flow".to_string(), "true".to_string()),
+        ("state".to_string(), state.to_string()),
+        (
+            "originator".to_string(),
+            originator().value.as_str().to_string(),
         ),
     ];
     if let Some(workspace_id) = forced_chatgpt_workspace_id {
-        query.push(("allowed_workspace_id".to_owned(), workspace_id.to_owned()));
+        query.push(("allowed_workspace_id".to_string(), workspace_id.to_string()));
     }
     let qs = query
         .into_iter()
