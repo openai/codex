@@ -1,4 +1,5 @@
 use codex_core::config::Config;
+use codex_core::features::Feature;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -36,6 +37,9 @@ struct ListConnectorsResponse {
 }
 
 pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<ConnectorInfo>> {
+    if !config.features.enabled(Feature::Connectors) {
+        return Ok(Vec::new());
+    }
     let (connectors_result, accessible_result) = tokio::join!(
         list_all_connectors(config),
         list_accessible_connectors_from_mcp_tools(config),
@@ -46,6 +50,9 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<ConnectorInf
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<ConnectorInfo>> {
+    if !config.features.enabled(Feature::Connectors) {
+        return Ok(Vec::new());
+    }
     init_chatgpt_token_from_auth(&config.codex_home, config.cli_auth_credentials_store_mode)
         .await?;
 

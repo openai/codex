@@ -1071,8 +1071,12 @@ impl App {
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
             }
-            AppEvent::OpenFullAccessConfirmation { preset } => {
-                self.chat_widget.open_full_access_confirmation(preset);
+            AppEvent::OpenFullAccessConfirmation {
+                preset,
+                return_to_permissions,
+            } => {
+                self.chat_widget
+                    .open_full_access_confirmation(preset, return_to_permissions);
             }
             AppEvent::OpenWorldWritableWarningConfirmation {
                 preset,
@@ -1241,6 +1245,7 @@ impl App {
                                         effort: None,
                                         summary: None,
                                         collaboration_mode: None,
+                                        personality: None,
                                     },
                                 ));
                                 self.app_event_tx
@@ -1514,6 +1519,9 @@ impl App {
                     }
                 }
             }
+            AppEvent::OpenPermissionsPopup => {
+                self.chat_widget.open_permissions_popup();
+            }
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;
             }
@@ -1522,6 +1530,13 @@ impl App {
             }
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
+            }
+            AppEvent::SubmitUserMessageWithMode {
+                text,
+                collaboration_mode,
+            } => {
+                self.chat_widget
+                    .submit_user_message_with_mode(text, collaboration_mode);
             }
             AppEvent::ManageSkillsClosed => {
                 self.chat_widget.handle_manage_skills_closed();

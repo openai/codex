@@ -13,6 +13,9 @@ use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
+use codex_app_server_protocol::AppInfo as ApiAppInfo;
+use codex_app_server_protocol::AppsListParams;
+use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::ArchiveConversationResponse;
 use codex_app_server_protocol::AskForApproval;
@@ -104,6 +107,8 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadLoadedListResponse;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
@@ -407,11 +412,14 @@ impl CodexMessageProcessor {
             ClientRequest::ThreadLoadedList { request_id, params } => {
                 self.thread_loaded_list(request_id, params).await;
             }
+            ClientRequest::ThreadRead { request_id, params } => {
+                self.thread_read(request_id, params).await;
+            }
             ClientRequest::SkillsList { request_id, params } => {
                 self.skills_list(request_id, params).await;
             }
-            ClientRequest::ConnectorsList { request_id, params } => {
-                self.connectors_list(request_id, params).await;
+            ClientRequest::AppsList { request_id, params } => {
+                self.apps_list(request_id, params).await;
             }
             ClientRequest::SkillsConfigWrite { request_id, params } => {
                 self.skills_config_write(request_id, params).await;
@@ -1628,6 +1636,7 @@ impl CodexMessageProcessor {
             limit,
             sort_key,
             model_providers,
+            archived,
         } = params;
 
         let requested_page_size = limit
@@ -1639,7 +1648,13 @@ impl CodexMessageProcessor {
             ThreadSortKey::UpdatedAt => CoreThreadSortKey::UpdatedAt,
         };
         let (summaries, next_cursor) = match self
-            .list_threads_common(requested_page_size, cursor, model_providers, core_sort_key)
+            .list_threads_common(
+                requested_page_size,
+                cursor,
+                model_providers,
+                core_sort_key,
+                archived.unwrap_or(false),
+            )
             .await
         {
             Ok(r) => r,
@@ -1706,6 +1721,83 @@ impl CodexMessageProcessor {
             data: page,
             next_cursor,
         };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn thread_read(&self, request_id: RequestId, params: ThreadReadParams) {
+        let ThreadReadParams {
+            thread_id,
+            include_turns,
+        } = params;
+
+        let thread_uuid = match ThreadId::from_string(&thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                self.send_invalid_request_error(request_id, format!("invalid thread id: {err}"))
+                    .await;
+                return;
+            }
+        };
+
+        let rollout_path =
+            match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
+                .await
+            {
+                Ok(Some(path)) => path,
+                Ok(None) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("no rollout found for thread id {thread_uuid}"),
+                    )
+                    .await;
+                    return;
+                }
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to locate thread id {thread_uuid}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+        let fallback_provider = self.config.model_provider_id.as_str();
+        let mut thread = match read_summary_from_rollout(&rollout_path, fallback_provider).await {
+            Ok(summary) => summary_to_thread(summary),
+            Err(err) => {
+                self.send_internal_error(
+                    request_id,
+                    format!(
+                        "failed to load rollout `{}` for thread {thread_uuid}: {err}",
+                        rollout_path.display()
+                    ),
+                )
+                .await;
+                return;
+            }
+        };
+
+        if include_turns {
+            match read_event_msgs_from_rollout(&rollout_path).await {
+                Ok(events) => {
+                    thread.turns = build_turns_from_event_msgs(&events);
+                }
+                Err(err) => {
+                    self.send_internal_error(
+                        request_id,
+                        format!(
+                            "failed to load rollout `{}` for thread {thread_uuid}: {err}",
+                            rollout_path.display()
+                        ),
+                    )
+                    .await;
+                    return;
+                }
+            }
+        }
+
+        let response = ThreadReadResponse { thread };
         self.outgoing.send_response(request_id, response).await;
     }
 
@@ -2205,6 +2297,7 @@ impl CodexMessageProcessor {
                 cursor,
                 model_providers,
                 CoreThreadSortKey::UpdatedAt,
+                false,
             )
             .await
         {
@@ -2224,6 +2317,7 @@ impl CodexMessageProcessor {
         cursor: Option<String>,
         model_providers: Option<Vec<String>>,
         sort_key: CoreThreadSortKey,
+        archived: bool,
     ) -> Result<(Vec<ConversationSummary>, Option<String>), JSONRPCErrorError> {
         let mut cursor_obj: Option<RolloutCursor> = match cursor.as_ref() {
             Some(cursor_str) => {
@@ -2254,21 +2348,39 @@ impl CodexMessageProcessor {
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
-            let page = RolloutRecorder::list_threads(
-                &self.config.codex_home,
-                page_size,
-                cursor_obj.as_ref(),
-                sort_key,
-                INTERACTIVE_SESSION_SOURCES,
-                model_provider_filter.as_deref(),
-                fallback_provider.as_str(),
-            )
-            .await
-            .map_err(|err| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: format!("failed to list threads: {err}"),
-                data: None,
-            })?;
+            let page = if archived {
+                RolloutRecorder::list_archived_threads(
+                    &self.config.codex_home,
+                    page_size,
+                    cursor_obj.as_ref(),
+                    sort_key,
+                    INTERACTIVE_SESSION_SOURCES,
+                    model_provider_filter.as_deref(),
+                    fallback_provider.as_str(),
+                )
+                .await
+                .map_err(|err| JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to list threads: {err}"),
+                    data: None,
+                })?
+            } else {
+                RolloutRecorder::list_threads(
+                    &self.config.codex_home,
+                    page_size,
+                    cursor_obj.as_ref(),
+                    sort_key,
+                    INTERACTIVE_SESSION_SOURCES,
+                    model_provider_filter.as_deref(),
+                    fallback_provider.as_str(),
+                )
+                .await
+                .map_err(|err| JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to list threads: {err}"),
+                    data: None,
+                })?
+            };
 
             let mut filtered = page
                 .items
@@ -3295,6 +3407,7 @@ impl CodexMessageProcessor {
                 summary,
                 final_output_json_schema: output_schema,
                 collaboration_mode: None,
+                personality: None,
             })
             .await;
 
@@ -3303,8 +3416,8 @@ impl CodexMessageProcessor {
             .await;
     }
 
-    async fn connectors_list(&self, request_id: RequestId, params: ConnectorsListParams) {
-        let ConnectorsListParams {} = params;
+    async fn apps_list(&self, request_id: RequestId, params: AppsListParams) {
+        let AppsListParams { cursor, limit } = params;
         let config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
@@ -3315,7 +3428,13 @@ impl CodexMessageProcessor {
 
         if !config.features.enabled(Feature::Connectors) {
             self.outgoing
-                .send_response(request_id, ConnectorsListResponse { data: Vec::new() })
+                .send_response(
+                    request_id,
+                    AppsListResponse {
+                        data: Vec::new(),
+                        next_cursor: None,
+                    },
+                )
                 .await;
             return;
         }
@@ -3323,26 +3442,73 @@ impl CodexMessageProcessor {
         let connectors = match connectors::list_connectors(&config).await {
             Ok(connectors) => connectors,
             Err(err) => {
-                self.send_internal_error(request_id, format!("failed to list connectors: {err}"))
+                self.send_internal_error(request_id, format!("failed to list apps: {err}"))
                     .await;
                 return;
             }
         };
 
-        let data = connectors
-            .into_iter()
-            .map(|connector| ApiConnectorInfo {
-                connector_id: connector.connector_id,
-                connector_name: connector.connector_name,
-                connector_description: connector.connector_description,
+        let total = connectors.len();
+        if total == 0 {
+            self.outgoing
+                .send_response(
+                    request_id,
+                    AppsListResponse {
+                        data: Vec::new(),
+                        next_cursor: None,
+                    },
+                )
+                .await;
+            return;
+        }
+
+        let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
+        let effective_limit = effective_limit.min(total);
+        let start = match cursor {
+            Some(cursor) => match cursor.parse::<usize>() {
+                Ok(idx) => idx,
+                Err(_) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("invalid cursor: {cursor}"),
+                    )
+                    .await;
+                    return;
+                }
+            },
+            None => 0,
+        };
+
+        if start > total {
+            self.send_invalid_request_error(
+                request_id,
+                format!("cursor {start} exceeds total apps {total}"),
+            )
+            .await;
+            return;
+        }
+
+        let end = start.saturating_add(effective_limit).min(total);
+        let data = connectors[start..end]
+            .iter()
+            .cloned()
+            .map(|connector| ApiAppInfo {
+                id: connector.connector_id,
+                name: connector.connector_name,
+                description: connector.connector_description,
                 logo_url: connector.logo_url,
                 install_url: connector.install_url,
                 is_accessible: connector.is_accessible,
             })
             .collect();
 
+        let next_cursor = if end < total {
+            Some(end.to_string())
+        } else {
+            None
+        };
         self.outgoing
-            .send_response(request_id, ConnectorsListResponse { data })
+            .send_response(request_id, AppsListResponse { data, next_cursor })
             .await;
     }
 
@@ -3465,6 +3631,7 @@ impl CodexMessageProcessor {
                     effort: params.effort.map(Some),
                     summary: params.summary,
                     collaboration_mode: params.collaboration_mode,
+                    personality: None,
                 })
                 .await;
         }

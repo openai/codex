@@ -49,6 +49,16 @@ impl ChatGptAuthFixture {
         self
     }
 
+    pub fn chatgpt_user_id(mut self, chatgpt_user_id: impl Into<String>) -> Self {
+        self.claims.chatgpt_user_id = Some(chatgpt_user_id.into());
+        self
+    }
+
+    pub fn chatgpt_account_id(mut self, chatgpt_account_id: impl Into<String>) -> Self {
+        self.claims.chatgpt_account_id = Some(chatgpt_account_id.into());
+        self
+    }
+
     pub fn email(mut self, email: impl Into<String>) -> Self {
         self.claims.email = Some(email.into());
         self
@@ -69,6 +79,8 @@ impl ChatGptAuthFixture {
 pub struct ChatGptIdTokenClaims {
     pub email: Option<String>,
     pub plan_type: Option<String>,
+    pub chatgpt_user_id: Option<String>,
+    pub chatgpt_account_id: Option<String>,
 }
 
 impl ChatGptIdTokenClaims {
@@ -85,6 +97,16 @@ impl ChatGptIdTokenClaims {
         self.plan_type = Some(plan_type.into());
         self
     }
+
+    pub fn chatgpt_user_id(mut self, chatgpt_user_id: impl Into<String>) -> Self {
+        self.chatgpt_user_id = Some(chatgpt_user_id.into());
+        self
+    }
+
+    pub fn chatgpt_account_id(mut self, chatgpt_account_id: impl Into<String>) -> Self {
+        self.chatgpt_account_id = Some(chatgpt_account_id.into());
+        self
+    }
 }
 
 pub fn encode_id_token(claims: &ChatGptIdTokenClaims) -> Result<String> {
@@ -93,10 +115,20 @@ pub fn encode_id_token(claims: &ChatGptIdTokenClaims) -> Result<String> {
     if let Some(email) = &claims.email {
         payload.insert("email".to_string(), json!(email));
     }
+    let mut auth_payload = serde_json::Map::new();
     if let Some(plan_type) = &claims.plan_type {
+        auth_payload.insert("chatgpt_plan_type".to_string(), json!(plan_type));
+    }
+    if let Some(chatgpt_user_id) = &claims.chatgpt_user_id {
+        auth_payload.insert("chatgpt_user_id".to_string(), json!(chatgpt_user_id));
+    }
+    if let Some(chatgpt_account_id) = &claims.chatgpt_account_id {
+        auth_payload.insert("chatgpt_account_id".to_string(), json!(chatgpt_account_id));
+    }
+    if !auth_payload.is_empty() {
         payload.insert(
             "https://api.openai.com/auth".to_string(),
-            json!({ "chatgpt_plan_type": plan_type }),
+            serde_json::Value::Object(auth_payload),
         );
     }
     let payload = serde_json::Value::Object(payload);

@@ -42,7 +42,7 @@ pub async fn list_accessible_connectors_from_mcp_tools(
 
     let auth_manager = auth_manager_from_config(config);
     let auth = auth_manager.auth().await;
-    let mcp_servers = with_codex_apps_mcp(HashMap::new(), true, auth.as_ref());
+    let mcp_servers = with_codex_apps_mcp(HashMap::new(), true, auth.as_ref(), config);
     if mcp_servers.is_empty() {
         return Ok(Vec::new());
     }
