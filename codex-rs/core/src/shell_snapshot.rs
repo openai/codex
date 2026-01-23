@@ -605,7 +605,10 @@ mod tests {
         };
 
         let home_display = home.display();
-        let script = format!("HOME=\"{home_display}\"; export HOME; {}", bash_snapshot_script());
+        let script = format!(
+            "HOME=\"{home_display}\"; export HOME; {}",
+            bash_snapshot_script()
+        );
         let output = run_script_with_timeout(&shell, &script, Duration::from_millis(500), true)
             .await
             .context("run snapshot command")?;
