@@ -169,10 +169,10 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_core::windows_sandbox::WindowsSandboxModeExt;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
-use codex_core::windows_sandbox::WindowsSandboxModeExt;
 use codex_login::run_login_server;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -1261,8 +1261,7 @@ impl CodexMessageProcessor {
         let timeout_ms = params
             .timeout_ms
             .and_then(|timeout_ms| u64::try_from(timeout_ms).ok());
-        let windows_sandbox_mode =
-            WindowsSandboxMode::from_config(&self.config);
+        let windows_sandbox_mode = WindowsSandboxMode::from_config(&self.config);
         let exec_params = ExecParams {
             command: params.command,
             cwd,

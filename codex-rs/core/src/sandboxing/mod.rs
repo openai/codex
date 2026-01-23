@@ -21,8 +21,8 @@ use crate::seatbelt::create_seatbelt_command_args;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use crate::tools::sandboxing::SandboxablePreference;
-pub use codex_protocol::models::SandboxPermissions;
 use codex_protocol::config_types::WindowsSandboxMode;
+pub use codex_protocol::models::SandboxPermissions;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -88,7 +88,7 @@ impl SandboxManager {
                 crate::safety::get_platform_sandbox(
                     windows_sandbox_mode != WindowsSandboxMode::Disabled,
                 )
-                    .unwrap_or(SandboxType::None)
+                .unwrap_or(SandboxType::None)
             }
             SandboxablePreference::Auto => match policy {
                 SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
@@ -97,7 +97,7 @@ impl SandboxManager {
                 _ => crate::safety::get_platform_sandbox(
                     windows_sandbox_mode != WindowsSandboxMode::Disabled,
                 )
-                    .unwrap_or(SandboxType::None),
+                .unwrap_or(SandboxType::None),
             },
         }
     }

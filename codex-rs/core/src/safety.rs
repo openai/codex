@@ -91,7 +91,6 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
     } else if cfg!(target_os = "linux") {
         Some(SandboxType::LinuxSeccomp)
     } else if cfg!(target_os = "windows") {
-        #[cfg(target_os = "windows")]
         if windows_sandbox_enabled {
             Some(SandboxType::WindowsRestrictedToken)
         } else {

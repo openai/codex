@@ -3131,7 +3131,6 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
         popup.contains("Stay in"),
         "expected startup prompt to offer staying in current mode: {popup}"
     );
-
 }
 
 #[tokio::test]

@@ -147,8 +147,10 @@ pub async fn process_exec_tool_call(
         SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
             SandboxType::None
         }
-        _ => get_platform_sandbox(windows_sandbox_mode != codex_protocol::config_types::WindowsSandboxMode::Disabled)
-            .unwrap_or(SandboxType::None),
+        _ => get_platform_sandbox(
+            windows_sandbox_mode != codex_protocol::config_types::WindowsSandboxMode::Disabled,
+        )
+        .unwrap_or(SandboxType::None),
     };
     tracing::debug!("Sandbox type: {sandbox_type:?}");
 

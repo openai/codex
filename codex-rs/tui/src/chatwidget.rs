@@ -39,8 +39,6 @@ use codex_core::features::Feature;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::local_git_branches;
 use codex_core::models_manager::manager::ModelsManager;
-#[cfg(target_os = "windows")]
-use codex_core::windows_sandbox::WindowsSandboxModeExt;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -90,6 +88,8 @@ use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_core::skills::model::SkillMetadata;
+#[cfg(target_os = "windows")]
+use codex_core::windows_sandbox::WindowsSandboxModeExt;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
@@ -3979,8 +3979,7 @@ impl ChatWidget {
             } else if preset.id == "auto" {
                 #[cfg(target_os = "windows")]
                 {
-                    if WindowsSandboxMode::from_config(&self.config)
-                        == WindowsSandboxMode::Disabled
+                    if WindowsSandboxMode::from_config(&self.config) == WindowsSandboxMode::Disabled
                     {
                         let preset_clone = preset.clone();
                         if codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
