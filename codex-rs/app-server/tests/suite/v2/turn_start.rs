@@ -38,6 +38,7 @@ use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -363,11 +364,14 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
-    let collaboration_mode = CollaborationMode::Custom(Settings {
-        model: "mock-model-collab".to_string(),
-        reasoning_effort: Some(ReasoningEffort::High),
-        developer_instructions: None,
-    });
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Custom,
+        settings: Settings {
+            model: "mock-model-collab".to_string(),
+            reasoning_effort: Some(ReasoningEffort::High),
+            developer_instructions: None,
+        },
+    };
 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {

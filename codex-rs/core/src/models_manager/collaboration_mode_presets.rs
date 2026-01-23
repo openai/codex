@@ -1,4 +1,5 @@
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
 
@@ -18,25 +19,34 @@ pub fn test_builtin_collaboration_mode_presets() -> Vec<CollaborationMode> {
 }
 
 fn plan_preset() -> CollaborationMode {
-    CollaborationMode::Plan(Settings {
-        model: "gpt-5.2-codex".to_string(),
-        reasoning_effort: Some(ReasoningEffort::High),
-        developer_instructions: Some(COLLABORATION_MODE_PLAN.to_string()),
-    })
+    CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: "gpt-5.2-codex".to_string(),
+            reasoning_effort: Some(ReasoningEffort::High),
+            developer_instructions: Some(COLLABORATION_MODE_PLAN.to_string()),
+        },
+    }
 }
 
 fn pair_programming_preset() -> CollaborationMode {
-    CollaborationMode::PairProgramming(Settings {
-        model: "gpt-5.2-codex".to_string(),
-        reasoning_effort: Some(ReasoningEffort::Medium),
-        developer_instructions: Some(COLLABORATION_MODE_PAIR_PROGRAMMING.to_string()),
-    })
+    CollaborationMode {
+        mode: ModeKind::PairProgramming,
+        settings: Settings {
+            model: "gpt-5.2-codex".to_string(),
+            reasoning_effort: Some(ReasoningEffort::Medium),
+            developer_instructions: Some(COLLABORATION_MODE_PAIR_PROGRAMMING.to_string()),
+        },
+    }
 }
 
 fn execute_preset() -> CollaborationMode {
-    CollaborationMode::Execute(Settings {
-        model: "gpt-5.2-codex".to_string(),
-        reasoning_effort: Some(ReasoningEffort::High),
-        developer_instructions: Some(COLLABORATION_MODE_EXECUTE.to_string()),
-    })
+    CollaborationMode {
+        mode: ModeKind::Execute,
+        settings: Settings {
+            model: "gpt-5.2-codex".to_string(),
+            reasoning_effort: Some(ReasoningEffort::High),
+            developer_instructions: Some(COLLABORATION_MODE_EXECUTE.to_string()),
+        },
+    }
 }
