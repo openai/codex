@@ -329,6 +329,7 @@ async fn turn_start_accepts_collaboration_mode_override_v2() -> Result<()> {
 
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
             ..Default::default()
         })
         .await?;
@@ -400,6 +401,7 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
 
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
             ..Default::default()
         })
         .await?;
@@ -1585,6 +1587,9 @@ approval_policy = "{approval_policy}"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
+
+[features]
+remote_models = false
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

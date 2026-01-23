@@ -27,6 +27,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_BASE_INSTRUCTIONS: &str = "You are Codex, based on GPT-5. You are running as a coding agent in the Codex CLI on a user's computer.";
 
 #[tokio::test]
 async fn thread_resume_returns_original_thread() -> Result<()> {
@@ -272,6 +273,7 @@ async fn thread_resume_accepts_personality_override_v2() -> Result<()> {
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            model: Some("gpt-5.2-codex".to_string()),
             ..Default::default()
         })
         .await?;
@@ -285,6 +287,7 @@ async fn thread_resume_accepts_personality_override_v2() -> Result<()> {
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: thread.id.clone(),
+            model: Some("gpt-5.2-codex".to_string()),
             personality: Some(Personality::Friendly),
             ..Default::default()
         })
@@ -320,14 +323,16 @@ async fn thread_resume_accepts_personality_override_v2() -> Result<()> {
 
     let request = response_mock.single_request();
     let developer_texts = request.message_input_texts("developer");
-    if developer_texts.is_empty() {
-        eprintln!("request body: {}", request.body_json());
-    }
     assert!(
-        developer_texts
+        !developer_texts
             .iter()
             .any(|text| text.contains("<personality_spec>")),
-        "expected personality update message in developer input, got {developer_texts:?}"
+        "did not expect a personality update message in developer input, got {developer_texts:?}"
+    );
+    let instructions_text = request.instructions_text();
+    assert!(
+        instructions_text.contains(DEFAULT_BASE_INSTRUCTIONS),
+        "expected default base instructions from history, got {instructions_text:?}"
     );
 
     Ok(())
@@ -345,6 +350,9 @@ approval_policy = "never"
 sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
+
+[features]
+remote_models = false
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
