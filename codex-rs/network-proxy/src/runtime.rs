@@ -1,5 +1,6 @@
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
+use crate::mitm::MitmState;
 use crate::policy::Host;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
@@ -110,6 +111,7 @@ pub struct ConfigState {
     pub config: NetworkProxyConfig,
     pub allow_set: GlobSet,
     pub deny_set: GlobSet,
+    pub mitm: Option<Arc<MitmState>>,
     pub constraints: NetworkProxyConstraints,
     pub blocked: VecDeque<BlockedRequest>,
 }
@@ -374,6 +376,12 @@ impl NetworkProxyState {
             info!("updated network mode to {mode:?}");
             return Ok(());
         }
+    }
+
+    pub async fn mitm_state(&self) -> Result<Option<Arc<MitmState>>> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.mitm.clone())
     }
 
     async fn reload_if_needed(&self) -> Result<()> {
