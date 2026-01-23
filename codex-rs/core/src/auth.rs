@@ -125,6 +125,10 @@ impl CodexAuth {
         self.get_current_token_data().and_then(|t| t.id_token.email)
     }
 
+    pub fn is_api_key(&self) -> bool {
+        self.mode == AuthMode::ApiKey
+    }
+
     /// Account-facing plan classification derived from the current token.
     /// Returns a high-level `AccountPlanType` (e.g., Free/Plus/Pro/Team/…)
     /// mapped from the ID token's internal plan value. Prefer this when you

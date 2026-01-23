@@ -100,13 +100,17 @@ fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> Mc
     }
 }
 
+fn connectors_allowed(connectors_enabled: bool, auth: Option<&CodexAuth>) -> bool {
+    connectors_enabled && !auth.is_some_and(CodexAuth::is_api_key)
+}
+
 pub(crate) fn with_codex_apps_mcp(
     mut servers: HashMap<String, McpServerConfig>,
     connectors_enabled: bool,
     auth: Option<&CodexAuth>,
     config: &Config,
 ) -> HashMap<String, McpServerConfig> {
-    if connectors_enabled {
+    if connectors_allowed(connectors_enabled, auth) {
         servers.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
             codex_apps_mcp_server_config(config, auth),

@@ -2052,7 +2052,7 @@ impl ChatWidget {
 
         widget
             .bottom_pane
-            .set_connectors_enabled(widget.config.features.enabled(Feature::Connectors));
+            .set_connectors_enabled(widget.connectors_enabled());
 
         widget
     }
@@ -4614,6 +4614,7 @@ impl ChatWidget {
 
     fn connectors_enabled(&self) -> bool {
         self.config.features.enabled(Feature::Connectors)
+            && self.auth_manager.get_auth_mode() != Some(AuthMode::ApiKey)
     }
 
     /// Build a placeholder header cell while the session is configuring.

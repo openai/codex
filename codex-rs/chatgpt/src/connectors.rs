@@ -1,3 +1,5 @@
+use codex_core::AuthManager;
+use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::features::Feature;
 use serde::Deserialize;
@@ -36,8 +38,21 @@ struct ListConnectorsResponse {
     connectors: Vec<AppInfo>,
 }
 
-pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
+async fn connectors_allowed(config: &Config) -> bool {
     if !config.features.enabled(Feature::Connectors) {
+        return false;
+    }
+    let auth_manager = AuthManager::new(
+        config.codex_home.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
+    let auth = auth_manager.auth().await;
+    !auth.as_ref().is_some_and(CodexAuth::is_api_key)
+}
+
+pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
+    if !connectors_allowed(config).await {
         return Ok(Vec::new());
     }
     let (connectors_result, accessible_result) = tokio::join!(
@@ -50,7 +65,7 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    if !config.features.enabled(Feature::Connectors) {
+    if !connectors_allowed(config).await {
         return Ok(Vec::new());
     }
     init_chatgpt_token_from_auth(&config.codex_home, config.cli_auth_credentials_store_mode)

@@ -20,6 +20,7 @@ use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::auth::AuthCredentialsStoreMode;
+use codex_core::auth::login_with_api_key;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::JsonObject;
@@ -64,6 +65,53 @@ async fn list_apps_returns_empty_when_connectors_disabled() -> Result<()> {
 
     assert!(data.is_empty());
     assert!(next_cursor.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_apps_returns_empty_when_using_api_key() -> Result<()> {
+    let connectors = vec![AppInfo {
+        id: "alpha".to_string(),
+        name: "Alpha".to_string(),
+        description: Some("Alpha connector".to_string()),
+        logo_url: None,
+        install_url: None,
+        is_accessible: false,
+    }];
+
+    let tools = vec![connector_tool("alpha", "Alpha App")?];
+    let (server_url, server_handle) = start_apps_server(connectors, tools).await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_config(codex_home.path(), &server_url)?;
+    login_with_api_key(
+        codex_home.path(),
+        "sk-test-key",
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: Some(50),
+            cursor: None,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let AppsListResponse { data, next_cursor } = to_response(response)?;
+
+    assert!(data.is_empty());
+    assert!(next_cursor.is_none());
+
+    server_handle.abort();
     Ok(())
 }
 
