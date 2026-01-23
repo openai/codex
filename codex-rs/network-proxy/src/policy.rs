@@ -34,7 +34,8 @@ pub fn is_non_public_ip(ip: IpAddr) -> bool {
 
 fn is_non_public_ipv4(ip: Ipv4Addr) -> bool {
     // Use the standard library classification helpers where possible; they encode the intent more
-    // clearly than hand-rolled range checks.
+    // clearly than hand-rolled range checks. Some non-public ranges (e.g., CGNAT and TEST-NET
+    // blocks) are not covered by stable stdlib helpers yet, so we fall back to CIDR checks.
     ip.is_loopback()
         || ip.is_private()
         || ip.is_link_local()
