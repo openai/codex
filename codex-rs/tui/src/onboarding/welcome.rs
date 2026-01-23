@@ -19,7 +19,7 @@ use crate::tui::FrameRequester;
 
 use super::onboarding_screen::StepState;
 
-const MIN_ANIMATION_HEIGHT: u16 = 20;
+const MIN_ANIMATION_HEIGHT: u16 = 37;
 const MIN_ANIMATION_WIDTH: u16 = 60;
 
 pub(crate) struct WelcomeWidget {
@@ -99,6 +99,7 @@ impl StepStateProvider for WelcomeWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 
@@ -106,31 +107,37 @@ mod tests {
     static VARIANT_B: [&str; 1] = ["frame-b"];
     static VARIANTS: [&[&str]; 2] = [&VARIANT_A, &VARIANT_B];
 
+    fn row_containing(buf: &Buffer, needle: &str) -> Option<u16> {
+        (0..buf.area.height).find(|&y| {
+            let mut row = String::new();
+            for x in 0..buf.area.width {
+                row.push_str(buf[(x, y)].symbol());
+            }
+            row.contains(needle)
+        })
+    }
+
     #[test]
     fn welcome_renders_animation_on_first_draw() {
         let widget = WelcomeWidget::new(false, FrameRequester::test_dummy(), true);
         let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
         let mut buf = Buffer::empty(area);
+        let frame_lines = widget.animation.current_frame().lines().count() as u16;
         (&widget).render(area, &mut buf);
 
-        let mut found = false;
-        let mut last_non_empty: Option<u16> = None;
-        for y in 0..area.height {
-            for x in 0..area.width {
-                if !buf[(x, y)].symbol().trim().is_empty() {
-                    found = true;
-                    last_non_empty = Some(y);
-                    break;
-                }
-            }
-        }
+        let welcome_row = row_containing(&buf, "Welcome");
+        assert_eq!(welcome_row, Some(frame_lines + 1));
+    }
 
-        assert!(found, "expected welcome animation to render characters");
-        let measured_rows = last_non_empty.map(|v| v + 2).unwrap_or(0);
-        assert!(
-            measured_rows >= MIN_ANIMATION_HEIGHT,
-            "expected measurement to report at least {MIN_ANIMATION_HEIGHT} rows, got {measured_rows}"
-        );
+    #[test]
+    fn welcome_skips_animation_below_height_breakpoint() {
+        let widget = WelcomeWidget::new(false, FrameRequester::test_dummy(), true);
+        let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT - 1);
+        let mut buf = Buffer::empty(area);
+        (&widget).render(area, &mut buf);
+
+        let welcome_row = row_containing(&buf, "Welcome");
+        assert_eq!(welcome_row, Some(0));
     }
 
     #[test]
