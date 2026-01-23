@@ -1884,15 +1884,15 @@ impl App {
                     ));
                 }
             },
-            #[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
+            #[cfg(not(target_os = "linux"))]
             AppEvent::TranscriptionComplete { id, text } => {
                 self.chat_widget.replace_transcription(&id, &text);
             }
-            #[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
+            #[cfg(not(target_os = "linux"))]
             AppEvent::TranscriptionFailed { id, error: _ } => {
                 self.chat_widget.remove_transcription_placeholder(&id);
             }
-            #[cfg(all(not(target_env = "musl"), not(target_os = "linux")))]
+            #[cfg(not(target_os = "linux"))]
             AppEvent::UpdateRecordingMeter { id, text } => {
                 // Update in place to preserve the element id for subsequent frames.
                 let updated = self.chat_widget.update_transcription_in_place(&id, &text);
