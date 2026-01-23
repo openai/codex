@@ -1236,11 +1236,11 @@ impl ChatWidget {
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn();
         let mut cleared_background = false;
-        if let Ok(mut state) = self.background_terminals_state.lock() {
-            if !state.list_items().is_empty() {
-                state.clear();
-                cleared_background = true;
-            }
+        if let Ok(mut state) = self.background_terminals_state.lock()
+            && !state.list_items().is_empty()
+        {
+            state.clear();
+            cleared_background = true;
         }
         if cleared_background {
             self.sync_unified_exec_footer();

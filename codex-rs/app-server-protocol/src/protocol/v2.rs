@@ -323,6 +323,9 @@ pub struct ToolsV2 {
     #[serde(alias = "web_search_request")]
     pub web_search: Option<bool>,
     pub view_image: Option<bool>,
+    #[ts(optional)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disallowed_tools: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

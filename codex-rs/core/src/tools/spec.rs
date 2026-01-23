@@ -10,6 +10,7 @@ use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolRegistryBuilder;
+use crate::truncate::approx_token_count;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
@@ -23,6 +24,11 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
+const MCP_DESCRIPTION_TOKEN_BUDGET_DIVISOR: usize = 10;
+const MCP_SEARCH_TOOL_NAME: &str = "MCPSearch";
+const MCP_SEARCH_TOOL_NAME_NORMALIZED: &str = "mcpsearch";
+const MCP_DESCRIPTION_DEFERRED: &str = "Description deferred. Use MCPSearch.";
+
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
@@ -31,12 +37,15 @@ pub(crate) struct ToolsConfig {
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub experimental_supported_tools: Vec<String>,
+    pub mcp_description_token_budget: Option<usize>,
+    pub mcp_search_enabled: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_info: &'a ModelInfo,
     pub(crate) features: &'a Features,
     pub(crate) web_search_mode: Option<WebSearchMode>,
+    pub(crate) disallowed_tools: &'a [String],
 }
 
 impl ToolsConfig {
@@ -45,6 +54,7 @@ impl ToolsConfig {
             model_info,
             features,
             web_search_mode,
+            disallowed_tools,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_collab_tools = features.enabled(Feature::Collab);
@@ -75,6 +85,25 @@ impl ToolsConfig {
             }
         };
 
+        let mcp_description_token_budget = model_info
+            .context_window
+            .and_then(|context_window| {
+                let adjusted = context_window
+                    .saturating_mul(model_info.effective_context_window_percent)
+                    / 100;
+                usize::try_from(adjusted).ok()
+            })
+            .map(|adjusted| adjusted / MCP_DESCRIPTION_TOKEN_BUDGET_DIVISOR);
+
+        let mcp_search_enabled = !disallowed_tools.iter().any(|tool| {
+            let normalized: String = tool
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .map(|c| c.to_ascii_lowercase())
+                .collect();
+            normalized == MCP_SEARCH_TOOL_NAME_NORMALIZED
+        });
+
         Self {
             shell_type,
             apply_patch_tool_type,
@@ -82,6 +111,8 @@ impl ToolsConfig {
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
+            mcp_description_token_budget,
+            mcp_search_enabled,
         }
     }
 }
@@ -1020,6 +1051,64 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
         },
     })
 }
+
+fn create_mcp_search_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "query".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Search query to match MCP tool names or descriptions.".to_string(),
+                ),
+            },
+        ),
+        (
+            "server".to_string(),
+            JsonSchema::String {
+                description: Some("Optional MCP server name to scope the search.".to_string()),
+            },
+        ),
+        (
+            "limit".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Maximum number of results to return (defaults to 10).".to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: MCP_SEARCH_TOOL_NAME.to_string(),
+        description:
+            "Search MCP tool names and descriptions when MCP tool descriptions are deferred."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["query".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn mcp_description_token_count(mcp_tools: &HashMap<String, mcp_types::Tool>) -> usize {
+    mcp_tools
+        .values()
+        .filter_map(|tool| tool.description.as_deref())
+        .map(approx_token_count)
+        .sum()
+}
+
+fn should_defer_mcp_descriptions(
+    config: &ToolsConfig,
+    mcp_tools: &HashMap<String, mcp_types::Tool>,
+) -> bool {
+    let Some(budget) = config.mcp_description_token_budget else {
+        return false;
+    };
+    config.mcp_search_enabled && mcp_description_token_count(mcp_tools) > budget
+}
 /// TODO(dylan): deprecate once we get rid of json tool
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApplyPatchToolArgs {
@@ -1257,6 +1346,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
+    use crate::tools::handlers::McpSearchHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestUserInputHandler;
@@ -1276,6 +1366,7 @@ pub(crate) fn build_specs(
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
+    let mcp_search_handler = Arc::new(McpSearchHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
@@ -1403,11 +1494,21 @@ pub(crate) fn build_specs(
     }
 
     if let Some(mcp_tools) = mcp_tools {
+        let defer_mcp_descriptions = should_defer_mcp_descriptions(config, &mcp_tools);
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
+        if defer_mcp_descriptions {
+            builder.push_spec(create_mcp_search_tool());
+            builder.register_handler(MCP_SEARCH_TOOL_NAME, mcp_search_handler);
+        }
+
         for (name, tool) in entries.into_iter() {
-            match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
+            let mut tool = tool;
+            if defer_mcp_descriptions {
+                tool.description = Some(MCP_DESCRIPTION_DEFERRED.to_string());
+            }
+            match mcp_tool_to_openai_tool(name.clone(), tool) {
                 Ok(converted_tool) => {
                     builder.push_spec(ToolSpec::Function(converted_tool));
                     builder.register_handler(name, mcp_handler.clone());
@@ -1547,6 +1648,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            disallowed_tools: &config.disallowed_tools,
         });
         let (tools, _) = build_specs(&config, None, &[]).build();
 
@@ -1611,6 +1713,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            disallowed_tools: &config.disallowed_tools,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(
@@ -1629,6 +1732,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            disallowed_tools: &config.disallowed_tools,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert!(
@@ -1641,6 +1745,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            disallowed_tools: &config.disallowed_tools,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(&tools, &["request_user_input"]);
@@ -1658,6 +1763,7 @@ mod tests {
             model_info: &model_info,
             features,
             web_search_mode,
+            disallowed_tools: &config.disallowed_tools,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
@@ -1674,6 +1780,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            disallowed_tools: &config.disallowed_tools,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -1696,6 +1803,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            disallowed_tools: &config.disallowed_tools,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -1942,6 +2050,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            disallowed_tools: &config.disallowed_tools,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
 
@@ -1964,6 +2073,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            disallowed_tools: &config.disallowed_tools,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -1983,6 +2093,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            disallowed_tools: &config.disallowed_tools,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -2014,6 +2125,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
+            disallowed_tools: &config.disallowed_tools,
         });
         let (tools, _) = build_specs(
             &tools_config,
@@ -2101,6 +2213,105 @@ mod tests {
     }
 
     #[test]
+    fn mcp_tool_descriptions_defer_when_over_budget() {
+        let mut config = test_config();
+        config.model_context_window = Some(100);
+        let model_info = ModelsManager::construct_model_info_offline("o3", &config);
+        let features = Features::with_defaults();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            disallowed_tools: &config.disallowed_tools,
+        });
+
+        let long_description = "a".repeat(50);
+        let (tools, _) = build_specs(
+            &tools_config,
+            Some(HashMap::from([(
+                "test_server/do_deferred".to_string(),
+                mcp_types::Tool {
+                    name: "do_deferred".to_string(),
+                    input_schema: ToolInputSchema {
+                        properties: None,
+                        required: None,
+                        r#type: "object".to_string(),
+                    },
+                    output_schema: None,
+                    title: None,
+                    annotations: None,
+                    description: Some(long_description),
+                },
+            )])),
+        )
+        .build();
+
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == MCP_SEARCH_TOOL_NAME)
+        );
+        let tool = find_tool(&tools, "test_server/do_deferred");
+        match &tool.spec {
+            ToolSpec::Function(ResponsesApiTool { description, .. }) => {
+                assert_eq!(description, MCP_DESCRIPTION_DEFERRED);
+            }
+            other => panic!("expected function tool, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mcp_tool_descriptions_not_deferred_when_search_disallowed() {
+        let mut config = test_config();
+        config.model_context_window = Some(100);
+        config
+            .disallowed_tools
+            .push(MCP_SEARCH_TOOL_NAME.to_string());
+        let model_info = ModelsManager::construct_model_info_offline("o3", &config);
+        let features = Features::with_defaults();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            disallowed_tools: &config.disallowed_tools,
+        });
+
+        let long_description = "a".repeat(50);
+        let (tools, _) = build_specs(
+            &tools_config,
+            Some(HashMap::from([(
+                "test_server/do_allowed".to_string(),
+                mcp_types::Tool {
+                    name: "do_allowed".to_string(),
+                    input_schema: ToolInputSchema {
+                        properties: None,
+                        required: None,
+                        r#type: "object".to_string(),
+                    },
+                    output_schema: None,
+                    title: None,
+                    annotations: None,
+                    description: Some(long_description.clone()),
+                },
+            )])),
+        )
+        .build();
+
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == MCP_SEARCH_TOOL_NAME)
+        );
+        let tool = find_tool(&tools, "test_server/do_allowed");
+        match &tool.spec {
+            ToolSpec::Function(ResponsesApiTool { description, .. }) => {
+                assert_eq!(description, &long_description);
+            }
+            other => panic!("expected function tool, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_build_specs_mcp_tools_sorted_by_name() {
         let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline("o3", &config);
@@ -2110,6 +2321,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            disallowed_tools: &config.disallowed_tools,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -2187,6 +2399,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            disallowed_tools: &config.disallowed_tools,
         });
 
         let (tools, _) = build_specs(
@@ -2245,6 +2458,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            disallowed_tools: &config.disallowed_tools,
         });
 
         let (tools, _) = build_specs(
@@ -2300,6 +2514,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            disallowed_tools: &config.disallowed_tools,
         });
 
         let (tools, _) = build_specs(
@@ -2357,6 +2572,7 @@ mod tests {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            disallowed_tools: &config.disallowed_tools,
         });
 
         let (tools, _) = build_specs(
@@ -2470,6 +2686,7 @@ Examples of valid command strings:
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
+            disallowed_tools: &config.disallowed_tools,
         });
         let (tools, _) = build_specs(
             &tools_config,

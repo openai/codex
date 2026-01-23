@@ -1,0 +1,12 @@
+---
+source: tui/src/bottom_pane/qa_dialog_view.rs
+expression: "render_snapshot(&view, area)"
+---
+Question 1/1                                                
+Clarify                                                     
+Q: What should the modal title be?                          
+Answer                                                      
++----------------------------------------------------------+
+|Type your answer (optional)                               |
++----------------------------------------------------------+
+enter submit | esc interrupt

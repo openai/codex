@@ -307,6 +307,9 @@ pub struct Config {
     /// Explicit or feature-derived web search mode.
     pub web_search_mode: Option<WebSearchMode>,
 
+    /// Tool names that should be excluded from the model tool list.
+    pub disallowed_tools: Vec<String>,
+
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
@@ -1004,6 +1007,10 @@ pub struct ToolsToml {
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
+
+    /// Tool names that should be excluded from the model tool list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disallowed_tools: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -1020,6 +1027,7 @@ impl From<ToolsToml> for Tools {
         Self {
             web_search: tools_toml.web_search,
             view_image: tools_toml.view_image,
+            disallowed_tools: tools_toml.disallowed_tools,
         }
     }
 }
@@ -1279,6 +1287,21 @@ impl Config {
 
         let features = Features::from_config(&cfg, &config_profile, feature_overrides);
         let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features);
+        let disallowed_tools = cfg
+            .tools
+            .as_ref()
+            .and_then(|tools| tools.disallowed_tools.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|tool| {
+                let trimmed = tool.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            })
+            .collect::<Vec<_>>();
         #[cfg(target_os = "windows")]
         {
             // Base flag controls sandbox on/off; elevated only applies when base is enabled.
@@ -1561,6 +1584,7 @@ impl Config {
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode,
+            disallowed_tools,
             use_experimental_unified_exec_tool,
             ghost_snapshot,
             features,
@@ -3715,6 +3739,7 @@ model_verbosity = "high"
                 forced_login_method: None,
                 include_apply_patch_tool: false,
                 web_search_mode: None,
+                disallowed_tools: Vec::new(),
                 use_experimental_unified_exec_tool: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
@@ -3797,6 +3822,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: None,
+            disallowed_tools: Vec::new(),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3894,6 +3920,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: None,
+            disallowed_tools: Vec::new(),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3977,6 +4004,7 @@ model_verbosity = "high"
             forced_login_method: None,
             include_apply_patch_tool: false,
             web_search_mode: None,
+            disallowed_tools: Vec::new(),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),

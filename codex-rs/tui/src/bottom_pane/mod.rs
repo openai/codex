@@ -39,9 +39,11 @@ use ratatui::layout::Rect;
 use std::time::Duration;
 
 mod approval_overlay;
+mod qa_dialog_view;
 mod request_user_input;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
+pub(crate) use qa_dialog_view::QaDialogView;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 mod background_terminals_view;
 mod bottom_pane_view;
@@ -642,13 +644,24 @@ impl BottomPane {
             request
         };
 
-        let modal = RequestUserInputOverlay::new(request, self.app_event_tx.clone());
+        let use_qa_dialog = QaDialogView::can_render(&request);
+        let question_count = request.questions.len();
+        let modal: Box<dyn BottomPaneView> = if use_qa_dialog {
+            Box::new(QaDialogView::new(request, self.app_event_tx.clone()))
+        } else {
+            Box::new(RequestUserInputOverlay::new(
+                request,
+                self.app_event_tx.clone(),
+            ))
+        };
         self.pause_status_timer_for_modal();
-        self.set_composer_input_enabled(
-            false,
-            Some("Answer the questions to continue.".to_string()),
-        );
-        self.push_view(Box::new(modal));
+        let placeholder = if question_count == 1 {
+            "Answer the question to continue."
+        } else {
+            "Answer the questions to continue."
+        };
+        self.set_composer_input_enabled(false, Some(placeholder.to_string()));
+        self.push_view(modal);
     }
 
     fn on_active_view_complete(&mut self) {

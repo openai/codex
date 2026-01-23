@@ -24,6 +24,16 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 - https://developers.openai.com/codex/config-reference
 
+## Tools
+
+You can exclude specific tools from the model tool list via `[tools].disallowed_tools`. For
+example, to disable MCP tool search auto mode:
+
+```toml
+[tools]
+disallowed_tools = ["MCPSearch"]
+```
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.
