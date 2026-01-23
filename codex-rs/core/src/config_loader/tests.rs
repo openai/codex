@@ -1,34 +1,47 @@
 use super::LoaderOverrides;
 use super::load_config_layers_state;
 use crate::config::CONFIG_TOML_FILE;
+use crate::config::ConfigBuilder;
+use crate::config::ConfigOverrides;
+use crate::config::ConfigToml;
+use crate::config::ProjectConfig;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::config_requirements::ConfigRequirementsWithSources;
 use crate::config_loader::fingerprint::version_for_toml;
 use crate::config_loader::load_requirements_toml;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
 #[cfg(target_os = "macos")]
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
-use serial_test::serial;
+use std::collections::HashMap;
+use std::path::Path;
 use tempfile::tempdir;
 use toml::Value as TomlValue;
 
-struct CwdGuard {
-    previous: std::path::PathBuf,
-}
-
-impl Drop for CwdGuard {
-    fn drop(&mut self) {
-        std::env::set_current_dir(&self.previous).expect("restore cwd");
-    }
-}
-
-fn set_test_cwd(path: &std::path::Path) -> CwdGuard {
-    let previous = std::env::current_dir().expect("read cwd");
-    std::env::set_current_dir(path).expect("set cwd");
-    CwdGuard { previous }
+async fn make_config_for_test(
+    codex_home: &Path,
+    project_path: &Path,
+    trust_level: TrustLevel,
+    project_root_markers: Option<Vec<String>>,
+) -> std::io::Result<()> {
+    tokio::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        toml::to_string(&ConfigToml {
+            projects: Some(HashMap::from([(
+                project_path.to_string_lossy().to_string(),
+                ProjectConfig {
+                    trust_level: Some(trust_level),
+                },
+            )])),
+            project_root_markers,
+            ..Default::default()
+        })
+        .expect("serialize config"),
+    )
+    .await
 }
 
 #[tokio::test]
@@ -370,46 +383,284 @@ async fn loads_repo_local_config_from_cwd_only() -> anyhow::Result<()> {
     let tmp = tempdir()?;
 
     let codex_home = tmp.path().join("home");
-    std::fs::create_dir_all(&codex_home)?;
-    std::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
-        r#"value = "user"
-"#,
-    )?;
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+    )
+    .await?;
 
-    let repo = tmp.path().join("repo");
-    let nested = repo.join("a").join("b");
-    std::fs::create_dir_all(&nested)?;
+    let project_layers: Vec<_> = layers
+        .layers_high_to_low()
+        .into_iter()
+        .filter_map(|layer| match &layer.name {
+            super::ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(project_layers.len(), 2);
+    assert_eq!(project_layers[0].as_path(), nested.join(".codex").as_path());
+    assert_eq!(
+        project_layers[1].as_path(),
+        project_root.join(".codex").as_path()
+    );
 
-    std::fs::create_dir_all(repo.join(".codex"))?;
-    std::fs::write(
-        repo.join(".codex").join(CONFIG_TOML_FILE),
-        r#"value = "root"
-"#,
-    )?;
+    let config = layers.effective_config();
+    let foo = config
+        .get("foo")
+        .and_then(TomlValue::as_str)
+        .expect("foo entry");
+    assert_eq!(foo, "child");
+    Ok(())
+}
 
-    std::fs::create_dir_all(repo.join("a").join(".codex"))?;
-    std::fs::write(
-        repo.join("a").join(".codex").join(CONFIG_TOML_FILE),
-        r#"value = "sub"
-"#,
-    )?;
+#[tokio::test]
+async fn project_paths_resolve_relative_to_dot_codex_and_override_in_order() -> std::io::Result<()>
+{
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
 
-    std::fs::create_dir_all(nested.join(".codex"))?;
-    std::fs::write(
+    let root_cfg = r#"
+model_instructions_file = "root.txt"
+"#;
+    let nested_cfg = r#"
+model_instructions_file = "child.txt"
+"#;
+    tokio::fs::write(project_root.join(".codex").join(CONFIG_TOML_FILE), root_cfg).await?;
+    tokio::fs::write(nested.join(".codex").join(CONFIG_TOML_FILE), nested_cfg).await?;
+    tokio::fs::write(
+        project_root.join(".codex").join("root.txt"),
+        "root instructions",
+    )
+    .await?;
+    tokio::fs::write(
+        nested.join(".codex").join("child.txt"),
+        "child instructions",
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(nested.clone()),
+            ..ConfigOverrides::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.base_instructions.as_deref(),
+        Some("child instructions")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_override_model_instructions_file_sets_base_instructions() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), "").await?;
+
+    let cwd = tmp.path().join("work");
+    tokio::fs::create_dir_all(&cwd).await?;
+
+    let instructions_path = tmp.path().join("instr.md");
+    tokio::fs::write(&instructions_path, "cli override instructions").await?;
+
+    let cli_overrides = vec![(
+        "model_instructions_file".to_string(),
+        TomlValue::String(instructions_path.to_string_lossy().to_string()),
+    )];
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .cli_overrides(cli_overrides)
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd),
+            ..ConfigOverrides::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.base_instructions.as_deref(),
+        Some("cli override instructions")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .layers_high_to_low()
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .collect();
+    assert_eq!(
+        vec![&ConfigLayerEntry {
+            name: super::ConfigLayerSource::Project {
+                dot_codex_folder: AbsolutePathBuf::from_absolute_path(project_root.join(".codex"))?,
+            },
+            config: TomlValue::Table(toml::map::Map::new()),
+            version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
+        }],
+        project_layers
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_layers_skipped_when_untrusted_or_unknown() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
-        r#"value = "cwd"
-"#,
-    )?;
+        "foo = \"child\"\n",
+    )
+    .await?;
 
-    let _cwd = set_test_cwd(&nested);
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
 
-    let overrides = LoaderOverrides {
-        managed_config_path: Some(tmp.path().join("managed_config.toml")),
-        #[cfg(target_os = "macos")]
-        managed_preferences_base64: None,
-        macos_managed_config_requirements_base64: None,
-    };
+    let codex_home_untrusted = tmp.path().join("home_untrusted");
+    tokio::fs::create_dir_all(&codex_home_untrusted).await?;
+    make_config_for_test(
+        &codex_home_untrusted,
+        &project_root,
+        TrustLevel::Untrusted,
+        None,
+    )
+    .await?;
+
+    let layers_untrusted = load_config_layers_state(
+        &codex_home_untrusted,
+        Some(cwd.clone()),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+    )
+    .await?;
+    let project_layers_untrusted = layers_untrusted
+        .layers_high_to_low()
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .count();
+    assert_eq!(project_layers_untrusted, 0);
+    assert_eq!(layers_untrusted.effective_config().get("foo"), None);
+
+    let codex_home_unknown = tmp.path().join("home_unknown");
+    tokio::fs::create_dir_all(&codex_home_unknown).await?;
+
+    let layers_unknown = load_config_layers_state(
+        &codex_home_unknown,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+    )
+    .await?;
+    let project_layers_unknown = layers_unknown
+        .layers_high_to_low()
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .count();
+    assert_eq!(project_layers_unknown, 0);
+    assert_eq!(layers_unknown.effective_config().get("foo"), None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_overrides_with_relative_paths_do_not_break_trust_check() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let cli_overrides = vec![(
+        "model_instructions_file".to_string(),
+        TomlValue::String("relative.md".to_string()),
+    )];
+
+    load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &cli_overrides,
+        LoaderOverrides::default(),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".hg"), "hg").await?;
+    tokio::fs::write(
+        project_root.join(".codex").join(CONFIG_TOML_FILE),
+        "foo = \"root\"\n",
+    )
+    .await?;
+    tokio::fs::write(
+        nested.join(".codex").join(CONFIG_TOML_FILE),
+        "foo = \"child\"\n",
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        Some(vec![".hg".to_string()]),
+    )
+    .await?;
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
     let state = load_config_layers_state(

@@ -93,7 +93,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@1.90
+      - uses: dtolnay/rust-toolchain@1.92
         with:
           targets: ${{ matrix.target }}
 
@@ -198,7 +198,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/bminor/bash /tmp/bash
+          git clone --depth 1 https://github.com/bolinfest/bash /tmp/bash
           cd /tmp/bash
           git fetch --depth 1 origin a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
           git checkout a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
@@ -240,7 +240,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/bminor/bash /tmp/bash
+          git clone --depth 1 https://github.com/bolinfest/bash /tmp/bash
           cd /tmp/bash
           git fetch --depth 1 origin a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
           git checkout a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b

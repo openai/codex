@@ -119,6 +119,10 @@ pub struct ResumeArgs {
     #[arg(long = "last", default_value_t = false)]
     pub last: bool,
 
+    /// Show all sessions (disables cwd filtering).
+    #[arg(long = "all", default_value_t = false)]
+    pub all: bool,
+
     /// Optional image(s) to attach to the prompt sent after resuming.
     #[arg(
         long = "image",

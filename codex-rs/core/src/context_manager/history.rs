@@ -1,12 +1,13 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
+use crate::instructions::SkillInstructions;
+use crate::instructions::UserInstructions;
+use crate::session_prefix::is_session_prefix;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::approx_tokens_from_byte_count;
 use crate::truncate::truncate_function_output_items_with_policy;
 use crate::truncate::truncate_text;
-use crate::user_instructions::SkillInstructions;
-use crate::user_instructions::UserInstructions;
 use crate::user_shell_command::is_user_shell_command_text;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -85,8 +86,11 @@ impl ContextManager {
     // This is a coarse lower bound, not a tokenizer-accurate count.
     pub(crate) fn estimate_token_count(&self, turn_context: &TurnContext) -> Option<i64> {
         let model_info = turn_context.client.get_model_info();
-        let base_instructions = model_info.base_instructions.as_str();
-        let base_tokens = i64::try_from(approx_token_count(base_instructions)).unwrap_or(i64::MAX);
+        let personality = turn_context
+            .personality
+            .or(turn_context.client.config().model_personality);
+        let base_instructions = model_info.get_model_instructions(personality);
+        let base_tokens = i64::try_from(approx_token_count(&base_instructions)).unwrap_or(i64::MAX);
 
         let items_tokens = self.items.iter().fold(0i64, |acc, item| {
             acc + match item {
@@ -97,7 +101,11 @@ impl ContextManager {
                 }
                 | ResponseItem::Compaction {
                     encrypted_content: content,
-                } => estimate_reasoning_length(content.len()) as i64,
+                } => {
+                    let reasoning_bytes = estimate_reasoning_length(content.len());
+                    i64::try_from(approx_tokens_from_byte_count(reasoning_bytes))
+                        .unwrap_or(i64::MAX)
+                }
                 item => {
                     let serialized = serde_json::to_string(item).unwrap_or_default();
                     i64::try_from(approx_token_count(&serialized)).unwrap_or(i64::MAX)
@@ -231,12 +239,19 @@ impl ContextManager {
         token_estimate as usize
     }
 
-    pub(crate) fn get_total_token_usage(&self) -> i64 {
-        self.token_info
+    /// When true, the server already accounted for past reasoning tokens and
+    /// the client should not re-estimate them.
+    pub(crate) fn get_total_token_usage(&self, server_reasoning_included: bool) -> i64 {
+        let last_tokens = self
+            .token_info
             .as_ref()
             .map(|info| info.last_token_usage.total_tokens)
-            .unwrap_or(0)
-            .saturating_add(self.get_non_last_reasoning_items_tokens() as i64)
+            .unwrap_or(0);
+        if server_reasoning_included {
+            last_tokens
+        } else {
+            last_tokens.saturating_add(self.get_non_last_reasoning_items_tokens() as i64)
+        }
     }
 
     /// This function enforces a couple of invariants on the in-memory history:
@@ -315,12 +330,6 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
         .checked_div(4)
         .unwrap_or(0)
         .saturating_sub(650)
-}
-
-fn is_session_prefix(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with("<environment_context>")
 }
 
 pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {

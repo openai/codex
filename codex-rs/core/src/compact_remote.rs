@@ -54,7 +54,8 @@ async fn run_remote_compact_task_inner_impl(
         input: history.for_prompt(),
         tools: vec![],
         parallel_tool_calls: false,
-        base_instructions_override: turn_context.base_instructions.clone(),
+        base_instructions: sess.get_base_instructions().await,
+        personality: turn_context.personality,
         output_schema: None,
     };
 

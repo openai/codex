@@ -258,7 +258,7 @@ fn send_message_v2_with_policies(
         thread_id: thread_response.thread.id.clone(),
         input: vec![V2UserInput::Text {
             text: user_message,
-            // Plain text conversion has no UI element ranges.
+            // Test client sends plain text without UI element ranges.
             text_elements: Vec::new(),
         }],
         ..Default::default()
@@ -292,6 +292,7 @@ fn send_follow_up_v2(
         thread_id: thread_response.thread.id.clone(),
         input: vec![V2UserInput::Text {
             text: first_message,
+            // Test client sends plain text without UI element ranges.
             text_elements: Vec::new(),
         }],
         ..Default::default()
@@ -304,6 +305,7 @@ fn send_follow_up_v2(
         thread_id: thread_response.thread.id.clone(),
         input: vec![V2UserInput::Text {
             text: follow_up_message,
+            // Test client sends plain text without UI element ranges.
             text_elements: Vec::new(),
         }],
         ..Default::default()
@@ -477,6 +479,8 @@ impl CodexClient {
                 conversation_id: *conversation_id,
                 items: vec![InputItem::Text {
                     text: message.to_string(),
+                    // Test client sends plain text without UI element ranges.
+                    text_elements: Vec::new(),
                 }],
             },
         };
@@ -838,6 +842,9 @@ impl CodexClient {
             turn_id,
             item_id,
             reason,
+            command,
+            cwd,
+            command_actions,
             proposed_execpolicy_amendment,
         } = params;
 
@@ -846,6 +853,17 @@ impl CodexClient {
         );
         if let Some(reason) = reason.as_deref() {
             println!("< reason: {reason}");
+        }
+        if let Some(command) = command.as_deref() {
+            println!("< command: {command}");
+        }
+        if let Some(cwd) = cwd.as_ref() {
+            println!("< cwd: {}", cwd.display());
+        }
+        if let Some(command_actions) = command_actions.as_ref()
+            && !command_actions.is_empty()
+        {
+            println!("< command actions: {command_actions:?}");
         }
         if let Some(execpolicy_amendment) = proposed_execpolicy_amendment.as_ref() {
             println!("< proposed execpolicy amendment: {execpolicy_amendment:?}");

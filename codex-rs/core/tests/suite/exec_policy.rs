@@ -81,6 +81,8 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 

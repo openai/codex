@@ -1,6 +1,0 @@
----
-source: tui/src/chatwidget/tests.rs
-expression: terminal.backend()
----
-"                                        "
-"                                        "

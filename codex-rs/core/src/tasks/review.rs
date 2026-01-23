@@ -88,7 +88,7 @@ async fn start_review_conversation(
     let mut sub_agent_config = config.as_ref().clone();
     // Carry over review-only feature restrictions so the delegate cannot
     // re-enable blocked tools (web search, view image).
-    sub_agent_config.web_search_mode = WebSearchMode::Disabled;
+    sub_agent_config.web_search_mode = Some(WebSearchMode::Disabled);
 
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
@@ -193,8 +193,8 @@ pub(crate) async fn exit_review_mode(
     review_output: Option<ReviewOutputEvent>,
     ctx: Arc<TurnContext>,
 ) {
-    const REVIEW_USER_MESSAGE_ID: &str = "review:rollout:user";
-    const REVIEW_ASSISTANT_MESSAGE_ID: &str = "review:rollout:assistant";
+    const REVIEW_USER_MESSAGE_ID: &str = "review_rollout_user";
+    const REVIEW_ASSISTANT_MESSAGE_ID: &str = "review_rollout_assistant";
     let (user_message, assistant_message) = if let Some(out) = review_output.clone() {
         let mut findings_str = String::new();
         let text = out.overall_explanation.trim();
@@ -224,6 +224,7 @@ pub(crate) async fn exit_review_mode(
                 id: Some(REVIEW_USER_MESSAGE_ID.to_string()),
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: user_message }],
+                end_turn: None,
             }],
         )
         .await;
@@ -242,6 +243,7 @@ pub(crate) async fn exit_review_mode(
                 content: vec![ContentItem::OutputText {
                     text: assistant_message,
                 }],
+                end_turn: None,
             },
         )
         .await;

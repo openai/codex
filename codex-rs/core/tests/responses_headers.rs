@@ -9,15 +9,18 @@ use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
+use codex_core::WEB_SEARCH_ELIGIBLE_HEADER;
 use codex_core::WireApi;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
+use core_test_support::test_codex::test_codex;
 use futures::StreamExt;
 use tempfile::TempDir;
 use wiremock::matchers::header;
@@ -101,6 +104,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         content: vec![ContentItem::InputText {
             text: "hello".into(),
         }],
+        end_turn: None,
     }];
 
     let mut stream = client_session.stream(&prompt).await.expect("stream failed");
@@ -197,6 +201,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         content: vec![ContentItem::InputText {
             text: "hello".into(),
         }],
+        end_turn: None,
     }];
 
     let mut stream = client_session.stream(&prompt).await.expect("stream failed");
@@ -210,6 +215,66 @@ async fn responses_stream_includes_subagent_header_on_other() {
     assert_eq!(
         request.header("x-openai-subagent").as_deref(),
         Some("my-task")
+    );
+}
+
+#[tokio::test]
+async fn responses_stream_includes_web_search_eligible_header_true_by_default() {
+    core_test_support::skip_if_no_network!();
+
+    let server = responses::start_mock_server().await;
+    let response_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+
+    let request_recorder = responses::mount_sse_once_match(
+        &server,
+        header(WEB_SEARCH_ELIGIBLE_HEADER, "true"),
+        response_body,
+    )
+    .await;
+
+    let test = test_codex().build(&server).await.expect("build test codex");
+    test.submit_turn("hello").await.expect("submit test prompt");
+
+    let request = request_recorder.single_request();
+    assert_eq!(
+        request.header(WEB_SEARCH_ELIGIBLE_HEADER).as_deref(),
+        Some("true")
+    );
+}
+
+#[tokio::test]
+async fn responses_stream_includes_web_search_eligible_header_false_when_disabled() {
+    core_test_support::skip_if_no_network!();
+
+    let server = responses::start_mock_server().await;
+    let response_body = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
+
+    let request_recorder = responses::mount_sse_once_match(
+        &server,
+        header(WEB_SEARCH_ELIGIBLE_HEADER, "false"),
+        response_body,
+    )
+    .await;
+
+    let test = test_codex()
+        .with_config(|config| {
+            config.web_search_mode = Some(WebSearchMode::Disabled);
+        })
+        .build(&server)
+        .await
+        .expect("build test codex");
+    test.submit_turn("hello").await.expect("submit test prompt");
+
+    let request = request_recorder.single_request();
+    assert_eq!(
+        request.header(WEB_SEARCH_ELIGIBLE_HEADER).as_deref(),
+        Some("false")
     );
 }
 
@@ -291,6 +356,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         content: vec![ContentItem::InputText {
             text: "hello".into(),
         }],
+        end_turn: None,
     }];
 
     let mut stream = client.stream(&prompt).await.expect("stream failed");

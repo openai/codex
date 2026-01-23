@@ -1,8 +1,13 @@
+use std::collections::BTreeMap;
+
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelInstructionsTemplate;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::PersonalityMessages;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationMode;
@@ -20,7 +25,12 @@ const GPT_5_CODEX_INSTRUCTIONS: &str = include_str!("../../gpt_5_codex_prompt.md
 const GPT_5_1_INSTRUCTIONS: &str = include_str!("../../gpt_5_1_prompt.md");
 const GPT_5_2_INSTRUCTIONS: &str = include_str!("../../gpt_5_2_prompt.md");
 const GPT_5_1_CODEX_MAX_INSTRUCTIONS: &str = include_str!("../../gpt-5.1-codex-max_prompt.md");
+
 const GPT_5_2_CODEX_INSTRUCTIONS: &str = include_str!("../../gpt-5.2-codex_prompt.md");
+const GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE: &str =
+    include_str!("../../templates/model_instructions/gpt-5.2-codex_instructions_template.md");
+const PERSONALITY_FRIENDLY: &str = include_str!("../../templates/personalities/friendly.md");
+const PERSONALITY_PRAGMATIC: &str = include_str!("../../templates/personalities/pragmatic.md");
 
 pub(crate) const CONTEXT_WINDOW_272K: i64 = 272_000;
 
@@ -44,6 +54,7 @@ macro_rules! model_info {
             priority: 99,
             upgrade: None,
             base_instructions: BASE_INSTRUCTIONS.to_string(),
+            model_instructions_template: None,
             supports_reasoning_summaries: false,
             support_verbosity: false,
             default_verbosity: None,
@@ -85,6 +96,11 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
                 TruncationPolicyConfig::tokens(limit)
             }
         };
+    }
+
+    if let Some(base_instructions) = &config.base_instructions {
+        model.base_instructions = base_instructions.clone();
+        model.model_instructions_template = None;
     }
     model
 }
@@ -187,6 +203,16 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
             supported_reasoning_levels: supported_reasoning_level_low_medium_high_xhigh(),
+            model_instructions_template: Some(ModelInstructionsTemplate {
+                template: GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string(),
+                personality_messages: Some(PersonalityMessages(BTreeMap::from([(
+                    Personality::Friendly,
+                    PERSONALITY_FRIENDLY.to_string(),
+                ), (
+                    Personality::Pragmatic,
+                    PERSONALITY_PRAGMATIC.to_string(),
+                )]))),
+            }),
         )
     } else if slug.starts_with("gpt-5.1-codex-max") {
         model_info!(

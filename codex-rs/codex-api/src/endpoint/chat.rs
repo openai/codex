@@ -87,6 +87,7 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
                 extra_headers,
                 RequestCompression::None,
                 spawn_chat_stream,
+                None,
             )
             .await
     }
@@ -156,6 +157,9 @@ impl Stream for AggregatedStream {
 
                     return Poll::Ready(Some(Ok(ResponseEvent::OutputItemDone(item))));
                 }
+                Poll::Ready(Some(Ok(ResponseEvent::ServerReasoningIncluded(included)))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::ServerReasoningIncluded(included))));
+                }
                 Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot)))) => {
                     return Poll::Ready(Some(Ok(ResponseEvent::RateLimits(snapshot))));
                 }
@@ -189,6 +193,7 @@ impl Stream for AggregatedStream {
                             content: vec![ContentItem::OutputText {
                                 text: std::mem::take(&mut this.cumulative),
                             }],
+                            end_turn: None,
                         };
                         this.pending
                             .push_back(ResponseEvent::OutputItemDone(aggregated_message));
