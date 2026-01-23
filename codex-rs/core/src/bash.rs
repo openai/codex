@@ -265,17 +265,20 @@ mod tests {
 
     #[test]
     fn accepts_mixed_quote_concatenation() {
-        let cmds = parse_seq("echo \"/usr\"'/'\"local\"/bin").unwrap();
         assert_eq!(
-            cmds,
+            parse_seq(r#"echo "/usr"'/'"local"/bin"#).unwrap(),
+            vec![vec!["echo".to_string(), "/usr/local/bin".to_string()]]
+        );
+        assert_eq!(
+            parse_seq(r#"echo '/usr'"/"'local'/bin"#).unwrap(),
             vec![vec!["echo".to_string(), "/usr/local/bin".to_string()]]
         );
     }
 
     #[test]
     fn rejects_double_quoted_strings_with_expansions() {
-        assert!(parse_seq("echo \"hi ${USER}\"").is_none());
-        assert!(parse_seq("echo \"$HOME\"").is_none());
+        assert!(parse_seq(r#"echo "hi ${USER}""#).is_none());
+        assert!(parse_seq(r#"echo "$HOME""#).is_none());
     }
 
     #[test]
