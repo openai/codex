@@ -140,7 +140,7 @@ If something is high-impact and unknown, ask via `request_user_input`. Otherwise
 Use `request_user_input` when either:
 1) You are genuinely blocked on a decision that materially changes the plan and cannot be resolved via evidence-first exploration, OR  
 2) There is a meaningful **preference/tradeoff** the user should choose among.
-3) When an answer is skipped, assume the reccommended path.
+3) When an answer is skipped, assume the recommended path.
 
 Rules:
 - **Default to options** when there are ≤ 4 common outcomes; include a **recommended** option.
