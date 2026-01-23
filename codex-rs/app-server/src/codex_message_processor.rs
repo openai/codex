@@ -455,10 +455,17 @@ impl CodexMessageProcessor {
             ClientRequest::CollaborationModeList { request_id, params } => {
                 let outgoing = self.outgoing.clone();
                 let thread_manager = self.thread_manager.clone();
+                let config = self.config.clone();
 
                 tokio::spawn(async move {
-                    Self::list_collaboration_modes(outgoing, thread_manager, request_id, params)
-                        .await;
+                    Self::list_collaboration_modes(
+                        outgoing,
+                        thread_manager,
+                        config,
+                        request_id,
+                        params,
+                    )
+                    .await;
                 });
             }
             ClientRequest::McpServerOauthLogin { request_id, params } => {
@@ -2505,11 +2512,12 @@ impl CodexMessageProcessor {
     async fn list_collaboration_modes(
         outgoing: Arc<OutgoingMessageSender>,
         thread_manager: Arc<ThreadManager>,
+        config: Arc<Config>,
         request_id: RequestId,
         params: CollaborationModeListParams,
     ) {
         let CollaborationModeListParams {} = params;
-        let items = thread_manager.list_collaboration_modes();
+        let items = thread_manager.list_collaboration_modes(config.as_ref());
         let response = CollaborationModeListResponse { data: items };
         outgoing.send_response(request_id, response).await;
     }

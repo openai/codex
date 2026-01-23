@@ -114,6 +114,33 @@
         }
       ]
     },
+    "CollaborationModeConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "model_reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        }
+      },
+      "type": "object"
+    },
+    "CollaborationModesConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "execute": {
+          "$ref": "#/definitions/CollaborationModeConfig"
+        },
+        "pair_programming": {
+          "$ref": "#/definitions/CollaborationModeConfig"
+        },
+        "plan": {
+          "$ref": "#/definitions/CollaborationModeConfig"
+        }
+      },
+      "type": "object"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -126,6 +153,9 @@
         },
         "chatgpt_base_url": {
           "type": "string"
+        },
+        "collaboration_modes": {
+          "$ref": "#/definitions/CollaborationModesConfig"
         },
         "experimental_compact_prompt_file": {
           "$ref": "#/definitions/AbsolutePathBuf"
@@ -1098,6 +1128,9 @@
       ],
       "default": null,
       "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
+    },
+    "collaboration_modes": {
+      "$ref": "#/definitions/CollaborationModesConfig"
     },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",

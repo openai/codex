@@ -24,6 +24,26 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 - https://developers.openai.com/codex/config-reference
 
+## Collaboration modes
+
+When the `collaboration_modes` feature is enabled, Codex uses built-in presets for `plan`, `pair_programming`, and `execute`.
+
+You can override the model and reasoning effort globally via `model` / `model_reasoning_effort`, and optionally per-mode:
+
+```toml
+model = "gpt-5.2"
+model_reasoning_effort = "xhigh"
+
+[collaboration_modes.plan]
+model = "gpt-5.2"
+model_reasoning_effort = "high"
+
+[collaboration_modes.execute]
+model_reasoning_effort = "xhigh"
+```
+
+Precedence is: built-in preset < global overrides < per-mode overrides.
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

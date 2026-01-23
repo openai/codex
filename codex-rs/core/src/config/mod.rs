@@ -1,6 +1,8 @@
 use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::config::types::CollaborationModeConfig;
+use crate::config::types::CollaborationModesConfig;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -276,6 +278,9 @@ pub struct Config {
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
     pub model_reasoning_effort: Option<ReasoningEffort>,
+
+    /// Optional overrides for built-in collaboration mode presets.
+    pub collaboration_modes: CollaborationModesConfig,
 
     /// If not "none", the value to use for `reasoning.summary` when making a
     /// request using the Responses API.
@@ -857,6 +862,7 @@ pub struct ConfigToml {
     pub show_raw_agent_reasoning: Option<bool>,
 
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub collaboration_modes: Option<CollaborationModesConfig>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
@@ -1178,6 +1184,48 @@ pub fn resolve_oss_provider(
     }
 }
 
+fn merge_collaboration_mode_config(
+    base: Option<CollaborationModeConfig>,
+    overlay: Option<CollaborationModeConfig>,
+) -> Option<CollaborationModeConfig> {
+    match (base, overlay) {
+        (None, None) => None,
+        (Some(base), None) => Some(base),
+        (None, Some(overlay)) => Some(overlay),
+        (Some(base), Some(overlay)) => Some(CollaborationModeConfig {
+            model: overlay.model.or(base.model),
+            model_reasoning_effort: overlay
+                .model_reasoning_effort
+                .or(base.model_reasoning_effort),
+        }),
+    }
+}
+
+fn merge_collaboration_modes_config(
+    base: Option<CollaborationModesConfig>,
+    overlay: Option<CollaborationModesConfig>,
+) -> CollaborationModesConfig {
+    let CollaborationModesConfig {
+        plan: base_plan,
+        pair_programming: base_pair_programming,
+        execute: base_execute,
+    } = base.unwrap_or_default();
+    let CollaborationModesConfig {
+        plan: overlay_plan,
+        pair_programming: overlay_pair_programming,
+        execute: overlay_execute,
+    } = overlay.unwrap_or_default();
+
+    CollaborationModesConfig {
+        plan: merge_collaboration_mode_config(base_plan, overlay_plan),
+        pair_programming: merge_collaboration_mode_config(
+            base_pair_programming,
+            overlay_pair_programming,
+        ),
+        execute: merge_collaboration_mode_config(base_execute, overlay_execute),
+    }
+}
+
 /// Resolve the web search mode from explicit config and feature flags.
 fn resolve_web_search_mode(
     config_toml: &ConfigToml,
@@ -1471,6 +1519,11 @@ impl Config {
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
+        let collaboration_modes = merge_collaboration_modes_config(
+            cfg.collaboration_modes.clone(),
+            config_profile.collaboration_modes.clone(),
+        );
+
         let config = Self {
             model,
             review_model,
@@ -1529,6 +1582,7 @@ impl Config {
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort),
+            collaboration_modes,
             model_reasoning_summary: config_profile
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary)
@@ -3684,6 +3738,7 @@ model_verbosity = "high"
                 hide_agent_reasoning: false,
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
+                collaboration_modes: CollaborationModesConfig::default(),
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: None,
                 model_verbosity: None,
@@ -3765,6 +3820,7 @@ model_verbosity = "high"
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
+            collaboration_modes: CollaborationModesConfig::default(),
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
@@ -3861,6 +3917,7 @@ model_verbosity = "high"
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
+            collaboration_modes: CollaborationModesConfig::default(),
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
@@ -3943,6 +4000,7 @@ model_verbosity = "high"
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
+            collaboration_modes: CollaborationModesConfig::default(),
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_supports_reasoning_summaries: None,
             model_verbosity: Some(Verbosity::High),

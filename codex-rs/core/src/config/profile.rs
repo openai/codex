@@ -3,6 +3,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::config::types::CollaborationModesConfig;
 use crate::config::types::Personality;
 use crate::protocol::AskForApproval;
 use codex_protocol::config_types::ReasoningSummary;
@@ -23,6 +24,7 @@ pub struct ConfigProfile {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub collaboration_modes: Option<CollaborationModesConfig>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub model_personality: Option<Personality>,

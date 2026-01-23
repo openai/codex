@@ -8,6 +8,7 @@ pub use codex_protocol::config_types::AltScreenMode;
 pub use codex_protocol::config_types::ModeKind;
 pub use codex_protocol::config_types::Personality;
 pub use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -23,6 +24,21 @@ use serde::Serialize;
 use serde::de::Error as SerdeError;
 
 pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct CollaborationModeConfig {
+    pub model: Option<String>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct CollaborationModesConfig {
+    pub plan: Option<CollaborationModeConfig>,
+    pub pair_programming: Option<CollaborationModeConfig>,
+    pub execute: Option<CollaborationModeConfig>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpServerDisabledReason {

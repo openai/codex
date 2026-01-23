@@ -93,9 +93,35 @@ impl ModelsManager {
 
     /// List collaboration mode presets.
     ///
-    /// Returns a static set of presets seeded with the configured model.
-    pub fn list_collaboration_modes(&self) -> Vec<CollaborationMode> {
+    /// Returns a static set of presets with config overrides applied.
+    pub fn list_collaboration_modes(&self, config: &Config) -> Vec<CollaborationMode> {
+        let global_model = config.model.clone();
+        let global_effort = config.model_reasoning_effort;
         builtin_collaboration_mode_presets()
+            .into_iter()
+            .map(|preset| {
+                let per_mode = match &preset {
+                    CollaborationMode::Plan(_) => config.collaboration_modes.plan.as_ref(),
+                    CollaborationMode::PairProgramming(_) => {
+                        config.collaboration_modes.pair_programming.as_ref()
+                    }
+                    CollaborationMode::Execute(_) => config.collaboration_modes.execute.as_ref(),
+                    CollaborationMode::Custom(_) => None,
+                };
+
+                let preset =
+                    preset.with_updates(global_model.clone(), global_effort.map(Some), None);
+                if let Some(per_mode) = per_mode {
+                    preset.with_updates(
+                        per_mode.model.clone(),
+                        per_mode.model_reasoning_effort.map(Some),
+                        None,
+                    )
+                } else {
+                    preset
+                }
+            })
+            .collect()
     }
 
     /// Attempt to list models without blocking, using the current cached state.
@@ -362,10 +388,12 @@ mod tests {
     use crate::CodexAuth;
     use crate::auth::AuthCredentialsStoreMode;
     use crate::config::ConfigBuilder;
+    use crate::config::types::CollaborationModeConfig;
     use crate::features::Feature;
     use crate::model_provider_info::WireApi;
     use chrono::Utc;
     use codex_protocol::openai_models::ModelsResponse;
+    use codex_protocol::openai_models::ReasoningEffort;
     use core_test_support::responses::mount_models_once;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -490,6 +518,62 @@ mod tests {
             1,
             "expected a single /models request"
         );
+    }
+
+    #[tokio::test]
+    async fn collaboration_mode_presets_respect_global_and_per_mode_overrides() {
+        let codex_home = tempdir().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+
+        config.model = Some("global-model".to_string());
+        config.model_reasoning_effort = Some(ReasoningEffort::High);
+        config.collaboration_modes.plan = Some(CollaborationModeConfig {
+            model: Some("plan-model".to_string()),
+            model_reasoning_effort: Some(ReasoningEffort::Low),
+        });
+        config.collaboration_modes.execute = Some(CollaborationModeConfig {
+            model: None,
+            model_reasoning_effort: Some(ReasoningEffort::XHigh),
+        });
+
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let manager = ModelsManager::new(codex_home.path().to_path_buf(), auth_manager);
+
+        let actual = manager.list_collaboration_modes(&config);
+        let builtin = builtin_collaboration_mode_presets();
+
+        let expected = vec![
+            builtin[0]
+                .with_updates(
+                    config.model.clone(),
+                    config.model_reasoning_effort.map(Some),
+                    None,
+                )
+                .with_updates(
+                    Some("plan-model".to_string()),
+                    Some(Some(ReasoningEffort::Low)),
+                    None,
+                ),
+            builtin[1].with_updates(
+                config.model.clone(),
+                config.model_reasoning_effort.map(Some),
+                None,
+            ),
+            builtin[2]
+                .with_updates(
+                    config.model.clone(),
+                    config.model_reasoning_effort.map(Some),
+                    None,
+                )
+                .with_updates(None, Some(Some(ReasoningEffort::XHigh)), None),
+        ];
+
+        assert_eq!(expected, actual);
     }
 
     #[tokio::test]
