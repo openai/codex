@@ -2,6 +2,7 @@ use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::RealtimeAudioDeviceKind;
+use crate::app_event::ForkPanePlacement;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -32,6 +33,8 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+use crate::terminal_multiplexer::spawn_fork_in_new_pane;
+use crate::terminal_multiplexer::validate_fork_placement;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -40,6 +43,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
+use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -53,6 +57,7 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use codex_core::terminal::terminal_info;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
@@ -689,6 +694,7 @@ pub(crate) struct App {
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_picker_threads: HashMap<ThreadId, AgentPickerThreadEntry>,
+    suppressed_thread_created: HashSet<ThreadId>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
     primary_thread_id: Option<ThreadId>,
@@ -1366,6 +1372,7 @@ impl App {
         self.abort_all_thread_event_listeners();
         self.thread_event_channels.clear();
         self.agent_picker_threads.clear();
+        self.suppressed_thread_created.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
@@ -1421,6 +1428,49 @@ impl App {
         let mut config = self.config.clone();
         config.service_tier = self.chat_widget.current_service_tier();
         config
+    }
+
+    fn in_terminal_multiplexer(&self) -> bool {
+        terminal_info().multiplexer.is_some()
+    }
+
+    async fn try_spawn_fork_in_new_pane(
+        &mut self,
+        forked_thread_id: ThreadId,
+        forked_thread: &Arc<CodexThread>,
+        placement: Option<ForkPanePlacement>,
+    ) -> bool {
+        let terminal_info = terminal_info();
+        let Some(multiplexer) = terminal_info.multiplexer.as_ref() else {
+            return false;
+        };
+        let description =
+            match spawn_fork_in_new_pane(multiplexer, &forked_thread_id, placement).await {
+                Ok(description) => description,
+                Err(err) => {
+                    self.chat_widget.add_error_message(format!(
+                        "Forked session created but failed to open a new pane: {err}"
+                    ));
+                    return false;
+                }
+            };
+
+        self.suppressed_thread_created.insert(forked_thread_id);
+        if let Err(err) = forked_thread.submit(Op::Shutdown).await {
+            self.chat_widget.add_error_message(format!(
+                "Forked session opened in a new {description} but failed to shut down the local fork {forked_thread_id}: {err}"
+            ));
+        }
+        self.server.remove_thread(&forked_thread_id).await;
+        self.thread_event_channels.remove(&forked_thread_id);
+        let resume_command = format!("codex resume {forked_thread_id}");
+        let spans = vec![
+            format!("Forked session opened in a new {description} (resume it with ").into(),
+            resume_command.cyan(),
+            ").".into(),
+        ];
+        self.chat_widget.add_plain_history_lines(vec![spans.into()]);
+        true
     }
 
     async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -1743,6 +1793,7 @@ impl App {
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_picker_threads: HashMap::new(),
+            suppressed_thread_created: HashSet::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -2034,9 +2085,15 @@ impl App {
                 // Leaving alt-screen may blank the inline viewport; force a redraw either way.
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::ForkCurrentSession => {
+            AppEvent::ForkCurrentSession { placement } => {
                 self.otel_manager
                     .counter("codex.thread.fork", 1, &[("source", "slash_command")]);
+                // Validate placement argument before forking.
+                if let Err(message) = validate_fork_placement(placement) {
+                    self.chat_widget.add_error_message(message);
+                    tui.frame_requester().schedule_frame();
+                    return Ok(AppRunControl::Continue);
+                }
                 let summary = session_summary(
                     self.chat_widget.token_usage(),
                     self.chat_widget.thread_id(),
@@ -2054,6 +2111,18 @@ impl App {
                             .await
                         {
                             Ok(forked) => {
+                                if self.in_terminal_multiplexer()
+                                    && self
+                                        .try_spawn_fork_in_new_pane(
+                                            forked.thread_id,
+                                            &forked.thread,
+                                            placement,
+                                        )
+                                        .await
+                                {
+                                    tui.frame_requester().schedule_frame();
+                                    return Ok(AppRunControl::Continue);
+                                }
                                 self.shutdown_current_thread().await;
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
@@ -3330,6 +3399,9 @@ impl App {
     }
 
     async fn handle_thread_created(&mut self, thread_id: ThreadId) -> Result<()> {
+        if self.suppressed_thread_created.remove(&thread_id) {
+            return Ok(());
+        }
         if self.thread_event_channels.contains_key(&thread_id) {
             return Ok(());
         }
@@ -4485,6 +4557,7 @@ mod tests {
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_picker_threads: HashMap::new(),
+            suppressed_thread_created: HashSet::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -4545,6 +4618,7 @@ mod tests {
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_picker_threads: HashMap::new(),
+                suppressed_thread_created: HashSet::new(),
                 active_thread_id: None,
                 active_thread_rx: None,
                 primary_thread_id: None,
