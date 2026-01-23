@@ -125,7 +125,7 @@ async fn override_turn_context_records_permissions_update() -> Result<()> {
     test.codex.submit(Op::Shutdown).await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
-    let rollout_path = test.codex.rollout_path();
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
     let rollout_text = read_rollout_text(&rollout_path).await?;
     let developer_texts = rollout_developer_texts(&rollout_text);
     let approval_texts: Vec<&String> = developer_texts
@@ -168,7 +168,7 @@ async fn override_turn_context_records_environment_update() -> Result<()> {
     test.codex.submit(Op::Shutdown).await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
-    let rollout_path = test.codex.rollout_path();
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
     let rollout_text = read_rollout_text(&rollout_path).await?;
     let env_texts = rollout_environment_texts(&rollout_text);
     let new_cwd_text = new_cwd.path().display().to_string();
@@ -205,7 +205,7 @@ async fn override_turn_context_records_collaboration_update() -> Result<()> {
     test.codex.submit(Op::Shutdown).await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
-    let rollout_path = test.codex.rollout_path();
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
     let rollout_text = read_rollout_text(&rollout_path).await?;
     let developer_texts = rollout_developer_texts(&rollout_text);
     let collab_text = collab_xml(collab_text);

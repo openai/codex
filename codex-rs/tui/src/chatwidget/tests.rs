@@ -158,7 +158,7 @@ async fn resumed_initial_messages_render_history() {
                 message: "assistant reply".to_string(),
             }),
         ]),
-        rollout_path: rollout_file.path().to_path_buf(),
+        rollout_path: Some(rollout_file.path().to_path_buf()),
     };
 
     chat.handle_codex_event(Event {
@@ -219,7 +219,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
             text_elements: text_elements.clone(),
             local_images: local_images.clone(),
         })]),
-        rollout_path: rollout_file.path().to_path_buf(),
+        rollout_path: Some(rollout_file.path().to_path_buf()),
     };
 
     chat.handle_codex_event(Event {
@@ -266,7 +266,7 @@ async fn submission_preserves_text_elements_and_local_images() {
         history_log_id: 0,
         history_entry_count: 0,
         initial_messages: None,
-        rollout_path: rollout_file.path().to_path_buf(),
+        rollout_path: Some(rollout_file.path().to_path_buf()),
     };
     chat.handle_codex_event(Event {
         id: "initial".into(),

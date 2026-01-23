@@ -2203,7 +2203,7 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
-                rollout_path: PathBuf::new(),
+                rollout_path: Some(PathBuf::new()),
             };
             Arc::new(new_session_info(
                 app.chat_widget.config_ref(),
@@ -2250,7 +2250,7 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
-                rollout_path: PathBuf::new(),
+                rollout_path: Some(PathBuf::new()),
             }),
         });
 
@@ -2293,7 +2293,7 @@ mod tests {
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
-            rollout_path: PathBuf::new(),
+            rollout_path: Some(PathBuf::new()),
         };
 
         app.chat_widget.handle_codex_event(Event {

@@ -9,13 +9,13 @@ use tokio::sync::watch;
 
 pub struct CodexThread {
     codex: Codex,
-    rollout_path: PathBuf,
+    rollout_path: Option<PathBuf>,
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread
 /// (formerly called a conversation) in Codex.
 impl CodexThread {
-    pub(crate) fn new(codex: Codex, rollout_path: PathBuf) -> Self {
+    pub(crate) fn new(codex: Codex, rollout_path: Option<PathBuf>) -> Self {
         Self {
             codex,
             rollout_path,
@@ -43,7 +43,7 @@ impl CodexThread {
         self.codex.agent_status.clone()
     }
 
-    pub fn rollout_path(&self) -> PathBuf {
+    pub fn rollout_path(&self) -> Option<PathBuf> {
         self.rollout_path.clone()
     }
 }
