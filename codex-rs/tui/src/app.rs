@@ -31,12 +31,14 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config_loader::ConfigLayerStackOrdering;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
@@ -169,6 +171,45 @@ fn emit_deprecation_notice(app_event_tx: &AppEventSender, notice: Option<Depreca
     };
     app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
         crate::history_cell::new_deprecation_notice(summary, details),
+    )));
+}
+
+fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) {
+    let mut disabled_folders = Vec::new();
+
+    for layer in config
+        .config_layer_stack
+        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+    {
+        let ConfigLayerSource::Project { dot_codex_folder } = &layer.name else {
+            continue;
+        };
+        if layer.disabled_reason.is_none() {
+            continue;
+        }
+        disabled_folders.push((
+            dot_codex_folder.as_path().display().to_string(),
+            layer
+                .disabled_reason
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "Config folder disabled.".to_string()),
+        ));
+    }
+
+    if disabled_folders.is_empty() {
+        return;
+    }
+
+    let mut message = "The following config folders are disabled:\n".to_string();
+    for (index, (folder, reason)) in disabled_folders.iter().enumerate() {
+        let display_index = index + 1;
+        message.push_str(&format!("    {display_index}. {folder}\n"));
+        message.push_str(&format!("       {reason}\n"));
+    }
+
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        history_cell::new_warning_event(message),
     )));
 }
 
@@ -795,6 +836,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
+        emit_project_config_warnings(&app_event_tx, &config);
 
         let thread_manager = Arc::new(ThreadManager::new(
             config.codex_home.clone(),

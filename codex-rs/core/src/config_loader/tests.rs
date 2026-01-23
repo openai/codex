@@ -132,6 +132,7 @@ async fn returns_empty_when_all_layers_missing() {
             },
             config: TomlValue::Table(toml::map::Map::new()),
             version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
+            disabled_reason: None,
         },
         user_layer,
     );
@@ -546,6 +547,7 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
             },
             config: TomlValue::Table(toml::map::Map::new()),
             version: version_for_toml(&TomlValue::Table(toml::map::Map::new())),
+            disabled_reason: None,
         }],
         project_layers
     );
@@ -554,7 +556,7 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
 }
 
 #[tokio::test]
-async fn project_layers_skipped_when_untrusted_or_unknown() -> std::io::Result<()> {
+async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
     let nested = project_root.join("child");
@@ -576,6 +578,13 @@ async fn project_layers_skipped_when_untrusted_or_unknown() -> std::io::Result<(
         None,
     )
     .await?;
+    let untrusted_config_path = codex_home_untrusted.join(CONFIG_TOML_FILE);
+    let untrusted_config_contents = tokio::fs::read_to_string(&untrusted_config_path).await?;
+    tokio::fs::write(
+        &untrusted_config_path,
+        format!("foo = \"user\"\n{untrusted_config_contents}"),
+    )
+    .await?;
 
     let layers_untrusted = load_config_layers_state(
         &codex_home_untrusted,
@@ -584,16 +593,35 @@ async fn project_layers_skipped_when_untrusted_or_unknown() -> std::io::Result<(
         LoaderOverrides::default(),
     )
     .await?;
-    let project_layers_untrusted = layers_untrusted
-        .layers_high_to_low()
+    let project_layers_untrusted: Vec<_> = layers_untrusted
+        .get_layers(
+            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            true,
+        )
         .into_iter()
         .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
-        .count();
-    assert_eq!(project_layers_untrusted, 0);
-    assert_eq!(layers_untrusted.effective_config().get("foo"), None);
+        .collect();
+    assert_eq!(project_layers_untrusted.len(), 1);
+    assert!(
+        project_layers_untrusted[0].disabled_reason.is_some(),
+        "expected untrusted project layer to be disabled"
+    );
+    assert_eq!(
+        project_layers_untrusted[0].config.get("foo"),
+        Some(&TomlValue::String("child".to_string()))
+    );
+    assert_eq!(
+        layers_untrusted.effective_config().get("foo"),
+        Some(&TomlValue::String("user".to_string()))
+    );
 
     let codex_home_unknown = tmp.path().join("home_unknown");
     tokio::fs::create_dir_all(&codex_home_unknown).await?;
+    tokio::fs::write(
+        codex_home_unknown.join(CONFIG_TOML_FILE),
+        "foo = \"user\"\n",
+    )
+    .await?;
 
     let layers_unknown = load_config_layers_state(
         &codex_home_unknown,
@@ -602,13 +630,92 @@ async fn project_layers_skipped_when_untrusted_or_unknown() -> std::io::Result<(
         LoaderOverrides::default(),
     )
     .await?;
-    let project_layers_unknown = layers_unknown
-        .layers_high_to_low()
+    let project_layers_unknown: Vec<_> = layers_unknown
+        .get_layers(
+            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            true,
+        )
         .into_iter()
         .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
-        .count();
-    assert_eq!(project_layers_unknown, 0);
-    assert_eq!(layers_unknown.effective_config().get("foo"), None);
+        .collect();
+    assert_eq!(project_layers_unknown.len(), 1);
+    assert!(
+        project_layers_unknown[0].disabled_reason.is_some(),
+        "expected unknown-trust project layer to be disabled"
+    );
+    assert_eq!(
+        project_layers_unknown[0].config.get("foo"),
+        Some(&TomlValue::String("child".to_string()))
+    );
+    assert_eq!(
+        layers_unknown.effective_config().get("foo"),
+        Some(&TomlValue::String("user".to_string()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_project_config_ignored_when_untrusted_or_unknown() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(nested.join(".codex").join(CONFIG_TOML_FILE), "foo =").await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let cases = [
+        ("untrusted", Some(TrustLevel::Untrusted)),
+        ("unknown", None),
+    ];
+
+    for (name, trust_level) in cases {
+        let codex_home = tmp.path().join(format!("home_{name}"));
+        tokio::fs::create_dir_all(&codex_home).await?;
+        let config_path = codex_home.join(CONFIG_TOML_FILE);
+
+        if let Some(trust_level) = trust_level {
+            make_config_for_test(&codex_home, &project_root, trust_level, None).await?;
+            let config_contents = tokio::fs::read_to_string(&config_path).await?;
+            tokio::fs::write(&config_path, format!("foo = \"user\"\n{config_contents}")).await?;
+        } else {
+            tokio::fs::write(&config_path, "foo = \"user\"\n").await?;
+        }
+
+        let layers = load_config_layers_state(
+            &codex_home,
+            Some(cwd.clone()),
+            &[] as &[(String, TomlValue)],
+            LoaderOverrides::default(),
+        )
+        .await?;
+        let project_layers: Vec<_> = layers
+            .get_layers(
+                super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+                true,
+            )
+            .into_iter()
+            .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+            .collect();
+        assert_eq!(
+            project_layers.len(),
+            1,
+            "expected one project layer for {name}"
+        );
+        assert!(
+            project_layers[0].disabled_reason.is_some(),
+            "expected {name} project layer to be disabled"
+        );
+        assert_eq!(
+            project_layers[0].config,
+            TomlValue::Table(toml::map::Map::new())
+        );
+        assert_eq!(
+            layers.effective_config().get("foo"),
+            Some(&TomlValue::String("user".to_string()))
+        );
+    }
 
     Ok(())
 }

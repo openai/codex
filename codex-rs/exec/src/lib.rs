@@ -297,7 +297,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
 
-    if !skip_git_repo_check && get_git_repo_root(&default_cwd).is_none() {
+    // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
+    // since the user is explicitly running in an externally sandboxed environment.
+    if !skip_git_repo_check
+        && !dangerously_bypass_approvals_and_sandbox
+        && get_git_repo_root(&default_cwd).is_none()
+    {
         eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
         std::process::exit(1);
     }
