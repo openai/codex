@@ -101,7 +101,7 @@ Each response yields:
 
 Fetch the built-in collaboration mode presets with `collaborationMode/list`. This endpoint does not accept pagination and returns the full list in one response:
 
-- `data` – ordered list of collaboration mode presets
+- `data` – ordered list of collaboration mode masks (partial settings to apply on top of the base mode)
 
 ## Event stream
 

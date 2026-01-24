@@ -19,7 +19,7 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
@@ -158,7 +158,7 @@ impl ThreadManager {
             .await
     }
 
-    pub fn list_collaboration_modes(&self) -> Vec<CollaborationMode> {
+    pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
         self.state.models_manager.list_collaboration_modes()
     }
 

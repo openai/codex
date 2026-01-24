@@ -221,10 +221,7 @@ impl CollaborationMode {
         CollaborationMode {
             mode: mask.mode.unwrap_or(self.mode),
             settings: Settings {
-                model: mask
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| settings.model.clone()),
+                model: mask.model.clone().unwrap_or_else(|| settings.model.clone()),
                 reasoning_effort: mask.reasoning_effort.or(settings.reasoning_effort),
                 developer_instructions: mask
                     .developer_instructions
