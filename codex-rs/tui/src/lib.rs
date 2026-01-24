@@ -23,6 +23,8 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
+use codex_core::config_loader::ConfigLoadError;
+use codex_core::config_loader::format_config_error_with_source;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::get_platform_sandbox;
 use codex_core::protocol::AskForApproval;
@@ -177,7 +179,18 @@ pub async fn run_main(
     {
         Ok(config_toml) => config_toml,
         Err(err) => {
-            eprintln!("Error loading config.toml: {err}");
+            let config_error = err
+                .get_ref()
+                .and_then(|err| err.downcast_ref::<ConfigLoadError>())
+                .map(ConfigLoadError::config_error);
+            if let Some(config_error) = config_error {
+                eprintln!(
+                    "Error loading config.toml:\n{}",
+                    format_config_error_with_source(config_error)
+                );
+            } else {
+                eprintln!("Error loading config.toml: {err}");
+            }
             std::process::exit(1);
         }
     };

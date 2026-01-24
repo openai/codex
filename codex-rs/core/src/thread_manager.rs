@@ -314,11 +314,22 @@ impl ThreadManagerState {
         config: Config,
         agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
-        self.spawn_thread(
+        self.spawn_new_thread_with_source(config, agent_control, self.session_source.clone())
+            .await
+    }
+
+    pub(crate) async fn spawn_new_thread_with_source(
+        &self,
+        config: Config,
+        agent_control: AgentControl,
+        session_source: SessionSource,
+    ) -> CodexResult<NewThread> {
+        self.spawn_thread_with_source(
             config,
             InitialHistory::New,
             Arc::clone(&self.auth_manager),
             agent_control,
+            session_source,
         )
         .await
     }
@@ -331,6 +342,24 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
     ) -> CodexResult<NewThread> {
+        self.spawn_thread_with_source(
+            config,
+            initial_history,
+            auth_manager,
+            agent_control,
+            self.session_source.clone(),
+        )
+        .await
+    }
+
+    pub(crate) async fn spawn_thread_with_source(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+        agent_control: AgentControl,
+        session_source: SessionSource,
+    ) -> CodexResult<NewThread> {
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(
@@ -339,7 +368,7 @@ impl ThreadManagerState {
             Arc::clone(&self.models_manager),
             Arc::clone(&self.skills_manager),
             initial_history,
-            self.session_source.clone(),
+            session_source,
             agent_control,
         )
         .await?;

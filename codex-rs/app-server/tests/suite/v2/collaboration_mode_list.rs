@@ -1,7 +1,7 @@
 //! Validates that the collaboration mode list endpoint returns the expected default presets.
 //!
 //! The test drives the app server through the MCP harness and asserts that the list response
-//! includes the plan, pair programming, and execute modes with their default model and reasoning
+//! includes the plan, coding, pair programming, and execute modes with their default model and reasoning
 //! effort settings, which keeps the API contract visible in one place.
 
 #![allow(clippy::unwrap_used)]
@@ -17,6 +17,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::models_manager::test_builtin_collaboration_mode_presets;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -44,7 +45,12 @@ async fn list_collaboration_modes_returns_presets() -> Result<()> {
     let CollaborationModeListResponse { data: items } =
         to_response::<CollaborationModeListResponse>(response)?;
 
-    let expected = vec![plan_preset(), pair_programming_preset(), execute_preset()];
+    let expected = vec![
+        plan_preset(),
+        code_preset(),
+        pair_programming_preset(),
+        execute_preset(),
+    ];
     assert_eq!(expected, items);
     Ok(())
 }
@@ -57,7 +63,7 @@ fn plan_preset() -> CollaborationMode {
     let presets = test_builtin_collaboration_mode_presets();
     presets
         .into_iter()
-        .find(|p| matches!(p, CollaborationMode::Plan(_)))
+        .find(|p| p.mode == ModeKind::Plan)
         .unwrap()
 }
 
@@ -69,7 +75,16 @@ fn pair_programming_preset() -> CollaborationMode {
     let presets = test_builtin_collaboration_mode_presets();
     presets
         .into_iter()
-        .find(|p| matches!(p, CollaborationMode::PairProgramming(_)))
+        .find(|p| p.mode == ModeKind::PairProgramming)
+        .unwrap()
+}
+
+/// Builds the code preset that the list response is expected to return.
+fn code_preset() -> CollaborationMode {
+    let presets = test_builtin_collaboration_mode_presets();
+    presets
+        .into_iter()
+        .find(|p| p.mode == ModeKind::Code)
         .unwrap()
 }
 
@@ -81,6 +96,6 @@ fn execute_preset() -> CollaborationMode {
     let presets = test_builtin_collaboration_mode_presets();
     presets
         .into_iter()
-        .find(|p| matches!(p, CollaborationMode::Execute(_)))
+        .find(|p| p.mode == ModeKind::Execute)
         .unwrap()
 }

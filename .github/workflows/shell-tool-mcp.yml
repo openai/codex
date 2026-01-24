@@ -99,9 +99,9 @@ jobs:
 
       - if: ${{ matrix.install_musl }}
         name: Install musl build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools pkg-config
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
 
       - name: Build exec server binaries
         run: cargo build --release --target ${{ matrix.target }} --bin codex-exec-mcp-server --bin codex-execve-wrapper
