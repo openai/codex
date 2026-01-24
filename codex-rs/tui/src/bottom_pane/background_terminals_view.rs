@@ -249,6 +249,10 @@ impl BackgroundTerminalsState {
             .collect()
     }
 
+    pub(crate) fn has_running_processes(&self) -> bool {
+        self.processes.iter().any(|entry| entry.status.is_running())
+    }
+
     pub(crate) fn list_items(&self) -> Vec<BackgroundTerminalListItem> {
         self.processes
             .iter()

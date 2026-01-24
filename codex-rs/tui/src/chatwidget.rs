@@ -681,7 +681,7 @@ impl ChatWidget {
         let has_background = self
             .background_terminals_state
             .lock()
-            .is_ok_and(|state| !state.list_items().is_empty());
+            .is_ok_and(|state| state.has_running_processes());
         self.bottom_pane.set_task_running(
             self.agent_turn_running || self.mcp_startup_status.is_some() || has_background,
         );
