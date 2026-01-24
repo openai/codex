@@ -3,11 +3,40 @@ source: tui/src/bottom_pane/stash_indicator.rs
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
-    area: Rect { x: 0, y: 0, width: 10, height: 1 },
+    area: Rect { x: 0, y: 0, width: 10, height: 10 },
     content: [
-        " ⬇ Stashed",
+        "  ↳ Stashe",
+        "    d     ",
+        "    (resto",
+        "    res   ",
+        "    after ",
+        "    curren",
+        "    t     ",
+        "    messag",
+        "    e is  ",
+        "    sent) ",
     ],
     styles: [
-        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 4, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 5, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 0, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 7, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 9, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 5, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 0, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 5, y: 6, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 7, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 0, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 8, y: 8, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 4, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,
+        x: 9, y: 9, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
     ]
 }
