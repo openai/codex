@@ -1051,8 +1051,10 @@ trust_level = "untrusted"
         );
         std::fs::write(temp_dir.path().join("config.toml"), config_toml)?;
 
-        let mut trusted_overrides = ConfigOverrides::default();
-        trusted_overrides.cwd = Some(trusted.clone());
+        let trusted_overrides = ConfigOverrides {
+            cwd: Some(trusted.clone()),
+            ..Default::default()
+        };
         let trusted_config = ConfigBuilder::default()
             .codex_home(codex_home.clone())
             .harness_overrides(trusted_overrides.clone())
@@ -1063,8 +1065,10 @@ trust_level = "untrusted"
             AskForApproval::OnRequest
         );
 
-        let mut untrusted_overrides = trusted_overrides;
-        untrusted_overrides.cwd = Some(untrusted);
+        let untrusted_overrides = ConfigOverrides {
+            cwd: Some(untrusted),
+            ..trusted_overrides
+        };
         let untrusted_config = ConfigBuilder::default()
             .codex_home(codex_home)
             .harness_overrides(untrusted_overrides)
