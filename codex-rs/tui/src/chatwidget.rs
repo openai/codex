@@ -5162,10 +5162,6 @@ impl ChatWidget {
         self.bottom_pane.show_stash_hint();
     }
 
-    pub(crate) fn clear_stash_hint(&mut self) {
-        self.bottom_pane.clear_stash_hint();
-    }
-
     /// Forward an `Op` directly to codex.
     pub(crate) fn submit_op(&mut self, op: Op) {
         // Record outbound operation for session replay fidelity.
