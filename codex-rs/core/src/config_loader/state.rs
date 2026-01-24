@@ -192,16 +192,12 @@ impl ConfigLayerStack {
     /// Returns the highest-precedence to lowest-precedence layers, so
     /// `ConfigLayerSource::SessionFlags` would be first, if present.
     pub fn layers_high_to_low(&self) -> Vec<&ConfigLayerEntry> {
-        self.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, false)
+        self.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst)
     }
 
     /// Returns the highest-precedence to lowest-precedence layers, so
     /// `ConfigLayerSource::SessionFlags` would be first, if present.
-    pub fn get_layers(
-        &self,
-        ordering: ConfigLayerStackOrdering,
-        _include_disabled: bool,
-    ) -> Vec<&ConfigLayerEntry> {
+    pub fn get_layers(&self, ordering: ConfigLayerStackOrdering) -> Vec<&ConfigLayerEntry> {
         match ordering {
             ConfigLayerStackOrdering::HighestPrecedenceFirst => self.layers.iter().rev().collect(),
             ConfigLayerStackOrdering::LowestPrecedenceFirst => self.layers.iter().collect(),
