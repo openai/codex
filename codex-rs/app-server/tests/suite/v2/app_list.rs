@@ -75,7 +75,9 @@ async fn list_apps_returns_empty_when_using_api_key() -> Result<()> {
         name: "Alpha".to_string(),
         description: Some("Alpha connector".to_string()),
         logo_url: None,
+        logo_url_dark: None,
         install_url: None,
+        distribution_channel: None,
         is_accessible: false,
     }];
 
@@ -123,7 +125,9 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
             name: "Alpha".to_string(),
             description: Some("Alpha connector".to_string()),
             logo_url: Some("https://example.com/alpha.png".to_string()),
+            logo_url_dark: Some("https://example.com/alpha-dark.png".to_string()),
             install_url: None,
+            distribution_channel: None,
             is_accessible: false,
         },
         AppInfo {
@@ -131,7 +135,9 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
             name: "beta".to_string(),
             description: None,
             logo_url: None,
+            logo_url_dark: None,
             install_url: None,
+            distribution_channel: None,
             is_accessible: false,
         },
     ];
@@ -174,7 +180,9 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
             name: "Beta App".to_string(),
             description: None,
             logo_url: None,
+            logo_url_dark: None,
             install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
+            distribution_channel: None,
             is_accessible: true,
         },
         AppInfo {
@@ -182,7 +190,9 @@ async fn list_apps_returns_connectors_with_accessible_flags() -> Result<()> {
             name: "Alpha".to_string(),
             description: Some("Alpha connector".to_string()),
             logo_url: Some("https://example.com/alpha.png".to_string()),
+            logo_url_dark: Some("https://example.com/alpha-dark.png".to_string()),
             install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+            distribution_channel: None,
             is_accessible: false,
         },
     ];
@@ -202,7 +212,9 @@ async fn list_apps_paginates_results() -> Result<()> {
             name: "Alpha".to_string(),
             description: Some("Alpha connector".to_string()),
             logo_url: None,
+            logo_url_dark: None,
             install_url: None,
+            distribution_channel: None,
             is_accessible: false,
         },
         AppInfo {
@@ -210,7 +222,9 @@ async fn list_apps_paginates_results() -> Result<()> {
             name: "beta".to_string(),
             description: None,
             logo_url: None,
+            logo_url_dark: None,
             install_url: None,
+            distribution_channel: None,
             is_accessible: false,
         },
     ];
@@ -253,7 +267,9 @@ async fn list_apps_paginates_results() -> Result<()> {
         name: "Beta App".to_string(),
         description: None,
         logo_url: None,
+        logo_url_dark: None,
         install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
+        distribution_channel: None,
         is_accessible: true,
     }];
 
@@ -281,7 +297,9 @@ async fn list_apps_paginates_results() -> Result<()> {
         name: "Alpha".to_string(),
         description: Some("Alpha connector".to_string()),
         logo_url: None,
+        logo_url_dark: None,
         install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+        distribution_channel: None,
         is_accessible: false,
     }];
 

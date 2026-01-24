@@ -1144,6 +1144,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "urlencoding",
 ]
 
 [[package]]
