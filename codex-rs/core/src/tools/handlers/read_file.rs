@@ -18,7 +18,6 @@ pub struct ReadFileHandler;
 const MAX_LINE_LENGTH: usize = 500;
 const TAB_WIDTH: usize = 4;
 
-// TODO(jif) add support for block comments
 const COMMENT_PREFIXES: &[&str] = &["#", "//", "--"];
 
 /// JSON arguments accepted by the `read_file` tool handler.
@@ -73,6 +72,7 @@ struct LineRecord {
     raw: String,
     display: String,
     indent: usize,
+    is_comment: bool,
 }
 
 impl LineRecord {
@@ -85,9 +85,7 @@ impl LineRecord {
     }
 
     fn is_comment(&self) -> bool {
-        COMMENT_PREFIXES
-            .iter()
-            .any(|prefix| self.raw.trim().starts_with(prefix))
+        self.is_comment
     }
 }
 
@@ -225,6 +223,7 @@ mod indentation {
     use crate::tools::handlers::read_file::IndentationArgs;
     use crate::tools::handlers::read_file::LineRecord;
     use crate::tools::handlers::read_file::TAB_WIDTH;
+    use crate::tools::handlers::read_file::classify_comment_line;
     use crate::tools::handlers::read_file::format_line;
     use crate::tools::handlers::read_file::trim_empty_lines;
     use std::collections::VecDeque;
@@ -374,6 +373,7 @@ mod indentation {
         let mut buffer = Vec::new();
         let mut lines = Vec::new();
         let mut number = 0usize;
+        let mut in_block_comment = false;
 
         loop {
             buffer.clear();
@@ -396,11 +396,13 @@ mod indentation {
             let raw = String::from_utf8_lossy(&buffer).into_owned();
             let indent = measure_indent(&raw);
             let display = format_line(&buffer);
+            let is_comment = classify_comment_line(&raw, &mut in_block_comment);
             lines.push(LineRecord {
                 number,
                 raw,
                 display,
                 indent,
+                is_comment,
             });
         }
 
@@ -427,6 +429,36 @@ mod indentation {
             .map(|c| if c == '\t' { TAB_WIDTH } else { 1 })
             .sum()
     }
+}
+
+fn classify_comment_line(line: &str, in_block_comment: &mut bool) -> bool {
+    let trimmed = line.trim_start();
+    if *in_block_comment {
+        *in_block_comment = !trimmed.contains("*/");
+        return true;
+    }
+
+    if COMMENT_PREFIXES
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix))
+    {
+        return true;
+    }
+
+    if let Some(start_idx) = trimmed.find("/*") {
+        let after_start = &trimmed[start_idx + 2..];
+        if let Some(end_idx) = after_start.find("*/") {
+            if start_idx == 0 {
+                let after_end = after_start[end_idx + 2..].trim();
+                return after_end.is_empty();
+            }
+            return false;
+        }
+        *in_block_comment = true;
+        return start_idx == 0;
+    }
+
+    false
 }
 
 fn format_line(bytes: &[u8]) -> String {
@@ -987,5 +1019,73 @@ private:
             ]
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn indentation_mode_includes_block_comment_headers() -> anyhow::Result<()> {
+        let mut temp = NamedTempFile::new()?;
+        use std::io::Write as _;
+        write!(
+            temp,
+            "/*\n * Header line\n */\nfn main() {{\n    if cond {{\n        inner();\n    }}\n}}\n"
+        )?;
+
+        let options = IndentationArgs {
+            anchor_line: Some(6),
+            include_siblings: false,
+            include_header: true,
+            max_levels: 2,
+            ..Default::default()
+        };
+
+        let lines = read_block(temp.path(), 6, 50, options).await?;
+        assert_eq!(
+            lines,
+            vec![
+                "L1: /*".to_string(),
+                "L2:  * Header line".to_string(),
+                "L3:  */".to_string(),
+                "L4: fn main() {".to_string(),
+                "L5:     if cond {".to_string(),
+                "L6:         inner();".to_string(),
+                "L7:     }".to_string(),
+                "L8: }".to_string(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inline_block_comment_starts_state_after_code() {
+        let mut in_block_comment = false;
+        assert_eq!(
+            classify_comment_line("let x = 1; /* start", &mut in_block_comment),
+            false
+        );
+        assert_eq!(in_block_comment, true);
+        assert_eq!(
+            classify_comment_line(" * middle", &mut in_block_comment),
+            true
+        );
+        assert_eq!(in_block_comment, true);
+        assert_eq!(
+            classify_comment_line(" */ end", &mut in_block_comment),
+            true
+        );
+        assert_eq!(in_block_comment, false);
+        assert_eq!(
+            classify_comment_line("let y = 2;", &mut in_block_comment),
+            false
+        );
+    }
+
+    #[test]
+    fn block_comment_with_trailing_code_is_not_header_comment() {
+        let mut in_block_comment = false;
+        assert_eq!(
+            classify_comment_line("/* comment */ let x = 1;", &mut in_block_comment),
+            false
+        );
+        assert_eq!(in_block_comment, false);
     }
 }
