@@ -1926,7 +1926,9 @@ if self.slash_commands_enabled()
         if text.is_empty() && self.attached_images.is_empty() {
             return None;
         }
-        if !text.is_empty() || !self.attached_images.is_empty() {
+if matches!(mode, PrepareMode::ForSubmit)
+            && (!text.is_empty() || !self.attached_images.is_empty())
+        {
             let local_image_paths = self
                 .attached_images
                 .iter()
