@@ -173,6 +173,7 @@ use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::McpServerRefreshConfig;
@@ -193,7 +194,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
@@ -3314,51 +3314,27 @@ impl CodexMessageProcessor {
         // If the thread is active, request shutdown and wait briefly.
         if let Some(conversation) = self.thread_manager.remove_thread(&thread_id).await {
             info!("thread {thread_id} was active; shutting down");
-            let conversation_clone = conversation.clone();
-            let notify = Arc::new(tokio::sync::Notify::new());
-            let notify_clone = notify.clone();
-
-            // Establish the listener for ShutdownComplete before submitting
-            // Shutdown so it is not missed.
-            let is_shutdown = tokio::spawn(async move {
-                // Create the notified future outside the loop to avoid losing notifications.
-                let notified = notify_clone.notified();
-                tokio::pin!(notified);
-                loop {
-                    select! {
-                        _ = &mut notified => { break; }
-                        event = conversation_clone.next_event() => {
-                            match event {
-                                Ok(event) => {
-                                    if matches!(event.msg, EventMsg::ShutdownComplete) { break; }
-                                }
-                                // Break on errors to avoid tight loops when the agent loop has exited.
-                                Err(_) => { break; }
-                            }
-                        }
-                    }
-                }
-            });
             // Request shutdown.
             match conversation.submit(Op::Shutdown).await {
                 Ok(_) => {
-                    // Successfully submitted Shutdown; wait before proceeding.
-                    select! {
-                        _ = is_shutdown => {
-                            // Normal shutdown: proceed with archive.
+                    // Poll agent status rather than consuming events so attached listeners do not block shutdown.
+                    let wait_for_shutdown = async {
+                        loop {
+                            if matches!(conversation.agent_status().await, AgentStatus::Shutdown) {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(50)).await;
                         }
-                        _ = tokio::time::sleep(Duration::from_secs(10)) => {
-                            warn!("thread {thread_id} shutdown timed out; proceeding with archive");
-                            // Wake any waiter; use notify_waiters to avoid missing the signal.
-                            notify.notify_waiters();
-                            // Perhaps we lost a shutdown race, so let's continue to
-                            // clean up the .jsonl file.
-                        }
+                    };
+                    if tokio::time::timeout(Duration::from_secs(10), wait_for_shutdown)
+                        .await
+                        .is_err()
+                    {
+                        warn!("thread {thread_id} shutdown timed out; proceeding with archive");
                     }
                 }
                 Err(err) => {
                     error!("failed to submit Shutdown to thread {thread_id}: {err}");
-                    notify.notify_waiters();
                 }
             }
         }
