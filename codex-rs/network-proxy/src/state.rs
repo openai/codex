@@ -63,7 +63,7 @@ pub(crate) async fn build_config_state() -> Result<ConfigState> {
 
 fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
     stack
-        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst)
+        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false)
         .iter()
         .filter_map(|layer| {
             let path = match &layer.name {
@@ -139,9 +139,10 @@ fn network_proxy_constraints_from_trusted_layers(
     layers: &codex_core::config_loader::ConfigLayerStack,
 ) -> Result<NetworkProxyConstraints> {
     let mut constraints = NetworkProxyConstraints::default();
-    for layer in layers
-        .get_layers(codex_core::config_loader::ConfigLayerStackOrdering::LowestPrecedenceFirst)
-    {
+    for layer in layers.get_layers(
+        codex_core::config_loader::ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        false,
+    ) {
         // Only trusted layers contribute constraints. User-controlled layers can narrow policy but
         // must never widen beyond what managed config allows.
         if is_user_controlled_layer(&layer.name) {
