@@ -628,7 +628,7 @@ impl ChatComposer {
         self.sync_popups();
     }
 
-    /// Replaces the entire composer with `text`, restes cursor and sets pending pastes.
+    /// Replaces the entire composer with `text`, resets cursor and sets pending pastes.
     pub(crate) fn set_text_content_with_pending_pastes(
         &mut self,
         text: String,
