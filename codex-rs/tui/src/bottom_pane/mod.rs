@@ -562,6 +562,11 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn show_stash_hint(&mut self) {
+        self.composer.set_stash_hint(true);
+        self.request_redraw();
+    }
+
     // esc_backtrack_hint_visible removed; hints are controlled internally.
 
     pub fn set_task_running(&mut self, running: bool) {
@@ -658,6 +663,11 @@ impl BottomPane {
 
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.composer.is_empty()
+    }
+
+    // Check if the composer has a text, images, or pending pastes draft.
+    pub(crate) fn composer_has_draft(&self) -> bool {
+        self.composer.has_draft()
     }
 
     pub(crate) fn is_task_running(&self) -> bool {
@@ -863,6 +873,11 @@ impl BottomPane {
             flex2.push(0, RenderableItem::Borrowed(&self.composer));
             RenderableItem::Owned(Box::new(flex2))
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stash_exists(&self) -> bool {
+        self.stash_indicator.stash_exists
     }
 }
 

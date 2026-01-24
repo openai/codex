@@ -118,13 +118,14 @@ pub(crate) enum FooterMode {
     ShortcutOverlay,
     /// Transient "press Esc again" hint shown after the first Esc while idle.
     EscHint,
-    /// Base single-line footer when the composer is empty.
+/// Base single-line footer when the composer is empty.
     ComposerEmpty,
     /// Base single-line footer when the composer contains a draft.
     ///
     /// The shortcuts hint is suppressed here; when a task is running with
     /// steer enabled, this mode can show the queue hint instead.
     ComposerHasDraft,
+    CantUnstashHint,
 }
 
 pub(crate) fn toggle_shortcut_mode(
@@ -156,9 +157,18 @@ pub(crate) fn esc_hint_mode(current: FooterMode, is_task_running: bool) -> Foote
     }
 }
 
+pub(crate) fn stash_hint_mode(current: FooterMode, is_task_running: bool) -> FooterMode {
+    if is_task_running {
+        current
+    } else {
+        FooterMode::CantUnstashHint
+    }
+}
+
 pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     match current {
-        FooterMode::EscHint
+        FooterMode::CantUnstashHint
+        | FooterMode::EscHint
         | FooterMode::ShortcutOverlay
         | FooterMode::QuitShortcutReminder
         | FooterMode::ComposerHasDraft => FooterMode::ComposerEmpty,
@@ -563,6 +573,7 @@ fn footer_from_props_lines(
             shortcut_overlay_lines(state)
         }
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
+        FooterMode::CantUnstashHint => vec![show_stash_preserved_hint_line()],
         FooterMode::ComposerHasDraft => {
             let state = LeftSideState {
                 hint: if show_queue_hint {
@@ -641,6 +652,12 @@ fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
         ])
         .dim()
     }
+}
+
+fn show_stash_preserved_hint_line() -> Line<'static> {
+    Line::from(vec![
+        "Stash preserved — clear input and press Ctrl+S to restore".dim(),
+    ])
 }
 
 fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {

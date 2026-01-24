@@ -2686,9 +2686,8 @@ impl ChatWidget {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } if self.bottom_pane.no_modal_or_popup_active() && self.stash.is_some() => {
-                if let Some(stash) = self.stash.take() {
-                    self.bottom_pane.restore_stash(stash);
-                    self.refresh_stash_indicator();
+                tracing::info!("Ctrl+S pressed - attempting to restore stash");
+                if self.restore_stash() {
                     return;
                 }
             }
@@ -2716,10 +2715,9 @@ impl ChatWidget {
                         self.queue_user_message(user_message);
                     }
 
-                    if let Some(stash) = self.stash.take() {
-                        self.bottom_pane.restore_stash(stash);
-                        self.refresh_stash_indicator();
-                    }
+                    // Only attempts to restore stash if the composer is still empty and has no
+                    // attachments/pending pastes
+                    self.restore_stash();
                 }
                 InputResult::Queued {
                     text,
@@ -2751,8 +2749,22 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn restore_stash(&mut self) -> bool {
+        if self.bottom_pane.composer_has_draft() {
+            self.show_stash_hint();
+            return false;
+        }
+
+        if let Some(stash) = self.stash.take() {
+            self.bottom_pane.restore_stash(stash);
+            self.refresh_stash_indicator();
+            return true;
+        }
+
+        false
+    }
+
     pub(crate) fn attach_image(&mut self, path: PathBuf) {
-        tracing::info!("attach_image path={path:?}");
         self.bottom_pane.attach_image(path);
         self.request_redraw();
     }
@@ -5791,6 +5803,15 @@ impl ChatWidget {
     pub(crate) fn clear_esc_backtrack_hint(&mut self) {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
+
+    pub(crate) fn show_stash_hint(&mut self) {
+        self.bottom_pane.show_stash_hint();
+    }
+
+    pub(crate) fn clear_stash_hint(&mut self) {
+        self.bottom_pane.clear_stash_hint();
+    }
+
     /// Forward an `Op` directly to codex.
     pub(crate) fn submit_op(&mut self, op: Op) {
         // Record outbound operation for session replay fidelity.

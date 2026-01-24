@@ -5008,3 +5008,24 @@ async fn review_queues_user_messages_snapshot() {
     .unwrap();
     assert_snapshot!(term.backend().vt100().screen().contents());
 }
+
+#[tokio::test]
+async fn stash_indicator() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.bottom_pane
+        .set_composer_text("I will be stashed".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+    assert!(chat.stash.is_some());
+    assert!(chat.bottom_pane.stash_exists());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+    assert!(chat.stash.is_none());
+    assert!(!chat.bottom_pane.stash_exists());
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "I will be stashed".to_string()
+    );
+}
