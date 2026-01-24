@@ -105,6 +105,7 @@ use super::footer::render_footer;
 use super::footer::render_footer_hint_items;
 use super::footer::render_mode_indicator;
 use super::footer::reset_mode_after_activity;
+use super::footer::stash_hint_mode;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
@@ -382,6 +383,13 @@ impl ChatComposer {
     /// Returns true if the composer currently contains no user input.
     pub(crate) fn is_empty(&self) -> bool {
         self.textarea.is_empty()
+    }
+
+    // Returns true if the composer has no user input, no attached images, and no pending pastes.
+    pub(crate) fn has_draft(&self) -> bool {
+        !self.textarea.is_empty()
+            || !self.attached_images.is_empty()
+            || !self.pending_pastes.is_empty()
     }
 
     /// Record the history metadata advertised by `SessionConfiguredEvent` so
@@ -2516,6 +2524,14 @@ impl ChatComposer {
         self.esc_backtrack_hint = show;
         if show {
             self.footer_mode = esc_hint_mode(self.footer_mode, self.is_task_running);
+        } else {
+            self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        }
+    }
+
+    pub(crate) fn set_stash_hint(&mut self, show: bool) {
+        if show {
+            self.footer_mode = stash_hint_mode(self.footer_mode, self.is_task_running);
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
@@ -6278,5 +6294,70 @@ mod tests {
             height: 5,
         };
         assert_eq!(composer.cursor_pos(area), None);
+    }
+
+    #[test]
+    fn ctrl_s_stashes_message() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_text_content("This will be stashed".to_string(), Vec::new(), Vec::new());
+
+        // Press Enter: should dispatch the command, not submit literal text.
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+
+        let InputResult::Stashed(stash) = result else {
+            panic!("expected stashed result, got {result:?}");
+        };
+
+        assert_eq!(stash.text, "This will be stashed".to_string());
+        assert!(stash.text_elements.is_empty());
+        assert!(stash.local_images.is_empty());
+        assert!(stash.pending_pastes.is_empty());
+        assert!(composer.textarea.is_empty());
+    }
+
+    #[test]
+    fn has_draft_detects_text_images_and_pending_pastes() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // 1) empty
+        assert!(!composer.has_draft());
+
+        // 2) text
+        composer.set_text_content("hello".to_string(), Vec::new(), Vec::new());
+        assert!(composer.has_draft());
+
+        // reset
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
+        assert!(!composer.has_draft());
+
+        // 3) pending pastes
+        composer.handle_paste("x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1));
+        assert!(composer.has_draft());
+
+        // reset
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
+        assert!(!composer.has_draft());
+
+        // 4) image attachment
+        composer.attach_image(PathBuf::from("/tmp/fake.png"));
+        assert!(composer.has_draft());
     }
 }
