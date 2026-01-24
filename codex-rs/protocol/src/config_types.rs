@@ -188,21 +188,21 @@ impl CollaborationMode {
     ///
     /// - `model`: `Some(s)` to update the model, `None` to keep the current model
     /// - `effort`: `Some(Some(e))` to set effort to `e`, `Some(None)` to clear effort, `None` to keep current effort
-    /// - `developer_instructions`: `Some(s)` to update developer instructions, `None` to keep current
+    /// - `developer_instructions`: `Some(Some(s))` to set instructions, `Some(None)` to clear them, `None` to keep current
     ///
     /// Returns a new `CollaborationMode` with updated values, preserving the mode.
     pub fn with_updates(
         &self,
         model: Option<String>,
         effort: Option<Option<ReasoningEffort>>,
-        developer_instructions: Option<String>,
+        developer_instructions: Option<Option<String>>,
     ) -> Self {
         let settings = self.settings_ref();
         let updated_settings = Settings {
             model: model.unwrap_or_else(|| settings.model.clone()),
             reasoning_effort: effort.unwrap_or(settings.reasoning_effort),
             developer_instructions: developer_instructions
-                .or_else(|| settings.developer_instructions.clone()),
+                .unwrap_or_else(|| settings.developer_instructions.clone()),
         };
 
         CollaborationMode {
@@ -222,11 +222,11 @@ impl CollaborationMode {
             mode: mask.mode.unwrap_or(self.mode),
             settings: Settings {
                 model: mask.model.clone().unwrap_or_else(|| settings.model.clone()),
-                reasoning_effort: mask.reasoning_effort.or(settings.reasoning_effort),
+                reasoning_effort: mask.reasoning_effort.unwrap_or(settings.reasoning_effort),
                 developer_instructions: mask
                     .developer_instructions
                     .clone()
-                    .or_else(|| settings.developer_instructions.clone()),
+                    .unwrap_or_else(|| settings.developer_instructions.clone()),
             },
         }
     }
@@ -247,6 +247,41 @@ pub struct CollaborationModeMask {
     pub name: String,
     pub mode: Option<ModeKind>,
     pub model: Option<String>,
-    pub reasoning_effort: Option<ReasoningEffort>,
-    pub developer_instructions: Option<String>,
+    pub reasoning_effort: Option<Option<ReasoningEffort>>,
+    pub developer_instructions: Option<Option<String>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn apply_mask_can_clear_optional_fields() {
+        let mode = CollaborationMode {
+            mode: ModeKind::Code,
+            settings: Settings {
+                model: "gpt-5.2-codex".to_string(),
+                reasoning_effort: Some(ReasoningEffort::High),
+                developer_instructions: Some("stay focused".to_string()),
+            },
+        };
+        let mask = CollaborationModeMask {
+            name: "Clear".to_string(),
+            mode: None,
+            model: None,
+            reasoning_effort: Some(None),
+            developer_instructions: Some(None),
+        };
+
+        let expected = CollaborationMode {
+            mode: ModeKind::Code,
+            settings: Settings {
+                model: "gpt-5.2-codex".to_string(),
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        };
+        assert_eq!(expected, mode.apply_mask(&mask));
+    }
 }

@@ -4628,10 +4628,11 @@ impl ChatWidget {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.reasoning_effort();
         }
+        let current_effort = self.current_collaboration_mode.reasoning_effort();
         self.active_collaboration_mask
             .as_ref()
             .and_then(|mask| mask.reasoning_effort)
-            .or_else(|| self.current_collaboration_mode.reasoning_effort())
+            .unwrap_or(current_effort)
     }
 
     fn effective_collaboration_mode(&self) -> CollaborationMode {

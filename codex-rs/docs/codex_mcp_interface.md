@@ -102,6 +102,7 @@ Each response yields:
 Fetch the built-in collaboration mode presets with `collaborationMode/list`. This endpoint does not accept pagination and returns the full list in one response:
 
 - `data` – ordered list of collaboration mode masks (partial settings to apply on top of the base mode)
+  - For tri-state fields like `reasoning_effort` and `developer_instructions`, omit the field to keep the current value, set it to `null` to clear it, or set a concrete value to update it.
 
 ## Event stream
 
