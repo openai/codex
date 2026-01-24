@@ -5,10 +5,10 @@ expression: terminal.backend()
 
 Choose working directory to resume this session
 
-  Session directory: /Users/example/session
-  Current directory: /Users/example/current
+  Session = latest cwd recorded in the resumed session                          
+  Current = your current working directory
 
-› 1. Use current directory (/Users/example/current)                             
-  2. Use session directory (/Users/example/session)
+› 1. Use session directory (/Users/example/session)                             
+  2. Use current directory (/Users/example/current)
 
   Press enter to continue

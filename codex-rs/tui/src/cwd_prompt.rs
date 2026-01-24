@@ -36,6 +36,13 @@ impl CwdPromptAction {
             CwdPromptAction::Fork => "fork",
         }
     }
+
+    fn past_participle(self) -> &'static str {
+        match self {
+            CwdPromptAction::Resume => "resumed",
+            CwdPromptAction::Fork => "forked",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,7 +102,7 @@ pub(crate) async fn run_cwd_selection_prompt(
         }
     }
 
-    Ok(screen.selection().unwrap_or(CwdSelection::Current))
+    Ok(screen.selection().unwrap_or(CwdSelection::Session))
 }
 
 struct CwdPromptScreen {
@@ -119,7 +126,7 @@ impl CwdPromptScreen {
             action,
             current_cwd,
             session_cwd,
-            highlighted: CwdSelection::Current,
+            highlighted: CwdSelection::Session,
             selection: None,
         }
     }
@@ -131,16 +138,16 @@ impl CwdPromptScreen {
         if key_event.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('d'))
         {
-            self.select(CwdSelection::Current);
+            self.select(CwdSelection::Session);
             return;
         }
         match key_event.code {
             KeyCode::Up | KeyCode::Char('k') => self.set_highlight(self.highlighted.prev()),
             KeyCode::Down | KeyCode::Char('j') => self.set_highlight(self.highlighted.next()),
-            KeyCode::Char('1') => self.select(CwdSelection::Current),
-            KeyCode::Char('2') => self.select(CwdSelection::Session),
+            KeyCode::Char('1') => self.select(CwdSelection::Session),
+            KeyCode::Char('2') => self.select(CwdSelection::Current),
             KeyCode::Enter => self.select(self.highlighted),
-            KeyCode::Esc => self.select(CwdSelection::Current),
+            KeyCode::Esc => self.select(CwdSelection::Session),
             _ => {}
         }
     }
@@ -173,6 +180,7 @@ impl WidgetRef for &CwdPromptScreen {
         let mut column = ColumnRenderable::new();
 
         let action_verb = self.action.verb();
+        let action_past = self.action.past_participle();
         let current_cwd = self.current_cwd.as_str();
         let session_cwd = self.session_cwd.as_str();
 
@@ -183,15 +191,27 @@ impl WidgetRef for &CwdPromptScreen {
             " this session".into(),
         ]));
         column.push("");
+        column.push(
+            Line::from(format!(
+                "Session = latest cwd recorded in the {action_past} session"
+            ))
+            .dim()
+            .inset(Insets::tlbr(0, 2, 0, 0)),
+        );
+        column.push(
+            Line::from("Current = your current working directory".dim())
+                .inset(Insets::tlbr(0, 2, 0, 0)),
+        );
+        column.push("");
         column.push(selection_option_row(
             0,
-            format!("Use current directory ({current_cwd})"),
-            self.highlighted == CwdSelection::Current,
+            format!("Use session directory ({session_cwd})"),
+            self.highlighted == CwdSelection::Session,
         ));
         column.push(selection_option_row(
             1,
-            format!("Use session directory ({session_cwd})"),
-            self.highlighted == CwdSelection::Session,
+            format!("Use current directory ({current_cwd})"),
+            self.highlighted == CwdSelection::Current,
         ));
         column.push("");
         column.push(
@@ -250,17 +270,17 @@ mod tests {
     }
 
     #[test]
-    fn cwd_prompt_selects_current_by_default() {
+    fn cwd_prompt_selects_session_by_default() {
         let mut screen = new_prompt();
         screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(screen.selection(), Some(CwdSelection::Current));
+        assert_eq!(screen.selection(), Some(CwdSelection::Session));
     }
 
     #[test]
-    fn cwd_prompt_can_select_session() {
+    fn cwd_prompt_can_select_current() {
         let mut screen = new_prompt();
         screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(screen.selection(), Some(CwdSelection::Session));
+        assert_eq!(screen.selection(), Some(CwdSelection::Current));
     }
 }
