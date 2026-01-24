@@ -4574,6 +4574,11 @@ impl ChatWidget {
         self.current_collaboration_mode =
             self.current_collaboration_mode
                 .with_updates(None, Some(effort), None);
+        if self.collaboration_modes_enabled()
+            && let Some(mask) = self.active_collaboration_mask.as_mut()
+        {
+            mask.reasoning_effort = Some(effort);
+        }
     }
 
     /// Set the model in the widget's config copy and stored collaboration mode.
@@ -4581,6 +4586,11 @@ impl ChatWidget {
         self.current_collaboration_mode =
             self.current_collaboration_mode
                 .with_updates(Some(model.to_string()), None, None);
+        if self.collaboration_modes_enabled()
+            && let Some(mask) = self.active_collaboration_mask.as_mut()
+        {
+            mask.model = Some(model.to_string());
+        }
         self.refresh_model_display();
     }
 

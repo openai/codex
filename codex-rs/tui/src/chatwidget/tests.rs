@@ -2273,6 +2273,36 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
 }
 
 #[tokio::test]
+async fn set_model_updates_active_collaboration_mask() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.set_model("gpt-5.1-codex-mini");
+
+    assert_eq!(chat.current_model(), "gpt-5.1-codex-mini");
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn set_reasoning_effort_updates_active_collaboration_mask() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.set_reasoning_effort(None);
+
+    assert_eq!(chat.current_reasoning_effort(), None);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
 async fn collab_mode_is_not_sent_until_selected() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
