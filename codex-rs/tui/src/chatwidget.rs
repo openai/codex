@@ -29,6 +29,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::bottom_pane::PreparedDraft;
 use crate::version::CODEX_CLI_VERSION;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
@@ -575,6 +576,8 @@ pub(crate) struct ChatWidget {
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
+    // Stashed message, if any
+    stash: Option<PreparedDraft>,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -2278,9 +2281,11 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            stash: None,
         };
 
         widget.prefetch_rate_limits();
+        widget.refresh_stash_indicator();
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
@@ -2423,9 +2428,11 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            stash: None,
         };
 
         widget.prefetch_rate_limits();
+        widget.refresh_stash_indicator();
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
@@ -2557,9 +2564,11 @@ impl ChatWidget {
             feedback_audience,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
+            stash: None,
         };
 
         widget.prefetch_rate_limits();
+        widget.refresh_stash_indicator();
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
@@ -2695,6 +2704,20 @@ impl ChatWidget {
                     } else {
                         self.queue_user_message(user_message);
                     }
+
+                    if let Some(stash) = self.stash.take() {
+                        self.bottom_pane.set_composer_text_with_pending_pastes(
+                            stash.text,
+                            stash.text_elements,
+                            stash
+                                .local_images
+                                .iter()
+                                .map(|img| img.path.clone())
+                                .collect(),
+                            stash.pending_pastes,
+                        );
+                        self.refresh_stash_indicator();
+                    }
                 }
                 InputResult::Queued {
                     text,
@@ -2715,6 +2738,11 @@ impl ChatWidget {
                 }
                 InputResult::CommandWithArgs(cmd, args) => {
                     self.dispatch_command_with_args(cmd, args);
+                }
+                InputResult::Stashed(stash) => {
+                    self.stash = Some(stash);
+                    self.refresh_stash_indicator();
+                    self.request_redraw();
                 }
                 InputResult::None => {}
             },
@@ -3603,6 +3631,11 @@ impl ChatWidget {
             .map(|m| m.text.clone())
             .collect();
         self.bottom_pane.set_queued_user_messages(messages);
+    }
+
+    /// Update the stash indicator in the bottom pane.
+    fn refresh_stash_indicator(&mut self) {
+        self.bottom_pane.set_stashed(self.stash.is_some());
     }
 
     pub(crate) fn add_diff_in_progress(&mut self) {

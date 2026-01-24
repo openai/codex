@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::queued_user_messages::QueuedUserMessages;
+use crate::bottom_pane::stash_indicator::StashIndicator;
 use crate::bottom_pane::unified_exec_footer::UnifiedExecFooter;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -78,8 +79,10 @@ pub mod popup_consts;
 mod queued_user_messages;
 mod scroll_state;
 mod selection_popup_common;
+mod stash_indicator;
 mod textarea;
 mod unified_exec_footer;
+pub(crate) use chat_composer::PreparedDraft;
 pub(crate) use feedback_view::FeedbackNoteView;
 
 /// How long the "press again to quit" hint stays visible.
@@ -149,6 +152,8 @@ pub(crate) struct BottomPane {
     unified_exec_footer: UnifiedExecFooter,
     /// Queued user messages to show above the composer while a turn is running.
     queued_user_messages: QueuedUserMessages,
+    /// Shows an indicator when there are stashed changes.
+    stash_indicator: StashIndicator,
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
 }
@@ -197,6 +202,7 @@ impl BottomPane {
             status: None,
             unified_exec_footer: UnifiedExecFooter::new(),
             queued_user_messages: QueuedUserMessages::new(),
+            stash_indicator: StashIndicator::new(),
             esc_backtrack_hint: false,
             animations_enabled,
             context_window_percent: None,
@@ -407,6 +413,23 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Replace the composer text with `text`.
+    pub(crate) fn set_composer_text_with_pending_pastes(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+        pending_pastes: Vec<(String, String)>,
+    ) {
+        self.composer.set_text_content_with_pending_pastes(
+            text,
+            text_elements,
+            local_image_paths,
+            pending_pastes,
+        );
+        self.request_redraw();
+    }
+
     #[allow(dead_code)]
     pub(crate) fn set_composer_input_enabled(
         &mut self,
@@ -599,6 +622,11 @@ impl BottomPane {
     /// Update the queued messages preview shown above the composer.
     pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
         self.queued_user_messages.messages = queued;
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_stashed(&mut self, stashed: bool) {
+        self.stash_indicator.stash_exists = stashed;
         self.request_redraw();
     }
 
@@ -799,13 +827,21 @@ impl BottomPane {
                 flex.push(0, RenderableItem::Borrowed(&self.unified_exec_footer));
             }
             let has_queued_messages = !self.queued_user_messages.messages.is_empty();
+            let has_stash = self.stash_indicator.stash_exists;
+            let has_aux = has_queued_messages || has_stash;
+
             let has_status_or_footer =
                 self.status.is_some() || !self.unified_exec_footer.is_empty();
-            if has_queued_messages && has_status_or_footer {
+            if has_aux && has_status_or_footer {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
-            flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
-            if !has_queued_messages && has_status_or_footer {
+            if has_queued_messages {
+                flex.push(1, RenderableItem::Borrowed(&self.queued_user_messages));
+            }
+            if has_stash {
+                flex.push(0, RenderableItem::Borrowed(&self.stash_indicator));
+            }
+            if !has_aux && has_status_or_footer {
                 flex.push(0, RenderableItem::Owned("".into()));
             }
             let mut flex2 = FlexRenderable::new();
