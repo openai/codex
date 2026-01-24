@@ -7,7 +7,7 @@ fn mode_kind(mode: &CollaborationMode) -> ModeKind {
 }
 
 fn is_tui_mode(kind: ModeKind) -> bool {
-    matches!(kind, ModeKind::Plan | ModeKind::Coding)
+    matches!(kind, ModeKind::Plan | ModeKind::Code)
 }
 
 fn filtered_presets(models_manager: &ModelsManager) -> Vec<CollaborationMode> {
@@ -26,7 +26,7 @@ pub(crate) fn default_mode(models_manager: &ModelsManager) -> Option<Collaborati
     let presets = filtered_presets(models_manager);
     presets
         .iter()
-        .find(|preset| preset.mode == ModeKind::Coding)
+        .find(|preset| preset.mode == ModeKind::Code)
         .cloned()
         .or_else(|| presets.into_iter().next())
 }
@@ -63,8 +63,8 @@ pub(crate) fn next_mode(
     presets.get(next_index).cloned()
 }
 
-pub(crate) fn coding_mode(models_manager: &ModelsManager) -> Option<CollaborationMode> {
+pub(crate) fn code_mode(models_manager: &ModelsManager) -> Option<CollaborationMode> {
     filtered_presets(models_manager)
         .into_iter()
-        .find(|preset| mode_kind(preset) == ModeKind::Coding)
+        .find(|preset| mode_kind(preset) == ModeKind::Code)
 }

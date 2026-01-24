@@ -350,7 +350,7 @@
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
-        "coding",
+        "code",
         "pair_programming",
         "execute",
         "custom"

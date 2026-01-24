@@ -47,7 +47,7 @@ async fn list_collaboration_modes_returns_presets() -> Result<()> {
 
     let expected = vec![
         plan_preset(),
-        coding_preset(),
+        code_preset(),
         pair_programming_preset(),
         execute_preset(),
     ];
@@ -79,12 +79,12 @@ fn pair_programming_preset() -> CollaborationMode {
         .unwrap()
 }
 
-/// Builds the coding preset that the list response is expected to return.
-fn coding_preset() -> CollaborationMode {
+/// Builds the code preset that the list response is expected to return.
+fn code_preset() -> CollaborationMode {
     let presets = test_builtin_collaboration_mode_presets();
     presets
         .into_iter()
-        .find(|p| p.mode == ModeKind::Coding)
+        .find(|p| p.mode == ModeKind::Code)
         .unwrap()
 }
 
