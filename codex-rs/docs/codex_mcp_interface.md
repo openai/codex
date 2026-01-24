@@ -102,7 +102,6 @@ Each response yields:
 Fetch the built-in collaboration mode presets with `collaborationMode/list`. This endpoint does not accept pagination and returns the full list in one response:
 
 - `data` – ordered list of collaboration mode presets
-- Current built-in presets include Plan, Coding, Pair Programming, and Execute.
 
 ## Event stream
 
