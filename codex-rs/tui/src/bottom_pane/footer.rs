@@ -46,6 +46,44 @@ pub(crate) struct FooterProps {
     pub(crate) context_window_used_tokens: Option<i64>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CollaborationModeIndicator {
+    Plan,
+    Code,
+    PairProgramming,
+    Execute,
+}
+
+const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
+
+impl CollaborationModeIndicator {
+    fn label(self, show_cycle_hint: bool) -> String {
+        let suffix = if show_cycle_hint {
+            format!(" ({MODE_CYCLE_HINT})")
+        } else {
+            String::new()
+        };
+        match self {
+            CollaborationModeIndicator::Plan => format!("Plan mode{suffix}"),
+            CollaborationModeIndicator::Code => format!("Code mode{suffix}"),
+            CollaborationModeIndicator::PairProgramming => {
+                format!("Pair Programming mode{suffix}")
+            }
+            CollaborationModeIndicator::Execute => format!("Execute mode{suffix}"),
+        }
+    }
+
+    fn styled_span(self, show_cycle_hint: bool) -> Span<'static> {
+        let label = self.label(show_cycle_hint);
+        match self {
+            CollaborationModeIndicator::Plan => Span::from(label).magenta(),
+            CollaborationModeIndicator::Code => Span::from(label).cyan(),
+            CollaborationModeIndicator::PairProgramming => Span::from(label).cyan(),
+            CollaborationModeIndicator::Execute => Span::from(label).dim(),
+        }
+    }
+}
+
 /// Selects which footer content is rendered.
 ///
 /// The current mode is owned by `ChatComposer`, which may override it based on transient state
@@ -104,6 +142,41 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
     .render(area, buf);
 }
 
+pub(crate) fn render_mode_indicator(
+    area: Rect,
+    buf: &mut Buffer,
+    indicator: Option<CollaborationModeIndicator>,
+    show_cycle_hint: bool,
+    left_content_width: Option<u16>,
+) {
+    let Some(indicator) = indicator else {
+        return;
+    };
+    if area.is_empty() {
+        return;
+    }
+
+    let span = indicator.styled_span(show_cycle_hint);
+    let label_width = span.width() as u16;
+    if label_width == 0 || label_width > area.width {
+        return;
+    }
+
+    let x = area
+        .x
+        .saturating_add(area.width)
+        .saturating_sub(label_width)
+        .saturating_sub(FOOTER_INDENT_COLS as u16);
+    let y = area.y + area.height.saturating_sub(1);
+    if let Some(left_content_width) = left_content_width {
+        let left_extent = FOOTER_INDENT_COLS as u16 + left_content_width;
+        if left_extent >= x.saturating_sub(area.x) {
+            return;
+        }
+    }
+    buf.set_span(x, y, &span, label_width);
+}
+
 pub(crate) fn inset_footer_hint_area(mut area: Rect) -> Rect {
     if area.width > 2 {
         area.x += 2;
@@ -117,16 +190,7 @@ pub(crate) fn render_footer_hint_items(area: Rect, buf: &mut Buffer, items: &[(S
         return;
     }
 
-    let mut spans = Vec::with_capacity(items.len() * 4);
-    for (idx, (key, label)) in items.iter().enumerate() {
-        spans.push(" ".into());
-        spans.push(key.clone().bold());
-        spans.push(format!(" {label}").into());
-        if idx + 1 != items.len() {
-            spans.push("   ".into());
-        }
-    }
-    Line::from(spans).render(inset_footer_hint_area(area), buf);
+    footer_hint_items_line(items).render(inset_footer_hint_area(area), buf);
 }
 
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
@@ -178,6 +242,33 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
             vec![line]
         }
     }
+}
+
+pub(crate) fn footer_line_width(props: FooterProps) -> u16 {
+    footer_lines(props)
+        .last()
+        .map(|line| line.width() as u16)
+        .unwrap_or(0)
+}
+
+pub(crate) fn footer_hint_items_width(items: &[(String, String)]) -> u16 {
+    if items.is_empty() {
+        return 0;
+    }
+    footer_hint_items_line(items).width() as u16
+}
+
+fn footer_hint_items_line(items: &[(String, String)]) -> Line<'static> {
+    let mut spans = Vec::with_capacity(items.len() * 4);
+    for (idx, (key, label)) in items.iter().enumerate() {
+        spans.push(" ".into());
+        spans.push(key.clone().bold());
+        spans.push(format!(" {label}").into());
+        if idx + 1 != items.len() {
+            spans.push("   ".into());
+        }
+    }
+    Line::from(spans)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -535,6 +626,30 @@ mod tests {
         assert_snapshot!(name, terminal.backend());
     }
 
+    fn snapshot_footer_with_indicator(
+        name: &str,
+        width: u16,
+        props: FooterProps,
+        indicator: Option<CollaborationModeIndicator>,
+    ) {
+        let height = footer_height(props).max(1);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = Rect::new(0, 0, f.area().width, height);
+                render_footer(area, f.buffer_mut(), props);
+                render_mode_indicator(
+                    area,
+                    f.buffer_mut(),
+                    indicator,
+                    !props.is_task_running,
+                    Some(footer_line_width(props)),
+                );
+            })
+            .unwrap();
+        assert_snapshot!(name, terminal.backend());
+    }
+
     #[test]
     fn footer_snapshots() {
         snapshot_footer(
@@ -700,6 +815,51 @@ mod tests {
                 context_window_percent: None,
                 context_window_used_tokens: None,
             },
+        );
+
+        let props = FooterProps {
+            mode: FooterMode::ShortcutSummary,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            steer_enabled: false,
+            collaboration_modes_enabled: true,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: None,
+            context_window_used_tokens: None,
+        };
+
+        snapshot_footer_with_indicator(
+            "footer_mode_indicator_wide",
+            120,
+            props,
+            Some(CollaborationModeIndicator::Plan),
+        );
+
+        snapshot_footer_with_indicator(
+            "footer_mode_indicator_narrow_overlap_hides",
+            50,
+            props,
+            Some(CollaborationModeIndicator::Plan),
+        );
+
+        let props = FooterProps {
+            mode: FooterMode::ShortcutSummary,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: true,
+            steer_enabled: false,
+            collaboration_modes_enabled: true,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: None,
+            context_window_used_tokens: None,
+        };
+
+        snapshot_footer_with_indicator(
+            "footer_mode_indicator_running_hides_hint",
+            120,
+            props,
+            Some(CollaborationModeIndicator::Plan),
         );
     }
 }

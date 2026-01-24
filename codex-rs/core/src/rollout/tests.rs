@@ -131,6 +131,63 @@ fn write_session_file_with_provider(
     Ok((dt, uuid))
 }
 
+fn write_session_file_with_delayed_user_event(
+    root: &Path,
+    ts_str: &str,
+    uuid: Uuid,
+    meta_lines_before_user: usize,
+) -> std::io::Result<()> {
+    let format: &[FormatItem] =
+        format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
+    let dt = PrimitiveDateTime::parse(ts_str, format)
+        .unwrap()
+        .assume_utc();
+    let dir = root
+        .join("sessions")
+        .join(format!("{:04}", dt.year()))
+        .join(format!("{:02}", u8::from(dt.month())))
+        .join(format!("{:02}", dt.day()));
+    fs::create_dir_all(&dir)?;
+
+    let filename = format!("rollout-{ts_str}-{uuid}.jsonl");
+    let file_path = dir.join(filename);
+    let mut file = File::create(file_path)?;
+
+    for i in 0..meta_lines_before_user {
+        let id = if i == 0 {
+            uuid
+        } else {
+            Uuid::from_u128(100 + i as u128)
+        };
+        let payload = serde_json::json!({
+            "id": id,
+            "timestamp": ts_str,
+            "cwd": ".",
+            "originator": "test_originator",
+            "cli_version": "test_version",
+            "source": "vscode",
+            "model_provider": "test-provider",
+        });
+        let meta = serde_json::json!({
+            "timestamp": ts_str,
+            "type": "session_meta",
+            "payload": payload,
+        });
+        writeln!(file, "{meta}")?;
+    }
+
+    let user_event = serde_json::json!({
+        "timestamp": ts_str,
+        "type": "event_msg",
+        "payload": {"type": "user_message", "message": "Hello from user", "kind": "plain"}
+    });
+    writeln!(file, "{user_event}")?;
+
+    let times = FileTimes::new().set_modified(dt.into());
+    file.set_times(times)?;
+    Ok(())
+}
+
 fn write_session_file_with_meta_payload(
     root: &Path,
     ts_str: &str,
@@ -540,6 +597,31 @@ async fn test_pagination_cursor() {
 }
 
 #[tokio::test]
+async fn test_list_threads_scans_past_head_for_user_event() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path();
+
+    let uuid = Uuid::from_u128(99);
+    let ts = "2025-05-01T10-30-00";
+    write_session_file_with_delayed_user_event(home, ts, uuid, 12).unwrap();
+
+    let provider_filter = provider_vec(&[TEST_PROVIDER]);
+    let page = get_threads(
+        home,
+        10,
+        None,
+        ThreadSortKey::CreatedAt,
+        INTERACTIVE_SESSION_SOURCES,
+        Some(provider_filter.as_slice()),
+        TEST_PROVIDER,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(page.items.len(), 1);
+}
+
+#[tokio::test]
 async fn test_get_thread_contents() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
@@ -806,6 +888,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 content: vec![ContentItem::OutputText {
                     text: format!("reply-{idx}"),
                 }],
+                end_turn: None,
             }),
         };
         writeln!(file, "{}", serde_json::to_string(&response_line)?)?;

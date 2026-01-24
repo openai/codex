@@ -43,10 +43,10 @@ pub(crate) enum WindowsSandboxFallbackReason {
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
-    ExternalApprovalRequest {
-        thread_id: ThreadId,
-        event: Event,
-    },
+    /// Open the agent picker for switching active threads.
+    OpenAgentPicker,
+    /// Switch the active thread to the selected agent.
+    SelectAgentThread(ThreadId),
 
     /// Start a new session.
     NewSession,
@@ -239,6 +239,12 @@ pub(crate) enum AppEvent {
 
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
+
+    /// Submit a user message with an explicit collaboration mode.
+    SubmitUserMessageWithMode {
+        text: String,
+        collaboration_mode: CollaborationMode,
+    },
 
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),

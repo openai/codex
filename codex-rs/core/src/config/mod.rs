@@ -410,9 +410,21 @@ impl ConfigBuilder {
         // relative paths to absolute paths based on the parent folder of the
         // respective config file, so we should be safe to deserialize without
         // AbsolutePathBufGuard here.
-        let config_toml: ConfigToml = merged_toml
-            .try_into()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let config_toml: ConfigToml = match merged_toml.try_into() {
+            Ok(config_toml) => config_toml,
+            Err(err) => {
+                if let Some(config_error) =
+                    crate::config_loader::first_layer_config_error(&config_layer_stack).await
+                {
+                    return Err(crate::config_loader::io_error_from_config_error(
+                        std::io::ErrorKind::InvalidData,
+                        config_error,
+                        Some(err),
+                    ));
+                }
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err));
+            }
+        };
         Config::load_config_with_layer_stack(
             config_toml,
             harness_overrides,
@@ -1141,6 +1153,7 @@ pub struct ConfigOverrides {
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
+    pub model_personality: Option<Personality>,
     pub compact_prompt: Option<String>,
     pub include_apply_patch_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
@@ -1228,6 +1241,7 @@ impl Config {
             codex_linux_sandbox_exe,
             base_instructions,
             developer_instructions,
+            model_personality,
             compact_prompt,
             include_apply_patch_tool: include_apply_patch_tool_override,
             show_raw_agent_reasoning,
@@ -1433,6 +1447,9 @@ impl Config {
             Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
         let base_instructions = base_instructions.or(file_base_instructions);
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
+        let model_personality = model_personality
+            .or(config_profile.model_personality)
+            .or(cfg.model_personality);
 
         let experimental_compact_prompt_path = config_profile
             .experimental_compact_prompt_file
@@ -1482,7 +1499,7 @@ impl Config {
             notify: cfg.notify,
             user_instructions,
             base_instructions,
-            model_personality: config_profile.model_personality.or(cfg.model_personality),
+            model_personality,
             developer_instructions,
             compact_prompt,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"

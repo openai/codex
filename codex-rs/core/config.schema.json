@@ -153,6 +153,9 @@
             "collaboration_modes": {
               "type": "boolean"
             },
+            "connectors": {
+              "type": "boolean"
+            },
             "elevated_windows_sandbox": {
               "type": "boolean"
             },
@@ -347,6 +350,7 @@
       "description": "Initial collaboration mode to use when the TUI starts.",
       "enum": [
         "plan",
+        "code",
         "pair_programming",
         "execute",
         "custom"
@@ -1133,6 +1137,9 @@
           "type": "boolean"
         },
         "collaboration_modes": {
+          "type": "boolean"
+        },
+        "connectors": {
           "type": "boolean"
         },
         "elevated_windows_sandbox": {

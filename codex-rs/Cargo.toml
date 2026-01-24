@@ -27,6 +27,7 @@ members = [
     "login",
     "mcp-server",
     "mcp-types",
+    "network-proxy",
     "ollama",
     "process-hardening",
     "protocol",
@@ -136,6 +137,7 @@ env-flags = "0.1.1"
 env_logger = "0.11.5"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
+globset = "0.4"
 http = "1.3.1"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"
@@ -179,13 +181,14 @@ ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
 regex = "1.12.2"
 regex-lite = "0.1.8"
-reqwest = { version = "0.12", features = ["rustls-tls-webpki-roots", "rustls-tls-native-roots"] }
+reqwest = "0.12"
 rmcp = { version = "0.12.0", default-features = false }
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 sentry = "0.46.0"
 serde = "1"
 serde_json = "1"
+serde_path_to_error = "0.1.20"
 serde_with = "3.16"
 serde_yaml = "0.9"
 serial_test = "3.2.0"
@@ -209,7 +212,7 @@ tiny_http = "0.12"
 tokio = "1"
 tokio-stream = "0.1.18"
 tokio-test = "0.4"
-tokio-tungstenite = { version = "0.28.0", features = ["rustls-tls-webpki-roots", "rustls-tls-native-roots", "proxy"] }
+tokio-tungstenite = { version = "0.28.0", features = ["proxy", "rustls-tls-native-roots"] }
 tokio-util = "0.7.18"
 toml = "0.9.5"
 toml_edit = "0.24.0"

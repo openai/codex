@@ -110,6 +110,7 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -226,6 +227,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -303,6 +305,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 

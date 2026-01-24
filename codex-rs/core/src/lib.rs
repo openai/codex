@@ -20,6 +20,7 @@ mod codex_delegate;
 mod command_safety;
 pub mod config;
 pub mod config_loader;
+pub mod connectors;
 mod context_manager;
 pub mod custom_prompts;
 pub mod env;

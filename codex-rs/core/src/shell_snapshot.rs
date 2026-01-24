@@ -28,6 +28,7 @@ pub struct ShellSnapshot {
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 const SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 7); // 7 days retention.
 const SNAPSHOT_DIR: &str = "shell_snapshots";
+const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD"];
 
 impl ShellSnapshot {
     pub fn start_snapshotting(
@@ -138,9 +139,9 @@ async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> Resu
 async fn capture_snapshot(shell: &Shell) -> Result<String> {
     let shell_type = shell.shell_type.clone();
     match shell_type {
-        ShellType::Zsh => run_shell_script(shell, zsh_snapshot_script()).await,
-        ShellType::Bash => run_shell_script(shell, bash_snapshot_script()).await,
-        ShellType::Sh => run_shell_script(shell, sh_snapshot_script()).await,
+        ShellType::Zsh => run_shell_script(shell, &zsh_snapshot_script()).await,
+        ShellType::Bash => run_shell_script(shell, &bash_snapshot_script()).await,
+        ShellType::Sh => run_shell_script(shell, &sh_snapshot_script()).await,
         ShellType::PowerShell => run_shell_script(shell, powershell_snapshot_script()).await,
         ShellType::Cmd => bail!("Shell snapshotting is not yet supported for {shell_type:?}"),
     }
@@ -202,8 +203,13 @@ async fn run_script_with_timeout(
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn zsh_snapshot_script() -> &'static str {
-    r##"if [[ -n "$ZDOTDIR" ]]; then
+fn excluded_exports_regex() -> String {
+    EXCLUDED_EXPORT_VARS.join("|")
+}
+
+fn zsh_snapshot_script() -> String {
+    let excluded = excluded_exports_regex();
+    let script = r##"if [[ -n "$ZDOTDIR" ]]; then
   rc="$ZDOTDIR/.zshrc"
 else
   rc="$HOME/.zshrc"
@@ -229,6 +235,9 @@ export_lines=$(export -p | awk '
   name=line
   sub(/^(export|declare -x|typeset -x) /, "", name)
   sub(/=.*/, "", name)
+  if (name ~ /^(EXCLUDED_EXPORTS)$/) {
+    next
+  }
   if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
     print line
   }
@@ -238,11 +247,13 @@ print "# exports $export_count"
 if [[ -n "$export_lines" ]]; then
   print -r -- "$export_lines"
 fi
-"##
+"##;
+    script.replace("EXCLUDED_EXPORTS", &excluded)
 }
 
-fn bash_snapshot_script() -> &'static str {
-    r##"if [ -z "$BASH_ENV" ] && [ -r "$HOME/.bashrc" ]; then
+fn bash_snapshot_script() -> String {
+    let excluded = excluded_exports_regex();
+    let script = r##"if [ -z "$BASH_ENV" ] && [ -r "$HOME/.bashrc" ]; then
   . "$HOME/.bashrc"
 fi
 echo '# Snapshot file'
@@ -268,6 +279,9 @@ export_lines=$(export -p | awk '
   name=line
   sub(/^(export|declare -x|typeset -x) /, "", name)
   sub(/=.*/, "", name)
+  if (name ~ /^(EXCLUDED_EXPORTS)$/) {
+    next
+  }
   if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
     print line
   }
@@ -277,11 +291,13 @@ echo "# exports $export_count"
 if [ -n "$export_lines" ]; then
   printf '%s\n' "$export_lines"
 fi
-"##
+"##;
+    script.replace("EXCLUDED_EXPORTS", &excluded)
 }
 
-fn sh_snapshot_script() -> &'static str {
-    r##"if [ -n "$ENV" ] && [ -r "$ENV" ]; then
+fn sh_snapshot_script() -> String {
+    let excluded = excluded_exports_regex();
+    let script = r##"if [ -n "$ENV" ] && [ -r "$ENV" ]; then
   . "$ENV"
 fi
 echo '# Snapshot file'
@@ -320,6 +336,9 @@ if export -p >/dev/null 2>&1; then
   name=line
   sub(/^(export|declare -x|typeset -x) /, "", name)
   sub(/=.*/, "", name)
+  if (name ~ /^(EXCLUDED_EXPORTS)$/) {
+    next
+  }
   if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
     print line
   }
@@ -334,13 +353,14 @@ else
   echo "# exports $export_count"
   env | sort | while IFS='=' read -r key value; do
     case "$key" in
-      ""|[0-9]*|*[!A-Za-z0-9_]* ) continue ;;
+      ""|[0-9]*|*[!A-Za-z0-9_]*|EXCLUDED_EXPORTS) continue ;;
     esac
     escaped=$(printf "%s" "$value" | sed "s/'/'\"'\"'/g")
     printf "export %s='%s'\n" "$key" "$escaped"
   done
 fi
-"##
+"##;
+    script.replace("EXCLUDED_EXPORTS", &excluded)
 }
 
 fn powershell_snapshot_script() -> &'static str {
@@ -494,6 +514,7 @@ mod tests {
             .arg(bash_snapshot_script())
             .env("BASH_ENV", "/dev/null")
             .env("VALID_NAME", "ok")
+            .env("PWD", "/tmp/stale")
             .env("NEXTEST_BIN_EXE_codex-write-config-schema", "/path/to/bin")
             .env("BAD-NAME", "broken")
             .output()?;
@@ -502,6 +523,7 @@ mod tests {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("VALID_NAME"));
+        assert!(!stdout.contains("PWD=/tmp/stale"));
         assert!(!stdout.contains("NEXTEST_BIN_EXE_codex-write-config-schema"));
         assert!(!stdout.contains("BAD-NAME"));
 
