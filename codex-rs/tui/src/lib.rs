@@ -627,6 +627,8 @@ async fn run_ratatui_app(
         &mut tui,
         auth_manager,
         config,
+        cli_kv_overrides.clone(),
+        overrides.clone(),
         active_profile,
         prompt,
         images,
@@ -684,7 +686,7 @@ async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
     None
 }
 
-pub(crate) fn should_prompt_for_cwd(current_cwd: &Path, session_cwd: &Path) -> bool {
+pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
     match (
         path_utils::normalize_for_path_comparison(current_cwd),
         path_utils::normalize_for_path_comparison(session_cwd),
@@ -704,7 +706,7 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
     let Some(history_cwd) = read_session_cwd(path).await else {
         return Ok(None);
     };
-    if allow_prompt && should_prompt_for_cwd(current_cwd, &history_cwd) {
+    if allow_prompt && cwds_differ(current_cwd, &history_cwd) {
         let selection =
             cwd_prompt::run_cwd_selection_prompt(tui, action, current_cwd, &history_cwd).await?;
         return Ok(Some(match selection {
@@ -852,7 +854,9 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 mod tests {
     use super::*;
     use codex_core::config::ConfigBuilder;
+    use codex_core::config::ConfigOverrides;
     use codex_core::config::ProjectConfig;
+    use codex_core::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SessionMeta;
@@ -1022,7 +1026,54 @@ mod tests {
 
         let session_cwd = read_session_cwd(&rollout_path).await.expect("expected cwd");
         assert_eq!(session_cwd, latest);
-        assert!(should_prompt_for_cwd(&current, &session_cwd));
+        assert!(cwds_differ(&current, &session_cwd));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn config_rebuild_changes_trust_defaults_with_cwd() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let codex_home = temp_dir.path().to_path_buf();
+        let trusted = temp_dir.path().join("trusted");
+        let untrusted = temp_dir.path().join("untrusted");
+        std::fs::create_dir_all(&trusted)?;
+        std::fs::create_dir_all(&untrusted)?;
+
+        let trusted_display = trusted.display();
+        let untrusted_display = untrusted.display();
+        let config_toml = format!(
+            r#"[projects."{trusted_display}"]
+trust_level = "trusted"
+
+[projects."{untrusted_display}"]
+trust_level = "untrusted"
+"#
+        );
+        std::fs::write(temp_dir.path().join("config.toml"), config_toml)?;
+
+        let mut trusted_overrides = ConfigOverrides::default();
+        trusted_overrides.cwd = Some(trusted.clone());
+        let trusted_config = ConfigBuilder::default()
+            .codex_home(codex_home.clone())
+            .harness_overrides(trusted_overrides.clone())
+            .build()
+            .await?;
+        assert_eq!(
+            trusted_config.approval_policy.value(),
+            AskForApproval::OnRequest
+        );
+
+        let mut untrusted_overrides = trusted_overrides;
+        untrusted_overrides.cwd = Some(untrusted);
+        let untrusted_config = ConfigBuilder::default()
+            .codex_home(codex_home)
+            .harness_overrides(untrusted_overrides)
+            .build()
+            .await?;
+        assert_eq!(
+            untrusted_config.approval_policy.value(),
+            AskForApproval::UnlessTrusted
+        );
         Ok(())
     }
 

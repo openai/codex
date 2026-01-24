@@ -37,6 +37,8 @@ use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
+use codex_core::config::ConfigOverrides;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config_loader::ConfigLayerStackOrdering;
@@ -45,12 +47,14 @@ use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::FinalOutput;
 use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::Op;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
@@ -88,6 +92,7 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
+use toml::Value as TomlValue;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 1024;
@@ -499,6 +504,10 @@ pub(crate) struct App {
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) active_profile: Option<String>,
+    cli_kv_overrides: Vec<(String, TomlValue)>,
+    harness_overrides: ConfigOverrides,
+    runtime_approval_policy_override: Option<AskForApproval>,
+    runtime_sandbox_policy_override: Option<SandboxPolicy>,
 
     pub(crate) file_search: FileSearchManager,
 
@@ -565,6 +574,38 @@ impl App {
             is_first_run: false,
             model: Some(self.chat_widget.current_model().to_string()),
             otel_manager: self.otel_manager.clone(),
+        }
+    }
+
+    async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
+        let mut overrides = self.harness_overrides.clone();
+        overrides.cwd = Some(cwd.clone());
+        let cwd_display = cwd.display().to_string();
+        ConfigBuilder::default()
+            .codex_home(self.config.codex_home.clone())
+            .cli_overrides(self.cli_kv_overrides.clone())
+            .harness_overrides(overrides)
+            .build()
+            .await
+            .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))
+    }
+
+    fn apply_runtime_policy_overrides(&mut self, config: &mut Config) {
+        if let Some(policy) = self.runtime_approval_policy_override.as_ref()
+            && let Err(err) = config.approval_policy.set(*policy)
+        {
+            tracing::warn!(%err, "failed to carry forward approval policy override");
+            self.chat_widget.add_error_message(format!(
+                "Failed to carry forward approval policy override: {err}"
+            ));
+        }
+        if let Some(policy) = self.runtime_sandbox_policy_override.as_ref()
+            && let Err(err) = config.sandbox_policy.set(policy.clone())
+        {
+            tracing::warn!(%err, "failed to carry forward sandbox policy override");
+            self.chat_widget.add_error_message(format!(
+                "Failed to carry forward sandbox policy override: {err}"
+            ));
         }
     }
 
@@ -825,6 +866,8 @@ impl App {
         tui: &mut tui::Tui,
         auth_manager: Arc<AuthManager>,
         mut config: Config,
+        cli_kv_overrides: Vec<(String, TomlValue)>,
+        harness_overrides: ConfigOverrides,
         active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
@@ -980,6 +1023,10 @@ impl App {
             auth_manager: auth_manager.clone(),
             config,
             active_profile,
+            cli_kv_overrides,
+            harness_overrides,
+            runtime_approval_policy_override: None,
+            runtime_sandbox_policy_override: None,
             file_search,
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
@@ -1205,8 +1252,7 @@ impl App {
                 {
                     SessionSelection::Resume(path) => {
                         let current_cwd = self.config.cwd.clone();
-                        let mut resume_config = self.config.clone();
-                        if let Some(resolved_cwd) = crate::resolve_cwd_for_resume_or_fork(
+                        let resume_cwd = match crate::resolve_cwd_for_resume_or_fork(
                             tui,
                             &current_cwd,
                             &path,
@@ -1215,8 +1261,24 @@ impl App {
                         )
                         .await?
                         {
-                            resume_config.cwd = resolved_cwd;
-                        }
+                            Some(cwd) => cwd,
+                            None => current_cwd.clone(),
+                        };
+                        let mut resume_config = if crate::cwds_differ(&current_cwd, &resume_cwd) {
+                            match self.rebuild_config_for_cwd(resume_cwd).await {
+                                Ok(cfg) => cfg,
+                                Err(err) => {
+                                    self.chat_widget.add_error_message(format!(
+                                        "Failed to rebuild configuration for resume: {err}"
+                                    ));
+                                    return Ok(AppRunControl::Continue);
+                                }
+                            }
+                        } else {
+                            // No rebuild needed: current_cwd comes from self.config.cwd.
+                            self.config.clone()
+                        };
+                        self.apply_runtime_policy_overrides(&mut resume_config);
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
                             self.chat_widget.thread_id(),
@@ -1679,6 +1741,13 @@ impl App {
                 }
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
+                self.runtime_approval_policy_override = Some(policy);
+                if let Err(err) = self.config.approval_policy.set(policy) {
+                    tracing::warn!(%err, "failed to set approval policy on app config");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to set approval policy: {err}"));
+                    return Ok(AppRunControl::Continue);
+                }
                 self.chat_widget.set_approval_policy(policy);
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
@@ -1707,6 +1776,8 @@ impl App {
                         .add_error_message(format!("Failed to set sandbox policy: {err}"));
                     return Ok(AppRunControl::Continue);
                 }
+                self.runtime_sandbox_policy_override =
+                    Some(self.config.sandbox_policy.get().clone());
 
                 // If sandbox policy becomes workspace-write or read-only, run the Windows world-writable scan.
                 #[cfg(target_os = "windows")]
@@ -2255,6 +2326,7 @@ mod tests {
     use codex_core::CodexAuth;
     use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
+    use codex_core::config::ConfigOverrides;
     use codex_core::models_manager::manager::ModelsManager;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
@@ -2294,6 +2366,10 @@ mod tests {
             auth_manager,
             config,
             active_profile: None,
+            cli_kv_overrides: Vec::new(),
+            harness_overrides: ConfigOverrides::default(),
+            runtime_approval_policy_override: None,
+            runtime_sandbox_policy_override: None,
             file_search,
             transcript_cells: Vec::new(),
             overlay: None,
@@ -2342,6 +2418,10 @@ mod tests {
                 auth_manager,
                 config,
                 active_profile: None,
+                cli_kv_overrides: Vec::new(),
+                harness_overrides: ConfigOverrides::default(),
+                runtime_approval_policy_override: None,
+                runtime_sandbox_policy_override: None,
                 file_search,
                 transcript_cells: Vec::new(),
                 overlay: None,
