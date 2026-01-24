@@ -1347,41 +1347,40 @@ pub(crate) fn new_web_search_call(query: String) -> PrefixedWrappedHistoryCell {
     PrefixedWrappedHistoryCell::new(text, "• ".dim(), "  ")
 }
 
-/// If the first content is an image, return a new cell with the image.
-/// TODO(rgwood-dd): Handle images properly even if they're not the first result.
+/// If any content is an image, return a new cell with the first image.
 fn try_new_completed_mcp_tool_call_with_image_output(
     result: &Result<mcp_types::CallToolResult, String>,
 ) -> Option<CompletedMcpToolCallWithImageOutput> {
     match result {
         Ok(mcp_types::CallToolResult { content, .. }) => {
-            if let Some(mcp_types::ContentBlock::ImageContent(image)) = content.first() {
-                let raw_data = match base64::engine::general_purpose::STANDARD.decode(&image.data) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        error!("Failed to decode image data: {e}");
-                        return None;
-                    }
-                };
-                let reader = match ImageReader::new(Cursor::new(raw_data)).with_guessed_format() {
-                    Ok(reader) => reader,
-                    Err(e) => {
-                        error!("Failed to guess image format: {e}");
-                        return None;
-                    }
-                };
+            let image = content.iter().find_map(|block| match block {
+                mcp_types::ContentBlock::ImageContent(image) => Some(image),
+                _ => None,
+            })?;
+            let raw_data = match base64::engine::general_purpose::STANDARD.decode(&image.data) {
+                Ok(data) => data,
+                Err(e) => {
+                    error!("Failed to decode image data: {e}");
+                    return None;
+                }
+            };
+            let reader = match ImageReader::new(Cursor::new(raw_data)).with_guessed_format() {
+                Ok(reader) => reader,
+                Err(e) => {
+                    error!("Failed to guess image format: {e}");
+                    return None;
+                }
+            };
 
-                let image = match reader.decode() {
-                    Ok(image) => image,
-                    Err(e) => {
-                        error!("Image decoding failed: {e}");
-                        return None;
-                    }
-                };
+            let image = match reader.decode() {
+                Ok(image) => image,
+                Err(e) => {
+                    error!("Image decoding failed: {e}");
+                    return None;
+                }
+            };
 
-                Some(CompletedMcpToolCallWithImageOutput { _image: image })
-            } else {
-                None
-            }
+            Some(CompletedMcpToolCallWithImageOutput { _image: image })
         }
         _ => None,
     }
@@ -1846,9 +1845,12 @@ mod tests {
     use codex_core::protocol::ExecCommandSource;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
+    use mcp_types::ImageContent;
     use mcp_types::TextContent;
     use mcp_types::Tool;
     use mcp_types::ToolInputSchema;
+
+    const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
     async fn test_config() -> Config {
         let codex_home = std::env::temp_dir();
         ConfigBuilder::default()
@@ -2213,6 +2215,44 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(48)).join("\n");
 
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn completed_mcp_tool_call_image_after_text_returns_extra_cell() {
+        let invocation = McpInvocation {
+            server: "search".into(),
+            tool: "find_docs".into(),
+            arguments: Some(json!({
+                "query": "ratatui styling",
+                "limit": 1,
+            })),
+        };
+
+        let result = CallToolResult {
+            content: vec![
+                ContentBlock::TextContent(TextContent {
+                    annotations: None,
+                    text: "Found styling guidance in styles.md".into(),
+                    r#type: "text".into(),
+                }),
+                ContentBlock::ImageContent(ImageContent {
+                    annotations: None,
+                    data: SMALL_PNG_BASE64.to_string(),
+                    mime_type: "image/png".into(),
+                    r#type: "image".into(),
+                }),
+            ],
+            is_error: None,
+            structured_content: None,
+        };
+
+        let mut cell = new_active_mcp_tool_call("call-5".into(), invocation, true);
+        let extra_cell = cell
+            .complete(Duration::from_millis(480), Ok(result))
+            .expect("image output cell");
+
+        let rendered = render_lines(&extra_cell.display_lines(80));
+        assert_eq!(rendered, vec!["tool result (image output)".to_string()]);
     }
 
     #[test]
