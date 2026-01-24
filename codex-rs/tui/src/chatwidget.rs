@@ -2388,7 +2388,6 @@ impl ChatWidget {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } if self.bottom_pane.no_modal_or_popup_active() && self.stash.is_some() => {
-                tracing::info!("Ctrl+S pressed - attempting to restore stash");
                 if self.restore_stash() {
                     return;
                 }
