@@ -52,7 +52,6 @@ impl Renderable for StashIndicator {
 mod tests {
     use super::*;
     use insta::assert_snapshot;
-    // use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::{buffer::Buffer, layout::Rect};
 
