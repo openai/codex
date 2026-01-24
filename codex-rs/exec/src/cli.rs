@@ -181,3 +181,33 @@ pub enum Color {
     #[default]
     Auto,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn resume_parses_prompt_after_global_flags() {
+        let cli = Cli::parse_from([
+            "codex-exec",
+            "resume",
+            "--last",
+            "--json",
+            "--model",
+            "gpt-5.2-codex",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            "echo resume-with-global-flags-after-subcommand",
+        ]);
+
+        let Some(Command::Resume(args)) = cli.command else {
+            panic!("expected resume command");
+        };
+        assert_eq!(
+            args.session_id.as_deref(),
+            Some("echo resume-with-global-flags-after-subcommand")
+        );
+        assert_eq!(args.prompt, None);
+    }
+}
