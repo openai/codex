@@ -1412,7 +1412,7 @@ impl CodexMessageProcessor {
             developer_instructions,
             dynamic_tools,
             experimental_raw_events,
-            personality
+            personality,
         } = params;
         let typesafe_overrides = self.build_thread_config_overrides(
             model,
