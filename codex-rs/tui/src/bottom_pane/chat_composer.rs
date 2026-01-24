@@ -1848,7 +1848,7 @@ fn record_mention_path(&mut self, insert_text: &str, path: &str) {
         let input_starts_with_space = original_input.starts_with(' ');
         self.textarea.set_text_clearing_elements("");
 
-        if !self.pending_pastes.is_empty() {
+        if matches!(mode, PrepareMode::ForSubmit) && !self.pending_pastes.is_empty() {
             // Expand placeholders so element byte ranges stay aligned.
             let (expanded, expanded_elements) =
                 Self::expand_pending_pastes(&text, text_elements, &self.pending_pastes);
