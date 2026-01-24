@@ -85,6 +85,13 @@ impl ResponsesRequest {
         self.0.body.clone()
     }
 
+    pub fn instructions_text(&self) -> String {
+        self.body_json()["instructions"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
     /// Returns all `input_text` spans from `message` inputs for the provided role.
     pub fn message_input_texts(&self, role: &str) -> Vec<String> {
         self.inputs_of_type("message")

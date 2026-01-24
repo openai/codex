@@ -5,10 +5,14 @@ use crate::network_policy::NetworkPolicyRequest;
 use crate::network_policy::NetworkProtocol;
 use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
+use crate::reasons::REASON_METHOD_NOT_ALLOWED;
+use crate::reasons::REASON_NOT_ALLOWED;
+use crate::reasons::REASON_PROXY_DISABLED;
 use crate::responses::blocked_header_value;
 use crate::responses::json_response;
-use crate::state::AppState;
+use crate::runtime::unix_socket_permissions_supported;
 use crate::state::BlockedRequest;
+use crate::state::NetworkProxyState;
 use crate::upstream::UpstreamClient;
 use crate::upstream::proxy_for_connect;
 use anyhow::Context as _;
@@ -58,7 +62,7 @@ use tracing::info;
 use tracing::warn;
 
 pub async fn run_http_proxy(
-    state: Arc<AppState>,
+    state: Arc<NetworkProxyState>,
     addr: SocketAddr,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 ) -> Result<()> {
@@ -106,7 +110,7 @@ async fn http_connect_accept(
 ) -> Result<(Response, Request), Response> {
     let app_state = req
         .extensions()
-        .get::<Arc<AppState>>()
+        .get::<Arc<NetworkProxyState>>()
         .cloned()
         .ok_or_else(|| text_response(StatusCode::INTERNAL_SERVER_ERROR, "missing state"))?;
 
@@ -125,30 +129,21 @@ async fn http_connect_accept(
 
     let client = client_addr(&req);
 
-    let enabled = match app_state.enabled().await {
-        Ok(enabled) => enabled,
-        Err(err) => {
-            error!("failed to read enabled state: {err}");
-            return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
-        }
-    };
+    let enabled = app_state
+        .enabled()
+        .await
+        .map_err(|err| internal_error("failed to read enabled state", err))?;
     if !enabled {
-        let _ = app_state
-            .record_blocked(BlockedRequest::new(
-                host.clone(),
-                "proxy_disabled".to_string(),
-                client.clone(),
-                Some("CONNECT".to_string()),
-                None,
-                "http-connect".to_string(),
-            ))
-            .await;
         let client = client.as_deref().unwrap_or_default();
         warn!("CONNECT blocked; proxy disabled (client={client}, host={host})");
-        return Err(text_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "proxy disabled",
-        ));
+        return Err(proxy_disabled_response(
+            &app_state,
+            host,
+            client_addr(&req),
+            Some("CONNECT".to_string()),
+            "http-connect",
+        )
+        .await);
     }
 
     let request = NetworkPolicyRequest::new(
@@ -187,13 +182,26 @@ async fn http_connect_accept(
         }
     }
 
-    let mode = match app_state.network_mode().await {
-        Ok(mode) => mode,
-        Err(err) => {
-            error!("failed to read network mode: {err}");
-            return Err(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
-        }
-    };
+    let mode = app_state
+        .network_mode()
+        .await
+        .map_err(|err| internal_error("failed to read network mode", err))?;
+
+    if mode == NetworkMode::Limited {
+        let _ = app_state
+            .record_blocked(BlockedRequest::new(
+                host.clone(),
+                REASON_METHOD_NOT_ALLOWED.to_string(),
+                client.clone(),
+                Some("CONNECT".to_string()),
+                Some(NetworkMode::Limited),
+                "http-connect".to_string(),
+            ))
+            .await;
+        let client = client.as_deref().unwrap_or_default();
+        warn!("CONNECT blocked by method policy (client={client}, host={host}, mode=limited)");
+        return Err(blocked_text(REASON_METHOD_NOT_ALLOWED));
+    }
 
     req.extensions_mut().insert(ProxyTarget(authority));
     req.extensions_mut().insert(mode);
@@ -208,17 +216,16 @@ async fn http_connect_accept(
 }
 
 async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
-    let Some(target) = upgraded
-        .extensions()
-        .get::<ProxyTarget>()
-        .map(|t| t.0.clone())
-    else {
+    if upgraded.extensions().get::<ProxyTarget>().is_none() {
         warn!("CONNECT missing proxy target");
         return Ok(());
-    };
-    let _host = normalize_host(&target.host.to_string());
+    }
 
-    let allow_upstream_proxy = match upgraded.extensions().get::<Arc<AppState>>().cloned() {
+    let allow_upstream_proxy = match upgraded
+        .extensions()
+        .get::<Arc<NetworkProxyState>>()
+        .cloned()
+    {
         Some(state) => match state.allow_upstream_proxy().await {
             Ok(allowed) => allowed,
             Err(err) => {
@@ -291,7 +298,7 @@ async fn http_plain_proxy(
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     req: Request,
 ) -> Result<Response, Infallible> {
-    let app_state = match req.extensions().get::<Arc<AppState>>().cloned() {
+    let app_state = match req.extensions().get::<Arc<NetworkProxyState>>().cloned() {
         Some(state) => state,
         None => {
             error!("missing app state");
@@ -300,12 +307,13 @@ async fn http_plain_proxy(
     };
     let client = client_addr(&req);
 
-    let method_allowed = match app_state.method_allowed(req.method().as_str()).await {
+    let method_allowed = match app_state
+        .method_allowed(req.method().as_str())
+        .await
+        .map_err(|err| internal_error("failed to evaluate method policy", err))
+    {
         Ok(allowed) => allowed,
-        Err(err) => {
-            error!("failed to evaluate method policy: {err}");
-            return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
-        }
+        Err(resp) => return Ok(resp),
     };
 
     // `x-unix-socket` is an escape hatch for talking to local daemons. We keep it tightly scoped:
@@ -322,30 +330,25 @@ async fn http_plain_proxy(
                 ));
             }
         };
-        let enabled = match app_state.enabled().await {
+        let enabled = match app_state
+            .enabled()
+            .await
+            .map_err(|err| internal_error("failed to read enabled state", err))
+        {
             Ok(enabled) => enabled,
-            Err(err) => {
-                error!("failed to read enabled state: {err}");
-                return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
-            }
+            Err(resp) => return Ok(resp),
         };
         if !enabled {
-            let _ = app_state
-                .record_blocked(BlockedRequest::new(
-                    socket_path.clone(),
-                    "proxy_disabled".to_string(),
-                    client.clone(),
-                    Some(req.method().as_str().to_string()),
-                    None,
-                    "unix-socket".to_string(),
-                ))
-                .await;
             let client = client.as_deref().unwrap_or_default();
             warn!("unix socket blocked; proxy disabled (client={client}, path={socket_path})");
-            return Ok(text_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "proxy disabled",
-            ));
+            return Ok(proxy_disabled_response(
+                &app_state,
+                socket_path,
+                client_addr(&req),
+                Some(req.method().as_str().to_string()),
+                "unix-socket",
+            )
+            .await);
         }
         if !method_allowed {
             let client = client.as_deref().unwrap_or_default();
@@ -353,10 +356,10 @@ async fn http_plain_proxy(
             warn!(
                 "unix socket blocked by method policy (client={client}, method={method}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
             );
-            return Ok(json_blocked("unix-socket", "method_not_allowed"));
+            return Ok(json_blocked("unix-socket", REASON_METHOD_NOT_ALLOWED));
         }
 
-        if !cfg!(target_os = "macos") {
+        if !unix_socket_permissions_supported() {
             warn!("unix socket proxy unsupported on this platform (path={socket_path})");
             return Ok(text_response(
                 StatusCode::NOT_IMPLEMENTED,
@@ -364,31 +367,31 @@ async fn http_plain_proxy(
             ));
         }
 
-        match app_state.is_unix_socket_allowed(&socket_path).await {
+        return match app_state.is_unix_socket_allowed(&socket_path).await {
             Ok(true) => {
                 let client = client.as_deref().unwrap_or_default();
                 info!("unix socket allowed (client={client}, path={socket_path})");
                 match proxy_via_unix_socket(req, &socket_path).await {
-                    Ok(resp) => return Ok(resp),
+                    Ok(resp) => Ok(resp),
                     Err(err) => {
                         warn!("unix socket proxy failed: {err}");
-                        return Ok(text_response(
+                        Ok(text_response(
                             StatusCode::BAD_GATEWAY,
                             "unix socket proxy failed",
-                        ));
+                        ))
                     }
                 }
             }
             Ok(false) => {
                 let client = client.as_deref().unwrap_or_default();
                 warn!("unix socket blocked (client={client}, path={socket_path})");
-                return Ok(json_blocked("unix-socket", "not_allowed"));
+                Ok(json_blocked("unix-socket", REASON_NOT_ALLOWED))
             }
             Err(err) => {
                 warn!("unix socket check failed: {err}");
-                return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
+                Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"))
             }
-        }
+        };
     }
 
     let authority = match RequestContext::try_from(&req).map(|ctx| ctx.host_with_port()) {
@@ -400,31 +403,26 @@ async fn http_plain_proxy(
     };
     let host = normalize_host(&authority.host.to_string());
     let port = authority.port;
-    let enabled = match app_state.enabled().await {
+    let enabled = match app_state
+        .enabled()
+        .await
+        .map_err(|err| internal_error("failed to read enabled state", err))
+    {
         Ok(enabled) => enabled,
-        Err(err) => {
-            error!("failed to read enabled state: {err}");
-            return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
-        }
+        Err(resp) => return Ok(resp),
     };
     if !enabled {
-        let _ = app_state
-            .record_blocked(BlockedRequest::new(
-                host.clone(),
-                "proxy_disabled".to_string(),
-                client.clone(),
-                Some(req.method().as_str().to_string()),
-                None,
-                "http".to_string(),
-            ))
-            .await;
         let client = client.as_deref().unwrap_or_default();
         let method = req.method();
         warn!("request blocked; proxy disabled (client={client}, host={host}, method={method})");
-        return Ok(text_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "proxy disabled",
-        ));
+        return Ok(proxy_disabled_response(
+            &app_state,
+            host,
+            client_addr(&req),
+            Some(req.method().as_str().to_string()),
+            "http",
+        )
+        .await);
     }
 
     let request = NetworkPolicyRequest::new(
@@ -464,7 +462,7 @@ async fn http_plain_proxy(
         let _ = app_state
             .record_blocked(BlockedRequest::new(
                 host.clone(),
-                "method_not_allowed".to_string(),
+                REASON_METHOD_NOT_ALLOWED.to_string(),
                 client.clone(),
                 Some(req.method().as_str().to_string()),
                 Some(NetworkMode::Limited),
@@ -476,19 +474,20 @@ async fn http_plain_proxy(
         warn!(
             "request blocked by method policy (client={client}, host={host}, method={method}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
         );
-        return Ok(json_blocked(&host, "method_not_allowed"));
+        return Ok(json_blocked(&host, REASON_METHOD_NOT_ALLOWED));
     }
 
     let client = client.as_deref().unwrap_or_default();
     let method = req.method();
     info!("request allowed (client={client}, host={host}, method={method})");
 
-    let allow_upstream_proxy = match app_state.allow_upstream_proxy().await {
+    let allow_upstream_proxy = match app_state
+        .allow_upstream_proxy()
+        .await
+        .map_err(|err| internal_error("failed to read upstream proxy config", err))
+    {
         Ok(allow) => allow,
-        Err(err) => {
-            error!("failed to read upstream proxy config: {err}");
-            return Ok(text_response(StatusCode::INTERNAL_SERVER_ERROR, "error"));
-        }
+        Err(resp) => return Ok(resp),
     };
     let client = if allow_upstream_proxy {
         UpstreamClient::from_env_proxy()
@@ -558,6 +557,31 @@ fn blocked_text(reason: &str) -> Response {
     crate::responses::blocked_text_response(reason)
 }
 
+async fn proxy_disabled_response(
+    app_state: &NetworkProxyState,
+    host: String,
+    client: Option<String>,
+    method: Option<String>,
+    protocol: &str,
+) -> Response {
+    let _ = app_state
+        .record_blocked(BlockedRequest::new(
+            host,
+            REASON_PROXY_DISABLED.to_string(),
+            client,
+            method,
+            None,
+            protocol.to_string(),
+        ))
+        .await;
+    text_response(StatusCode::SERVICE_UNAVAILABLE, "proxy disabled")
+}
+
+fn internal_error(context: &str, err: impl std::fmt::Display) -> Response {
+    error!("{context}: {err}");
+    text_response(StatusCode::INTERNAL_SERVER_ERROR, "error")
+}
+
 fn text_response(status: StatusCode, body: &str) -> Response {
     Response::builder()
         .status(status)
@@ -571,4 +595,42 @@ struct BlockedResponse<'a> {
     status: &'static str,
     host: &'a str,
     reason: &'a str,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::config::NetworkMode;
+    use crate::config::NetworkPolicy;
+    use crate::runtime::network_proxy_state_for_policy;
+    use pretty_assertions::assert_eq;
+    use rama_http::Method;
+    use rama_http::Request;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn http_connect_accept_blocks_in_limited_mode() {
+        let policy = NetworkPolicy {
+            allowed_domains: vec!["example.com".to_string()],
+            ..Default::default()
+        };
+        let state = Arc::new(network_proxy_state_for_policy(policy));
+        state.set_network_mode(NetworkMode::Limited).await.unwrap();
+
+        let mut req = Request::builder()
+            .method(Method::CONNECT)
+            .uri("https://example.com:443")
+            .header("host", "example.com:443")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(state);
+
+        let response = http_connect_accept(None, req).await.unwrap_err();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response.headers().get("x-proxy-error").unwrap(),
+            "blocked-by-method-policy"
+        );
+    }
 }

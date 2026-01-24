@@ -1,4 +1,7 @@
-use crate::state::AppState;
+use crate::reasons::REASON_POLICY_DENIED;
+use crate::runtime::HostBlockDecision;
+use crate::runtime::HostBlockReason;
+use crate::state::NetworkProxyState;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::future::Future;
@@ -24,7 +27,6 @@ pub struct NetworkPolicyRequest {
 }
 
 impl NetworkPolicyRequest {
-    #[must_use]
     pub fn new(
         protocol: NetworkProtocol,
         host: String,
@@ -53,11 +55,10 @@ pub enum NetworkDecision {
 }
 
 impl NetworkDecision {
-    #[must_use]
     pub fn deny(reason: impl Into<String>) -> Self {
         let reason = reason.into();
         let reason = if reason.is_empty() {
-            "policy_denied".to_string()
+            REASON_POLICY_DENIED.to_string()
         } else {
             reason
         };
@@ -94,22 +95,21 @@ where
 }
 
 pub(crate) async fn evaluate_host_policy(
-    state: &AppState,
+    state: &NetworkProxyState,
     decider: Option<&Arc<dyn NetworkPolicyDecider>>,
     request: &NetworkPolicyRequest,
 ) -> Result<NetworkDecision> {
-    let (blocked, reason) = state.host_blocked(&request.host, request.port).await?;
-    if !blocked {
-        return Ok(NetworkDecision::Allow);
+    match state.host_blocked(&request.host, request.port).await? {
+        HostBlockDecision::Allowed => Ok(NetworkDecision::Allow),
+        HostBlockDecision::Blocked(HostBlockReason::NotAllowed) => {
+            if let Some(decider) = decider {
+                Ok(decider.decide(request.clone()).await)
+            } else {
+                Ok(NetworkDecision::deny(HostBlockReason::NotAllowed.as_str()))
+            }
+        }
+        HostBlockDecision::Blocked(reason) => Ok(NetworkDecision::deny(reason.as_str())),
     }
-
-    if reason == "not_allowed"
-        && let Some(decider) = decider
-    {
-        return Ok(decider.decide(request.clone()).await);
-    }
-
-    Ok(NetworkDecision::deny(reason))
 }
 
 #[cfg(test)]
@@ -117,7 +117,9 @@ mod tests {
     use super::*;
 
     use crate::config::NetworkPolicy;
-    use crate::state::app_state_for_policy;
+    use crate::reasons::REASON_DENIED;
+    use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
+    use crate::state::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
@@ -125,12 +127,14 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_host_policy_invokes_decider_for_not_allowed() {
-        let state = app_state_for_policy(NetworkPolicy::default());
+        let state = network_proxy_state_for_policy(NetworkPolicy::default());
         let calls = Arc::new(AtomicUsize::new(0));
         let decider: Arc<dyn NetworkPolicyDecider> = Arc::new({
             let calls = calls.clone();
             move |_req| {
                 calls.fetch_add(1, Ordering::SeqCst);
+                // The default policy denies all; the decider is consulted for not_allowed
+                // requests and can override that decision.
                 async { NetworkDecision::Allow }
             }
         });
@@ -154,7 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_host_policy_skips_decider_for_denied() {
-        let state = app_state_for_policy(NetworkPolicy {
+        let state = network_proxy_state_for_policy(NetworkPolicy {
             allowed_domains: vec!["example.com".to_string()],
             denied_domains: vec!["blocked.com".to_string()],
             ..NetworkPolicy::default()
@@ -184,7 +188,7 @@ mod tests {
         assert_eq!(
             decision,
             NetworkDecision::Deny {
-                reason: "denied".to_string()
+                reason: REASON_DENIED.to_string()
             }
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -192,7 +196,7 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_host_policy_skips_decider_for_not_allowed_local() {
-        let state = app_state_for_policy(NetworkPolicy {
+        let state = network_proxy_state_for_policy(NetworkPolicy {
             allowed_domains: vec!["example.com".to_string()],
             allow_local_binding: false,
             ..NetworkPolicy::default()
@@ -222,7 +226,7 @@ mod tests {
         assert_eq!(
             decision,
             NetworkDecision::Deny {
-                reason: "not_allowed_local".to_string()
+                reason: REASON_NOT_ALLOWED_LOCAL.to_string()
             }
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);

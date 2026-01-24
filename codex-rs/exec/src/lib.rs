@@ -211,6 +211,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         codex_linux_sandbox_exe,
         base_instructions: None,
         developer_instructions: None,
+        model_personality: None,
         compact_prompt: None,
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
@@ -296,7 +297,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
 
-    if !skip_git_repo_check && get_git_repo_root(&default_cwd).is_none() {
+    // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
+    // since the user is explicitly running in an externally sandboxed environment.
+    if !skip_git_repo_check
+        && !dangerously_bypass_approvals_and_sandbox
+        && get_git_repo_root(&default_cwd).is_none()
+    {
         eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
         std::process::exit(1);
     }
@@ -455,6 +461,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     summary: default_summary,
                     final_output_json_schema: output_schema,
                     collaboration_mode: None,
+                    personality: None,
                 })
                 .await?;
             info!("Sent prompt with event ID: {task_id}");

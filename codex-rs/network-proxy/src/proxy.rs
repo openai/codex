@@ -2,8 +2,10 @@ use crate::admin;
 use crate::config;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
+use crate::runtime::unix_socket_permissions_supported;
 use crate::socks5;
-use crate::state::AppState;
+use crate::state::NetworkProxyState;
+use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
 use std::net::SocketAddr;
@@ -13,48 +15,38 @@ use tracing::warn;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "codex-network-proxy", about = "Codex network sandbox proxy")]
-pub struct Args {
-    /// Enable SOCKS5 UDP associate support (default: disabled).
-    #[arg(long, default_value_t = false)]
-    pub enable_socks5_udp: bool,
-}
+pub struct Args {}
 
 #[derive(Clone, Default)]
 pub struct NetworkProxyBuilder {
-    state: Option<Arc<AppState>>,
+    state: Option<Arc<NetworkProxyState>>,
     http_addr: Option<SocketAddr>,
     socks_addr: Option<SocketAddr>,
     admin_addr: Option<SocketAddr>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
-    enable_socks5_udp: bool,
 }
 
 impl NetworkProxyBuilder {
-    #[must_use]
-    pub fn state(mut self, state: Arc<AppState>) -> Self {
+    pub fn state(mut self, state: Arc<NetworkProxyState>) -> Self {
         self.state = Some(state);
         self
     }
 
-    #[must_use]
     pub fn http_addr(mut self, addr: SocketAddr) -> Self {
         self.http_addr = Some(addr);
         self
     }
 
-    #[must_use]
     pub fn socks_addr(mut self, addr: SocketAddr) -> Self {
         self.socks_addr = Some(addr);
         self
     }
 
-    #[must_use]
     pub fn admin_addr(mut self, addr: SocketAddr) -> Self {
         self.admin_addr = Some(addr);
         self
     }
 
-    #[must_use]
     pub fn policy_decider<D>(mut self, decider: D) -> Self
     where
         D: NetworkPolicyDecider,
@@ -63,28 +55,22 @@ impl NetworkProxyBuilder {
         self
     }
 
-    #[must_use]
     pub fn policy_decider_arc(mut self, decider: Arc<dyn NetworkPolicyDecider>) -> Self {
         self.policy_decider = Some(decider);
-        self
-    }
-
-    #[must_use]
-    pub fn enable_socks5_udp(mut self, enabled: bool) -> Self {
-        self.enable_socks5_udp = enabled;
         self
     }
 
     pub async fn build(self) -> Result<NetworkProxy> {
         let state = match self.state {
             Some(state) => state,
-            None => Arc::new(AppState::new().await?),
+            None => Arc::new(NetworkProxyState::new().await?),
         };
-        let runtime = config::resolve_runtime(&state.current_cfg().await?);
         let current_cfg = state.current_cfg().await?;
+        let runtime = config::resolve_runtime(&current_cfg)?;
         // Reapply bind clamping for caller overrides so unix-socket proxying stays loopback-only.
-        let (http_addr, admin_addr) = config::clamp_bind_addrs(
+        let (http_addr, socks_addr, admin_addr) = config::clamp_bind_addrs(
             self.http_addr.unwrap_or(runtime.http_addr),
+            self.socks_addr.unwrap_or(runtime.socks_addr),
             self.admin_addr.unwrap_or(runtime.admin_addr),
             &current_cfg.network_proxy,
         );
@@ -92,34 +78,25 @@ impl NetworkProxyBuilder {
         Ok(NetworkProxy {
             state,
             http_addr,
-            socks_addr: self.socks_addr.unwrap_or(runtime.socks_addr),
+            socks_addr,
             admin_addr,
             policy_decider: self.policy_decider,
-            enable_socks5_udp: self.enable_socks5_udp,
         })
     }
 }
 
 #[derive(Clone)]
 pub struct NetworkProxy {
-    state: Arc<AppState>,
+    state: Arc<NetworkProxyState>,
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
     admin_addr: SocketAddr,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
-    enable_socks5_udp: bool,
 }
 
 impl NetworkProxy {
-    #[must_use]
     pub fn builder() -> NetworkProxyBuilder {
         NetworkProxyBuilder::default()
-    }
-
-    pub async fn from_cli_args(args: Args) -> Result<Self> {
-        let mut builder = Self::builder();
-        builder = builder.enable_socks5_udp(args.enable_socks5_udp);
-        builder.build().await
     }
 
     pub async fn run(&self) -> Result<NetworkProxyHandle> {
@@ -129,7 +106,7 @@ impl NetworkProxy {
             return Ok(NetworkProxyHandle::noop());
         }
 
-        if cfg!(not(target_os = "macos")) {
+        if !unix_socket_permissions_supported() {
             warn!("allowUnixSockets is macOS-only; requests will be rejected on this platform");
         }
 
@@ -138,51 +115,102 @@ impl NetworkProxy {
             self.http_addr,
             self.policy_decider.clone(),
         ));
-        let socks_task = tokio::spawn(socks5::run_socks5(
-            self.state.clone(),
-            self.socks_addr,
-            self.policy_decider.clone(),
-            self.enable_socks5_udp,
-        ));
+        let socks_task = if current_cfg.network_proxy.enable_socks5 {
+            Some(tokio::spawn(socks5::run_socks5(
+                self.state.clone(),
+                self.socks_addr,
+                self.policy_decider.clone(),
+                current_cfg.network_proxy.enable_socks5_udp,
+            )))
+        } else {
+            None
+        };
         let admin_task = tokio::spawn(admin::run_admin_api(self.state.clone(), self.admin_addr));
 
         Ok(NetworkProxyHandle {
-            http_task,
+            http_task: Some(http_task),
             socks_task,
-            admin_task,
+            admin_task: Some(admin_task),
+            completed: false,
         })
     }
 }
 
 pub struct NetworkProxyHandle {
-    http_task: JoinHandle<Result<()>>,
-    socks_task: JoinHandle<Result<()>>,
-    admin_task: JoinHandle<Result<()>>,
+    http_task: Option<JoinHandle<Result<()>>>,
+    socks_task: Option<JoinHandle<Result<()>>>,
+    admin_task: Option<JoinHandle<Result<()>>>,
+    completed: bool,
 }
 
 impl NetworkProxyHandle {
     fn noop() -> Self {
         Self {
-            http_task: tokio::spawn(async { Ok(()) }),
-            socks_task: tokio::spawn(async { Ok(()) }),
-            admin_task: tokio::spawn(async { Ok(()) }),
+            http_task: Some(tokio::spawn(async { Ok(()) })),
+            socks_task: None,
+            admin_task: Some(tokio::spawn(async { Ok(()) })),
+            completed: true,
         }
     }
 
-    pub async fn wait(self) -> Result<()> {
-        self.http_task.await??;
-        self.socks_task.await??;
-        self.admin_task.await??;
+    pub async fn wait(mut self) -> Result<()> {
+        let http_task = self.http_task.take().context("missing http proxy task")?;
+        let admin_task = self.admin_task.take().context("missing admin proxy task")?;
+        let socks_task = self.socks_task.take();
+        let http_result = http_task.await;
+        let admin_result = admin_task.await;
+        let socks_result = match socks_task {
+            Some(task) => Some(task.await),
+            None => None,
+        };
+        self.completed = true;
+        http_result??;
+        admin_result??;
+        if let Some(socks_result) = socks_result {
+            socks_result??;
+        }
         Ok(())
     }
 
-    pub async fn shutdown(self) -> Result<()> {
-        self.http_task.abort();
-        self.socks_task.abort();
-        self.admin_task.abort();
-        let _ = self.http_task.await;
-        let _ = self.socks_task.await;
-        let _ = self.admin_task.await;
+    pub async fn shutdown(mut self) -> Result<()> {
+        abort_tasks(
+            self.http_task.take(),
+            self.socks_task.take(),
+            self.admin_task.take(),
+        )
+        .await;
+        self.completed = true;
         Ok(())
+    }
+}
+
+async fn abort_task(task: Option<JoinHandle<Result<()>>>) {
+    if let Some(task) = task {
+        task.abort();
+        let _ = task.await;
+    }
+}
+
+async fn abort_tasks(
+    http_task: Option<JoinHandle<Result<()>>>,
+    socks_task: Option<JoinHandle<Result<()>>>,
+    admin_task: Option<JoinHandle<Result<()>>>,
+) {
+    abort_task(http_task).await;
+    abort_task(socks_task).await;
+    abort_task(admin_task).await;
+}
+
+impl Drop for NetworkProxyHandle {
+    fn drop(&mut self) {
+        if self.completed {
+            return;
+        }
+        let http_task = self.http_task.take();
+        let socks_task = self.socks_task.take();
+        let admin_task = self.admin_task.take();
+        tokio::spawn(async move {
+            abort_tasks(http_task, socks_task, admin_task).await;
+        });
     }
 }

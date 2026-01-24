@@ -84,11 +84,18 @@ async fn run_compact_task_inner(
     let max_retries = turn_context.client.get_provider().stream_max_retries();
     let mut retries = 0;
 
+    // TODO: If we need to guarantee the persisted mode always matches the prompt used for this
+    // turn, capture it in TurnContext at creation time. Using SessionConfiguration here avoids
+    // duplicating model settings on TurnContext, but an Op after turn start could update the
+    // session config before this write occurs.
+    let collaboration_mode = sess.current_collaboration_mode().await;
     let rollout_item = RolloutItem::TurnContext(TurnContextItem {
         cwd: turn_context.cwd.clone(),
         approval_policy: turn_context.approval_policy,
         sandbox_policy: turn_context.sandbox_policy.clone(),
         model: turn_context.client.get_model(),
+        personality: turn_context.personality,
+        collaboration_mode: Some(collaboration_mode),
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
         user_instructions: turn_context.user_instructions.clone(),
@@ -105,6 +112,7 @@ async fn run_compact_task_inner(
         let prompt = Prompt {
             input: turn_input,
             base_instructions: sess.get_base_instructions().await,
+            personality: turn_context.personality,
             ..Default::default()
         };
         let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
@@ -299,6 +307,7 @@ fn build_compacted_history_with_limit(
             content: vec![ContentItem::InputText {
                 text: message.clone(),
             }],
+            end_turn: None,
         });
     }
 
@@ -312,6 +321,7 @@ fn build_compacted_history_with_limit(
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText { text: summary_text }],
+        end_turn: None,
     });
 
     history
@@ -400,6 +410,7 @@ mod tests {
                 content: vec![ContentItem::OutputText {
                     text: "ignored".to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: Some("user".to_string()),
@@ -407,6 +418,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "first".to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Other,
         ];
@@ -426,6 +438,7 @@ mod tests {
                     text: "# AGENTS.md instructions for project\n\n<INSTRUCTIONS>\ndo things\n</INSTRUCTIONS>"
                         .to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -433,6 +446,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "<ENVIRONMENT_CONTEXT>cwd=/tmp</ENVIRONMENT_CONTEXT>".to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -440,6 +454,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "real user message".to_string(),
                 }],
+                end_turn: None,
             },
         ];
 
@@ -524,6 +539,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: marker.clone(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -531,6 +547,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "real user message".to_string(),
                 }],
+                end_turn: None,
             },
         ];
 

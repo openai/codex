@@ -5,8 +5,10 @@ use crate::network_policy::NetworkPolicyRequest;
 use crate::network_policy::NetworkProtocol;
 use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
-use crate::state::AppState;
+use crate::reasons::REASON_METHOD_NOT_ALLOWED;
+use crate::reasons::REASON_PROXY_DISABLED;
 use crate::state::BlockedRequest;
+use crate::state::NetworkProxyState;
 use anyhow::Context as _;
 use anyhow::Result;
 use rama_core::Layer;
@@ -31,7 +33,7 @@ use tracing::info;
 use tracing::warn;
 
 pub async fn run_socks5(
-    state: Arc<AppState>,
+    state: Arc<NetworkProxyState>,
     addr: SocketAddr,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     enable_socks5_udp: bool,
@@ -65,12 +67,15 @@ pub async fn run_socks5(
             async move {
                 let app_state = req
                     .extensions()
-                    .get::<Arc<AppState>>()
+                    .get::<Arc<NetworkProxyState>>()
                     .cloned()
                     .ok_or_else(|| io::Error::other("missing state"))?;
 
                 let host = normalize_host(&req.authority.host.to_string());
                 let port = req.authority.port;
+                if host.is_empty() {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid host").into());
+                }
                 let client = req
                     .extensions()
                     .get::<SocketInfo>()
@@ -81,7 +86,7 @@ pub async fn run_socks5(
                         let _ = app_state
                             .record_blocked(BlockedRequest::new(
                                 host.clone(),
-                                "proxy_disabled".to_string(),
+                                REASON_PROXY_DISABLED.to_string(),
                                 client.clone(),
                                 None,
                                 None,
@@ -106,7 +111,7 @@ pub async fn run_socks5(
                         let _ = app_state
                             .record_blocked(BlockedRequest::new(
                                 host.clone(),
-                                "method_not_allowed".to_string(),
+                                REASON_METHOD_NOT_ALLOWED.to_string(),
                                 client.clone(),
                                 None,
                                 Some(NetworkMode::Limited),
@@ -191,6 +196,9 @@ pub async fn run_socks5(
 
                     let host = normalize_host(&server_address.ip_addr.to_string());
                     let port = server_address.port;
+                    if host.is_empty() {
+                        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid host"));
+                    }
                     let client = extensions
                         .get::<SocketInfo>()
                         .map(|info| info.peer_addr().to_string());
@@ -200,7 +208,7 @@ pub async fn run_socks5(
                             let _ = udp_state
                                 .record_blocked(BlockedRequest::new(
                                     host.clone(),
-                                    "proxy_disabled".to_string(),
+                                    REASON_PROXY_DISABLED.to_string(),
                                     client.clone(),
                                     None,
                                     None,
@@ -227,7 +235,7 @@ pub async fn run_socks5(
                             let _ = udp_state
                                 .record_blocked(BlockedRequest::new(
                                     host.clone(),
-                                    "method_not_allowed".to_string(),
+                                    REASON_METHOD_NOT_ALLOWED.to_string(),
                                     client.clone(),
                                     None,
                                     Some(NetworkMode::Limited),

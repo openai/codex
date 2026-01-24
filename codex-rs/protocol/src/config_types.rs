@@ -66,6 +66,27 @@ pub enum SandboxMode {
 }
 
 #[derive(
+    Debug,
+    Serialize,
+    Deserialize,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Display,
+    JsonSchema,
+    TS,
+    PartialOrd,
+    Ord,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum Personality {
+    Friendly,
+    Pragmatic,
+}
+
+#[derive(
     Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS, Default,
 )]
 #[serde(rename_all = "lowercase")]
@@ -130,33 +151,36 @@ pub enum AltScreenMode {
     Never,
 }
 
+/// Initial collaboration mode to use when the TUI starts.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ModeKind {
+    Plan,
+    PairProgramming,
+    Execute,
+    Custom,
+}
+
 /// Collaboration mode for a Codex session.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(tag = "mode", rename_all = "lowercase")]
-pub enum CollaborationMode {
-    Plan(Settings),
-    PairProgramming(Settings),
-    Execute(Settings),
-    Custom(Settings),
+#[serde(rename_all = "lowercase")]
+pub struct CollaborationMode {
+    pub mode: ModeKind,
+    pub settings: Settings,
 }
 
 impl CollaborationMode {
-    /// Returns a reference to the settings, regardless of variant.
-    fn settings(&self) -> &Settings {
-        match self {
-            CollaborationMode::Plan(settings)
-            | CollaborationMode::PairProgramming(settings)
-            | CollaborationMode::Execute(settings)
-            | CollaborationMode::Custom(settings) => settings,
-        }
+    /// Returns a reference to the settings.
+    fn settings_ref(&self) -> &Settings {
+        &self.settings
     }
 
     pub fn model(&self) -> &str {
-        self.settings().model.as_str()
+        self.settings_ref().model.as_str()
     }
 
     pub fn reasoning_effort(&self) -> Option<ReasoningEffort> {
-        self.settings().reasoning_effort
+        self.settings_ref().reasoning_effort
     }
 
     /// Updates the collaboration mode with new model and/or effort values.
@@ -165,14 +189,14 @@ impl CollaborationMode {
     /// - `effort`: `Some(Some(e))` to set effort to `e`, `Some(None)` to clear effort, `None` to keep current effort
     /// - `developer_instructions`: `Some(s)` to update developer instructions, `None` to keep current
     ///
-    /// Returns a new `CollaborationMode` with updated values, preserving the variant.
+    /// Returns a new `CollaborationMode` with updated values, preserving the mode.
     pub fn with_updates(
         &self,
         model: Option<String>,
         effort: Option<Option<ReasoningEffort>>,
         developer_instructions: Option<String>,
     ) -> Self {
-        let settings = self.settings();
+        let settings = self.settings_ref();
         let updated_settings = Settings {
             model: model.unwrap_or_else(|| settings.model.clone()),
             reasoning_effort: effort.unwrap_or(settings.reasoning_effort),
@@ -180,13 +204,9 @@ impl CollaborationMode {
                 .or_else(|| settings.developer_instructions.clone()),
         };
 
-        match self {
-            CollaborationMode::Plan(_) => CollaborationMode::Plan(updated_settings),
-            CollaborationMode::PairProgramming(_) => {
-                CollaborationMode::PairProgramming(updated_settings)
-            }
-            CollaborationMode::Execute(_) => CollaborationMode::Execute(updated_settings),
-            CollaborationMode::Custom(_) => CollaborationMode::Custom(updated_settings),
+        CollaborationMode {
+            mode: self.mode,
+            settings: updated_settings,
         }
     }
 }

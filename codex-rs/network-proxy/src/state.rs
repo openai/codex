@@ -1,57 +1,86 @@
-use crate::config::Config;
 use crate::config::NetworkMode;
+use crate::config::NetworkProxyConfig;
 use crate::policy::DomainPattern;
 use crate::policy::compile_globset;
 use crate::runtime::ConfigState;
+use crate::runtime::LayerMtime;
 use anyhow::Context;
 use anyhow::Result;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::config::CONFIG_TOML_FILE;
-use codex_core::config::ConfigBuilder;
 use codex_core::config::Constrained;
 use codex_core::config::ConstraintError;
+use codex_core::config::find_codex_home;
+use codex_core::config_loader::ConfigLayerStack;
+use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::RequirementSource;
+use codex_core::config_loader::load_config_layers_state;
 use serde::Deserialize;
 use std::collections::HashSet;
 
-pub use crate::runtime::AppState;
 pub use crate::runtime::BlockedRequest;
+pub use crate::runtime::NetworkProxyState;
 #[cfg(test)]
-pub(crate) use crate::runtime::app_state_for_policy;
+pub(crate) use crate::runtime::network_proxy_state_for_policy;
 
 pub(crate) async fn build_config_state() -> Result<ConfigState> {
     // Load config through `codex-core` so we inherit the same layer ordering and semantics as the
     // rest of Codex (system/managed layers, user layers, session flags, etc.).
-    let codex_cfg = ConfigBuilder::default()
-        .build()
+    let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
+    let cli_overrides = Vec::new();
+    let overrides = LoaderOverrides::default();
+    let config_layer_stack = load_config_layers_state(&codex_home, None, &cli_overrides, overrides)
         .await
         .context("failed to load Codex config")?;
 
-    let cfg_path = codex_cfg.codex_home.join(CONFIG_TOML_FILE);
+    let cfg_path = codex_home.join(CONFIG_TOML_FILE);
 
     // Deserialize from the merged effective config, rather than parsing config.toml ourselves.
     // This avoids a second parser/merger implementation (and the drift that comes with it).
-    let merged_toml = codex_cfg.config_layer_stack.effective_config();
-    let config: Config = merged_toml
+    let merged_toml = config_layer_stack.effective_config();
+    let config: NetworkProxyConfig = merged_toml
         .try_into()
         .context("failed to deserialize network proxy config")?;
 
     // Security boundary: user-controlled layers must not be able to widen restrictions set by
     // trusted/managed layers (e.g., MDM). Enforce this before building runtime state.
-    let constraints = enforce_trusted_constraints(&codex_cfg.config_layer_stack, &config)?;
+    let constraints = enforce_trusted_constraints(&config_layer_stack, &config)?;
 
-    let mtime = cfg_path.metadata().and_then(|m| m.modified()).ok();
+    let layer_mtimes = collect_layer_mtimes(&config_layer_stack);
     let deny_set = compile_globset(&config.network_proxy.policy.denied_domains)?;
     let allow_set = compile_globset(&config.network_proxy.policy.allowed_domains)?;
     Ok(ConfigState {
         config,
-        mtime,
         allow_set,
         deny_set,
         constraints,
+        layer_mtimes,
         cfg_path,
         blocked: std::collections::VecDeque::new(),
     })
+}
+
+fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
+    stack
+        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false)
+        .iter()
+        .filter_map(|layer| {
+            let path = match &layer.name {
+                ConfigLayerSource::System { file } => Some(file.as_path().to_path_buf()),
+                ConfigLayerSource::User { file } => Some(file.as_path().to_path_buf()),
+                ConfigLayerSource::Project { dot_codex_folder } => dot_codex_folder
+                    .join(CONFIG_TOML_FILE)
+                    .ok()
+                    .map(|p| p.as_path().to_path_buf()),
+                ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => {
+                    Some(file.as_path().to_path_buf())
+                }
+                _ => None,
+            };
+            path.map(LayerMtime::new)
+        })
+        .collect()
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -83,7 +112,7 @@ struct PartialNetworkPolicy {
     allow_local_binding: Option<bool>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct NetworkProxyConstraints {
     pub(crate) enabled: Option<bool>,
     pub(crate) mode: Option<NetworkMode>,
@@ -98,7 +127,7 @@ pub(crate) struct NetworkProxyConstraints {
 
 fn enforce_trusted_constraints(
     layers: &codex_core::config_loader::ConfigLayerStack,
-    config: &Config,
+    config: &NetworkProxyConfig,
 ) -> Result<NetworkProxyConstraints> {
     let constraints = network_proxy_constraints_from_trusted_layers(layers)?;
     validate_policy_against_constraints(config, &constraints)
@@ -110,9 +139,10 @@ fn network_proxy_constraints_from_trusted_layers(
     layers: &codex_core::config_loader::ConfigLayerStack,
 ) -> Result<NetworkProxyConstraints> {
     let mut constraints = NetworkProxyConstraints::default();
-    for layer in layers
-        .get_layers(codex_core::config_loader::ConfigLayerStackOrdering::LowestPrecedenceFirst)
-    {
+    for layer in layers.get_layers(
+        codex_core::config_loader::ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        false,
+    ) {
         // Only trusted layers contribute constraints. User-controlled layers can narrow policy but
         // must never widen beyond what managed config allows.
         if is_user_controlled_layer(&layer.name) {
@@ -173,7 +203,7 @@ fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {
 }
 
 pub(crate) fn validate_policy_against_constraints(
-    config: &Config,
+    config: &NetworkProxyConfig,
     constraints: &NetworkProxyConstraints,
 ) -> std::result::Result<(), ConstraintError> {
     fn invalid_value(
@@ -295,14 +325,14 @@ pub(crate) fn validate_policy_against_constraints(
     if let Some(allowed_domains) = &constraints.allowed_domains {
         let managed_patterns: Vec<DomainPattern> = allowed_domains
             .iter()
-            .map(|entry| DomainPattern::parse(entry))
+            .map(|entry| DomainPattern::parse_for_constraints(entry))
             .collect();
         let _ = Constrained::new(
             config.network_proxy.policy.allowed_domains.clone(),
             move |candidate| {
                 let mut invalid = Vec::new();
                 for entry in candidate {
-                    let candidate_pattern = DomainPattern::parse(entry);
+                    let candidate_pattern = DomainPattern::parse_for_constraints(entry);
                     if !managed_patterns
                         .iter()
                         .any(|managed| managed.allows(&candidate_pattern))

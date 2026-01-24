@@ -62,6 +62,7 @@ pub fn user_shell_command_record_item(
         content: vec![ContentItem::InputText {
             text: format_user_shell_command_record(command, exec_output, turn_context),
         }],
+        end_turn: None,
     }
 }
 

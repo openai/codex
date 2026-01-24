@@ -8,6 +8,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let args = Args::parse();
-    let proxy = NetworkProxy::from_cli_args(args).await?;
+    let _ = args;
+    let proxy = NetworkProxy::builder().build().await?;
     proxy.run().await?.wait().await
 }

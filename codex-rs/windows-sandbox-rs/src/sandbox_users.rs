@@ -36,6 +36,7 @@ use windows_sys::Win32::Security::SID_NAME_USE;
 
 use codex_windows_sandbox::dpapi_protect;
 use codex_windows_sandbox::sandbox_dir;
+use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::SETUP_VERSION;
@@ -394,6 +395,8 @@ fn write_secrets(
 ) -> Result<()> {
     let sandbox_dir = sandbox_dir(codex_home);
     std::fs::create_dir_all(&sandbox_dir)?;
+    let secrets_dir = sandbox_secrets_dir(codex_home);
+    std::fs::create_dir_all(&secrets_dir)?;
     let offline_blob = dpapi_protect(offline_pwd.as_bytes())?;
     let online_blob = dpapi_protect(online_pwd.as_bytes())?;
     let users = SandboxUsersFile {
@@ -415,7 +418,7 @@ fn write_secrets(
         read_roots: Vec::new(),
         write_roots: Vec::new(),
     };
-    let users_path = sandbox_dir.join("sandbox_users.json");
+    let users_path = secrets_dir.join("sandbox_users.json");
     let marker_path = sandbox_dir.join("setup_marker.json");
     std::fs::write(users_path, serde_json::to_vec_pretty(&users)?)?;
     std::fs::write(marker_path, serde_json::to_vec_pretty(&marker)?)?;

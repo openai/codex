@@ -312,6 +312,7 @@ async fn apply_patch_cli_move_without_content_change_has_no_turn_diff(
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -900,6 +901,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_emits_turn_diff() -> Result<(
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -979,6 +981,7 @@ async fn apply_patch_shell_command_failure_propagates_error_and_skips_diff() -> 
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1128,6 +1131,7 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff(
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1190,6 +1194,7 @@ async fn apply_patch_turn_diff_for_rename_with_content_change(
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1260,6 +1265,7 @@ async fn apply_patch_aggregates_diff_across_multiple_tool_calls() -> Result<()> 
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1330,6 +1336,7 @@ async fn apply_patch_aggregates_diff_preserves_success_after_failure() -> Result
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 

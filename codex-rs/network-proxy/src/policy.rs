@@ -1,6 +1,8 @@
+#[cfg(test)]
 use crate::config::NetworkMode;
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::ensure;
 use globset::GlobBuilder;
 use globset::GlobSet;
 use globset::GlobSetBuilder;
@@ -8,17 +10,29 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
+use url::Host as UrlHost;
 
-pub fn method_allowed(mode: NetworkMode, method: &str) -> bool {
-    match mode {
-        NetworkMode::Full => true,
-        NetworkMode::Limited => matches!(method, "GET" | "HEAD" | "OPTIONS"),
+/// A normalized host string for policy evaluation.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Host(String);
+
+impl Host {
+    pub fn parse(input: &str) -> Result<Self> {
+        let normalized = normalize_host(input);
+        ensure!(!normalized.is_empty(), "host is empty");
+        Ok(Self(normalized))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-pub fn is_loopback_host(host: &str) -> bool {
-    let host = host.to_ascii_lowercase();
-    if host == "localhost" || host == "localhost." {
+/// Returns true if the host is a loopback hostname or IP literal.
+pub fn is_loopback_host(host: &Host) -> bool {
+    let host = host.as_str();
+    let host = host.split_once('%').map(|(ip, _)| ip).unwrap_or(host);
+    if host == "localhost" {
         return true;
     }
     if let Ok(ip) = host.parse::<IpAddr>() {
@@ -36,12 +50,33 @@ pub fn is_non_public_ip(ip: IpAddr) -> bool {
 
 fn is_non_public_ipv4(ip: Ipv4Addr) -> bool {
     // Use the standard library classification helpers where possible; they encode the intent more
-    // clearly than hand-rolled range checks.
+    // clearly than hand-rolled range checks. Some non-public ranges (e.g., CGNAT and TEST-NET
+    // blocks) are not covered by stable stdlib helpers yet, so we fall back to CIDR checks.
     ip.is_loopback()
         || ip.is_private()
         || ip.is_link_local()
         || ip.is_unspecified()
         || ip.is_multicast()
+        || ip.is_broadcast()
+        || ipv4_in_cidr(ip, [0, 0, 0, 0], 8) // "this network" (RFC 1122)
+        || ipv4_in_cidr(ip, [100, 64, 0, 0], 10) // CGNAT (RFC 6598)
+        || ipv4_in_cidr(ip, [192, 0, 0, 0], 24) // IETF Protocol Assignments (RFC 6890)
+        || ipv4_in_cidr(ip, [192, 0, 2, 0], 24) // TEST-NET-1 (RFC 5737)
+        || ipv4_in_cidr(ip, [198, 18, 0, 0], 15) // Benchmarking (RFC 2544)
+        || ipv4_in_cidr(ip, [198, 51, 100, 0], 24) // TEST-NET-2 (RFC 5737)
+        || ipv4_in_cidr(ip, [203, 0, 113, 0], 24) // TEST-NET-3 (RFC 5737)
+        || ipv4_in_cidr(ip, [240, 0, 0, 0], 4) // Reserved (RFC 6890)
+}
+
+fn ipv4_in_cidr(ip: Ipv4Addr, base: [u8; 4], prefix: u8) -> bool {
+    let ip = u32::from(ip);
+    let base = u32::from(Ipv4Addr::from(base));
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    };
+    (ip & mask) == (base & mask)
 }
 
 fn is_non_public_ipv6(ip: Ipv6Addr) -> bool {
@@ -61,6 +96,7 @@ fn is_non_public_ipv6(ip: Ipv6Addr) -> bool {
         || ip.is_unicast_link_local()
 }
 
+/// Normalize host fragments for policy matching (trim whitespace, strip ports/brackets, lowercase).
 pub fn normalize_host(host: &str) -> String {
     let host = host.trim();
     if host.starts_with('[')
@@ -141,16 +177,50 @@ pub(crate) enum DomainPattern {
 }
 
 impl DomainPattern {
+    /// Parse a policy pattern for constraint comparisons.
+    ///
+    /// Validation of glob syntax happens when building the globset; here we only
+    /// decode the wildcard prefixes to keep constraint checks lightweight.
     pub(crate) fn parse(input: &str) -> Self {
+        let input = input.trim();
+        if input.is_empty() {
+            return Self::Exact(String::new());
+        }
         if input == "*" {
             Self::Any
         } else if let Some(domain) = input.strip_prefix("**.") {
-            Self::ApexAndSubdomains(domain.to_string())
+            Self::parse_domain(domain, Self::ApexAndSubdomains)
         } else if let Some(domain) = input.strip_prefix("*.") {
-            Self::SubdomainsOnly(domain.to_string())
+            Self::parse_domain(domain, Self::SubdomainsOnly)
         } else {
             Self::Exact(input.to_string())
         }
+    }
+
+    /// Parse a policy pattern for constraint comparisons, validating domain parts with `url`.
+    pub(crate) fn parse_for_constraints(input: &str) -> Self {
+        let input = input.trim();
+        if input.is_empty() {
+            return Self::Exact(String::new());
+        }
+        if input == "*" {
+            return Self::Any;
+        }
+        if let Some(domain) = input.strip_prefix("**.") {
+            return Self::ApexAndSubdomains(parse_domain_for_constraints(domain));
+        }
+        if let Some(domain) = input.strip_prefix("*.") {
+            return Self::SubdomainsOnly(parse_domain_for_constraints(domain));
+        }
+        Self::Exact(parse_domain_for_constraints(input))
+    }
+
+    fn parse_domain(domain: &str, build: impl FnOnce(String) -> Self) -> Self {
+        let domain = domain.trim();
+        if domain.is_empty() {
+            return Self::Exact(String::new());
+        }
+        build(domain.to_string())
     }
 
     pub(crate) fn allows(&self, candidate: &DomainPattern) -> bool {
@@ -181,6 +251,25 @@ impl DomainPattern {
                 }
             },
         }
+    }
+}
+
+fn parse_domain_for_constraints(domain: &str) -> String {
+    let domain = domain.trim().trim_end_matches('.');
+    if domain.is_empty() {
+        return String::new();
+    }
+    let host = if domain.starts_with('[') && domain.ends_with(']') {
+        &domain[1..domain.len().saturating_sub(1)]
+    } else {
+        domain
+    };
+    if host.contains('*') || host.contains('?') || host.contains('%') {
+        return domain.to_string();
+    }
+    match UrlHost::parse(host) {
+        Ok(host) => host.to_string(),
+        Err(_) => String::new(),
     }
 }
 
@@ -228,18 +317,18 @@ mod tests {
 
     #[test]
     fn method_allowed_full_allows_everything() {
-        assert!(method_allowed(NetworkMode::Full, "GET"));
-        assert!(method_allowed(NetworkMode::Full, "POST"));
-        assert!(method_allowed(NetworkMode::Full, "CONNECT"));
+        assert!(NetworkMode::Full.allows_method("GET"));
+        assert!(NetworkMode::Full.allows_method("POST"));
+        assert!(NetworkMode::Full.allows_method("CONNECT"));
     }
 
     #[test]
     fn method_allowed_limited_allows_only_safe_methods() {
-        assert!(method_allowed(NetworkMode::Limited, "GET"));
-        assert!(method_allowed(NetworkMode::Limited, "HEAD"));
-        assert!(method_allowed(NetworkMode::Limited, "OPTIONS"));
-        assert!(!method_allowed(NetworkMode::Limited, "POST"));
-        assert!(!method_allowed(NetworkMode::Limited, "CONNECT"));
+        assert!(NetworkMode::Limited.allows_method("GET"));
+        assert!(NetworkMode::Limited.allows_method("HEAD"));
+        assert!(NetworkMode::Limited.allows_method("OPTIONS"));
+        assert!(!NetworkMode::Limited.allows_method("POST"));
+        assert!(!NetworkMode::Limited.allows_method("CONNECT"));
     }
 
     #[test]
@@ -275,17 +364,17 @@ mod tests {
 
     #[test]
     fn is_loopback_host_handles_localhost_variants() {
-        assert!(is_loopback_host("localhost"));
-        assert!(is_loopback_host("localhost."));
-        assert!(is_loopback_host("LOCALHOST"));
-        assert!(!is_loopback_host("notlocalhost"));
+        assert!(is_loopback_host(&Host::parse("localhost").unwrap()));
+        assert!(is_loopback_host(&Host::parse("localhost.").unwrap()));
+        assert!(is_loopback_host(&Host::parse("LOCALHOST").unwrap()));
+        assert!(!is_loopback_host(&Host::parse("notlocalhost").unwrap()));
     }
 
     #[test]
     fn is_loopback_host_handles_ip_literals() {
-        assert!(is_loopback_host("127.0.0.1"));
-        assert!(is_loopback_host("::1"));
-        assert!(!is_loopback_host("1.2.3.4"));
+        assert!(is_loopback_host(&Host::parse("127.0.0.1").unwrap()));
+        assert!(is_loopback_host(&Host::parse("::1").unwrap()));
+        assert!(!is_loopback_host(&Host::parse("1.2.3.4").unwrap()));
     }
 
     #[test]
@@ -293,6 +382,14 @@ mod tests {
         assert!(is_non_public_ip("127.0.0.1".parse().unwrap()));
         assert!(is_non_public_ip("10.0.0.1".parse().unwrap()));
         assert!(is_non_public_ip("192.168.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("100.64.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("192.0.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("192.0.2.1".parse().unwrap()));
+        assert!(is_non_public_ip("198.18.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("198.51.100.1".parse().unwrap()));
+        assert!(is_non_public_ip("203.0.113.1".parse().unwrap()));
+        assert!(is_non_public_ip("240.0.0.1".parse().unwrap()));
+        assert!(is_non_public_ip("0.1.2.3".parse().unwrap()));
         assert!(!is_non_public_ip("8.8.8.8".parse().unwrap()));
 
         assert!(is_non_public_ip("::ffff:127.0.0.1".parse().unwrap()));

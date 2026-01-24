@@ -1,12 +1,13 @@
 use anyhow::anyhow;
 use anyhow::Result;
 use windows_sys::Win32::Foundation::GetLastError;
-use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Security::Cryptography::CryptProtectData;
 use windows_sys::Win32::Security::Cryptography::CryptUnprotectData;
-use windows_sys::Win32::Security::Cryptography::CRYPT_INTEGER_BLOB;
+use windows_sys::Win32::Security::Cryptography::CRYPTPROTECT_LOCAL_MACHINE;
 use windows_sys::Win32::Security::Cryptography::CRYPTPROTECT_UI_FORBIDDEN;
+use windows_sys::Win32::Security::Cryptography::CRYPT_INTEGER_BLOB;
 
 fn make_blob(data: &[u8]) -> CRYPT_INTEGER_BLOB {
     CRYPT_INTEGER_BLOB {
@@ -29,12 +30,15 @@ pub fn protect(data: &[u8]) -> Result<Vec<u8>> {
             std::ptr::null(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            CRYPTPROTECT_UI_FORBIDDEN,
+            // Use machine scope so elevated and non-elevated processes can decrypt.
+            CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_LOCAL_MACHINE,
             &mut out_blob,
         )
     };
     if ok == 0 {
-        return Err(anyhow!("CryptProtectData failed: {}", unsafe { GetLastError() }));
+        return Err(anyhow!("CryptProtectData failed: {}", unsafe {
+            GetLastError()
+        }));
     }
     let slice =
         unsafe { std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize) }.to_vec();
@@ -60,15 +64,15 @@ pub fn unprotect(blob: &[u8]) -> Result<Vec<u8>> {
             std::ptr::null(),
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            CRYPTPROTECT_UI_FORBIDDEN,
+            // Use machine scope so elevated and non-elevated processes can decrypt.
+            CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_LOCAL_MACHINE,
             &mut out_blob,
         )
     };
     if ok == 0 {
-        return Err(anyhow!(
-            "CryptUnprotectData failed: {}",
-            unsafe { GetLastError() }
-        ));
+        return Err(anyhow!("CryptUnprotectData failed: {}", unsafe {
+            GetLastError()
+        }));
     }
     let slice =
         unsafe { std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize) }.to_vec();
