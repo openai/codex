@@ -21,6 +21,7 @@ async fn user_info_returns_email_from_auth_json() -> Result<()> {
     write_chatgpt_auth(
         codex_home.path(),
         ChatGptAuthFixture::new("access")
+// app-server/tests/suite/user_info.rs
             .refresh_token("refresh")
             .email("user@example.com"),
         AuthCredentialsStoreMode::File,

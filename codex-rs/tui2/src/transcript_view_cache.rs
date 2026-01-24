@@ -515,6 +515,7 @@ impl TranscriptRasterCache {
     }
 
     /// Evict old cached rows until `rows.len() <= capacity`.
+// tui2/src/transcript_view_cache.rs
     ///
     /// The cache uses an approximate LRU: we push `(key, stamp)` on every access, and only evict a
     /// row when the popped entry matches the row's current `last_used` stamp.

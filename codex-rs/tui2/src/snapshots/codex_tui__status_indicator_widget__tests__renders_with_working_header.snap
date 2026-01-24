@@ -1,6 +1,7 @@
 ---
 source: tui/src/status_indicator_widget.rs
 expression: terminal.backend()
+# tui2/src/snapshots/codex_tui__status_indicator_widget__tests__renders_with_working_header.snap
 ---
 "• Working (0s • esc to interrupt)                                               "
 "                                                                                "

@@ -169,6 +169,7 @@ pub(crate) mod tools {
         Function(ResponsesApiTool),
         #[serde(rename = "local_shell")]
         LocalShell {},
+// core/src/client_common.rs
         // TODO: Understand why we get an error on web_search although the API docs say it's supported.
         // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
         // The `external_web_access` field determines whether the web search is over cached or live content.

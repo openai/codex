@@ -280,6 +280,7 @@ conversation entry reaches scrollback exactly once.
 ## 6. Streaming, Width Changes, and Tradeoffs
 
 ### 6.1 Streaming cells
+<!-- tui2/docs/tui_viewport_and_history.md -->
 
 Streaming agent responses are represented as a sequence of history entries:
 

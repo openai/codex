@@ -375,6 +375,7 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
     while idx < args.len() {
         let arg = &args[idx];
         let lower = arg.to_ascii_lowercase();
+// core/src/command_safety/windows_dangerous_commands.rs
         match lower.as_str() {
             "-command" | "/command" | "-c" => {
                 let script = args.get(idx + 1)?;

@@ -70,6 +70,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     // Start a turn that triggers a long-running command.
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
+// app-server/tests/suite/v2/turn_interrupt.rs
             thread_id: thread.id.clone(),
             input: vec![V2UserInput::Text {
                 text: "run sleep".to_string(),

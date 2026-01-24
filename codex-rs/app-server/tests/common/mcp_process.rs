@@ -363,6 +363,7 @@ impl McpProcess {
 
     /// Send a `thread/rollback` JSON-RPC request.
     pub async fn send_thread_rollback_request(
+// app-server/tests/common/mcp_process.rs
         &mut self,
         params: ThreadRollbackParams,
     ) -> anyhow::Result<i64> {

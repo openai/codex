@@ -57,6 +57,7 @@ async fn continue_after_stream_error() {
         .await;
 
     // Configure a provider that uses the Responses API and points at our mock
+// core/tests/suite/stream_error_allows_next_turn.rs
     // server. Use an existing env var (PATH) to satisfy the auth plumbing
     // without requiring a real secret.
     let provider = ModelProviderInfo {

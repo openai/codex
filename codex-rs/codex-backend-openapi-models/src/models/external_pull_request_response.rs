@@ -18,6 +18,7 @@ pub struct ExternalPullRequestResponse {
     pub id: String,
     #[serde(rename = "assistant_turn_id")]
     pub assistant_turn_id: String,
+// codex-backend-openapi-models/src/models/external_pull_request_response.rs
     #[serde(rename = "pull_request")]
     pub pull_request: Box<models::GitPullRequest>,
     #[serde(rename = "codex_updated_sha", skip_serializing_if = "Option::is_none")]

@@ -1,1 +1,2 @@
+# apply-patch/tests/fixtures/scenarios/012_delete_directory_fails/input/dir/foo.txt
 stable

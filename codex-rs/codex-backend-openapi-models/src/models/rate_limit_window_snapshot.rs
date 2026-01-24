@@ -17,6 +17,7 @@ pub struct RateLimitWindowSnapshot {
     #[serde(rename = "limit_window_seconds")]
     pub limit_window_seconds: i32,
     #[serde(rename = "reset_after_seconds")]
+// codex-backend-openapi-models/src/models/rate_limit_window_snapshot.rs
     pub reset_after_seconds: i32,
     #[serde(rename = "reset_at")]
     pub reset_at: i32,

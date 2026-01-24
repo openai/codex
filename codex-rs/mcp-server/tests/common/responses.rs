@@ -46,6 +46,7 @@ pub fn create_final_assistant_message_sse_response(message: &str) -> anyhow::Res
             {
                 "delta": {
                     "content": message
+// mcp-server/tests/common/responses.rs
                 },
                 "finish_reason": "stop"
             }

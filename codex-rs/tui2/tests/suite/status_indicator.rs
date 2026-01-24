@@ -10,6 +10,7 @@ use codex_ansi_escape::ansi_escape_line;
 fn ansi_escape_line_strips_escape_sequences() {
     let text_in_ansi_red = "\x1b[31mRED\x1b[0m";
 
+// tui2/tests/suite/status_indicator.rs
     // The returned line must contain three printable glyphs and **no** raw
     // escape bytes.
     let line = ansi_escape_line(text_in_ansi_red);

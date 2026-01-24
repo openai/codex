@@ -76,6 +76,7 @@ impl Renderable for QueuedUserMessages {
 mod tests {
     use super::*;
     use insta::assert_snapshot;
+// tui2/src/bottom_pane/queued_user_messages.rs
     use pretty_assertions::assert_eq;
 
     #[test]

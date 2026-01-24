@@ -7,6 +7,7 @@ expression: terminal.backend()
 "    1 -one                                                                      "
 "    1 +one changed                                                              "
 "                                                                                "
+# tui2/src/snapshots/codex_tui__diff_render__tests__apply_multiple_files_block.snap
 "  └ b.txt (+1 -0)                                                               "
 "    1 +new                                                                      "
 "                                                                                "

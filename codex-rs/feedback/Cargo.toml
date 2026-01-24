@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# feedback/Cargo.toml
 anyhow = { workspace = true }
 codex-protocol = { workspace = true }
 sentry = { version = "0.46" }

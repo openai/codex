@@ -220,6 +220,7 @@ impl KeyboardHandler for OnboardingScreen {
                 ..
             }
             | KeyEvent {
+// tui2/src/onboarding/onboarding_screen.rs
                 code: KeyCode::Char('c'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,

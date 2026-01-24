@@ -618,6 +618,7 @@ mod tests {
                 decision: Decision::Allow,
                 matched_rules: vec![RuleMatch::HeuristicsRuleMatch {
                     command: vec!["ls".to_string()],
+// core/src/exec_policy.rs
                     decision: Decision::Allow
                 }],
             },

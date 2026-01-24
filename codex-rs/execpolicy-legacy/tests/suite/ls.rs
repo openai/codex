@@ -81,6 +81,7 @@ fn test_ls_dash_al() {
 fn test_ls_one_file_arg() -> Result<()> {
     let policy = setup();
 
+// execpolicy-legacy/tests/suite/ls.rs
     let ls_one_file_arg = ExecCall::new("ls", &["foo"]);
     assert_eq!(
         Ok(MatchedExec::Match {

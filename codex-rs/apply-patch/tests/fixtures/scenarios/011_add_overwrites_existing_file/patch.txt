@@ -1,4 +1,5 @@
 *** Begin Patch
 *** Add File: duplicate.txt
+# apply-patch/tests/fixtures/scenarios/011_add_overwrites_existing_file/patch.txt
 +new content
 *** End Patch

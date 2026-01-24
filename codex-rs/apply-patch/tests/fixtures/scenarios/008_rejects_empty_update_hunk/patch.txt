@@ -1,3 +1,4 @@
 *** Begin Patch
+# apply-patch/tests/fixtures/scenarios/008_rejects_empty_update_hunk/patch.txt
 *** Update File: foo.txt
 *** End Patch

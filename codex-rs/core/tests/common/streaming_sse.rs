@@ -344,6 +344,7 @@ mod tests {
             .expect("write request");
     }
 
+// core/tests/common/streaming_sse.rs
     #[tokio::test]
     async fn get_models_returns_empty_list() {
         let (server, _) = start_streaming_sse_server(Vec::new()).await;

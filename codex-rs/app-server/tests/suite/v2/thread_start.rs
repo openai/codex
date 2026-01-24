@@ -45,6 +45,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
         model_provider,
         ..
     } = to_response::<ThreadStartResponse>(resp)?;
+// app-server/tests/suite/v2/thread_start.rs
     assert!(!thread.id.is_empty(), "thread id should not be empty");
     assert!(
         thread.preview.is_empty(),

@@ -452,6 +452,7 @@ macro_rules! server_notification_definitions {
         pub fn export_server_notification_schemas(
             out_dir: &::std::path::Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
+// app-server-protocol/src/protocol/common.rs
             let mut schemas = Vec::new();
             $(schemas.push(crate::export::write_json_schema::<$payload>(out_dir, stringify!($payload))?);)*
             Ok(schemas)

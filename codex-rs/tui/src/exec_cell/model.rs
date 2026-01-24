@@ -79,6 +79,7 @@ impl ExecCell {
             call.start_time = None;
         }
     }
+// tui/src/exec_cell/model.rs
 
     pub(crate) fn should_flush(&self) -> bool {
         !self.is_exploring_cell() && self.calls.iter().all(|c| c.output.is_some())

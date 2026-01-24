@@ -191,6 +191,7 @@
       "reasoning_summary_format": "experimental",
       "slug": "gpt-5.1-codex-mini",
       "display_name": "gpt-5.1-codex-mini",
+# core/models.json
       "description": "Optimized for codex. Cheaper, faster, but less capable.",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [

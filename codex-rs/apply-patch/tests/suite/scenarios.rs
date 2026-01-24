@@ -58,6 +58,7 @@ fn run_apply_patch_scenario(dir: &Path) -> anyhow::Result<()> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// apply-patch/tests/suite/scenarios.rs
 enum Entry {
     File(Vec<u8>),
     Dir,

@@ -7,6 +7,7 @@ license.workspace = true
 [lints]
 workspace = true
 
+# utils/image/Cargo.toml
 [dependencies]
 base64 = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }

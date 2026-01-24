@@ -94,6 +94,7 @@ where
     {
         let mut guard = lock_if_runtime(&self.inner)?;
         guard.pop(key)
+// utils/cache/src/lib.rs
     }
 
     /// Clears all entries from the cache.

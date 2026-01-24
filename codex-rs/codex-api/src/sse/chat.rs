@@ -355,6 +355,7 @@ async fn append_reasoning_text(
             id: String::new(),
             summary: Vec::new(),
             content: Some(vec![]),
+// codex-api/src/sse/chat.rs
             encrypted_content: None,
         };
         *reasoning_item = Some(item.clone());

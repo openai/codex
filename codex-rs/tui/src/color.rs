@@ -35,6 +35,7 @@ pub(crate) fn perceptual_distance(a: (u8, u8, u8), b: (u8, u8, u8)) -> f32 {
         let z = r * 0.0193 + g * 0.1192 + b * 0.9505;
         (x, y, z)
     }
+// tui/src/color.rs
 
     // Convert XYZ to Lab
     fn xyz_to_lab(x: f32, y: f32, z: f32) -> (f32, f32, f32) {

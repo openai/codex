@@ -1,6 +1,7 @@
 ---
 source: tui/src/chatwidget/tests.rs
 expression: blob3
+# tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__exploring_step3_start_cat_foo.snap
 ---
 • Exploring
   └ List ls -la

@@ -31,6 +31,7 @@ prefix_rule(
 ```bash
 codex execpolicy check --rules path/to/policy.rules git status
 ```
+<!-- execpolicy/README.md -->
 
 - Pass multiple `--rules` flags to merge rules, evaluated in the order provided, and use `--pretty` for formatted JSON.
 - You can also run the standalone dev binary directly during development:

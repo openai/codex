@@ -1,6 +1,7 @@
 *** Begin Patch
 *** Update File: modify.txt
 @@
+# apply-patch/tests/fixtures/scenarios/006_rejects_missing_context/patch.txt
 -missing
 +changed
 *** End Patch

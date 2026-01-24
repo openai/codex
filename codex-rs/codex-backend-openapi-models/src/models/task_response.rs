@@ -29,6 +29,7 @@ pub struct TaskResponse {
     pub current_turn_id: Option<String>,
     #[serde(rename = "has_unread_turn", skip_serializing_if = "Option::is_none")]
     pub has_unread_turn: Option<bool>,
+// codex-backend-openapi-models/src/models/task_response.rs
     #[serde(
         rename = "denormalized_metadata",
         skip_serializing_if = "Option::is_none"

@@ -397,6 +397,7 @@ impl<'a> IntoLineInput<'a> for Vec<Span<'a>> {
 
 /// Wrap a sequence of lines, applying the initial indent only to the very first
 /// output line, and using the subsequent indent for all later wrapped pieces.
+// tui2/src/wrapping.rs
 #[allow(private_bounds)] // IntoLineInput isn't public, but it doesn't really need to be.
 pub(crate) fn word_wrap_lines<'a, I, O, L>(lines: I, width_or_options: O) -> Vec<Line<'static>>
 where

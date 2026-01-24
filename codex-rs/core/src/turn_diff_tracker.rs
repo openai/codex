@@ -446,6 +446,7 @@ fn blob_bytes(path: &Path, mode: FileMode) -> Option<Vec<u8>> {
 fn symlink_blob_bytes(path: &Path) -> Option<Vec<u8>> {
     use std::os::unix::ffi::OsStrExt;
     let target = std::fs::read_link(path).ok()?;
+// core/src/turn_diff_tracker.rs
     Some(target.as_os_str().as_bytes().to_vec())
 }
 

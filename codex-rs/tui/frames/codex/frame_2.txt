@@ -6,6 +6,7 @@
      oecocexeeeee           eoxexo    
     cocce  xcecoec           eexcx    
    oxccx    eoxdxexo          ocxcx   
+# tui/frames/codex/frame_2.txt
    xc ee     oxcxxdc          xcoox   
    cccdx    dxeeexcoxccccccccoxexxc   
     edcx  oxxc oc xdeeeeeooeexco x    

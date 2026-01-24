@@ -4,6 +4,7 @@ expression: rendered
 ---
 • Ran echo
   │ this_is_a_very_long_si
+# tui2/src/snapshots/codex_tui__history_cell__tests__ran_cell_multiline_with_stderr_snapshot.snap
   │ ngle_token_that_will_w
   │ … +2 lines
   └ error: first line on

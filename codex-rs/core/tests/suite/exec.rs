@@ -62,6 +62,7 @@ async fn exit_code_0_succeeds() {
 }
 
 /// Command succeeds with exit code 0 normally
+// core/tests/suite/exec.rs
 #[tokio::test]
 async fn truncates_output_lines() {
     if skip_test() {

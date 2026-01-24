@@ -1,2 +1,3 @@
 line1
+# apply-patch/tests/fixtures/scenarios/006_rejects_missing_context/input/modify.txt
 line2

@@ -530,6 +530,7 @@ pub fn print_summary(
     out: &mut impl std::io::Write,
 ) -> std::io::Result<()> {
     writeln!(out, "Success. Updated the following files:")?;
+// apply-patch/src/lib.rs
     for path in &affected.added {
         writeln!(out, "A {}", path.display())?;
     }

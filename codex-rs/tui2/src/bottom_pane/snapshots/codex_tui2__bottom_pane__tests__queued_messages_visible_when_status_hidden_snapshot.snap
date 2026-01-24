@@ -3,6 +3,7 @@ source: tui2/src/bottom_pane/mod.rs
 expression: "render_snapshot(&pane, area)"
 ---
   ↳ Queued follow-up question                   
+# tui2/src/bottom_pane/snapshots/codex_tui2__bottom_pane__tests__queued_messages_visible_when_status_hidden_snapshot.snap
     ⌥ + ↑ edit                                  
                                                 
 › Ask Codex to do anything                      

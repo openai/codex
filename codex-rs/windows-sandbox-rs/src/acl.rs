@@ -312,6 +312,7 @@ unsafe fn ensure_allow_mask_aces_with_inheritance_impl(
                 added = true;
                 if !p_new_dacl.is_null() {
                     LocalFree(p_new_dacl as HLOCAL);
+// windows-sandbox-rs/src/acl.rs
                 }
             } else {
                 if !p_new_dacl.is_null() {

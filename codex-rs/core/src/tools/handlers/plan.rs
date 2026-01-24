@@ -56,6 +56,7 @@ At most one step can be in_progress at a time.
             required: Some(vec!["plan".to_string()]),
             additional_properties: Some(false.into()),
         },
+// core/src/tools/handlers/plan.rs
     })
 });
 

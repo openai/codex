@@ -463,6 +463,7 @@ async fn review_uses_session_model_when_review_model_unset() {
 
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let _closed = wait_for_event(&codex, |ev| {
+// core/tests/suite/review.rs
         matches!(
             ev,
             EventMsg::ExitedReviewMode(ExitedReviewModeEvent {

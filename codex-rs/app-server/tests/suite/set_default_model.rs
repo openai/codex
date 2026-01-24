@@ -30,6 +30,7 @@ async fn set_default_model_persists_overrides() -> Result<()> {
 
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
+// app-server/tests/suite/set_default_model.rs
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;

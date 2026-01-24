@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+# tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__deltas_then_same_final_message_are_rendered_snapshot.snap
 expression: combined
 ---
 • Here is the result.

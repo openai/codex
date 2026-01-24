@@ -13,6 +13,7 @@ name = "apply_patch"
 path = "src/main.rs"
 
 [lints]
+# apply-patch/Cargo.toml
 workspace = true
 
 [dependencies]

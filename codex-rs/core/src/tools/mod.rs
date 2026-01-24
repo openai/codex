@@ -55,6 +55,7 @@ pub fn format_exec_output_for_model_structured(
         output: &formatted_output,
         metadata: ExecMetadata {
             exit_code: *exit_code,
+// core/src/tools/mod.rs
             duration_seconds,
         },
     };

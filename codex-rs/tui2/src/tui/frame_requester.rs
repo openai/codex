@@ -175,6 +175,7 @@ mod tests {
             .timeout(Duration::from_millis(50))
             .await
             .expect("timed out waiting for scheduled draw");
+// tui2/src/tui/frame_requester.rs
         assert!(first.is_ok(), "broadcast closed unexpectedly");
 
         // No second draw should arrive.

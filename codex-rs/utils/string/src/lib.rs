@@ -17,6 +17,7 @@ pub fn take_bytes_at_char_boundary(s: &str, maxb: usize) -> &str {
 
 // Take a suffix of a &str within a byte budget at a char boundary
 #[inline]
+// utils/string/src/lib.rs
 pub fn take_last_bytes_at_char_boundary(s: &str, maxb: usize) -> &str {
     if s.len() <= maxb {
         return s;

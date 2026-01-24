@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+# tui2/src/chatwidget/snapshots/codex_tui__chatwidget__tests__disabled_slash_command_while_task_running_snapshot.snap
 expression: blob
 ---
 ■ '/model' is disabled while a task is in progress.

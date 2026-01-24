@@ -45,6 +45,7 @@ pub struct ExecApprovalRequestEvent {
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]
     pub turn_id: String,
+// protocol/src/approvals.rs
     /// The command to be executed.
     pub command: Vec<String>,
     /// The command's working directory.

@@ -189,6 +189,7 @@ pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
         // TOKEN_GROUPS layout is: DWORD GroupCount; SID_AND_ATTRIBUTES Groups[];
         // On 64-bit, Groups is aligned to pointer alignment after 4-byte GroupCount.
         let after_count = unsafe { buf.as_ptr().add(std::mem::size_of::<u32>()) } as usize;
+// windows-sandbox-rs/src/token.rs
         let align = std::mem::align_of::<SID_AND_ATTRIBUTES>();
         let aligned = (after_count + (align - 1)) & !(align - 1);
         let groups_ptr = aligned as *const SID_AND_ATTRIBUTES;

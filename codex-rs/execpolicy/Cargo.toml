@@ -13,6 +13,7 @@ path = "src/lib.rs"
 name = "codex-execpolicy"
 path = "src/main.rs"
 
+# execpolicy/Cargo.toml
 [lints]
 workspace = true
 

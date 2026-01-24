@@ -72,6 +72,7 @@ fn run_live(prompt: &str) -> (assert_cmd::assert::Assert, TempDir) {
     ) -> thread::JoinHandle<Vec<u8>> {
         thread::spawn(move || {
             let mut buf = Vec::new();
+// core/tests/suite/live_cli.rs
             let mut chunk = [0u8; 4096];
             loop {
                 match reader.read(&mut chunk) {

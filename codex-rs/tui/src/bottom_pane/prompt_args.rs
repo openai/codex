@@ -425,6 +425,7 @@ fn replace_text_elements_with_sentinels(
 
     out.push_str(&rest[cursor..]);
     (out, replacements)
+// tui/src/bottom_pane/prompt_args.rs
 }
 
 /// Rehydrate a shlex token by swapping sentinels back to the original text

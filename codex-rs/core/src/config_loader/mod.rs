@@ -351,6 +351,7 @@ async fn load_requirements_from_legacy_scheme(
         let new_requirements_toml = ConfigRequirementsToml::from(legacy_config);
         config_requirements_toml.merge_unset_fields(source, new_requirements_toml);
     }
+// core/src/config_loader/mod.rs
 
     Ok(())
 }

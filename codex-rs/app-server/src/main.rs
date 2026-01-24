@@ -19,6 +19,7 @@ fn main() -> anyhow::Result<()> {
         run_main(
             codex_linux_sandbox_exe,
             CliConfigOverrides::default(),
+// app-server/src/main.rs
             loader_overrides,
             false,
         )

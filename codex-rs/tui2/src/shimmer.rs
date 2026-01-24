@@ -38,6 +38,7 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(chars.len());
     let base_color = default_fg().unwrap_or((128, 128, 128));
     let highlight_color = default_bg().unwrap_or((255, 255, 255));
+// tui2/src/shimmer.rs
     for (i, ch) in chars.iter().enumerate() {
         let i_pos = i as isize + padding as isize;
         let pos = pos as isize;

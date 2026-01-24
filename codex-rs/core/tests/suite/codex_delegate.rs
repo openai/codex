@@ -115,6 +115,7 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     skip_if_no_network!();
 
     let call_id = "call-patch-1";
+// core/tests/suite/codex_delegate.rs
     let patch = "*** Begin Patch\n*** Add File: delegated.txt\n+hello\n*** End Patch\n";
     let sse1 = sse(vec![
         ev_response_created("resp-1"),

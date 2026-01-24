@@ -54,6 +54,7 @@ async fn emits_deprecation_notice_for_legacy_feature_flag() -> anyhow::Result<()
     );
 
     Ok(())
+// core/tests/suite/deprecation_notice.rs
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

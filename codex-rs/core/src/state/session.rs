@@ -52,6 +52,7 @@ impl SessionState {
 
     // Token/rate limit helpers
     pub(crate) fn update_token_info_from_usage(
+// core/src/state/session.rs
         &mut self,
         usage: &TokenUsage,
         model_context_window: Option<i64>,

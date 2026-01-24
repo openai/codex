@@ -2,6 +2,7 @@
   <context>User initiated a review task. Here's the full review output from reviewer model. User may select one or more comments to resolve.</context>
   <action>review</action>
   <results>
+<!-- core/templates/review/history_message_completed.md -->
   {findings}
   </results>
 </user_action>

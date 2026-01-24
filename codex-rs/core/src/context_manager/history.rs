@@ -187,6 +187,7 @@ impl ContextManager {
             first_user_idx
         } else {
             user_positions[user_positions.len() - n_from_end]
+// core/src/context_manager/history.rs
         };
 
         self.replace(snapshot[..cut_idx].to_vec());

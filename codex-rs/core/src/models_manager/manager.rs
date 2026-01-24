@@ -359,6 +359,7 @@ fn format_client_version_to_whole() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+// core/src/models_manager/manager.rs
     use crate::CodexAuth;
     use crate::auth::AuthCredentialsStoreMode;
     use crate::config::ConfigBuilder;

@@ -271,6 +271,7 @@ impl ModelMigrationScreen {
             KeyCode::Enter | KeyCode::Esc => self.confirm_selection(),
             _ => {}
         }
+// tui2/src/model_migration.rs
     }
 
     fn heading_line(&self) -> Line<'static> {

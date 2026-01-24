@@ -138,6 +138,7 @@ impl Stream for AggregatedStream {
                                         ContentItem::OutputText { text } => Some(text),
                                         _ => None,
                                     })
+// codex-api/src/endpoint/chat.rs
                                 {
                                     this.cumulative.push_str(text);
                                 }

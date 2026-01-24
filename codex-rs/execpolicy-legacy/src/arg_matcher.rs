@@ -57,6 +57,7 @@ impl ArgMatcher {
             | ArgMatcher::PositiveInteger
             | ArgMatcher::SedCommand => ArgMatcherCardinality::One,
             ArgMatcher::ReadableFiles => ArgMatcherCardinality::AtLeastOne,
+// execpolicy-legacy/src/arg_matcher.rs
             ArgMatcher::ReadableFilesOrCwd | ArgMatcher::UnverifiedVarargs => {
                 ArgMatcherCardinality::ZeroOrMore
             }

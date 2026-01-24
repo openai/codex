@@ -10,6 +10,7 @@ narrow:
     streaming implementation
     used to bake soft wraps
     into hard line breaks.
+# tui2/src/snapshots/codex_tui2__history_cell__tests__agent_message_cell_reflow_on_resize.snap
   
   > A blockquote line that
   > is also long enough to

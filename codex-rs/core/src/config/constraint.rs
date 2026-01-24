@@ -115,6 +115,7 @@ impl<T: Send + Sync> Constrained<T> {
         } else {
             value
         };
+// core/src/config/constraint.rs
         (self.validator)(&value)?;
         self.value = value;
         Ok(())

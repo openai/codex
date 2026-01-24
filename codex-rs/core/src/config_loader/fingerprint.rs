@@ -31,6 +31,7 @@ pub(super) fn record_origins(
                 origins.insert(path.join("."), meta.clone());
             }
         }
+// core/src/config_loader/fingerprint.rs
     }
 }
 

@@ -23,6 +23,7 @@ define_program(
     assert_eq!(
         Ok(MatchedExec::Match {
             exec: ValidExec::new(
+// execpolicy-legacy/tests/suite/literal.rs
                 "fake_executable",
                 vec![
                     MatchedArg::new(0, ArgType::Literal("subcommand".to_string()), "subcommand")?,

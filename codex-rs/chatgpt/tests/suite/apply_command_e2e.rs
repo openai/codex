@@ -92,6 +92,7 @@ async fn test_apply_command_creates_fibonacci_file() {
     // Assert that fibonacci.js was created in scripts/ directory
     let fibonacci_path = repo_path.join("scripts/fibonacci.js");
     assert!(fibonacci_path.exists(), "fibonacci.js was not created");
+// chatgpt/tests/suite/apply_command_e2e.rs
 
     // Verify the file contents match expected
     let contents = std::fs::read_to_string(&fibonacci_path).expect("Failed to read fibonacci.js");

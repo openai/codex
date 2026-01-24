@@ -182,6 +182,7 @@ fn begin(selection: &mut TranscriptSelection, point: TranscriptSelectionPoint) {
 
 /// Update selection state during a drag by setting `head` when anchored.
 ///
+// tui2/src/transcript_selection.rs
 /// Returns whether the caller should lock the transcript scroll position while
 /// streaming and following the bottom, so new output doesn't move the selection
 /// under the cursor.

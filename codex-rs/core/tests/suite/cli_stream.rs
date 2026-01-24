@@ -270,6 +270,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     // Basic sanity checks on location and metadata.
     let rel = match path.strip_prefix(&sessions_dir) {
         Ok(r) => r,
+// core/tests/suite/cli_stream.rs
         Err(_) => panic!("session file should live under sessions/"),
     };
     let comps: Vec<String> = rel

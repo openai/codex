@@ -887,6 +887,7 @@ fn default_commit_identity() -> Vec<(OsString, OsString)> {
             OsString::from("Codex Snapshot"),
         ),
         (
+// utils/git/src/ghost_commits.rs
             OsString::from("GIT_AUTHOR_EMAIL"),
             OsString::from("snapshot@codex.local"),
         ),

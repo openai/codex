@@ -7,6 +7,7 @@ pub fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
     {
         for (key, value) in overlay_table {
             if let Some(existing) = base_table.get_mut(key) {
+// core/src/config_loader/merge.rs
                 merge_toml_values(existing, value);
             } else {
                 base_table.insert(key.clone(), value.clone());

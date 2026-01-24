@@ -217,6 +217,7 @@ pub(crate) fn gather_read_roots(command_cwd: &Path, policy: &SandboxPolicy) -> V
         }
     }
     canonical_existing(&roots)
+// windows-sandbox-rs/src/setup_orchestrator.rs
 }
 
 pub(crate) fn gather_write_roots(

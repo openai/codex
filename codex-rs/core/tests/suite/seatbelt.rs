@@ -153,6 +153,7 @@ async fn read_only_forbids_all_writes() {
             TestExpectations {
                 file_outside_repo_is_writable: false,
                 file_in_repo_root_is_writable: false,
+// core/tests/suite/seatbelt.rs
                 file_in_dot_git_dir_is_writable: false,
             },
         )

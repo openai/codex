@@ -175,6 +175,7 @@ impl OauthLoginHandle {
         (self.authorization_url, self.completion)
     }
 
+// rmcp-client/src/perform_oauth_login.rs
     pub async fn wait(self) -> Result<()> {
         self.completion
             .await

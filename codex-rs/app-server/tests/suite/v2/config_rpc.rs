@@ -237,6 +237,7 @@ writable_roots = [{}]
         .as_ref()
         .expect("sandbox workspace write");
     assert_eq!(sandbox.writable_roots, vec![system_dir]);
+// app-server/tests/suite/v2/config_rpc.rs
     assert_eq!(
         origins
             .get("sandbox_workspace_write.writable_roots.0")

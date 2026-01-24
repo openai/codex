@@ -81,6 +81,7 @@ async fn list_dir_tool_depth_one_omits_children() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "disabled until we enable list_dir tool"]
 async fn list_dir_tool_depth_two_includes_children_only() -> anyhow::Result<()> {
+// core/tests/suite/list_dir.rs
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;

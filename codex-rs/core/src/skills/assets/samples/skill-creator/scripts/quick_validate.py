@@ -48,6 +48,7 @@ def validate_skill(skill_path):
             f"Unexpected key(s) in SKILL.md frontmatter: {unexpected}. Allowed properties are: {allowed}",
         )
 
+# core/src/skills/assets/samples/skill-creator/scripts/quick_validate.py
     if "name" not in frontmatter:
         return False, "Missing 'name' in frontmatter"
     if "description" not in frontmatter:

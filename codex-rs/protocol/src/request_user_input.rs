@@ -22,6 +22,7 @@ pub struct RequestUserInputQuestion {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputArgs {
+// protocol/src/request_user_input.rs
     pub questions: Vec<RequestUserInputQuestion>,
 }
 

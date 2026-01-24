@@ -309,6 +309,7 @@ fn is_safe_git_command(words: &[String]) -> bool {
     while let Some(arg) = iter.next() {
         let arg_lc = arg.to_ascii_lowercase();
 
+// core/src/command_safety/windows_safe_commands.rs
         if arg.starts_with('-') {
             if arg.eq_ignore_ascii_case("-c") || arg.eq_ignore_ascii_case("--config") {
                 if iter.next().is_none() {

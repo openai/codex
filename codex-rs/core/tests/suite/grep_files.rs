@@ -70,6 +70,7 @@ async fn grep_files_tool_collects_matches() -> Result<()> {
     );
 
     let entries = collect_file_names(&content);
+// core/tests/suite/grep_files.rs
     assert_eq!(entries.len(), 2, "content: {content}");
     assert!(
         entries.contains("alpha.rs"),

@@ -74,6 +74,7 @@ fn long_token_wraps() {
             {
                 count_a += 1;
             }
+// tui/tests/suite/vt100_history.rs
         }
     }
 

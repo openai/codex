@@ -273,6 +273,7 @@ impl EventProcessorWithJsonOutput {
                 tool,
                 arguments,
                 result: None,
+// exec/src/event_processor_with_jsonl_output.rs
                 error: None,
                 status: McpToolCallStatus::InProgress,
             }),

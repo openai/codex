@@ -57,6 +57,7 @@ pub(crate) async fn get_git_diff() -> io::Result<(bool, String)> {
             Err(_) => {}
         }
     }
+// tui2/src/get_git_diff.rs
 
     Ok((true, format!("{tracked_diff}{untracked_diff}")))
 }

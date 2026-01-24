@@ -434,6 +434,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tokio::sync::mpsc;
+// codex-api/src/sse/responses.rs
     use tokio_test::io::Builder as IoBuilder;
 
     async fn collect_events(chunks: &[&[u8]]) -> Vec<Result<ResponseEvent, ApiError>> {

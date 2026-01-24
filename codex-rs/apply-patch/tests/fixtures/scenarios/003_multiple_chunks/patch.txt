@@ -2,6 +2,7 @@
 *** Update File: multi.txt
 @@
 -line2
+# apply-patch/tests/fixtures/scenarios/003_multiple_chunks/patch.txt
 +changed2
 @@
 -line4

@@ -184,6 +184,7 @@ fn trigger_stop_event(kq: libc::c_int) {
 /// Put all of the above together to track all the descendants of `root_pid`.
 fn track_descendants(kq: libc::c_int, root_pid: i32) -> HashSet<i32> {
     if kq < 0 {
+// cli/src/debug_sandbox/pid_tracker.rs
         let mut seen = HashSet::new();
         seen.insert(root_pid);
         return seen;

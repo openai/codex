@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# utils/json-to-toml/Cargo.toml
 serde_json = { workspace = true }
 toml = { workspace = true }
 

@@ -276,6 +276,7 @@ mod tests {
     }
 
     /// AGENTS.md missing – should yield `None`.
+// core/src/project_doc.rs
     #[tokio::test]
     async fn no_doc_file_returns_none() {
         let tmp = tempfile::tempdir().expect("tempdir");

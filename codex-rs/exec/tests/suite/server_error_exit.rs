@@ -14,6 +14,7 @@ async fn exits_non_zero_when_server_reports_error() -> anyhow::Result<()> {
     // `response.failed` event with an error message.
     let server = responses::start_mock_server().await;
     let body = responses::sse(vec![serde_json::json!({
+// exec/tests/suite/server_error_exit.rs
         "type": "response.failed",
         "response": {
             "id": "resp_err_1",

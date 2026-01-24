@@ -81,6 +81,7 @@ async fn list_and_get_render_expected_output() -> Result<()> {
     let mut list_json_cmd = codex_command(codex_home.path())?;
     let json_output = list_json_cmd.args(["mcp", "list", "--json"]).output()?;
     assert!(json_output.status.success());
+// cli/tests/mcp_list.rs
     let stdout = String::from_utf8(json_output.stdout)?;
     let parsed: JsonValue = serde_json::from_str(&stdout)?;
     assert_eq!(

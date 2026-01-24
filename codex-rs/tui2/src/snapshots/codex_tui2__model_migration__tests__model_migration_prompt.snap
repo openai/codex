@@ -8,6 +8,7 @@ expression: terminal.backend()
   We recommend switching from gpt-5.1-codex-mini to
   gpt-5.1-codex-max.
 
+# tui2/src/snapshots/codex_tui2__model_migration__tests__model_migration_prompt.snap
   Codex-optimized flagship for deep and fast reasoning.
 
   You can continue using gpt-5.1-codex-mini if you prefer.

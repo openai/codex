@@ -6,6 +6,7 @@
                  c  xx                
                  cdoxx                
                  o  xx                
+# tui2/frames/codex/frame_13.txt
                  c  cx                
                 oc  exo               
                 xc  cdx               

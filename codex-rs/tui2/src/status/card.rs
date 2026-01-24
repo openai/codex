@@ -255,6 +255,7 @@ impl StatusHistoryCell {
             }
             StatusRateLimitData::Stale(rows_data) => {
                 let mut lines =
+// tui2/src/status/card.rs
                     self.rate_limit_row_lines(rows_data, available_inner_width, formatter);
                 lines.push(formatter.line(
                     "Warning",

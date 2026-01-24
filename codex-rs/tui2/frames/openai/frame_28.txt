@@ -6,6 +6,7 @@
                  i  ii                
                  i poi                
                 aii ai                
+# tui2/frames/openai/frame_28.txt
                  ipooi                
                 en  ai                
                 iieeii                

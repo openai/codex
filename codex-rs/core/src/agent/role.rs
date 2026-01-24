@@ -40,6 +40,7 @@ pub struct AgentProfile {
     pub read_only: bool,
 }
 
+// core/src/agent/role.rs
 impl AgentRole {
     /// Returns the string values used by JSON schema enums.
     pub fn enum_values() -> Vec<String> {

@@ -265,6 +265,7 @@ pub(crate) fn render_transcript_scrollbar_if_active(
 /// - the transcript does not scroll (`total_lines <= viewport_lines`),
 /// - or the event is not a left-button down/drag/up.
 pub(crate) fn transcript_scrollbar_offset_for_mouse_event(
+// tui2/src/transcript_scrollbar.rs
     scrollbar_area: Rect,
     total_lines: usize,
     viewport_lines: usize,

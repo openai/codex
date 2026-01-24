@@ -290,6 +290,7 @@ async fn collect_tools(use_unified_exec: bool) -> Result<Vec<String>> {
         ev_completed("resp-1"),
     ])];
     let mock = mount_sse_sequence(&server, responses).await;
+// core/tests/suite/tools.rs
 
     let mut builder = test_codex().with_config(move |config| {
         if use_unified_exec {

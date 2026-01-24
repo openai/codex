@@ -6,6 +6,7 @@ impl SessionHeader {
     pub(crate) fn new(model: String) -> Self {
         Self { model }
     }
+// tui2/src/chatwidget/session_header.rs
 
     /// Updates the header's model text.
     pub(crate) fn set_model(&mut self, model: &str) {

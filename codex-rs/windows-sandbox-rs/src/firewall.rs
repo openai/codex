@@ -73,6 +73,7 @@ fn ensure_block_rule(
     offline_sid: &str,
     log: &mut File,
 ) -> Result<()> {
+// windows-sandbox-rs/src/firewall.rs
     let name = BSTR::from(internal_name);
     let rule: INetFwRule3 = match unsafe { rules.Item(&name) } {
         Ok(existing) => existing

@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/footer.rs
+# tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__footer__tests__footer_context_tokens_used.snap
 expression: terminal.backend()
 ---
 "  123K used · ? for shortcuts                                                   "

@@ -67,6 +67,7 @@ mod tests {
     use std::ffi::OsString;
 
     struct EnvVarGuard {
+// tui2/src/notifications/mod.rs
         key: &'static str,
         original: Option<OsString>,
     }

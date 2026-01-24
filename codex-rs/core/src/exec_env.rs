@@ -123,6 +123,7 @@ mod tests {
             ignore_default_excludes: false, // apply KEY/SECRET/TOKEN filter
             ..Default::default()
         };
+// core/src/exec_env.rs
         let result = populate_env(vars, &policy);
 
         let expected: HashMap<String, String> = hashmap! {

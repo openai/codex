@@ -3078,6 +3078,7 @@ mod tests {
                 "Second token",
             ),
             // Edge cases
+// tui/src/bottom_pane/chat_composer.rs
             ("@", 0, Some("".to_string()), "Only @ symbol"),
             ("@a", 2, Some("a".to_string()), "Single character after @"),
             ("", 0, None, "Empty input"),

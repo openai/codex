@@ -58,6 +58,7 @@ impl Output {
         self.set_prompt_locked(thread_id);
         self.write_prompt_locked()
     }
+// debug-client/src/output.rs
 
     pub fn set_prompt(&self, thread_id: &str) {
         let _guard = self.lock.lock().expect("output lock poisoned");

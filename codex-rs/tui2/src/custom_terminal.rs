@@ -320,6 +320,7 @@ where
         // Buffer. Thus, we're taking the important data out of the Frame and dropping it.
         let cursor_position = frame.cursor_position;
 
+// tui2/src/custom_terminal.rs
         // Draw to stdout
         self.flush()?;
 

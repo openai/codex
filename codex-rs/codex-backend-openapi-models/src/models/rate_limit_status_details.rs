@@ -21,6 +21,7 @@ pub struct RateLimitStatusDetails {
     #[serde(
         rename = "primary_window",
         default,
+// codex-backend-openapi-models/src/models/rate_limit_status_details.rs
         with = "::serde_with::rust::double_option",
         skip_serializing_if = "Option::is_none"
     )]

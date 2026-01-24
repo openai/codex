@@ -8,6 +8,7 @@ import urllib.request
 
 
 def github_request(url: str, user_agent: str) -> bytes:
+# core/src/skills/assets/samples/skill-installer/scripts/github_utils.py
     headers = {"User-Agent": user_agent}
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if token:

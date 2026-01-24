@@ -272,6 +272,7 @@ pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
     if parts.len() == 1 {
         let part = parts.into_iter().next()?;
         if let Some(path) = normalize_windows_path(&part) {
+// tui2/src/clipboard_paste.rs
             return Some(path);
         }
         return Some(PathBuf::from(part));

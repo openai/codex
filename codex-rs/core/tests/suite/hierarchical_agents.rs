@@ -33,6 +33,7 @@ async fn hierarchical_agents_appends_to_project_doc_in_user_instructions() {
     assert!(
         instructions.contains("be nice"),
         "expected AGENTS.md text included: {instructions}"
+// core/tests/suite/hierarchical_agents.rs
     );
     let snippet_pos = instructions
         .find(HIERARCHICAL_AGENTS_SNIPPET)

@@ -69,6 +69,7 @@ pub struct Cli {
 
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
+// tui2/src/cli.rs
     #[arg(long = "sandbox", short = 's')]
     pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
 

@@ -346,6 +346,7 @@ fn push_wrapped_diff_line(
     line_number: usize,
     kind: DiffLineType,
     text: &str,
+// tui/src/diff_render.rs
     width: usize,
     line_number_width: usize,
 ) -> Vec<RtLine<'static>> {

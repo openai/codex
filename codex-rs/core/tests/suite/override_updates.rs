@@ -106,6 +106,7 @@ async fn override_turn_context_records_permissions_update() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
         config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+// core/tests/suite/override_updates.rs
     });
     let test = builder.build(&server).await?;
 

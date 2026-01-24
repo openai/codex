@@ -5,6 +5,7 @@ expression: terminal.backend()
 "• Added new_file.txt (+2 -0)                                                    "
 "    1 +alpha                                                                    "
 "    2 +beta                                                                     "
+# tui2/src/snapshots/codex_tui__diff_render__tests__apply_add_block.snap
 "                                                                                "
 "                                                                                "
 "                                                                                "

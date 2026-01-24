@@ -6,6 +6,7 @@ expression: popup
   Access legacy models by running codex -m <model_name> or in your config.toml
 
 › 1. gpt-5.2-codex (default)  Latest frontier agentic coding model.
+# tui2/src/chatwidget/snapshots/codex_tui2__chatwidget__tests__model_selection_popup.snap
   2. gpt-5.2                  Latest frontier model with improvements across
                               knowledge, reasoning and coding
   3. gpt-5.1-codex-max        Codex-optimized flagship for deep and fast

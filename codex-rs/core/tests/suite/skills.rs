@@ -108,6 +108,7 @@ async fn skill_load_errors_surface_in_session_configured() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
+// core/tests/suite/skills.rs
     let mut builder = test_codex().with_pre_build_hook(|home| {
         let skill_dir = home.join("skills").join("broken");
         fs::create_dir_all(&skill_dir).unwrap();

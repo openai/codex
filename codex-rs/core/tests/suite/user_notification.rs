@@ -38,6 +38,7 @@ async fn summarize_context_three_requests_and_instructions() -> anyhow::Result<(
 
     let notify_dir = TempDir::new()?;
     // write a script to the notify that touches a file next to it
+// core/tests/suite/user_notification.rs
     let notify_script = notify_dir.path().join("notify.sh");
     std::fs::write(
         &notify_script,

@@ -19,6 +19,7 @@ impl TestCodexExecBuilder {
             .env("CODEX_HOME", self.home.path())
             .env(CODEX_API_KEY_ENV_VAR, "dummy");
         cmd
+// core/tests/common/test_codex_exec.rs
     }
     pub fn cmd_with_server(&self, server: &MockServer) -> assert_cmd::Command {
         let mut cmd = self.cmd();

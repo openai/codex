@@ -100,6 +100,7 @@ fn send_merges_default_tags_per_line() -> Result<()> {
                 assert_eq!(points.len(), 1);
                 points[0]
             }
+// otel/tests/suite/send.rs
             _ => panic!("unexpected counter aggregation"),
         },
         _ => panic!("unexpected counter data type"),

@@ -70,6 +70,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
             body: sse_event(ev_message_item_done("msg-1", "first turn")),
         },
         StreamingSseChunk {
+// core/tests/suite/pending_input.rs
             gate: Some(gate_completed_rx),
             body: sse_event(ev_completed("resp-1")),
         },

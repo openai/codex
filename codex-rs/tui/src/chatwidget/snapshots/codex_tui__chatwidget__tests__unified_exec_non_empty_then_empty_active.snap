@@ -1,6 +1,7 @@
 ---
 source: tui/src/chatwidget/tests.rs
 expression: active_combined
+# tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__unified_exec_non_empty_then_empty_active.snap
 ---
 ↳ Interacted with background terminal · just fix
   └ pwd

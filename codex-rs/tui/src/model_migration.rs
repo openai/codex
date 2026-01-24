@@ -288,6 +288,7 @@ impl ModelMigrationScreen {
                 self.reject();
             }
             KeyCode::Enter | KeyCode::Esc => self.confirm_selection(),
+// tui/src/model_migration.rs
             _ => {}
         }
     }

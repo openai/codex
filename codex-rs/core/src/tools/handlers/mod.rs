@@ -18,6 +18,7 @@ use serde::Deserialize;
 use crate::function_tool::FunctionCallError;
 pub use apply_patch::ApplyPatchHandler;
 pub use collab::CollabHandler;
+// core/src/tools/handlers/mod.rs
 pub use grep_files::GrepFilesHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;

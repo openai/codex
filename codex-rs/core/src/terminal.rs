@@ -581,6 +581,7 @@ mod tests {
             terminal,
             terminal_info(TerminalName::Iterm2, None, None, None, None),
             "iterm_session_id_info"
+// core/src/terminal.rs
         );
         assert_eq!(
             terminal.user_agent_token(),

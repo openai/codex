@@ -5,6 +5,7 @@
 /// history so the model can see them, but they are not user intent and must not create user-turn
 /// boundaries.
 pub(crate) const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
+// core/src/session_prefix.rs
 pub(crate) const TURN_ABORTED_OPEN_TAG: &str = "<turn_aborted>";
 
 /// Returns true if `text` starts with a session prefix marker (case-insensitive).

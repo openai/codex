@@ -1,6 +1,7 @@
 ---
 source: tui/src/chatwidget/tests.rs
 expression: combined
+# tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__unified_exec_waiting_multiple_empty_after.snap
 ---
 ↳ Interacted with background terminal · just fix
   └ (waited)

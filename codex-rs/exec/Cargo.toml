@@ -29,6 +29,7 @@ codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 mcp-types = { workspace = true }
 owo-colors = { workspace = true }
+# exec/Cargo.toml
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 shlex = { workspace = true }

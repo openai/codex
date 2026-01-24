@@ -3,6 +3,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
+// protocol/src/message_history.rs
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
 pub struct HistoryEntry {
     pub conversation_id: String,

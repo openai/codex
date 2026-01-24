@@ -6,6 +6,7 @@
          occdeccxco coccdcxx          
          x xxxcexedee xcxcxxx         
          e xcexccxeeocooo exx         
+# tui2/frames/codex/frame_9.txt
         x  xoeoexxxeodeex  xx         
            coxc oxcxxxxcxxoxxe        
          xexxxeoxexexxxxeexxx         

@@ -8,6 +8,7 @@
 
 - **Default:** Most of the time, just use the default foreground color. `reset` can help get it back.
 - **User input tips, selection, and status indicators:** Use ANSI `cyan`.
+<!-- tui2/styles.md -->
 - **Success and additions:** Use ANSI `green`.
 - **Errors, failures and deletions:** Use ANSI `red`.
 - **Codex:** Use ANSI `magenta`.

@@ -103,6 +103,7 @@ pub(crate) fn try_find_powershell_executable_blocking() -> Option<AbsolutePathBu
 pub(crate) fn try_find_pwsh_executable_blocking() -> Option<AbsolutePathBuf> {
     if let Some(ps_home) = std::process::Command::new("cmd")
         .args(["/C", "pwsh", "-NoProfile", "-Command", "$PSHOME"])
+// core/src/powershell.rs
         .output()
         .ok()
         .and_then(|out| {

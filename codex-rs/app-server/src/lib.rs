@@ -122,6 +122,7 @@ pub async fn run_main(
     let feedback = CodexFeedback::new();
 
     let otel = codex_core::otel_init::build_provider(
+// app-server/src/lib.rs
         &config,
         env!("CARGO_PKG_VERSION"),
         Some("codex_app_server"),

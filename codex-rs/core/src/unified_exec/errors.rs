@@ -15,6 +15,7 @@ pub(crate) enum UnifiedExecError {
     )]
     StdinClosed,
     #[error("missing command line for unified exec request")]
+// core/src/unified_exec/errors.rs
     MissingCommandLine,
     #[error("Command denied by sandbox: {message}")]
     SandboxDenied {

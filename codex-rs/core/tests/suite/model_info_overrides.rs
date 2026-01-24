@@ -14,6 +14,7 @@ async fn offline_model_info_without_tool_output_override() {
     assert_eq!(
         model_info.truncation_policy,
         TruncationPolicyConfig::bytes(10_000)
+// core/tests/suite/model_info_overrides.rs
     );
 }
 

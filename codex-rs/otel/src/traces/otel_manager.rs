@@ -254,6 +254,7 @@ impl OtelManager {
             ),
             None => tracing::event!(
                 tracing::Level::INFO,
+// otel/src/traces/otel_manager.rs
                 event.name = "codex.sse_event",
                 event.timestamp = %timestamp(),
                 conversation.id = %self.metadata.conversation_id,

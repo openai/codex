@@ -206,6 +206,7 @@ async fn mixed_tools_fall_back_to_serial() -> anyhow::Result<()> {
     ]);
     mount_sse_sequence(&server, vec![first_response, second_response]).await;
 
+// core/tests/suite/tool_parallelism.rs
     let duration = run_turn_and_measure(&test, "mix tools").await?;
     assert_serial_duration(duration);
 

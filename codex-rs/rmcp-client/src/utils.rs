@@ -149,6 +149,7 @@ pub(crate) fn apply_default_headers(
 ) -> ClientBuilder {
     if default_headers.is_empty() {
         builder
+// rmcp-client/src/utils.rs
     } else {
         builder.default_headers(default_headers.clone())
     }

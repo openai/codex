@@ -1,6 +1,7 @@
 ---
 source: tui/src/chatwidget/tests.rs
 expression: blob
+# tui2/src/chatwidget/snapshots/codex_tui__chatwidget__tests__user_shell_ls_output.snap
 ---
 • You ran ls
   └ file1

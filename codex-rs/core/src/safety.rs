@@ -141,6 +141,7 @@ pub fn get_platform_sandbox() -> Option<SandboxType> {
 }
 
 fn is_write_patch_constrained_to_writable_paths(
+// core/src/safety.rs
     action: &ApplyPatchAction,
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,

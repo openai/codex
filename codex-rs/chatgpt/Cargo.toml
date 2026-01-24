@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+# chatgpt/Cargo.toml
 clap = { workspace = true, features = ["derive"] }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }

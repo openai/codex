@@ -110,6 +110,7 @@ impl TranscriptScrollbarUi {
     ///
     /// The caller is expected to provide the transcript layout for the current terminal size:
     /// `transcript_area` for content and `scrollbar_area` for the 1-column scrollbar track. See
+// tui2/src/transcript_scrollbar_ui.rs
     /// [`crate::transcript_scrollbar::split_transcript_area`].
     ///
     /// Returns [`TranscriptScrollbarMouseHandling::Handled`] when the event should not be

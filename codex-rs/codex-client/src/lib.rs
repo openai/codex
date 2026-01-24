@@ -10,6 +10,7 @@ pub use crate::default_client::CodexHttpClient;
 pub use crate::default_client::CodexRequestBuilder;
 pub use crate::error::StreamError;
 pub use crate::error::TransportError;
+// codex-client/src/lib.rs
 pub use crate::request::Request;
 pub use crate::request::RequestCompression;
 pub use crate::request::Response;

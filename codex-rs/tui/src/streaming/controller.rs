@@ -109,6 +109,7 @@ mod tests {
             " vs",
             ".",
             " tight",
+// tui/src/streaming/controller.rs
             " list",
             " items",
             ":\n",

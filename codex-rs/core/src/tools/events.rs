@@ -231,6 +231,7 @@ impl ToolEmitter {
                     source,
                     parsed_cmd,
                     process_id,
+// core/src/tools/events.rs
                 },
                 stage,
             ) => {

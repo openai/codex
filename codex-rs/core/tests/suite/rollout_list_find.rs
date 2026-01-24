@@ -38,6 +38,7 @@ fn write_minimal_rollout_with_id(codex_home: &Path, id: Uuid) -> PathBuf {
 }
 
 #[tokio::test]
+// core/tests/suite/rollout_list_find.rs
 async fn find_locates_rollout_file_by_id() {
     let home = TempDir::new().unwrap();
     let id = Uuid::new_v4();

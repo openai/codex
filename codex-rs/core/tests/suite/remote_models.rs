@@ -396,6 +396,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 
     Ok(())
 }
+// core/tests/suite/remote_models.rs
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_models_preserve_builtin_presets() -> Result<()> {

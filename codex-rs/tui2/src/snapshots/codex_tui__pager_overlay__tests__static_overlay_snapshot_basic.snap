@@ -5,6 +5,7 @@ expression: term.backend()
 "/ S T A T I C / / / / / / / / / / / / / "
 "one                                     "
 "two                                     "
+# tui2/src/snapshots/codex_tui__pager_overlay__tests__static_overlay_snapshot_basic.snap
 "three                                   "
 "~                                       "
 "~                                       "

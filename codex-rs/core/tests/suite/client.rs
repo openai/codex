@@ -1002,6 +1002,7 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// core/tests/suite/client.rs
 async fn includes_default_verbosity_in_request() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;

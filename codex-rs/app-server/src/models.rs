@@ -20,6 +20,7 @@ pub async fn supported_models(thread_manager: Arc<ThreadManager>, config: &Confi
 
 fn model_from_preset(preset: ModelPreset) -> Model {
     Model {
+// app-server/src/models.rs
         id: preset.id.to_string(),
         model: preset.model.to_string(),
         display_name: preset.display_name.to_string(),

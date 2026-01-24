@@ -20,6 +20,7 @@ pub use arg_matcher::ArgMatcher;
 pub use arg_resolver::PositionalArg;
 pub use arg_type::ArgType;
 pub use error::Error;
+// execpolicy-legacy/src/lib.rs
 pub use error::Result;
 pub use exec_call::ExecCall;
 pub use execv_checker::ExecvChecker;

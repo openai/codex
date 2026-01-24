@@ -35,6 +35,7 @@ impl ToolHandler for McpHandler {
                 return Err(FunctionCallError::RespondToModel(
                     "mcp handler received unsupported payload".to_string(),
                 ));
+// core/src/tools/handlers/mcp.rs
             }
         };
 

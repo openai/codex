@@ -8,6 +8,7 @@ from pathlib import Path
 def main() -> int:
     crate_dir = Path(__file__).resolve().parent
     generator = crate_dir / "generate_mcp_types.py"
+# mcp-types/check_lib_rs.py
 
     result = subprocess.run(
         [sys.executable, str(generator), "--check"],

@@ -5,6 +5,7 @@ expression: popup
   Select Model and Effort
   Access legacy models by running codex -m <model_name> or in your config.toml
 
+# tui2/src/chatwidget/snapshots/codex_tui__chatwidget__tests__model_selection_popup.snap
 › 1. gpt-5.1-codex-max   Latest Codex-optimized flagship for deep and fast
                          reasoning.
   2. gpt-5.1-codex       Optimized for codex.

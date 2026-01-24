@@ -16,6 +16,7 @@ pub enum ApiError {
     ContextWindowExceeded,
     #[error("quota exceeded")]
     QuotaExceeded,
+// codex-api/src/error.rs
     #[error("usage not included")]
     UsageNotIncluded,
     #[error("retryable error: {message}")]

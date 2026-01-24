@@ -78,6 +78,7 @@ pub fn hide_current_user_profile_dir(log_base: &Path) {
 fn hide_users_in_winlogon(usernames: &[String], log_base: &Path) -> anyhow::Result<()> {
     let key = create_userlist_key()?;
     for username in usernames {
+// windows-sandbox-rs/src/hide_users.rs
         let name_w = to_wide(OsStr::new(username));
         let value: u32 = 0;
         let status = unsafe {

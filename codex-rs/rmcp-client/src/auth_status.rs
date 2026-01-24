@@ -68,6 +68,7 @@ async fn supports_oauth_login_with_headers(url: &str, default_headers: &HeaderMa
     for candidate_path in discovery_paths(base_url.path()) {
         let mut discovery_url = base_url.clone();
         discovery_url.set_path(&candidate_path);
+// rmcp-client/src/auth_status.rs
 
         let response = match client
             .get(discovery_url.clone())

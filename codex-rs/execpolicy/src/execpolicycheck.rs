@@ -39,6 +39,7 @@ impl ExecPolicyCheckCommand {
         let matched_rules = policy.matches_for_command(&self.command, None);
 
         let json = format_matches_json(&matched_rules, self.pretty)?;
+// execpolicy/src/execpolicycheck.rs
         println!("{json}");
 
         Ok(())

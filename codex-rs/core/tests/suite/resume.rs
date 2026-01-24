@@ -102,6 +102,7 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+// core/tests/suite/resume.rs
         })
         .await?;
 

@@ -55,6 +55,7 @@ impl ScrollState {
             self.selected_idx = None;
             self.scroll_top = 0;
             return;
+// tui2/src/bottom_pane/scroll_state.rs
         }
         self.selected_idx = Some(match self.selected_idx {
             Some(idx) if idx + 1 < len => idx + 1,

@@ -51,6 +51,7 @@ async fn request_body_is_zstd_compressed_for_codex_backend_when_enabled() -> any
     let request = request_log.single_request();
     assert_eq!(request.header("content-encoding").as_deref(), Some("zstd"));
 
+// core/tests/suite/request_compression.rs
     let decompressed = zstd::stream::decode_all(std::io::Cursor::new(request.body_bytes()))?;
     let json: serde_json::Value = serde_json::from_slice(&decompressed)?;
     assert!(

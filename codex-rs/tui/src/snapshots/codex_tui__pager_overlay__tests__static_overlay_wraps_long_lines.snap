@@ -4,6 +4,7 @@ assertion_line: 798
 expression: term.backend()
 ---
 "/ S T A T I C / / / / / "
+# tui/src/snapshots/codex_tui__pager_overlay__tests__static_overlay_wraps_long_lines.snap
 "a very long line that   "
 "should wrap when        "
 "rendered within a narrow"

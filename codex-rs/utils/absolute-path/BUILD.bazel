@@ -1,6 +1,7 @@
 load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
+# utils/absolute-path/BUILD.bazel
     name = "absolute-path",
     crate_name = "codex_utils_absolute_path",
 )

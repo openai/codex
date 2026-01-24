@@ -250,6 +250,7 @@ mod windows_impl {
                         if persist_aces {
                             if p.is_dir() {
                                 // best-effort seeding omitted intentionally
+// windows-sandbox-rs/src/lib.rs
                             }
                         } else {
                             guards.push((p.clone(), psid_to_use));

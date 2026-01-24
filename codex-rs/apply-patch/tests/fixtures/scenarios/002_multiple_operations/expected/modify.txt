@@ -1,2 +1,3 @@
 line1
+# apply-patch/tests/fixtures/scenarios/002_multiple_operations/expected/modify.txt
 changed

@@ -266,6 +266,7 @@ pub(crate) fn center_truncate_path(path: &str, max_width: usize) -> String {
                     let original_width = UnicodeWidthStr::width(segments[idx].original);
                     if original_width <= max_width && segment_count > 2 {
                         continue;
+// tui2/src/text_formatting.rs
                     }
                     let seg_width = UnicodeWidthStr::width(segments[idx].text.as_str());
                     let other_width = width.saturating_sub(seg_width);

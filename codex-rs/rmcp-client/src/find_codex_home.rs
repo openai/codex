@@ -14,6 +14,7 @@ use std::path::PathBuf;
 /// - If `CODEX_HOME` is not set, this function does not verify that the
 ///   directory exists.
 pub(crate) fn find_codex_home() -> std::io::Result<PathBuf> {
+// rmcp-client/src/find_codex_home.rs
     // Honor the `CODEX_HOME` environment variable when it is set to allow users
     // (and tests) to override the default location.
     if let Ok(val) = std::env::var("CODEX_HOME")

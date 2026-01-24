@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 once_cell = { workspace = true }
 regex = "1"
+# utils/git/Cargo.toml
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tempfile = { workspace = true }

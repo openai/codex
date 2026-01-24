@@ -141,6 +141,7 @@ impl ServerHandler for TestToolServer {
         &self,
         _request: Option<PaginatedRequestParam>,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
+// rmcp-client/src/bin/test_stdio_server.rs
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         let tools = self.tools.clone();
         async move {

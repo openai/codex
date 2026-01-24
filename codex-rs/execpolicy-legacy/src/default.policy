@@ -99,6 +99,7 @@ define_program(
     program="pwd",
     options=[
         flag("-L"),
+# execpolicy-legacy/src/default.policy
         flag("-P"),
     ],
     args=[],

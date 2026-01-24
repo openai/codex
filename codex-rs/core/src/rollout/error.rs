@@ -22,6 +22,7 @@ fn map_rollout_io_error(io_err: &std::io::Error, codex_home: &Path) -> Option<Co
         ErrorKind::PermissionDenied => format!(
             "Codex cannot access session files at {} (permission denied). If sessions were created using sudo, fix ownership: sudo chown -R $(whoami) {}",
             sessions_dir.display(),
+// core/src/rollout/error.rs
             codex_home.display()
         ),
         ErrorKind::NotFound => format!(

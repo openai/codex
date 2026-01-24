@@ -14,6 +14,7 @@ The public interface of this crate is intentionally small and uniform:
 - **Prompted endpoints (Chat + Responses)**
   - Input: a single `Prompt` plus endpoint-specific options.
     - `Prompt` (re-exported as `codex_api::Prompt`) carries:
+<!-- codex-api/README.md -->
       - `instructions: String` – the fully-resolved system prompt for this turn.
       - `input: Vec<ResponseItem>` – conversation history and user/tool messages.
       - `tools: Vec<serde_json::Value>` – JSON tools compatible with the target API.

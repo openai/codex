@@ -6,6 +6,7 @@
                  .  ..                
                  . -█.                
                 -.. -.                
+# tui2/frames/hash/frame_28.txt
                  .-██.                
                 A*  -.                
                 ...A..                

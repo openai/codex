@@ -132,6 +132,7 @@ fn parse_pattern_token<'v>(value: Value<'v>) -> Result<PatternToken> {
         }
     } else {
         Err(Error::InvalidPattern(format!(
+// execpolicy/src/parser.rs
             "pattern element must be a string or list of strings (got {})",
             value.get_type()
         )))

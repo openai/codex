@@ -10,6 +10,7 @@ Buffer {
         "  ↳ This is another message             ",
         "    ⌥ + ↑ edit                          ",
     ],
+# tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__queued_user_messages__tests__render_wrapped_message.snap
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
         x: 4, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,

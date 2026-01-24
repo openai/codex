@@ -12,6 +12,7 @@ pub enum Error {
     #[error("invalid example: {0}")]
     InvalidExample(String),
     #[error("invalid rule: {0}")]
+// execpolicy/src/error.rs
     InvalidRule(String),
     #[error(
         "expected every example to match at least one rule. rules: {rules:?}; unmatched examples: \

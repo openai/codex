@@ -350,6 +350,7 @@ impl ExecCell {
                 push_owned_lines(&wrapped, &mut out_indented);
             }
         }
+// tui2/src/exec_cell/render.rs
 
         out.extend(prefix_lines(out_indented, "  └ ".dim(), "    ".into()));
         out

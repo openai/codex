@@ -29,6 +29,7 @@ pub struct TaskListItem {
     pub created_at: Option<f64>,
     #[serde(
         rename = "task_status_display",
+// codex-backend-openapi-models/src/models/task_list_item.rs
         skip_serializing_if = "Option::is_none"
     )]
     pub task_status_display: Option<std::collections::HashMap<String, serde_json::Value>>,

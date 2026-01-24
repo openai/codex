@@ -1,6 +1,7 @@
 ---
 source: tui2/src/history_cell.rs
 expression: rendered
+# tui2/src/snapshots/codex_tui2__history_cell__tests__plan_update_without_note_snapshot.snap
 ---
 • Updated Plan
   └ □ Define error taxonomy

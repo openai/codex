@@ -39,6 +39,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         experimental_supported_tools: Vec::new(),
     }
 }
+// app-server/tests/common/models_cache.rs
 
 /// Write a models_cache.json file to the codex home directory.
 /// This prevents ModelsManager from making network requests to refresh models.

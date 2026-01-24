@@ -224,6 +224,7 @@ fn anchor_index(
     line_meta: &[TranscriptLineMeta],
     cell_index: usize,
     line_in_cell: usize,
+// tui2/src/tui/scrolling.rs
 ) -> Option<usize> {
     line_meta
         .iter()

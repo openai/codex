@@ -24,6 +24,7 @@ pub struct SeatbeltCommand {
 }
 
 #[derive(Debug, Parser)]
+// cli/src/lib.rs
 pub struct LandlockCommand {
     /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
     #[arg(long = "full-auto", default_value_t = false)]

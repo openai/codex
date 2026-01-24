@@ -65,6 +65,7 @@ impl Provider {
         let mut url = if path.is_empty() {
             base.to_string()
         } else {
+// codex-api/src/provider.rs
             format!("{base}/{path}")
         };
 

@@ -40,6 +40,7 @@ package = "codex-protocol"
 path = "../protocol"
 
 [dependencies.rand]
+# windows-sandbox-rs/Cargo.toml
 default-features = false
 features = ["std", "small_rng"]
 version = "0.8"

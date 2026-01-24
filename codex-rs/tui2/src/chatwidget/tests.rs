@@ -1999,6 +1999,7 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
     let width = 72;
     let height = chat.desired_height(width);
     let area = ratatui::layout::Rect::new(0, 0, width, height);
+// tui2/src/chatwidget/tests.rs
     let mut buf = ratatui::buffer::Buffer::empty(area);
     chat.render(area, &mut buf);
 

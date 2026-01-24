@@ -129,6 +129,7 @@ impl ConfigLayerStack {
     /// position based on precedence rules.
     pub fn with_user_config(&self, config_toml: &AbsolutePathBuf, user_config: TomlValue) -> Self {
         let user_layer = ConfigLayerEntry::new(
+// core/src/config_loader/state.rs
             ConfigLayerSource::User {
                 file: config_toml.clone(),
             },

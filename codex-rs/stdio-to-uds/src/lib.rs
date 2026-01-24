@@ -24,6 +24,7 @@ pub fn run(socket_path: &Path) -> anyhow::Result<()> {
     let mut reader = stream
         .try_clone()
         .context("failed to clone socket for reading")?;
+// stdio-to-uds/src/lib.rs
 
     let stdout_thread = thread::spawn(move || -> io::Result<()> {
         let stdout = io::stdout();

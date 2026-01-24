@@ -118,6 +118,7 @@ async fn responses_stream_parses_items_and_completed_end_to_end() -> Result<()> 
     let completed = serde_json::json!({
         "type": "response.completed",
         "response": { "id": "resp1" }
+// codex-api/tests/sse_end_to_end.rs
     });
 
     let body = build_responses_body(vec![item1, item2, completed]);

@@ -5,6 +5,7 @@ expression: terminal.backend()
 ---
 "• Proposed Change example.txt (+1 -1)                                           "
 "    1                                                                           "
+# tui/src/snapshots/codex_tui__diff_render__tests__blank_context_line.snap
 "    2     -Y                                                                    "
 "    2     +Y changed                                                            "
 "                                                                                "

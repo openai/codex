@@ -226,6 +226,7 @@ pub fn run(
         search_directory: &std::path::Path,
     ) -> Option<&'a str> {
         let entry = match entry_result {
+// file-search/src/lib.rs
             Ok(e) => e,
             Err(_) => return None,
         };

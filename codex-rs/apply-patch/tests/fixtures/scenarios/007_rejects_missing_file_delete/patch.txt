@@ -1,3 +1,4 @@
 *** Begin Patch
+# apply-patch/tests/fixtures/scenarios/007_rejects_missing_file_delete/patch.txt
 *** Delete File: missing.txt
 *** End Patch

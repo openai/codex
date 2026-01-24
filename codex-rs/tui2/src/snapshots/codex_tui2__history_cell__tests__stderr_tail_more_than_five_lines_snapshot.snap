@@ -3,6 +3,7 @@ source: tui2/src/history_cell.rs
 expression: rendered
 ---
 • Ran seq 1 10 1>&2 && false
+# tui2/src/snapshots/codex_tui2__history_cell__tests__stderr_tail_more_than_five_lines_snapshot.snap
   └ 1
     2
     … +6 lines

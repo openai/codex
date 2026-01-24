@@ -76,6 +76,7 @@ pub fn parse_input(line: &str) -> Result<Option<InputAction>, ParseError> {
 }
 
 #[cfg(test)]
+// debug-client/src/commands.rs
 mod tests {
     use pretty_assertions::assert_eq;
 

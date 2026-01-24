@@ -22,6 +22,7 @@ impl SessionTask for CompactTask {
         session: Arc<SessionTaskContext>,
         ctx: Arc<TurnContext>,
         input: Vec<UserInput>,
+// core/src/tasks/compact.rs
         _cancellation_token: CancellationToken,
     ) -> Option<String> {
         let session = session.clone_session();

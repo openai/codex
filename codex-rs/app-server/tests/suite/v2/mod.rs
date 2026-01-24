@@ -7,6 +7,7 @@ mod model_list;
 mod output_schema;
 mod rate_limits;
 mod request_user_input;
+// app-server/tests/suite/v2/mod.rs
 mod review;
 mod thread_archive;
 mod thread_fork;

@@ -216,6 +216,7 @@ async fn test_send_message_raw_notifications_opt_in() -> Result<()> {
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(send_id)),
     )
+// app-server/tests/suite/send_message.rs
     .await??;
     let _ok: SendUserMessageResponse = to_response::<SendUserMessageResponse>(response)?;
 

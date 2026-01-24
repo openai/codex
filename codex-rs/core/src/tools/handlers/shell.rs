@@ -206,6 +206,7 @@ impl ShellHandler {
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params
             .sandbox_permissions
+// core/src/tools/handlers/shell.rs
             .requires_escalated_permissions()
             && !matches!(
                 turn.approval_policy,

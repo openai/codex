@@ -44,6 +44,7 @@ async fn thread_archive_moves_rollout_into_archived_directory() -> Result<()> {
         .expect("expected rollout path for thread id to exist");
     assert!(
         rollout_path.exists(),
+// app-server/tests/suite/v2/thread_archive.rs
         "expected {} to exist",
         rollout_path.display()
     );

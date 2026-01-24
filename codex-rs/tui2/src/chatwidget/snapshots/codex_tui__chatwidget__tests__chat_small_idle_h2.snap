@@ -1,6 +1,7 @@
 ---
 source: tui/src/chatwidget/tests.rs
 expression: terminal.backend()
+# tui2/src/chatwidget/snapshots/codex_tui__chatwidget__tests__chat_small_idle_h2.snap
 ---
 "                                        "
 "                                        "

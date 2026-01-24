@@ -167,6 +167,7 @@ fn write_user_namespace_maps(uid: libc::uid_t, gid: libc::gid_t) -> Result<()> {
 
 /// Drop all capabilities in the current user namespace.
 fn drop_caps() -> Result<()> {
+// linux-sandbox/src/mounts.rs
     let mut header = CapUserHeader {
         version: LINUX_CAPABILITY_VERSION_3,
         pid: 0,

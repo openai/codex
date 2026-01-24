@@ -86,6 +86,7 @@ mod tests {
         let (idx, score) = match fuzzy_match("hello", "hl") {
             Some(v) => v,
             None => panic!("expected a match"),
+// common/src/fuzzy_match.rs
         };
         assert_eq!(idx, vec![0, 2]);
         // 'h' at 0, 'l' at 2 -> window 1; start-of-string bonus applies (-100)

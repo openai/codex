@@ -29,6 +29,7 @@ impl FrameRateLimiter {
             .unwrap_or(last_emitted_at);
         requested.max(min_allowed)
     }
+// tui2/src/tui/frame_rate_limiter.rs
 
     /// Records that a draw notification was emitted at `emitted_at`.
     pub(super) fn mark_emitted(&mut self, emitted_at: Instant) {

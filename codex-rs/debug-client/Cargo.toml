@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# debug-client/Cargo.toml
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 codex-app-server-protocol.workspace = true

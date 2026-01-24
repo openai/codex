@@ -175,6 +175,7 @@ impl StatusIndicatorWidget {
         let mut out = word_wrap_lines(details.lines().map(|line| vec![line.dim()]), opts);
 
         if out.len() > DETAILS_MAX_LINES {
+// tui2/src/status_indicator_widget.rs
             out.truncate(DETAILS_MAX_LINES);
             let content_width = usize::from(width).saturating_sub(prefix_width).max(1);
             let max_base_len = content_width.saturating_sub(1);

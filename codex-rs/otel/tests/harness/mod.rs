@@ -38,6 +38,7 @@ pub(crate) fn latest_metrics(exporter: &InMemoryMetricExporter) -> ResourceMetri
 
 pub(crate) fn find_metric<'a>(
     resource_metrics: &'a ResourceMetrics,
+// otel/tests/harness/mod.rs
     name: &str,
 ) -> Option<&'a Metric> {
     for scope_metrics in resource_metrics.scope_metrics() {

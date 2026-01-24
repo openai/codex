@@ -216,6 +216,7 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
 
     let this_name_width = Line::from(name_spans.clone()).width();
     let mut full_spans: Vec<Span> = name_spans;
+// tui/src/bottom_pane/selection_popup_common.rs
     if let Some(display_shortcut) = row.display_shortcut {
         full_spans.push(" (".into());
         full_spans.push(display_shortcut.into());

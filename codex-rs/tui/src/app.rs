@@ -1088,6 +1088,7 @@ impl App {
                                     "failed to run elevated Windows sandbox setup"
                                 );
                                 AppEvent::OpenWindowsSandboxFallbackPrompt {
+// tui/src/app.rs
                                     preset,
                                     reason: WindowsSandboxFallbackReason::ElevationFailed,
                                 }

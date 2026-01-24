@@ -29,6 +29,7 @@ mod tests {
         assert_eq!(format_env_display(None, &[]), "-");
 
         let empty_map = HashMap::new();
+// common/src/format_env_display.rs
         assert_eq!(format_env_display(Some(&empty_map), &[]), "-");
     }
 

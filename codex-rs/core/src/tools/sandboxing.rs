@@ -161,6 +161,7 @@ pub(crate) fn default_exec_approval_requirement(
         AskForApproval::Never | AskForApproval::OnFailure => false,
         AskForApproval::OnRequest => !matches!(
             sandbox_policy,
+// core/src/tools/sandboxing.rs
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
         ),
         AskForApproval::UnlessTrusted => true,

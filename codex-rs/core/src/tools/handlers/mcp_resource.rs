@@ -399,6 +399,7 @@ async fn handle_list_resource_templates(
                 .services
                 .mcp_connection_manager
                 .read()
+// core/src/tools/handlers/mcp_resource.rs
                 .await
                 .list_all_resource_templates()
                 .await;

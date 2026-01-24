@@ -6,6 +6,7 @@
           eeipionooin oapinenonp      
           nennpnoiaeiipa   ipe o      
          oionpaoniippipnaeaeeioa      
+# tui2/frames/openai/frame_32.txt
          iiipa  oaiioeoinpaoniooa     
          niipa oaioaaipppiiiniona     
          oooaaiononaaaaaiioinipa      

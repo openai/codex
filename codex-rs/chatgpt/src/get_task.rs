@@ -18,6 +18,7 @@ pub struct AssistantTurn {
 #[serde(tag = "type")]
 pub enum OutputItem {
     #[serde(rename = "pr")]
+// chatgpt/src/get_task.rs
     Pr(PrOutputItem),
 
     #[serde(other)]

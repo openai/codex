@@ -30,6 +30,7 @@
                     },
                     {
                         "content_type": "repo_file_citation",
+# chatgpt/tests/task_turn_fixture.json
                         "path": "scripts/fibonacci.js",
                         "line_range_start": 1,
                         "line_range_end": 31

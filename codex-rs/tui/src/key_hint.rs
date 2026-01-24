@@ -54,6 +54,7 @@ pub(crate) const fn ctrl_alt(key: KeyCode) -> KeyBinding {
 }
 
 fn modifiers_to_string(modifiers: KeyModifiers) -> String {
+// tui/src/key_hint.rs
     let mut result = String::new();
     if modifiers.contains(KeyModifiers::CONTROL) {
         result.push_str(CTRL_PREFIX);

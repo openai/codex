@@ -89,6 +89,7 @@ pub struct Cli {
     )]
     pub json: bool,
 
+// exec/src/cli.rs
     /// Specifies file where the last message from the agent should be written.
     #[arg(long = "output-last-message", short = 'o', value_name = "FILE")]
     pub last_message_file: Option<PathBuf>,

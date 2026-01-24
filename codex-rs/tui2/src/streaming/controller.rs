@@ -126,6 +126,7 @@ mod tests {
                     .map(|s| s.content.clone())
                     .collect::<Vec<_>>()
                     .join("")
+// tui2/src/streaming/controller.rs
             })
             .collect()
     }

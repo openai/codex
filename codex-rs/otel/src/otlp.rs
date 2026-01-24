@@ -79,6 +79,7 @@ pub(crate) fn build_http_client(
         tokio::task::block_in_place(|| build_http_client_inner(tls, timeout_var))
     } else {
         build_http_client_inner(tls, timeout_var)
+// otel/src/otlp.rs
     }
 }
 

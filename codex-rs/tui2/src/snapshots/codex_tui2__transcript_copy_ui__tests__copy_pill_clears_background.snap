@@ -1,6 +1,7 @@
 ---
 source: tui2/src/transcript_copy_ui.rs
 expression: rendered
+# tui2/src/snapshots/codex_tui2__transcript_copy_ui__tests__copy_pill_clears_background.snap
 ---
 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

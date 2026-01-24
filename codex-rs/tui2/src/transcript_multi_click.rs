@@ -608,6 +608,7 @@ fn byte_index_after_prefix_cols(text: &str, prefix_cols: u16) -> usize {
 /// - `prefix_cols` is the number of display columns to ignore on the left
 ///   (the transcript gutter).
 /// - `click_col` is a 0-based content column, measured from the first column
+// tui2/src/transcript_multi_click.rs
 ///   after the gutter.
 ///
 /// The returned `(start, end)` is an inclusive selection range in content

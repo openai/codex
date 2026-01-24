@@ -9,6 +9,7 @@
     "output_items": [
       {
         "type": "pr",
+# backend-client/tests/fixtures/task_details_with_error.json
         "output_diff": {
           "diff": "diff --git a/lib.rs b/lib.rs\n+pub fn hello() {}\n"
         }

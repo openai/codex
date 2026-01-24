@@ -66,6 +66,7 @@ fn test_head_one_flag_one_file() -> Result<()> {
     assert_eq!(
         Ok(MatchedExec::Match {
             exec: ValidExec {
+// execpolicy-legacy/tests/suite/head.rs
                 program: "head".to_string(),
                 flags: vec![],
                 opts: vec![

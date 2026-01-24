@@ -6,6 +6,7 @@
                 e xcx  x              
                 xoxxx ee              
                 xeexxx e              
+# tui/frames/codex/frame_29.txt
                 xxdxx                 
                 xxxcx   e             
                 exdxx   e             

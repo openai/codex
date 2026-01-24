@@ -5,6 +5,7 @@ expression: terminal.backend()
 
 > Codex just got an upgrade. Introducing gpt-5.1-codex-mini.
 
+# tui/src/snapshots/codex_tui__model_migration__tests__model_migration_prompt_gpt5_codex_mini.snap
   We recommend switching from gpt-5-codex-mini to
   gpt-5.1-codex-mini.
 

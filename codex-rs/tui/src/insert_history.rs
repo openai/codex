@@ -263,6 +263,7 @@ where
         let next_fg = span.style.fg.unwrap_or(Color::Reset);
         let next_bg = span.style.bg.unwrap_or(Color::Reset);
         if next_fg != fg || next_bg != bg {
+// tui/src/insert_history.rs
             queue!(
                 writer,
                 SetColors(Colors::new(next_fg.into(), next_bg.into()))

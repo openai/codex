@@ -1,3 +1,4 @@
 [
+# core/tests/fixtures/incomplete_sse.json
   {"type": "response.output_item.done"}
 ]

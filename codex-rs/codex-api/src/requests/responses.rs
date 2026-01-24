@@ -128,6 +128,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
             model,
             instructions,
             input,
+// codex-api/src/requests/responses.rs
             tools,
             tool_choice: "auto",
             parallel_tool_calls: self.parallel_tool_calls,

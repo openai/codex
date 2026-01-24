@@ -1,6 +1,7 @@
 ---
 source: tui2/src/history_cell.rs
 expression: rendered
+# tui2/src/snapshots/codex_tui2__history_cell__tests__multiline_command_without_wrap_uses_branch_then_eight_spaces.snap
 ---
 • Ran echo one
   │ echo two

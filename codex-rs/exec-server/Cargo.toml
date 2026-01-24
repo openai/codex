@@ -29,6 +29,7 @@ libc = { workspace = true }
 path-absolutize = { workspace = true }
 rmcp = { workspace = true, default-features = false, features = [
     "auth",
+# exec-server/Cargo.toml
     "elicitation",
     "base64",
     "client",

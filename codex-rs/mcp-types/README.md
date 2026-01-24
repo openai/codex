@@ -2,6 +2,7 @@
 
 Types for Model Context Protocol. Inspired by https://crates.io/crates/lsp-types.
 
+<!-- mcp-types/README.md -->
 As documented on https://modelcontextprotocol.io/specification/2025-06-18/basic:
 
 - TypeScript schema is the source of truth: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2025-06-18/schema.ts

@@ -6,6 +6,7 @@
      eieaininnaip          nonion     
     eiiai  oaiieon          o nnip    
     onina   ooonpoip         p oni    
+# tui2/frames/openai/frame_4.txt
      ien     pieoaii           iii    
     ai ia   nieoaeepipppaaaapp iio    
     ine i peeepaiannipeapeeanieeoi    

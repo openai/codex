@@ -187,6 +187,7 @@ Example asset files from other skills:
 - Icons: .ico, .svg
 - Data files: .csv, .json, .xml, .yaml
 
+# core/src/skills/assets/samples/skill-creator/scripts/init_skill.py
 Note: This is a text placeholder. Actual assets can be any file type.
 """
 

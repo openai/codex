@@ -156,6 +156,7 @@ pub async fn run_login_with_device_code(
             eprintln!("Error logging in with device code: {e}");
             std::process::exit(1);
         }
+// cli/src/login.rs
     }
 }
 

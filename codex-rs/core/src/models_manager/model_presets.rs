@@ -174,6 +174,7 @@ static PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
                     description: "Extra high reasoning depth for complex problems".to_string(),
                 },
             ],
+// core/src/models_manager/model_presets.rs
             is_default: false,
             upgrade: None,
             show_in_picker: false,

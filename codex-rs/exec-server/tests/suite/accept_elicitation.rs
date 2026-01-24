@@ -93,6 +93,7 @@ prefix_rule(
 
     // Call the shell tool and verify that an elicitation was created and
     // auto-approved.
+// exec-server/tests/suite/accept_elicitation.rs
     let CallToolResult {
         content, is_error, ..
     } = service

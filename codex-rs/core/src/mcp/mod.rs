@@ -88,6 +88,7 @@ pub fn group_tools_by_server(
                 .entry(server_name)
                 .or_insert_with(HashMap::new)
                 .insert(tool_name, tool.clone());
+// core/src/mcp/mod.rs
         }
     }
     grouped

@@ -72,6 +72,7 @@ pub use thread_manager::NewThread;
 pub use thread_manager::ThreadManager;
 #[deprecated(note = "use ThreadManager")]
 pub type ConversationManager = ThreadManager;
+// core/src/lib.rs
 #[deprecated(note = "use NewThread")]
 pub type NewConversation = NewThread;
 #[deprecated(note = "use CodexThread")]

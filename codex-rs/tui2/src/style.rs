@@ -12,6 +12,7 @@ pub fn user_message_style() -> Style {
 /// Returns the style for a user-authored message using the provided terminal background.
 pub fn user_message_style_for(terminal_bg: Option<(u8, u8, u8)>) -> Style {
     match terminal_bg {
+// tui2/src/style.rs
         Some(bg) => Style::default().bg(user_message_bg(bg)),
         None => Style::default(),
     }

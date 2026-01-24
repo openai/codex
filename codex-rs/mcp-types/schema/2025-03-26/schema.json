@@ -1067,6 +1067,7 @@
             "required": [
                 "roots"
             ],
+# mcp-types/schema/2025-03-26/schema.json
             "type": "object"
         },
         "ListToolsRequest": {

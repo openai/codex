@@ -114,6 +114,7 @@ impl ToolRegistry {
                 || {
                     let handler = handler.clone();
                     let output_cell = &output_cell;
+// core/src/tools/registry.rs
                     let invocation = invocation;
                     async move {
                         if handler.is_mutating(&invocation).await {

@@ -85,6 +85,7 @@ pub async fn spawn_process(
         command_builder.env(key, value);
     }
 
+// utils/pty/src/pty.rs
     let mut child = pair.slave.spawn_command(command_builder)?;
     let killer = child.clone_killer();
 

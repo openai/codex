@@ -674,6 +674,7 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
                 line.contains("codex.tool_result") && line.contains("call_id=custom-tool-call")
             })
             .ok_or_else(|| "missing codex.tool_result event".to_string())?;
+// core/tests/suite/otel.rs
 
         if !line.contains("tool_name=unsupported_tool") {
             return Err("missing tool_name field".to_string());

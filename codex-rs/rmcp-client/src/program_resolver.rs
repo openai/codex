@@ -109,6 +109,7 @@ mod tests {
         let env = TestExecutableEnv::new()?;
         // Append the `.cmd` extension to the program name
         let program_with_ext = format!("{}.cmd", env.program_name);
+// rmcp-client/src/program_resolver.rs
         let mut cmd = Command::new(&program_with_ext);
         cmd.envs(&env.mcp_env);
 

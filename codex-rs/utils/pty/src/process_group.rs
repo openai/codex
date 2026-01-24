@@ -76,6 +76,7 @@ pub fn set_process_group() -> io::Result<()> {
         Ok(())
     }
 }
+// utils/pty/src/process_group.rs
 
 #[cfg(not(unix))]
 /// No-op on non-Unix platforms.

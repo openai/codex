@@ -78,6 +78,7 @@ async fn logout_chatgpt_removes_auth() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(status_id)),
     )
     .await??;
+// app-server/tests/suite/login.rs
     let status: GetAuthStatusResponse = to_response(status_resp)?;
     assert_eq!(status.auth_method, None);
     assert_eq!(status.auth_token, None);

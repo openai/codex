@@ -54,6 +54,7 @@ pub(crate) async fn run(file: String, argv: Vec<String>) -> anyhow::Result<i32> 
     let message = client
         .receive::<EscalateResponse>()
         .await
+// exec-server/src/posix/escalate_client.rs
         .context("failed to receive EscalateResponse")?;
     match message.action {
         EscalateAction::Escalate => {

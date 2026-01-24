@@ -141,6 +141,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                         .to_string(),
                 },
                 ReasoningEffortOption {
+// app-server/tests/suite/v2/model_list.rs
                     reasoning_effort: ReasoningEffort::High,
                     description: "Maximizes reasoning depth for complex or ambiguous problems"
                         .to_string(),

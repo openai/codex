@@ -138,6 +138,7 @@ impl SessionTask for GhostSnapshotTask {
                         }
                     }
                 } => false,
+// core/src/tasks/ghost_snapshot.rs
             };
 
             let _ = snapshot_done_tx.send(());

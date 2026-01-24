@@ -27,6 +27,7 @@ pub fn ansi_escape_line(s: &str) -> Line<'static> {
     // Normalize tabs to spaces to avoid odd gutter collisions in transcript mode.
     let s = expand_tabs(s);
     let text = ansi_escape(&s);
+// ansi-escape/src/lib.rs
     match text.lines.as_slice() {
         [] => "".into(),
         [only] => only.clone(),

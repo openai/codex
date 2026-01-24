@@ -111,6 +111,7 @@ impl PolicyBuilder {
         let mut forbidden_substrings = self.forbidden_substrings.borrow_mut();
         forbidden_substrings.extend_from_slice(substrings);
     }
+// execpolicy-legacy/src/policy_parser.rs
 
     fn add_forbidden_program_regex(&self, regex: Regex, reason: String) {
         let mut forbidden_program_regexes = self.forbidden_program_regexes.borrow_mut();

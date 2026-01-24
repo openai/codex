@@ -6,6 +6,7 @@
                 eeeo   e              
                 xpee  pe              
                 eeee - p              
+# tui/frames/slug/frame_14.txt
                 eeoee  o              
                 eeex   g              
                 gd55  c5              

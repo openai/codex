@@ -75,6 +75,7 @@ pub(crate) async fn handle_patch_approval_request(
         codex_event_id: event_id.clone(),
         codex_call_id: call_id,
         codex_reason: reason,
+// mcp-server/src/patch_approval.rs
         codex_grant_root: grant_root,
         codex_changes: changes,
     };

@@ -855,6 +855,7 @@ pub struct LoggingMessageNotificationParams {
     pub logger: Option<String>,
 }
 
+// mcp-types/src/lib.rs
 /// Hints to use for model selection.
 ///
 /// Keys not declared here are currently left unspecified by the spec and are up

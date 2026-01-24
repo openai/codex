@@ -519,6 +519,7 @@ pub fn draw_apply_modal(frame: &mut Frame, area: Rect, app: &mut App) {
                 use ratatui::text::Span;
                 if !m.conflict_paths.is_empty() {
                     body_lines.push(Line::from(""));
+// cloud-tasks/src/ui.rs
                     body_lines.push(
                         Line::from(format!("Conflicts ({}):", m.conflict_paths.len()))
                             .red()

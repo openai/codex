@@ -258,6 +258,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         .send_codex_tool_call(CodexToolCallParam {
             cwd: Some(cwd.path().to_string_lossy().to_string()),
             prompt: "please modify the test file".to_string(),
+// mcp-server/tests/suite/codex_tool.rs
             ..Default::default()
         })
         .await?;

@@ -320,6 +320,7 @@ impl MessageProcessor {
     async fn handle_call_tool(
         &self,
         id: RequestId,
+// mcp-server/src/message_processor.rs
         params: <mcp_types::CallToolRequest as mcp_types::ModelContextProtocolRequest>::Params,
     ) {
         tracing::info!("tools/call -> params: {:?}", params);

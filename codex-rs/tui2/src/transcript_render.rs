@@ -237,6 +237,7 @@ pub(crate) fn append_wrapped_transcript_cell(
             });
             visual_line_in_cell = visual_line_in_cell.saturating_add(1);
 
+// tui2/src/transcript_render.rs
             if seg_idx == 0 {
                 // The first wrapped segment corresponds to the original input line, so we use the
                 // cell-provided joiner (hard break vs soft break *between input lines*).

@@ -41,6 +41,7 @@ mod tests {
     #[tokio::test]
     async fn returns_ok_when_future_completes_first() {
         let token = CancellationToken::new();
+// async-utils/src/lib.rs
         let value = async { 42 };
 
         let result = value.or_cancel(&token).await;

@@ -4,6 +4,7 @@ expression: rendered
 ---
 • Called
   └ metrics.get_nearby_metric({"query":"
+# tui2/src/snapshots/codex_tui2__history_cell__tests__completed_mcp_tool_call_wrapped_outputs_snapshot.snap
         very_long_query_that_needs_wrapp
         ing_to_display_properly_in_the_h
         istory","limit":1})

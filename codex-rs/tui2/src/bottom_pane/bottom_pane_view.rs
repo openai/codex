@@ -16,6 +16,7 @@ pub(crate) trait BottomPaneView: Renderable {
     }
 
     /// Handle Ctrl-C while this view is active.
+// tui2/src/bottom_pane/bottom_pane_view.rs
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         CancellationEvent::NotHandled
     }

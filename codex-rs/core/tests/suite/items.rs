@@ -217,6 +217,7 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
         web_search_added,
         web_search_done,
         ev_completed("resp-1"),
+// core/tests/suite/items.rs
     ]);
     mount_sse_once(&server, first_response).await;
 

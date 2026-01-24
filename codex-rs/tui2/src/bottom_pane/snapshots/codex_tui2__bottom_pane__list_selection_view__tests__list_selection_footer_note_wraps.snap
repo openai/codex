@@ -5,6 +5,7 @@ expression: "render_lines_with_width(&view, 40)"
 ---
                                         
   Select Approval Mode                  
+# tui2/src/bottom_pane/snapshots/codex_tui2__bottom_pane__list_selection_view__tests__list_selection_footer_note_wraps.snap
                                         
 › 1. Read Only (current)  Codex can     
                           read files    

@@ -590,6 +590,7 @@ fn override_message(layer: &ConfigLayerSource) -> String {
     match layer {
         ConfigLayerSource::Mdm { domain, key: _ } => {
             format!("Overridden by managed policy (MDM): {domain}")
+// core/src/config/service.rs
         }
         ConfigLayerSource::System { file } => {
             format!("Overridden by managed config (system): {}", file.display())

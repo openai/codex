@@ -137,6 +137,7 @@ impl MessageProcessor {
                                     code: INVALID_REQUEST_ERROR_CODE,
                                     message: format!(
                                         "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
+// app-server/src/message_processor.rs
                                     ),
                                     data: None,
                                 };

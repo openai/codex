@@ -62,6 +62,7 @@ impl ComposerInput {
         action
     }
 
+// tui/src/public_widgets/composer_input.rs
     pub fn handle_paste(&mut self, pasted: String) -> bool {
         let handled = self.inner.handle_paste(pasted);
         self.drain_app_events();

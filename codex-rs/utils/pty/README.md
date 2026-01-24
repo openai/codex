@@ -27,6 +27,7 @@ let spawned = spawn_pty_process(
     "bash",
     &["-lc".into(), "echo hello".into()],
     Path::new("."),
+<!-- utils/pty/README.md -->
     &env_map,
     &None,
 ).await?;

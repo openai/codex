@@ -1,4 +1,5 @@
 line1
 changed2
+# apply-patch/tests/fixtures/scenarios/003_multiple_chunks/expected/multi.txt
 line3
 changed4

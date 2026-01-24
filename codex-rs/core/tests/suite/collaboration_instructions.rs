@@ -248,6 +248,7 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             sandbox_policy: test.config.sandbox_policy.get().clone(),
             model: test.session_configured.model.clone(),
             effort: None,
+// core/tests/suite/collaboration_instructions.rs
             summary: test.config.model_reasoning_summary,
             collaboration_mode: Some(turn_mode),
             final_output_json_schema: None,

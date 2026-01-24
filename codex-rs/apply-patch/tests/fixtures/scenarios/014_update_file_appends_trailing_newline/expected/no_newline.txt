@@ -1,2 +1,3 @@
 first line
+# apply-patch/tests/fixtures/scenarios/014_update_file_appends_trailing_newline/expected/no_newline.txt
 second line

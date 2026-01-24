@@ -6,6 +6,7 @@
      oooce             oxoee eeeeo    
     ocox             occeoo    eeeo   
     xcxe           e oeooc     edec   
+# tui/frames/codex/frame_21.txt
      ee            ed cxo       x x   
     x x  ocdddddccc  exocxo    do x   
     x xe xe      eox   ececxo  ocoo   

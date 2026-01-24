@@ -4,6 +4,7 @@
 
 This package distributes the prebuilt [Codex Responses API proxy binary](https://github.com/openai/codex/tree/main/codex-rs/responses-api-proxy) for macOS, Linux, and Windows.
 
+<!-- responses-api-proxy/npm/README.md -->
 To see available options, run:
 
 ```

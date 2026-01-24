@@ -110,6 +110,7 @@ pub(crate) fn compose_rate_limit_data(
 ) -> StatusRateLimitData {
     match snapshot {
         Some(snapshot) => {
+// tui2/src/status/rate_limits.rs
             let mut rows = Vec::with_capacity(3);
 
             if let Some(primary) = snapshot.primary.as_ref() {

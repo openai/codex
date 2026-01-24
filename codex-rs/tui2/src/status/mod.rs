@@ -4,6 +4,7 @@ mod format;
 mod helpers;
 mod rate_limits;
 
+// tui2/src/status/mod.rs
 pub(crate) use card::new_status_output;
 pub(crate) use helpers::format_tokens_compact;
 pub(crate) use rate_limits::RateLimitSnapshotDisplay;

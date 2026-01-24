@@ -111,6 +111,7 @@ pub mod tests {
     use super::KeyringStore;
     use keyring::Error as KeyringError;
     use keyring::credential::CredentialApi as _;
+// keyring-store/src/lib.rs
     use keyring::mock::MockCredential;
     use std::collections::HashMap;
     use std::sync::Arc;

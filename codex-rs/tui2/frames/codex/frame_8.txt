@@ -6,6 +6,7 @@
         c oxooexoe      ocexxo        
        xcoxeeeeexec      ecxxx        
        xcxxx cedexex     xexoxo       
+# tui2/frames/codex/frame_8.txt
        eoxxo  xceoxoco    oeoxx       
        e exxee  ocdxxococooexxx       
           ecodexcoxoxxdxdeexxdc       

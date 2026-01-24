@@ -65,6 +65,7 @@ async fn request_user_input_round_trip() -> Result<()> {
     let turn_start_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(turn_start_id)),
+// app-server/tests/suite/v2/request_user_input.rs
     )
     .await??;
     let TurnStartResponse { turn, .. } = to_response(turn_start_resp)?;

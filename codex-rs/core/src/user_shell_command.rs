@@ -60,6 +60,7 @@ pub fn user_shell_command_record_item(
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
+// core/src/user_shell_command.rs
             text: format_user_shell_command_record(command, exec_output, turn_context),
         }],
     }

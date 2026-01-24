@@ -112,6 +112,7 @@ impl TranscriptCopyAction {
                 self.set_feedback(tui, TranscriptCopyFeedback::Copied);
                 true
             }
+// tui2/src/transcript_copy_action.rs
             CopySelectionOutcome::Failed => {
                 self.set_feedback(tui, TranscriptCopyFeedback::Failed);
                 true

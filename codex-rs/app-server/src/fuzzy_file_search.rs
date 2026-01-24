@@ -44,6 +44,7 @@ pub(crate) async fn run_fuzzy_file_search(
             match file_search::run(
                 query.as_str(),
                 limit_per_root,
+// app-server/src/fuzzy_file_search.rs
                 &search_dir,
                 Vec::new(),
                 threads,

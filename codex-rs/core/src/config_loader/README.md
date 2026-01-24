@@ -31,6 +31,7 @@ Precedence is **top overrides bottom**:
 
 This is what `ConfigLayerStack::effective_config()` implements.
 
+<!-- core/src/config_loader/README.md -->
 ## Typical usage
 
 Most callers want the effective config plus metadata:

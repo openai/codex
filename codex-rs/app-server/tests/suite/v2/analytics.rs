@@ -31,6 +31,7 @@ async fn app_server_default_analytics_disabled_without_flag() -> Result<()> {
         &config,
         SERVICE_VERSION,
         Some("codex_app_server"),
+// app-server/tests/suite/v2/analytics.rs
         false,
     )
     .map_err(|err| anyhow::anyhow!(err.to_string()))?;

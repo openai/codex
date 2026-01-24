@@ -82,6 +82,7 @@ fn main() -> Result<()> {
             },
             None => {
                 eprintln!("no command provided");
+// execpolicy-legacy/src/main.rs
                 std::process::exit(1);
             }
         },

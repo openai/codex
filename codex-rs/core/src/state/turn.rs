@@ -67,6 +67,7 @@ impl ActiveTurn {
 
 /// Mutable state for a single turn.
 #[derive(Default)]
+// core/src/state/turn.rs
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,

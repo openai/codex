@@ -336,6 +336,7 @@ impl App {
         }
 
         let last_index = count.saturating_sub(1);
+// tui2/src/app_backtrack.rs
         let next_selection = if self.backtrack.nth_user_message == usize::MAX {
             last_index
         } else {

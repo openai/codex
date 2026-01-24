@@ -1426,6 +1426,7 @@ async fn unified_exec_can_enable_tty() -> Result<()> {
         ..
     } = builder.build(&server).await?;
 
+// core/tests/suite/unified_exec.rs
     let call_id = "uexec-tty-enabled";
     let args = serde_json::json!({
         "cmd": format!("{} -c \"import sys; print(sys.stdin.isatty())\"", python.display()),

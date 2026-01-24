@@ -234,6 +234,7 @@ impl Features {
                     if k != feat.key() {
                         self.record_legacy_usage(k.as_str(), feat);
                     }
+// core/src/features.rs
                     if *v {
                         self.enable(feat);
                     } else {

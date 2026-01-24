@@ -117,6 +117,7 @@ pub(crate) fn repo_subdir(repo_root: &Path, repo_path: &Path) -> Option<PathBuf>
             let repo_path_canon = repo_path.canonicalize().ok()?;
             repo_path_canon
                 .strip_prefix(&repo_root_canon)
+// utils/git/src/operations.rs
                 .ok()
                 .and_then(non_empty_path)
         })

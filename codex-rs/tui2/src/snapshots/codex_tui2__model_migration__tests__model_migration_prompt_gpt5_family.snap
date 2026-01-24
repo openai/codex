@@ -3,6 +3,7 @@ source: tui2/src/model_migration.rs
 expression: terminal.backend()
 ---
 > Try gpt-5.1
+# tui2/src/snapshots/codex_tui2__model_migration__tests__model_migration_prompt_gpt5_family.snap
 
   We recommend switching from gpt-5 to gpt-5.1.
 

@@ -12,6 +12,7 @@ pub enum StepStatus {
     Completed,
 }
 
+// protocol/src/plan_tool.rs
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct PlanItemArg {

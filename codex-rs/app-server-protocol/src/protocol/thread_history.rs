@@ -277,6 +277,7 @@ mod tests {
         ];
 
         let turns = build_turns_from_event_msgs(&events);
+// app-server-protocol/src/protocol/thread_history.rs
         assert_eq!(turns.len(), 2);
 
         let first = &turns[0];

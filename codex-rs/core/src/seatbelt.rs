@@ -309,6 +309,7 @@ mod tests {
             "bash",
             "-c",
             "echo 'pwned!' > \"$1\"",
+// core/src/seatbelt.rs
             "bash",
             pre_commit_hook.to_string_lossy().as_ref(),
         ]

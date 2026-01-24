@@ -15,6 +15,7 @@ pub(crate) fn subagent_header(source: &Option<SessionSource>) -> Option<String> 
         return None;
     };
     match sub {
+// codex-api/src/requests/headers.rs
         codex_protocol::protocol::SubAgentSource::Other(label) => Some(label.clone()),
         other => Some(
             serde_json::to_value(other)

@@ -1,3 +1,4 @@
 *** Begin Patch
+# apply-patch/tests/fixtures/scenarios/020_delete_file_success/patch.txt
 *** Delete File: obsolete.txt
 *** End Patch

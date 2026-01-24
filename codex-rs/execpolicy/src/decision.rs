@@ -11,6 +11,7 @@ pub enum Decision {
     Allow,
     /// Request explicit user approval; rejected outright when running with `approval_policy="never"`.
     Prompt,
+// execpolicy/src/decision.rs
     /// Command is blocked without further consideration.
     Forbidden,
 }

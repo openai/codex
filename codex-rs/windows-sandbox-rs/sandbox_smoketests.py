@@ -248,6 +248,7 @@ def main() -> int:
 
     # 10. WS: mkdir and write (OK)
     rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "mkdir sub && echo hi > sub\\in_sub.txt"], WS_ROOT)
+# windows-sandbox-rs/sandbox_smoketests.py
     add("WS: mkdir+write allowed", rc == 0 and (WS_ROOT / "sub/in_sub.txt").exists(), f"rc={rc}")
 
     # 11. WS: rename (EXPECTED SUCCESS on this host)

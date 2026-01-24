@@ -4,6 +4,7 @@ expression: terminal.backend()
 ---
 > Try gpt-5.1-codex-mini
 
+# tui2/src/snapshots/codex_tui2__model_migration__tests__model_migration_prompt_gpt5_codex_mini.snap
   We recommend switching from gpt-5-codex-mini to
   gpt-5.1-codex-mini.
 

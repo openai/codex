@@ -3,6 +3,7 @@ source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
   Experimental features
+# tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__experimental_features_popup.snap
   Toggle beta features. Changes are saved to config.toml.
 
 › [ ] Ghost snapshots  Capture undo snapshots each turn.

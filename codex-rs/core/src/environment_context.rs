@@ -101,6 +101,7 @@ mod tests {
 
     #[test]
     fn serialize_workspace_write_environment_context() {
+// core/src/environment_context.rs
         let cwd = test_path_buf("/repo");
         let context = EnvironmentContext::new(Some(cwd.clone()), fake_shell());
 

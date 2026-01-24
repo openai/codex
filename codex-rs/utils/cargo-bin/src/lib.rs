@@ -88,6 +88,7 @@ macro_rules! find_resource {
         // - we inject `BAZEL_PACKAGE` as a compile-time environment variable
         //   that points to native.package_name()
         // - at runtime, Bazel will set `RUNFILES_DIR` to the runfiles directory
+// utils/cargo-bin/src/lib.rs
         //
         // Therefore, the compile-time value of `BAZEL_PACKAGE` will always be
         // included in the compiled binary (even if it is built with Cargo), but

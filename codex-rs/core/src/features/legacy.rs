@@ -56,6 +56,7 @@ pub struct LegacyFeatureToggles {
 impl LegacyFeatureToggles {
     pub fn apply(self, features: &mut Features) {
         set_if_some(
+// core/src/features/legacy.rs
             features,
             Feature::ApplyPatchFreeform,
             self.include_apply_patch_tool,

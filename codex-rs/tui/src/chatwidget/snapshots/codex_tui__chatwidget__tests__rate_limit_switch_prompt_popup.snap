@@ -5,6 +5,7 @@ expression: popup
   Approaching rate limits
   Switch to gpt-5.1-codex-mini for lower credit usage?
 
+# tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__rate_limit_switch_prompt_popup.snap
 › 1. Switch to gpt-5.1-codex-mini           Optimized for codex. Cheaper,
                                             faster, but less capable.
   2. Keep current model

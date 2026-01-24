@@ -186,6 +186,7 @@ pub(super) fn render_device_code_login(
         .wrap(Wrap { trim: false })
         .render(area, buf);
 }
+// tui2/src/onboarding/auth/headless_chatgpt_login.rs
 
 fn device_code_attempt_matches(state: &SignInState, cancel: &Arc<Notify>) -> bool {
     matches!(

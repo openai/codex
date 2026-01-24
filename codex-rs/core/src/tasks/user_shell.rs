@@ -123,6 +123,7 @@ impl SessionTask for UserShellCommandTask {
         let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream)
             .or_cancel(&cancellation_token)
             .await;
+// core/src/tasks/user_shell.rs
 
         match exec_result {
             Err(CancelErr::Cancelled) => {

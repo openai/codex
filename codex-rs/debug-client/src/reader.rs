@@ -164,6 +164,7 @@ fn handle_response(
                 let mut state = state.lock().expect("state lock poisoned");
                 state.thread_id = Some(thread_id.clone());
                 if !state.known_threads.iter().any(|id| id == &thread_id) {
+// debug-client/src/reader.rs
                     state.known_threads.push(thread_id.clone());
                 }
             }

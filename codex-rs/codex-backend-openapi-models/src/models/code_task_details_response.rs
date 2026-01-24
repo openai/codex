@@ -19,6 +19,7 @@ pub struct CodeTaskDetailsResponse {
     #[serde(rename = "current_user_turn", skip_serializing_if = "Option::is_none")]
     pub current_user_turn: Option<std::collections::HashMap<String, serde_json::Value>>,
     #[serde(
+// codex-backend-openapi-models/src/models/code_task_details_response.rs
         rename = "current_assistant_turn",
         skip_serializing_if = "Option::is_none"
     )]

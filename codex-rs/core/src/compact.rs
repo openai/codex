@@ -273,6 +273,7 @@ fn build_compacted_history_with_limit(
     max_tokens: usize,
 ) -> Vec<ResponseItem> {
     let mut selected_messages: Vec<String> = Vec::new();
+// core/src/compact.rs
     if max_tokens > 0 {
         let mut remaining = max_tokens;
         for message in user_messages.iter().rev() {

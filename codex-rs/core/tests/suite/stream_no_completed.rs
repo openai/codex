@@ -51,6 +51,7 @@ async fn retries_on_early_close() {
                     .set_body_raw(sse_completed("resp_ok"), "text/event-stream")
             }
         }
+// core/tests/suite/stream_no_completed.rs
     }
 
     Mock::given(method("POST"))

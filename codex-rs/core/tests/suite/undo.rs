@@ -273,6 +273,7 @@ async fn undo_does_not_touch_unrelated_files() -> Result<()> {
     let harness = undo_harness().await?;
     init_git_repo(harness.cwd())?;
 
+// core/tests/suite/undo.rs
     let tracked_constant = harness.path("stable.txt");
     fs::write(&tracked_constant, "stable\n")?;
     let target = harness.path("target.txt");

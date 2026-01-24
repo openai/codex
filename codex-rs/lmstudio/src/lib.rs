@@ -21,6 +21,7 @@ pub async fn ensure_oss_ready(config: &Config) -> std::io::Result<()> {
 
     match lmstudio_client.fetch_models().await {
         Ok(models) => {
+// lmstudio/src/lib.rs
             if !models.iter().any(|m| m == model) {
                 lmstudio_client.download_model(model).await?;
             }

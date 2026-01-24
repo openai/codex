@@ -7,6 +7,7 @@ Each test case is one directory, composed of input state (input/), the patch ope
 
 Here's what this would look like for a simple test apply-patch test case to create a new file:
 
+<!-- apply-patch/tests/fixtures/scenarios/README.md -->
 ```
 001_add/
   input/

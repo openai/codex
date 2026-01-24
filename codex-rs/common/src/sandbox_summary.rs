@@ -41,6 +41,7 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             summary
         }
     }
+// common/src/sandbox_summary.rs
 }
 
 #[cfg(test)]

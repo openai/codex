@@ -3,6 +3,7 @@ source: tui2/src/chatwidget/tests.rs
 expression: popup
 ---
   How was this?
+# tui2/src/chatwidget/snapshots/codex_tui2__chatwidget__tests__feedback_selection_popup.snap
 
 › 1. bug          Crash, error message, hang, or broken UI/behavior.
   2. bad result   Output was off-target, incorrect, incomplete, or unhelpful.

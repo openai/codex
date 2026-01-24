@@ -153,6 +153,7 @@ pub(crate) mod announcement {
                 Some(pattern) => Some(Regex::new(&pattern).ok()?),
                 None => None,
             };
+// tui2/src/tooltips.rs
 
             Some(Self {
                 content: content.to_string(),

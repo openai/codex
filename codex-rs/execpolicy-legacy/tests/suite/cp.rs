@@ -41,6 +41,7 @@ fn test_cp_one_arg() {
             matcher: ArgMatcher::ReadableFiles,
         }),
         policy.check(&cp)
+// execpolicy-legacy/tests/suite/cp.rs
     );
 }
 

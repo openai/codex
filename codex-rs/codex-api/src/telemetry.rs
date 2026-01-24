@@ -40,6 +40,7 @@ fn http_status(err: &TransportError) -> Option<StatusCode> {
 }
 
 impl WithStatus for Response {
+// codex-api/src/telemetry.rs
     fn status(&self) -> StatusCode {
         self.status
     }

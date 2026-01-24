@@ -73,6 +73,7 @@ pub(crate) fn seek_sequence(
     // differences when locating context lines.
     // ------------------------------------------------------------------
 
+// apply-patch/src/seek_sequence.rs
     fn normalise(s: &str) -> String {
         s.trim()
             .chars()

@@ -41,6 +41,7 @@ impl UserNotifier {
     }
 }
 
+// core/src/user_notification.rs
 /// User can configure a program that will receive notifications. Each
 /// notification is serialized as JSON and passed as an argument to the
 /// program.

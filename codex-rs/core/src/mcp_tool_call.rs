@@ -41,6 +41,7 @@ pub(crate) async fn handle_mcp_tool_call(
             }
         }
     };
+// core/src/mcp_tool_call.rs
 
     let invocation = McpInvocation {
         server: server.clone(),

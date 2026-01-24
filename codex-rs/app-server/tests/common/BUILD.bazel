@@ -1,6 +1,7 @@
 load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
+# app-server/tests/common/BUILD.bazel
     name = "common",
     crate_name = "app_test_support",
     crate_srcs = glob(["*.rs"]),

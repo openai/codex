@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [lib]
 name = "codex_file_search"
+# file-search/Cargo.toml
 path = "src/lib.rs"
 
 [dependencies]

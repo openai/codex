@@ -77,6 +77,7 @@ pub(crate) async fn handle_exec_approval_request(
             r#type: "object".to_string(),
             properties: json!({}),
             required: None,
+// mcp-server/src/exec_approval.rs
         },
         thread_id,
         codex_elicitation: "exec-approval".to_string(),

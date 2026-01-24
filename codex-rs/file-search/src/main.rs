@@ -37,6 +37,7 @@ impl Reporter for StdioReporter {
             // of calling `contains` for every character (which would be O(N^2)
             // in the worst-case), walk through the `indices` vector once while
             // iterating over the characters.
+// file-search/src/main.rs
             let mut indices_iter = indices.iter().peekable();
 
             for (i, c) in file_match.path.chars().enumerate() {

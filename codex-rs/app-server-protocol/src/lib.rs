@@ -4,6 +4,7 @@ mod protocol;
 
 pub use export::generate_json;
 pub use export::generate_ts;
+// app-server-protocol/src/lib.rs
 pub use export::generate_types;
 pub use jsonrpc_lite::*;
 pub use protocol::common::*;

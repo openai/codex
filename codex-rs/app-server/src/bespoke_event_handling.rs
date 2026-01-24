@@ -1223,6 +1223,7 @@ async fn maybe_emit_raw_response_item_completed(
 }
 
 async fn find_and_remove_turn_summary(
+// app-server/src/bespoke_event_handling.rs
     conversation_id: ThreadId,
     turn_summary_store: &TurnSummaryStore,
 ) -> TurnSummary {

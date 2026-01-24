@@ -42,6 +42,7 @@ async fn web_search_mode_cached_sets_external_web_access_false_in_request_body()
         .await
         .expect("create test Codex conversation");
 
+// core/tests/suite/web_search_cached.rs
     test.submit_turn("hello cached web search")
         .await
         .expect("submit turn");

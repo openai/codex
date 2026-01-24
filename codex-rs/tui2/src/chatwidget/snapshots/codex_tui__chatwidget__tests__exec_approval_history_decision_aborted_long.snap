@@ -1,6 +1,7 @@
 ---
 source: tui/src/chatwidget/tests.rs
 assertion_line: 495
+# tui2/src/chatwidget/snapshots/codex_tui__chatwidget__tests__exec_approval_history_decision_aborted_long.snap
 expression: lines_to_single_string(&aborted_long)
 ---
 ✗ You canceled the request to run echo

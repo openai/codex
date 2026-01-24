@@ -299,6 +299,7 @@ mod tests {
 
         // Now finish the heading line with the trailing newline.
         c.push_delta("\n");
+// tui2/src/markdown_stream.rs
         let out2 = c.commit_complete_lines();
         let s2: Vec<String> = out2.iter().map(logical_line_text).collect();
         assert_eq!(

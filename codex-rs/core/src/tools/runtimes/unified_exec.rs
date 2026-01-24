@@ -102,6 +102,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
             cwd: req.cwd.clone(),
             tty: req.tty,
             sandbox_permissions: req.sandbox_permissions,
+// core/src/tools/runtimes/unified_exec.rs
         }]
     }
 

@@ -70,6 +70,7 @@ impl Policy {
     where
         Commands: IntoIterator,
         Commands::Item: AsRef<[String]>,
+// execpolicy/src/policy.rs
         F: Fn(&[String]) -> Decision,
     {
         let matched_rules: Vec<RuleMatch> = commands

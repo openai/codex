@@ -68,6 +68,7 @@ impl ClientHandler for LoggingClientHandler {
     ) {
         info!(
             "MCP server progress notification (token: {:?}, progress: {}, total: {:?}, message: {:?})",
+// rmcp-client/src/logging_client_handler.rs
             params.progress_token, params.progress, params.total, params.message
         );
     }

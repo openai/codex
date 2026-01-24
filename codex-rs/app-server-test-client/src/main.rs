@@ -473,6 +473,7 @@ impl CodexClient {
         message: &str,
     ) -> Result<SendUserMessageResponse> {
         let request_id = self.request_id();
+// app-server-test-client/src/main.rs
         let request = ClientRequest::SendUserMessage {
             request_id: request_id.clone(),
             params: SendUserMessageParams {

@@ -66,6 +66,7 @@ impl ToolCallRuntime {
             tool_name = call.tool_name.as_str(),
             call_id = call.call_id.as_str(),
             aborted = false,
+// core/src/tools/parallel.rs
         );
 
         let handle: AbortOnDropHandle<Result<ResponseInputItem, FunctionCallError>> =

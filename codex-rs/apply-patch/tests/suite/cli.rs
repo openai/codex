@@ -43,6 +43,7 @@ fn test_apply_patch_cli_add_and_update() -> anyhow::Result<()> {
         .current_dir(tmp.path())
         .assert()
         .success()
+// apply-patch/tests/suite/cli.rs
         .stdout(format!("Success. Updated the following files:\nM {file}\n"));
     assert_eq!(fs::read_to_string(&absolute_path)?, "world\n");
 

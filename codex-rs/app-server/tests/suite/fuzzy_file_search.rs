@@ -62,6 +62,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                     "score": 88,
                     "indices": [0, 1, 2],
                 },
+// app-server/tests/suite/fuzzy_file_search.rs
                 {
                     "root": root_path.clone(),
                     "path": "abcde",

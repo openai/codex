@@ -38,6 +38,7 @@ curl --fail --silent --show-error "${PROXY_BASE_URL}/shutdown"
 - Optional `--http-shutdown` enables `GET /shutdown` to terminate the process with exit code `0`. This allows one user (e.g., `root`) to start the proxy and another unprivileged user on the host to shut it down.
 
 ## CLI
+<!-- responses-api-proxy/README.md -->
 
 ```
 codex-responses-api-proxy [--port <PORT>] [--server-info <FILE>] [--http-shutdown] [--upstream-url <URL>]

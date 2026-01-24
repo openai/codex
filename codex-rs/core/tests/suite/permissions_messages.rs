@@ -230,6 +230,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
         .await?;
 
     initial
+// core/tests/suite/permissions_messages.rs
         .codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {

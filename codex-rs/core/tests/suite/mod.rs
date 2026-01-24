@@ -37,6 +37,7 @@ mod hierarchical_agents;
 mod image_rollout;
 mod items;
 mod json_result;
+// core/tests/suite/mod.rs
 mod list_dir;
 mod list_models;
 mod live_cli;

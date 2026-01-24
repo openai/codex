@@ -203,6 +203,7 @@ pub struct CodexToolCallReplyParam {
 
     /// The thread id for this Codex session.
     /// This field is required, but we keep it optional here for backward
+// mcp-server/src/codex_tool_config.rs
     /// compatibility for clients that still use conversationId.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thread_id: Option<String>,

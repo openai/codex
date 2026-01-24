@@ -5,6 +5,7 @@ expression: text
 • Edited wrap_demo.txt (+2 -2)
     1  1
     2 -2
+# tui2/src/snapshots/codex_tui2__diff_render__tests__apply_update_block_wraps_long_lines_text.snap
     2 +added long line which
         wraps and_if_there_i
        s_a_long_token_it_wil

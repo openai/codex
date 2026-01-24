@@ -92,6 +92,7 @@ impl ReqwestTransport {
                         http::HeaderValue::from_static("application/json"),
                     );
                 }
+// codex-client/src/transport.rs
 
                 tracing::info!(
                     pre_compression_bytes,

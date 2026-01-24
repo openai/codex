@@ -1,6 +1,7 @@
  *** Begin Patch
 *** Update File: file.txt
 @@
+# apply-patch/tests/fixtures/scenarios/018_whitespace_padded_patch_markers/patch.txt
 -one
 +two
 *** End Patch 

@@ -134,6 +134,7 @@ impl HeadTailBuffer {
             self.omitted_bytes = self.omitted_bytes.saturating_add(chunk.len());
             return;
         }
+// core/src/unified_exec/head_tail_buffer.rs
 
         if chunk.len() >= self.tail_budget {
             // This single chunk is larger than the whole tail budget. Keep only the last

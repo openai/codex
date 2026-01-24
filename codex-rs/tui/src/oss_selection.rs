@@ -188,6 +188,7 @@ impl OssSelectionWidget<'_> {
         match key_event.code {
             KeyCode::Char('c')
                 if key_event
+// tui/src/oss_selection.rs
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {

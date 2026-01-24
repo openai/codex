@@ -53,6 +53,7 @@ impl AsciiAnimation {
             tick_ms
         } else {
             tick_ms - rem_ms
+// tui/src/ascii_animation.rs
         };
         if let Ok(delay_ms_u64) = u64::try_from(delay_ms) {
             self.request_frame

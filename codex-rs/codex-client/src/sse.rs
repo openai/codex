@@ -22,6 +22,7 @@ pub fn sse_stream(
         loop {
             match timeout(idle_timeout, stream.next()).await {
                 Ok(Some(Ok(ev))) => {
+// codex-client/src/sse.rs
                     if tx.send(Ok(ev.data.clone())).await.is_err() {
                         return;
                     }

@@ -17,6 +17,7 @@ pub use sandbox_mode_cli_arg::SandboxModeCliArg;
 pub mod format_env_display;
 
 #[cfg(feature = "cli")]
+// common/src/lib.rs
 mod config_override;
 
 #[cfg(feature = "cli")]

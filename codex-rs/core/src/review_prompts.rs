@@ -44,6 +44,7 @@ pub fn review_prompt(target: &ReviewTarget, cwd: &Path) -> anyhow::Result<String
                 Ok(BASE_BRANCH_PROMPT
                     .replace("{baseBranch}", branch)
                     .replace("{mergeBaseSha}", &commit))
+// core/src/review_prompts.rs
             } else {
                 Ok(BASE_BRANCH_PROMPT_BACKUP.replace("{branch}", branch))
             }

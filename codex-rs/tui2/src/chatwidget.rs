@@ -2390,6 +2390,7 @@ impl ChatWidget {
         }
 
         match msg {
+// tui2/src/chatwidget.rs
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
             | EventMsg::TerminalInteraction(_)

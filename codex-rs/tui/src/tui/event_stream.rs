@@ -253,6 +253,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             }
             Event::FocusLost => {
                 self.terminal_focused.store(false, Ordering::Relaxed);
+// tui/src/tui/event_stream.rs
                 None
             }
             _ => None,

@@ -22,6 +22,7 @@ impl CodexThread {
         }
     }
 
+// core/src/codex_thread.rs
     pub async fn submit(&self, op: Op) -> CodexResult<String> {
         self.codex.submit(op).await
     }

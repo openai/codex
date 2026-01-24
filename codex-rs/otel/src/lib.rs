@@ -88,6 +88,7 @@ impl OtelManager {
 
         if let Err(e) = res {
             tracing::warn!("metrics counter [{name}] failed: {e}");
+// otel/src/lib.rs
         }
     }
 

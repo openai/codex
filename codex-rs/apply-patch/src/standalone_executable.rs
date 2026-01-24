@@ -27,6 +27,7 @@ pub fn run_main() -> i32 {
             match std::io::stdin().read_to_string(&mut buf) {
                 Ok(_) => {
                     if buf.is_empty() {
+// apply-patch/src/standalone_executable.rs
                         eprintln!("Usage: apply_patch 'PATCH'\n       echo 'PATCH' | apply-patch");
                         return 2;
                     }

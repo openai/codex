@@ -334,6 +334,7 @@ mod tests {
 
     #[test]
     fn file_storage_delete_removes_auth_file() -> anyhow::Result<()> {
+// core/src/auth/storage.rs
         let dir = tempdir()?;
         let auth_dot_json = AuthDotJson {
             openai_api_key: Some("sk-test-key".to_string()),

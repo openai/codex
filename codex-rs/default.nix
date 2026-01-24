@@ -14,6 +14,7 @@ rustPlatform.buildRustPackage (_: {
   cargoLock.lockFile = ./Cargo.lock;
   doCheck = false;
   src = ./.;
+# default.nix
   nativeBuildInputs = [
     pkg-config
     openssl

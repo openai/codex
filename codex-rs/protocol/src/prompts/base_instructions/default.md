@@ -135,6 +135,7 @@ If completing the user's task requires writing or modifying files, your code and
 
 - Fix the problem at the root cause rather than applying surface-level patches, when possible.
 - Avoid unneeded complexity in your solution.
+<!-- protocol/src/prompts/base_instructions/default.md -->
 - Do not attempt to fix unrelated bugs or broken tests. It is not your responsibility to fix them. (You may mention them to the user in your final message though.)
 - Update documentation as necessary.
 - Keep changes consistent with the style of the existing codebase. Changes should be minimal and focused on the task.

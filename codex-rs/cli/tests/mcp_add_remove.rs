@@ -112,6 +112,7 @@ async fn add_streamable_http_without_manual_token() -> Result<()> {
     add_cmd
         .args(["mcp", "add", "github", "--url", "https://example.com/mcp"])
         .assert()
+// cli/tests/mcp_add_remove.rs
         .success();
 
     let servers = load_global_mcp_servers(codex_home.path()).await?;

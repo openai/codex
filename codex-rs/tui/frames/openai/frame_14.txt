@@ -6,6 +6,7 @@
                 iiin   i              
                 ioii  oi              
                 iiii e o              
+# tui/frames/openai/frame_14.txt
                 iinia  n              
                 iiii   o              
                 oaee  ne              

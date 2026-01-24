@@ -55,6 +55,7 @@ pub struct Cli {
 
     /// Convenience flag to select the local open source model provider. Equivalent to -c
     /// model_provider=oss; verifies a local LM Studio or Ollama server is running.
+// tui/src/cli.rs
     #[arg(long = "oss", default_value_t = false)]
     pub oss: bool,
 

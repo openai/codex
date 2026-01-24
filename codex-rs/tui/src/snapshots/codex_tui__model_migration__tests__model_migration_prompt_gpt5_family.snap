@@ -4,6 +4,7 @@ expression: terminal.backend()
 ---
 
 > Codex just got an upgrade. Introducing gpt-5.1.
+# tui/src/snapshots/codex_tui__model_migration__tests__model_migration_prompt_gpt5_family.snap
 
   We recommend switching from gpt-5 to gpt-5.1.
 

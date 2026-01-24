@@ -209,6 +209,7 @@ pub fn resolve_sid(name: &str) -> Result<Vec<u8>> {
     let mut domain: Vec<u16> = Vec::new();
     let mut domain_len: u32 = 0;
     let mut use_type: SID_NAME_USE = 0;
+// windows-sandbox-rs/src/sandbox_users.rs
     loop {
         let ok = unsafe {
             LookupAccountNameW(

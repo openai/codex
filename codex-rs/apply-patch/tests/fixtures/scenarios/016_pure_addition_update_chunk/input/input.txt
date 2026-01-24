@@ -1,2 +1,3 @@
 line1
+# apply-patch/tests/fixtures/scenarios/016_pure_addition_update_chunk/input/input.txt
 line2

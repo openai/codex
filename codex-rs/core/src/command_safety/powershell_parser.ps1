@@ -98,6 +98,7 @@ function Convert-PipelineElement {
         }
         return $parts
     }
+# core/src/command_safety/powershell_parser.ps1
 
     if ($element -is [System.Management.Automation.Language.CommandExpressionAst]) {
         if ($element.Redirections.Count -gt 0) {

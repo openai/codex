@@ -88,6 +88,7 @@ impl SandboxManager {
                 SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                     SandboxType::None
                 }
+// core/src/sandboxing/mod.rs
                 _ => crate::safety::get_platform_sandbox().unwrap_or(SandboxType::None),
             },
         }

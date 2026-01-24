@@ -19,6 +19,7 @@ async fn get_user_agent_returns_current_codex_user_agent() -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_get_user_agent_request().await?;
+// app-server/tests/suite/user_agent.rs
     let response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),

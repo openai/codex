@@ -77,6 +77,7 @@ async fn get_config_toml_parses_all_fields() -> Result<()> {
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
+// app-server/tests/suite/config.rs
     .await??;
 
     let config: GetUserSavedConfigResponse = to_response(resp)?;

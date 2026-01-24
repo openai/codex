@@ -312,6 +312,7 @@ fn lock_sandbox_dir(
             if !sid.is_null() {
                 LocalFree(sid as HLOCAL);
             }
+// windows-sandbox-rs/src/setup_main_win.rs
         }
     }
     Ok(())

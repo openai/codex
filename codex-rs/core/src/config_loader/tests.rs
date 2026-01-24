@@ -333,6 +333,7 @@ allowed_approval_policies = ["never"]
 
 #[tokio::test(flavor = "current_thread")]
 async fn load_requirements_toml_produces_expected_constraints() -> anyhow::Result<()> {
+// core/src/config_loader/tests.rs
     let tmp = tempdir()?;
     let requirements_file = tmp.path().join("requirements.toml");
     tokio::fs::write(

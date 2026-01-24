@@ -19,6 +19,7 @@ async fn read_file_tool_returns_requested_lines() -> anyhow::Result<()> {
     std::fs::write(&file_path, "first\nsecond\nthird\nfourth\n")?;
     let file_path = file_path.to_string_lossy().to_string();
 
+// core/tests/suite/read_file.rs
     let call_id = "read-file-call";
     let arguments = json!({
         "file_path": file_path,

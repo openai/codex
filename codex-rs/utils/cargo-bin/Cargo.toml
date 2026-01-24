@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# utils/cargo-bin/Cargo.toml
 [lints]
 workspace = true
 

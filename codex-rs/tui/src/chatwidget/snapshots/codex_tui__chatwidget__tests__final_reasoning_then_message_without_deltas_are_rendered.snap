@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+# tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__final_reasoning_then_message_without_deltas_are_rendered.snap
 expression: combined
 ---
 • Here is the result.

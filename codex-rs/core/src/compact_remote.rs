@@ -40,6 +40,7 @@ async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
 ) -> CodexResult<()> {
+// core/src/compact_remote.rs
     let history = sess.clone_history().await;
 
     // Required to keep `/undo` available after compaction

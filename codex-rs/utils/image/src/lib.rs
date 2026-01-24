@@ -124,6 +124,7 @@ fn encode_image(
     let target_format = match preferred_format {
         ImageFormat::Jpeg => ImageFormat::Jpeg,
         _ => ImageFormat::Png,
+// utils/image/src/lib.rs
     };
 
     let mut buffer = Vec::new();

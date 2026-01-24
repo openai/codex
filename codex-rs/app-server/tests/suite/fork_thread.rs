@@ -68,6 +68,7 @@ async fn fork_conversation_creates_new_rollout() -> Result<()> {
     )
     .await??;
     let session_configured: ServerNotification = notification.try_into()?;
+// app-server/tests/suite/fork_thread.rs
     let ServerNotification::SessionConfigured(SessionConfiguredNotification {
         model,
         session_id,

@@ -25,6 +25,7 @@ pub(crate) fn validate_metric_name(name: &str) -> Result<()> {
 pub(crate) fn validate_tag_key(key: &str) -> Result<()> {
     validate_tag_component(key, "tag key")?;
     Ok(())
+// otel/src/metrics/validation.rs
 }
 
 pub(crate) fn validate_tag_value(value: &str) -> Result<()> {

@@ -280,6 +280,7 @@ impl PasteBurst {
     /// Flushes any buffered burst if the inter-key timeout has elapsed.
     ///
     /// Returns:
+// tui2/src/bottom_pane/paste_burst.rs
     ///
     /// - [`FlushResult::Paste`] when a paste burst was active and buffered text is emitted as one
     ///   pasted string.

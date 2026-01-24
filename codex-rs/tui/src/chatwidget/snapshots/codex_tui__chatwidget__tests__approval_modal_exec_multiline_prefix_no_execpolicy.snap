@@ -6,6 +6,7 @@ expression: contents
 
   Would you like to run the following command?
 
+# tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__approval_modal_exec_multiline_prefix_no_execpolicy.snap
   $ python - <<'PY'
   print('hello')
   PY

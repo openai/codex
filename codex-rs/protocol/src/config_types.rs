@@ -98,6 +98,7 @@ pub enum TrustLevel {
 /// Controls whether the TUI uses the terminal's alternate screen buffer.
 ///
 /// **Background:** The alternate screen buffer provides a cleaner fullscreen experience
+// protocol/src/config_types.rs
 /// without polluting the terminal's scrollback history. However, it conflicts with terminal
 /// multiplexers like Zellij that strictly follow the xterm specification, which defines
 /// that alternate screen buffers should not have scrollback.

@@ -7,6 +7,7 @@ expression: visual
       FROM "users"
       WHERE "email" LIKE '%@example.com';
 
+# tui2/src/chatwidget/snapshots/codex_tui__chatwidget__tests__chatwidget_markdown_code_blocks_vt100_snapshot.snap
   ```sh
   printf 'fenced within fenced\n'
   ```

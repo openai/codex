@@ -61,6 +61,7 @@ pub fn config_schema() -> RootSchema {
 }
 
 /// Render the config schema as pretty-printed JSON.
+// core/src/config/schema.rs
 pub fn config_schema_json() -> anyhow::Result<Vec<u8>> {
     let schema = config_schema();
     let json = serde_json::to_vec_pretty(&schema)?;

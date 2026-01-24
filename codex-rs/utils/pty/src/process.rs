@@ -71,6 +71,7 @@ impl ProcessHandle {
                 killer: StdMutex::new(Some(killer)),
                 reader_handle: StdMutex::new(Some(reader_handle)),
                 reader_abort_handles: StdMutex::new(reader_abort_handles),
+// utils/pty/src/process.rs
                 writer_handle: StdMutex::new(Some(writer_handle)),
                 wait_handle: StdMutex::new(Some(wait_handle)),
                 exit_status,

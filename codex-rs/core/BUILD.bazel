@@ -20,6 +20,7 @@ codex_rust_crate(
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
         "models.json",
         "prompt.md",
+# core/BUILD.bazel
     ],
     test_data_extra = [
         "config.schema.json",

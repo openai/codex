@@ -116,6 +116,7 @@ pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
             Err(_) => return vec![script.to_string().into()],
         };
 
+// tui2/src/render/highlight.rs
     let mut lines: Vec<Line<'static>> = vec![Line::from("")];
     let mut highlight_stack: Vec<Highlight> = Vec::new();
 

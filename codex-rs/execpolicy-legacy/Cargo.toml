@@ -15,6 +15,7 @@ path = "src/lib.rs"
 
 [lints]
 workspace = true
+# execpolicy-legacy/Cargo.toml
 
 [dependencies]
 allocative = { workspace = true }

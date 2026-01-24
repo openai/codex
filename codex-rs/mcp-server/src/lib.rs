@@ -72,6 +72,7 @@ pub async fn run_main(
                             // Receiver gone – nothing left to do.
                             break;
                         }
+// mcp-server/src/lib.rs
                     }
                     Err(e) => error!("Failed to deserialize JSONRPCMessage: {e}"),
                 }

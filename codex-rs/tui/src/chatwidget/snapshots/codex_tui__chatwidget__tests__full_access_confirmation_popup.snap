@@ -5,6 +5,7 @@ expression: popup
   Enable full access?
   When Codex runs with full access, it can edit any file on your computer and
   run commands with network, without your approval. Exercise caution when
+# tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__full_access_confirmation_popup.snap
   enabling full access. This significantly increases the risk of data loss,
   leaks, or unexpected behavior.
 

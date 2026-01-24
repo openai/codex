@@ -196,6 +196,7 @@ fn load_traceparent_context() -> Option<Context> {
         None => {
             warn!("TRACEPARENT is set but invalid; ignoring trace context");
             None
+// otel/src/otel_provider.rs
         }
     }
 }

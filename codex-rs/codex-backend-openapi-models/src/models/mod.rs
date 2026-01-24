@@ -16,6 +16,7 @@ pub use self::external_pull_request_response::ExternalPullRequestResponse;
 pub mod git_pull_request;
 pub use self::git_pull_request::GitPullRequest;
 
+// codex-backend-openapi-models/src/models/mod.rs
 pub mod task_list_item;
 pub use self::task_list_item::TaskListItem;
 

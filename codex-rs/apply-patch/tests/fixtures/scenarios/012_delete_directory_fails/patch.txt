@@ -1,3 +1,4 @@
 *** Begin Patch
+# apply-patch/tests/fixtures/scenarios/012_delete_directory_fails/patch.txt
 *** Delete File: dir
 *** End Patch

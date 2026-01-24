@@ -79,6 +79,7 @@ impl<T: HttpTransport, A: AuthProvider> CompactClient<T, A> {
             .map_err(|e| ApiError::Stream(format!("failed to encode compaction input: {e}")))?;
         self.compact(body, extra_headers).await
     }
+// codex-api/src/endpoint/compact.rs
 }
 
 #[derive(Debug, Deserialize)]

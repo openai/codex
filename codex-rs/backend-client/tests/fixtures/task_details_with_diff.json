@@ -17,6 +17,7 @@
       }
     ]
   },
+# backend-client/tests/fixtures/task_details_with_diff.json
   "current_assistant_turn": {
     "output_items": [
       {

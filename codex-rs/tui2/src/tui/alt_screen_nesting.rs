@@ -38,6 +38,7 @@ impl AltScreenNesting {
     /// Record a leave-alt-screen request.
     ///
     /// Returns `true` when the caller should actually leave the alternate screen.
+// tui2/src/tui/alt_screen_nesting.rs
     pub(crate) fn leave(&mut self) -> bool {
         match self.depth {
             0 => false,

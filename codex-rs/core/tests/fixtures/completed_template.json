@@ -6,6 +6,7 @@
       "usage": {
         "input_tokens": 0,
         "input_tokens_details": null,
+# core/tests/fixtures/completed_template.json
         "output_tokens": 0,
         "output_tokens_details": null,
         "total_tokens": 0

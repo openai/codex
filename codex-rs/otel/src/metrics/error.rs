@@ -16,6 +16,7 @@ pub enum MetricsError {
 
     #[error("metrics exporter is disabled")]
     ExporterDisabled,
+// otel/src/metrics/error.rs
 
     #[error("counter increment must be non-negative for {name}: {inc}")]
     NegativeCounterIncrement { name: String, inc: i64 },

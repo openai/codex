@@ -1,6 +1,7 @@
 load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
+# exec/BUILD.bazel
     name = "exec",
     crate_name = "codex_exec",
     test_tags = ["no-sandbox"],

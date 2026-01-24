@@ -64,6 +64,7 @@ Do **not** use `request_user_input` to ask "is my plan ready?" or "should I proc
 ```
 
 **2 Choice with free-form**
+<!-- core/templates/collaboration_mode/plan.md -->
 
 ```json
 {

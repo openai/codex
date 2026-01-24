@@ -262,6 +262,7 @@ fn format_truncation_marker(policy: TruncationPolicy, removed_count: u64) -> Str
     }
 }
 
+// core/src/truncate.rs
 fn split_budget(budget: usize) -> (usize, usize) {
     let left = budget / 2;
     (left, budget - left)

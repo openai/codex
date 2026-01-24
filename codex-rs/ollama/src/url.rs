@@ -17,6 +17,7 @@ pub fn base_url_to_host_root(base_url: &str) -> String {
     }
 }
 
+// ollama/src/url.rs
 #[cfg(test)]
 mod tests {
     use super::*;

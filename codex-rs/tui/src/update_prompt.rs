@@ -154,6 +154,7 @@ impl UpdatePromptScreen {
         self.selection.is_some()
     }
 
+// tui/src/update_prompt.rs
     fn selection(&self) -> Option<UpdateSelection> {
         self.selection
     }

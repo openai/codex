@@ -6,6 +6,7 @@ expression: terminal.backend()
 "    1 -first                                                                    "
 "    2 -second                                                                   "
 "    3 -third                                                                    "
+# tui2/src/snapshots/codex_tui2__diff_render__tests__apply_delete_block.snap
 "                                                                                "
 "                                                                                "
 "                                                                                "

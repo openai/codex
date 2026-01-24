@@ -1,6 +1,7 @@
 load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
+# feedback/BUILD.bazel
     name = "feedback",
     crate_name = "codex_feedback",
 )

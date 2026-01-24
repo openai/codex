@@ -51,6 +51,7 @@
   (sysctl-name "hw.pagesize")
   (sysctl-name "hw.physicalcpu")
   (sysctl-name "hw.physicalcpu_max")
+# core/src/seatbelt_base_policy.sbpl
   (sysctl-name "hw.tbfrequency_compat")
   (sysctl-name "hw.vectorunit")
   (sysctl-name "kern.argmax")

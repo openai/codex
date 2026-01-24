@@ -8,6 +8,7 @@ use ts_rs::TS;
 /// Example usage forms constructed in code:
 /// - Command token after '/': `"{PROMPTS_CMD_PREFIX}:name"`
 /// - Full slash prefix: `"/{PROMPTS_CMD_PREFIX}:"`
+// protocol/src/custom_prompts.rs
 pub const PROMPTS_CMD_PREFIX: &str = "prompts";
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]

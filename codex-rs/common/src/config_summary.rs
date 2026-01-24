@@ -14,6 +14,7 @@ pub fn create_config_summary_entries(config: &Config, model: &str) -> Vec<(&'sta
             "sandbox",
             summarize_sandbox_policy(config.sandbox_policy.get()),
         ),
+// common/src/config_summary.rs
     ];
     if config.model_provider.wire_api == WireApi::Responses {
         let reasoning_effort = config

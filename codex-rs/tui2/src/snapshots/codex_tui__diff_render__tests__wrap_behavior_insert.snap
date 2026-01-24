@@ -4,6 +4,7 @@ expression: terminal.backend()
 ---
 "1 +this is a very long line that should wrap across multiple terminal columns an          "
 "   d continue                                                                             "
+# tui2/src/snapshots/codex_tui__diff_render__tests__wrap_behavior_insert.snap
 "                                                                                          "
 "                                                                                          "
 "                                                                                          "

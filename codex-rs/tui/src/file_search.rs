@@ -97,6 +97,7 @@ impl FileSearchManager {
             if let Some(active_search) = &st.active_search
                 && !query.starts_with(&active_search.query)
             {
+// tui/src/file_search.rs
                 active_search
                     .cancellation_token
                     .store(true, Ordering::Relaxed);

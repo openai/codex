@@ -33,6 +33,7 @@ where
     let rel = path.strip_prefix(&home_dir).ok()?;
     Some(rel.to_path_buf())
 }
+// tui2/src/exec_command.rs
 
 #[cfg(test)]
 mod tests {

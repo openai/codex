@@ -19,6 +19,7 @@ pub fn test_builtin_collaboration_mode_presets() -> Vec<CollaborationMode> {
 
 fn plan_preset() -> CollaborationMode {
     CollaborationMode::Plan(Settings {
+// core/src/models_manager/collaboration_mode_presets.rs
         model: "gpt-5.2-codex".to_string(),
         reasoning_effort: Some(ReasoningEffort::Medium),
         developer_instructions: Some(COLLABORATION_MODE_PLAN.to_string()),

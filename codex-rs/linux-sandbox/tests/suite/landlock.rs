@@ -132,6 +132,7 @@ async fn test_writable_root() {
         ],
         &[tmpdir.path().to_path_buf()],
         // We have seen timeouts when running this test in CI on GitHub,
+// linux-sandbox/tests/suite/landlock.rs
         // so we are using a generous timeout until we can diagnose further.
         LONG_TIMEOUT_MS,
     )

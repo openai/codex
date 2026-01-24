@@ -67,6 +67,7 @@ async fn thread_loaded_list_paginates() -> Result<()> {
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
+// app-server/tests/suite/v2/thread_loaded_list.rs
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(list_id)),
     )

@@ -459,6 +459,7 @@ async fn status_snapshot_hides_when_has_no_credits_flag() {
 #[tokio::test]
 async fn status_card_token_usage_excludes_cached_tokens() {
     let temp_home = TempDir::new().expect("temp home");
+// tui2/src/status/tests.rs
     let mut config = test_config(&temp_home).await;
     config.model = Some("gpt-5.1-codex-max".to_string());
     config.cwd = PathBuf::from("/workspace/tests");

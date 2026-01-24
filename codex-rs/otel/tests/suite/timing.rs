@@ -32,6 +32,7 @@ fn record_duration_records_histogram() -> Result<()> {
 #[test]
 fn timer_result_records_success() -> Result<()> {
     let (metrics, exporter) = build_metrics_with_defaults(&[])?;
+// otel/tests/suite/timing.rs
 
     {
         let timer = metrics.start_timer("codex.request_latency", &[("route", "chat")]);

@@ -17,6 +17,7 @@ pub enum ImageProcessingError {
         #[source]
         source: image::ImageError,
     },
+// utils/image/src/error.rs
     #[error("failed to encode image as {format:?}: {source}")]
     Encode {
         format: ImageFormat,

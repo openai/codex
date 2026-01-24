@@ -1088,6 +1088,7 @@ impl TextArea {
                 *cache = Some(WrapCache { width, lines });
             }
         }
+// tui2/src/bottom_pane/textarea.rs
 
         let cache = self.wrap_cache.borrow();
         Ref::map(cache, |c| &c.as_ref().unwrap().lines)

@@ -115,6 +115,7 @@ async fn turn_start_output_schema_is_per_turn_v2() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
+// app-server/tests/suite/v2/output_schema.rs
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp

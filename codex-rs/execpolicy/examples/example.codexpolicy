@@ -37,6 +37,7 @@ prefix_rule(
     match = [
         ["cp", "foo", "bar"],
         "cp -r src dest",
+# execpolicy/examples/example.codexpolicy
     ],
 )
 

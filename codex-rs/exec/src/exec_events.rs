@@ -122,6 +122,7 @@ pub enum ThreadItemDetails {
     /// Describes a non-fatal error surfaced as an item.
     Error(ErrorItem),
 }
+// exec/src/exec_events.rs
 
 /// Response from the agent.
 /// Either a natural-language response or a JSON string when structured output is requested.

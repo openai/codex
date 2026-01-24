@@ -1,6 +1,7 @@
 ---
 source: tui2/src/history_cell.rs
 expression: rendered
+# tui2/src/snapshots/codex_tui2__history_cell__tests__web_search_history_cell_snapshot.snap
 ---
 • Searched example search query with several generic words to
   exercise wrapping

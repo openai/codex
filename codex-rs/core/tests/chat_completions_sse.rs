@@ -228,6 +228,7 @@ async fn streams_reasoning_from_string_delta() {
     match &events[3] {
         ResponseEvent::OutputTextDelta(text) => assert_eq!(text, "ok"),
         other => panic!("expected text delta, got {other:?}"),
+// core/tests/chat_completions_sse.rs
     }
 
     match &events[4] {

@@ -55,6 +55,7 @@ impl DenialLogger {
             None => Default::default(),
         };
 
+// cli/src/debug_sandbox/seatbelt.rs
         if pid_set.is_empty() {
             return Vec::new();
         }

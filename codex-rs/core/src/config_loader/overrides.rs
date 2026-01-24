@@ -25,6 +25,7 @@ fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
         if is_last {
             match current {
                 TomlValue::Table(table) => {
+// core/src/config_loader/overrides.rs
                     table.insert(segment.to_string(), value);
                 }
                 _ => {

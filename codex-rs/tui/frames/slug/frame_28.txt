@@ -6,6 +6,7 @@
                  e  xe                
                  e -ge                
                 dex de                
+# tui/frames/slug/frame_28.txt
                  e-gge                
                 5o  de                
                 ee-cxe                

@@ -6,6 +6,7 @@ mod create_thread;
 mod fork_thread;
 mod fuzzy_file_search;
 mod interrupt;
+// app-server/tests/suite/mod.rs
 mod list_resume;
 mod login;
 mod output_schema;

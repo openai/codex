@@ -5,6 +5,7 @@ expression: terminal.backend()
 > Introducing our gpt-5.1 models
 
   We've upgraded our family of models supported in Codex to
+# tui2/src/snapshots/codex_tui__model_migration__tests__model_migration_prompt_gpt5_codex.snap
   gpt-5.1, gpt-5.1-codex and gpt-5.1-codex-mini.
 
   You can continue using legacy models by specifying them

@@ -352,6 +352,7 @@ fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
         (0, 0)
     }
 }
+// tui2/src/diff_render.rs
 
 fn push_wrapped_diff_line(
     line_number: usize,

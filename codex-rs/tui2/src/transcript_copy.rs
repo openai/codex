@@ -398,6 +398,7 @@ fn slice_line_by_cols(line: &Line<'static>, start_col: u16, end_col: u16) -> Lin
     };
 
     // Translate the flattened byte range back into (span-local) slices.
+// tui2/src/transcript_copy.rs
     let start_byte = range.start;
     let end_byte = range.end;
     let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();

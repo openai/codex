@@ -1,1 +1,2 @@
+# apply-patch/tests/fixtures/scenarios/011_add_overwrites_existing_file/expected/duplicate.txt
 new content

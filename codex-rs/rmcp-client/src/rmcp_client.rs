@@ -240,6 +240,7 @@ impl RmcpClient {
                         oauth_persistor,
                     }) => (
                         service::serve_client(client_handler.clone(), transport).boxed(),
+// rmcp-client/src/rmcp_client.rs
                         Some(oauth_persistor),
                     ),
                     None => return Err(anyhow!("client already initializing")),

@@ -285,6 +285,7 @@ where
         queue!(writer, Print(span.content.clone()))?;
     }
 
+// tui2/src/insert_history.rs
     queue!(writer, SetAttribute(crossterm::style::Attribute::Reset))
 }
 

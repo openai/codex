@@ -12,6 +12,7 @@ path = "src/lib.rs"
 workspace = true
 
 [features]
+# cloud-tasks-client/Cargo.toml
 default = ["online"]
 online = ["dep:codex-backend-client"]
 mock = []

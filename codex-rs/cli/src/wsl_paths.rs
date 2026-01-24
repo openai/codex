@@ -27,6 +27,7 @@ pub fn win_path_to_wsl(path: &str) -> Option<String> {
 pub fn normalize_for_wsl<P: AsRef<OsStr>>(path: P) -> String {
     let value = path.as_ref().to_string_lossy().to_string();
     if !is_wsl() {
+// cli/src/wsl_paths.rs
         return value;
     }
     if let Some(mapped) = win_path_to_wsl(&value) {

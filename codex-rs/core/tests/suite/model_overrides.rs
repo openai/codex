@@ -47,6 +47,7 @@ async fn override_turn_context_does_not_persist_when_config_exists() {
 
     codex.submit(Op::Shutdown).await.expect("request shutdown");
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+// core/tests/suite/model_overrides.rs
 
     let contents = tokio::fs::read_to_string(&config_path)
         .await

@@ -3,6 +3,7 @@ source: tui/src/chatwidget/tests.rs
 assertion_line: 1989
 expression: popup
 ---
+# tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__model_picker_filters_hidden_models.snap
   Select Model and Effort
   Access legacy models by running codex -m <model_name> or in your config.toml
 

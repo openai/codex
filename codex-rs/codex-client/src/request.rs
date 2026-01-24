@@ -24,6 +24,7 @@ pub struct Request {
 
 impl Request {
     pub fn new(method: Method, url: String) -> Self {
+// codex-client/src/request.rs
         Self {
             method,
             url,

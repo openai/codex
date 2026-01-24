@@ -361,6 +361,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                         command,
                         proposed_execpolicy_amendment,
                     },
+// tui2/src/bottom_pane/approval_overlay.rs
                     header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
                 }
             }

@@ -1256,6 +1256,7 @@
             "required": [
                 "method"
             ],
+# mcp-types/schema/2025-06-18/schema.json
             "type": "object"
         },
         "ListToolsResult": {

@@ -7,6 +7,7 @@ fn main() -> anyhow::Result<()> {
     let Some(socket_path) = args.next() else {
         eprintln!("Usage: codex-stdio-to-uds <socket-path>");
         process::exit(1);
+// stdio-to-uds/src/main.rs
     };
 
     if args.next().is_some() {

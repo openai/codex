@@ -8,6 +8,7 @@ expression: terminal.backend()
 "    2     -line 2                                                               "
 "    2     +line two changed                                                     "
 "    3      line 3                                                               "
+# tui2/src/snapshots/codex_tui__diff_render__tests__vertical_ellipsis_between_hunks.snap
 "    4      line 4                                                               "
 "    5      line 5                                                               "
 "    ⋮                                                                           "

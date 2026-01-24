@@ -70,6 +70,7 @@ pub async fn load_auth_manager() -> Option<AuthManager> {
 }
 
 /// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,
+// cloud-tasks/src/util.rs
 /// and optional `ChatGPT-Account-Id`.
 pub async fn build_chatgpt_headers() -> HeaderMap {
     use reqwest::header::AUTHORIZATION;

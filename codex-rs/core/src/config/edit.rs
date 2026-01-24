@@ -866,6 +866,7 @@ model_reasoning_effort = "high"
                 enabled: false,
             }])
             .apply_blocking()
+// core/src/config/edit.rs
             .expect("persist");
 
         let contents =

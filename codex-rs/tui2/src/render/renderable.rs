@@ -213,6 +213,7 @@ impl<'a> ColumnRenderable<'a> {
 
 pub struct FlexChild<'a> {
     flex: i32,
+// tui2/src/render/renderable.rs
     child: RenderableItem<'a>,
 }
 

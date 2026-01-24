@@ -15,6 +15,7 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
+# linux-sandbox/Cargo.toml
 [target.'cfg(target_os = "linux")'.dependencies]
 clap = { workspace = true, features = ["derive"] }
 codex-core = { workspace = true }

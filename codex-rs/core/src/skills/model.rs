@@ -26,6 +26,7 @@ pub struct SkillInterface {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillError {
     pub path: PathBuf,
+// core/src/skills/model.rs
     pub message: String,
 }
 

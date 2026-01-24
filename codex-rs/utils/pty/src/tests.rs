@@ -141,6 +141,7 @@ async fn pipe_process_round_trips_stdin() -> anyhow::Result<()> {
     writer.send(b"roundtrip\n".to_vec()).await?;
 
     let (output, code) = collect_output_until_exit(spawned.output_rx, spawned.exit_rx, 5_000).await;
+// utils/pty/src/tests.rs
     let text = String::from_utf8_lossy(&output);
 
     assert!(

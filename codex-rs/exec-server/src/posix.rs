@@ -150,6 +150,7 @@ pub async fn main_mcp_server() -> anyhow::Result<()> {
 
 #[derive(Parser)]
 pub struct ExecveWrapperCli {
+// exec-server/src/posix.rs
     file: String,
 
     #[arg(trailing_var_arg = true)]

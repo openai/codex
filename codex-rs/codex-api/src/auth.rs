@@ -11,6 +11,7 @@ pub trait AuthProvider: Send + Sync {
         None
     }
 }
+// codex-api/src/auth.rs
 
 pub(crate) fn add_auth_headers<A: AuthProvider>(auth: &A, mut req: Request) -> Request {
     if let Some(token) = auth.bearer_token()

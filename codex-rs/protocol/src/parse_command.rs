@@ -13,6 +13,7 @@ pub enum ParsedCommand {
         /// (Best effort) Path to the file being read by the command. When
         /// possible, this is an absolute path, though when relative, it should
         /// be resolved against the `cwd`` that will be used to run the command
+// protocol/src/parse_command.rs
         /// to derive the absolute path.
         path: PathBuf,
     },

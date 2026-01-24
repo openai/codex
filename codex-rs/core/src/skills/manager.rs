@@ -104,6 +104,7 @@ impl SkillsManager {
         };
 
         let roots = skill_roots_from_layer_stack(&config_layer_stack);
+// core/src/skills/manager.rs
         let mut outcome = load_skills_from_roots(roots);
         outcome.disabled_paths = disabled_paths_from_stack(&config_layer_stack);
         match self.cache_by_cwd.write() {

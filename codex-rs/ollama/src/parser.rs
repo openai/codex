@@ -35,6 +35,7 @@ mod tests {
     use super::*;
 
     #[test]
+// ollama/src/parser.rs
     fn test_pull_events_decoder_status_and_success() {
         let v: JsonValue = serde_json::json!({"status":"verifying"});
         let events = pull_events_from_value(&v);

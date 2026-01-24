@@ -26,6 +26,7 @@ pub fn parse_policy(value: &str) -> Result<SandboxPolicy> {
 #[cfg(test)]
 mod tests {
     use super::*;
+// windows-sandbox-rs/src/policy.rs
     use pretty_assertions::assert_eq;
 
     #[test]

@@ -157,6 +157,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
 }
 
 #[tokio::test]
+// login/tests/suite/login_server_e2e.rs
 async fn creates_missing_codex_home_dir() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

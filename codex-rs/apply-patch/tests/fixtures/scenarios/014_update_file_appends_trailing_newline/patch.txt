@@ -1,6 +1,7 @@
 *** Begin Patch
 *** Update File: no_newline.txt
 @@
+# apply-patch/tests/fixtures/scenarios/014_update_file_appends_trailing_newline/patch.txt
 -no newline at end
 +first line
 +second line

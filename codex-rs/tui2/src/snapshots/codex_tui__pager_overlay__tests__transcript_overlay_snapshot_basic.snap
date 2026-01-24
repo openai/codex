@@ -5,6 +5,7 @@ expression: term.backend()
 "/ T R A N S C R I P T / / / / / / / / / "
 "alpha                                   "
 "                                        "
+# tui2/src/snapshots/codex_tui__pager_overlay__tests__transcript_overlay_snapshot_basic.snap
 "beta                                    "
 "                                        "
 "gamma                                   "

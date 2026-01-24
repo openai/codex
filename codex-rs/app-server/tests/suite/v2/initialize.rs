@@ -66,6 +66,7 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
 
     let JSONRPCMessage::Response(response) = message else {
         anyhow::bail!("expected initialize response, got {message:?}");
+// app-server/tests/suite/v2/initialize.rs
     };
     let InitializeResponse { user_agent } = to_response::<InitializeResponse>(response)?;
 

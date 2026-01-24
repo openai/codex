@@ -1,6 +1,7 @@
 # codex-process-hardening
 
 This crate provides `pre_main_hardening()`, which is designed to be called pre-`main()` (using `#[ctor::ctor]`) to perform various process hardening steps, such as
+<!-- process-hardening/README.md -->
 
 - disabling core dumps
 - disabling ptrace attach on Linux and macOS

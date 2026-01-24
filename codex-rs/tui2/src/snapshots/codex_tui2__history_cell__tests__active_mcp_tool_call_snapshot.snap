@@ -1,5 +1,6 @@
 ---
 source: tui2/src/history_cell.rs
+# tui2/src/snapshots/codex_tui2__history_cell__tests__active_mcp_tool_call_snapshot.snap
 expression: rendered
 ---
 • Calling search.find_docs({"query":"ratatui styling","limit":3})

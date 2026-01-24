@@ -217,6 +217,7 @@ async fn test_list_and_resume_conversations() -> Result<()> {
     // Then the response for resumeConversation
     let resume_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
+// app-server/tests/suite/list_resume.rs
         mcp.read_stream_until_response_message(RequestId::Integer(resume_req_id)),
     )
     .await??;

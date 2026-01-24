@@ -6,6 +6,7 @@
      epeoa             piean nnaap    
     eoei             pooaee    nnap   
     ioia           a eapeo     nnno   
+# tui/frames/openai/frame_21.txt
      an            nn oip       i i   
     i i  ppnnnnnppp  aipoip    ne i   
     i in ia      api   aoaoip  eoee   

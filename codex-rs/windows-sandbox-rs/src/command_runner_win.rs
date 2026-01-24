@@ -131,6 +131,7 @@ pub fn main() -> Result<()> {
     let open_pipe = |name: &str, access: u32| -> Result<HANDLE> {
         let path = to_wide(name);
         let handle = unsafe {
+// windows-sandbox-rs/src/command_runner_win.rs
             CreateFileW(
                 path.as_ptr(),
                 access,

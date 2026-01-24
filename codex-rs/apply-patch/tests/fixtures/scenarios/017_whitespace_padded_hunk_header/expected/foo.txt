@@ -1,1 +1,2 @@
+# apply-patch/tests/fixtures/scenarios/017_whitespace_padded_hunk_header/expected/foo.txt
 new

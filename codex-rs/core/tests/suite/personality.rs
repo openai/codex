@@ -9,6 +9,7 @@ const BASE_INSTRUCTIONS_TEMPLATE: &str = include_str!(
 );
 const FRIENDLY_PERSONALITY: &str = include_str!("../../templates/personalities/friendly.md");
 
+// core/tests/suite/personality.rs
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn model_personality_updates_base_instructions() {
     let codex_home = TempDir::new().expect("create temp dir");

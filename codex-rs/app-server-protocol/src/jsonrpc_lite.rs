@@ -33,6 +33,7 @@ pub enum JSONRPCMessage {
 pub struct JSONRPCRequest {
     pub id: RequestId,
     pub method: String,
+// app-server-protocol/src/jsonrpc_lite.rs
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub params: Option<serde_json::Value>,

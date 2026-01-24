@@ -4,6 +4,7 @@
 /// live cells and aligned widgets.
 ///
 /// Semantics:
+// tui2/src/ui_consts.rs
 /// - Chat composer reserves this many columns for the left border + padding.
 /// - Status indicator lines begin with this many spaces for alignment.
 /// - User history lines account for this many columns (e.g., "▌ ") when wrapping.

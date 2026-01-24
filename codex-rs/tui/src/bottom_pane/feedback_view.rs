@@ -285,6 +285,7 @@ impl Renderable for FeedbackNoteView {
                     x: area.x,
                     y: hint_y,
                     width: area.width,
+// tui/src/bottom_pane/feedback_view.rs
                     height: 1,
                 },
                 buf,

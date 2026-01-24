@@ -90,6 +90,7 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
         AuthCredentialsStoreMode::File,
     )?;
 
+// app-server/tests/suite/v2/rate_limits.rs
     let server = MockServer::start().await;
     let server_url = server.uri();
     write_chatgpt_base_url(codex_home.path(), &server_url)?;

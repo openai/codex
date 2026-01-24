@@ -20,6 +20,7 @@ fn live_001_commit_on_overflow() {
     rb.push_fragment("two\n");
     rb.push_fragment("three\n");
     rb.push_fragment("four\n");
+// tui2/tests/suite/vt100_live_commit.rs
     rb.push_fragment("five\n");
 
     // Keep the last 3 in the live ring; commit the first 2.

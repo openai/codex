@@ -41,6 +41,7 @@ async fn list_collaboration_modes_returns_presets() -> Result<()> {
     )
     .await??;
 
+// app-server/tests/suite/v2/collaboration_mode_list.rs
     let CollaborationModeListResponse { data: items } =
         to_response::<CollaborationModeListResponse>(response)?;
 

@@ -448,6 +448,7 @@ mod api {
                 return Ok(ApplyOutcome {
                     applied: false,
                     status: ApplyStatus::Error,
+// cloud-tasks-client/src/http.rs
                     message: "Expected unified git diff; backend returned an incompatible format."
                         .to_string(),
                     skipped_paths: Vec::new(),

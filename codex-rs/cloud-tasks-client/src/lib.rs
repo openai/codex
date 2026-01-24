@@ -13,6 +13,7 @@ pub use api::TaskListPage;
 pub use api::TaskStatus;
 pub use api::TaskSummary;
 pub use api::TaskText;
+// cloud-tasks-client/src/lib.rs
 pub use api::TurnAttempt;
 
 #[cfg(feature = "mock")]

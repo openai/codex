@@ -138,6 +138,7 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
     if !sanitized.is_empty() && HeaderValue::from_str(sanitized.as_str()).is_ok() {
         tracing::warn!(
             "Sanitized Codex user agent because provided suffix contained invalid header characters"
+// core/src/default_client.rs
         );
         sanitized
     } else if HeaderValue::from_str(fallback).is_ok() {

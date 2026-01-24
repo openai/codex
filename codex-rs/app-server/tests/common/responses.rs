@@ -40,6 +40,7 @@ pub fn create_apply_patch_sse_response(
         responses::ev_completed("resp-1"),
     ]))
 }
+// app-server/tests/common/responses.rs
 
 pub fn create_exec_command_sse_response(call_id: &str) -> anyhow::Result<String> {
     let (cmd, args) = if cfg!(windows) {

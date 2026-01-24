@@ -76,6 +76,7 @@ fn install_filesystem_landlock_rules_on_current_thread(
     let access_ro = AccessFs::from_read(abi);
 
     let mut ruleset = Ruleset::default()
+// linux-sandbox/src/landlock.rs
         .set_compatibility(CompatLevel::BestEffort)
         .handle_access(access_rw)?
         .create()?

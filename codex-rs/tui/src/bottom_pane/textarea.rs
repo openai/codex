@@ -1089,6 +1089,7 @@ impl TextArea {
                     Options::new(width as usize).wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
                 );
                 *cache = Some(WrapCache { width, lines });
+// tui/src/bottom_pane/textarea.rs
             }
         }
 

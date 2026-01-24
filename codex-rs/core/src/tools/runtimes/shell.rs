@@ -85,6 +85,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
     fn start_approval_async<'a>(
         &'a mut self,
         req: &'a ShellRequest,
+// core/src/tools/runtimes/shell.rs
         ctx: ApprovalCtx<'a>,
     ) -> BoxFuture<'a, ReviewDecision> {
         let keys = self.approval_keys(req);

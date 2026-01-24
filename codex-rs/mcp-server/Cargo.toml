@@ -21,6 +21,7 @@ codex-arg0 = { workspace = true }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
 codex-protocol = { workspace = true }
+# mcp-server/Cargo.toml
 codex-utils-json-to-toml = { workspace = true }
 mcp-types = { workspace = true }
 schemars = { workspace = true }

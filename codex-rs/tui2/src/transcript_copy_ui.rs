@@ -191,6 +191,7 @@ impl TranscriptCopyUi {
         let mut end = head;
         if (end.0 < start.0) || (end.0 == start.0 && end.1 < start.1) {
             std::mem::swap(&mut start, &mut end);
+// tui2/src/transcript_copy_ui.rs
         }
 
         // We want to place the pill *near the visible end of the selection*, which means:

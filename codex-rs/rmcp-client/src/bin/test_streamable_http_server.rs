@@ -160,6 +160,7 @@ impl ServerHandler for TestToolServer {
                 resources: (*resources).clone(),
                 next_cursor: None,
                 meta: None,
+// rmcp-client/src/bin/test_streamable_http_server.rs
             })
         }
     }

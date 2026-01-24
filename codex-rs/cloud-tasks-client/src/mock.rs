@@ -96,6 +96,7 @@ impl CloudBackend for MockClient {
             attempt_placement: Some(0),
             attempt_status: AttemptStatus::Completed,
         })
+// cloud-tasks-client/src/mock.rs
     }
 
     async fn apply_task(&self, id: TaskId, _diff_override: Option<String>) -> Result<ApplyOutcome> {

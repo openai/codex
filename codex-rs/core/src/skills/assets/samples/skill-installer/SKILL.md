@@ -26,6 +26,7 @@ Skills from {repo}:
 3. ...
 Which ones would you like installed?
 """
+<!-- core/src/skills/assets/samples/skill-installer/SKILL.md -->
 
 After installing a skill, tell the user: "Restart Codex to pick up new skills."
 

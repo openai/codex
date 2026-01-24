@@ -148,6 +148,7 @@ impl ChatComposerHistory {
         log_id: u64,
         offset: usize,
         entry: Option<String>,
+// tui/src/bottom_pane/chat_composer_history.rs
     ) -> Option<String> {
         if self.history_log_id != Some(log_id) {
             return None;

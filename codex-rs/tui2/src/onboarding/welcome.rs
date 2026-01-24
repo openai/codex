@@ -74,6 +74,7 @@ impl WidgetRef for &WelcomeWidget {
             lines.extend(frame.lines().map(Into::into));
             lines.push("".into());
         }
+// tui2/src/onboarding/welcome.rs
         lines.push(Line::from(vec![
             "  ".into(),
             "Welcome to ".into(),

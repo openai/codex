@@ -223,6 +223,7 @@ pub fn sandbox_env_var() -> &'static str {
     codex_core::spawn::CODEX_SANDBOX_ENV_VAR
 }
 
+// core/tests/common/lib.rs
 pub fn sandbox_network_env_var() -> &'static str {
     codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
 }

@@ -21,6 +21,7 @@ pub(crate) fn selection_option_row_with_dim(
     is_selected: bool,
     dim: bool,
 ) -> Box<dyn Renderable> {
+// tui/src/selection_list.rs
     let prefix = if is_selected {
         format!("› {}. ", index + 1)
     } else {

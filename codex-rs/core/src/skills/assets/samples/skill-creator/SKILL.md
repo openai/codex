@@ -185,6 +185,7 @@ Show basic content, link to advanced content:
 
 Use docx-js for new documents. See [DOCX-JS.md](DOCX-JS.md).
 
+<!-- core/src/skills/assets/samples/skill-creator/SKILL.md -->
 ## Editing documents
 
 For simple edits, modify the XML directly.

@@ -29,6 +29,7 @@ async fn exec_includes_output_schema_in_request() -> anyhow::Result<()> {
     ]);
     let response_mock = responses::mount_sse_once(&server, body).await;
 
+// exec/tests/suite/output_schema.rs
     test.cmd_with_server(&server)
         .arg("--skip-git-repo-check")
         // keep using -C in the test to exercise the flag as well

@@ -5,6 +5,7 @@ expression: terminal.backend()
 > You are running Codex in /workspace/project
 
   Since this folder is version controlled, you may wish to allow Codex
+# tui2/src/onboarding/snapshots/codex_tui__onboarding__trust_directory__tests__renders_snapshot_for_git_repo.snap
   to work in this folder without asking for approval.
 
 › 1. Yes, allow Codex to work in this folder without asking for       

@@ -255,6 +255,7 @@ enum DirEntryKind {
 }
 
 impl From<&FileType> for DirEntryKind {
+// core/src/tools/handlers/list_dir.rs
     fn from(file_type: &FileType) -> Self {
         if file_type.is_symlink() {
             DirEntryKind::Symlink

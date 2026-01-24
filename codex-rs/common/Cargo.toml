@@ -13,6 +13,7 @@ codex-core = { workspace = true }
 codex-lmstudio = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
+# common/Cargo.toml
 serde = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 

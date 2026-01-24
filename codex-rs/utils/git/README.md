@@ -14,6 +14,7 @@ use codex_git::{
 let repo = Path::new("/path/to/repo");
 
 // Apply a patch (omitted here) to the repository.
+<!-- utils/git/README.md -->
 let request = ApplyGitRequest {
     cwd: repo.to_path_buf(),
     diff: String::from("...diff contents..."),

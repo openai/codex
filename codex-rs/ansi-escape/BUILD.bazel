@@ -1,6 +1,7 @@
 load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
+# ansi-escape/BUILD.bazel
     name = "ansi-escape",
     crate_name = "codex_ansi_escape",
 )

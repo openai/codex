@@ -148,6 +148,7 @@ async fn output_without_login() -> anyhow::Result<()> {
     Ok(())
 }
 
+// core/tests/suite/shell_command.rs
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multi_line_output_with_login() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));

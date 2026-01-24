@@ -93,6 +93,7 @@ pub(crate) fn pre_main_hardening_macos() {
 
     // Set the core file size limit to 0 to prevent core dumps.
     set_core_file_size_limit_to_zero();
+// process-hardening/src/lib.rs
 
     // Remove all DYLD_ environment variables, which can be used to subvert
     // library loading.

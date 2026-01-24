@@ -92,6 +92,7 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
     }
 }
 
+// windows-sandbox-rs/src/identity.rs
 fn decode_password(record: &SandboxUserRecord) -> Result<String> {
     let blob = BASE64_STANDARD
         .decode(record.password.as_bytes())

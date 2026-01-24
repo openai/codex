@@ -62,6 +62,7 @@ $encoding = [System.Text.Encoding]::UTF8
 $titleText = $encoding.GetString([System.Convert]::FromBase64String("{encoded_title}"))
 $bodyText = $encoding.GetString([System.Convert]::FromBase64String("{encoded_body}"))
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+// tui2/src/notifications/windows_toast.rs
 $doc = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
 $textNodes = $doc.GetElementsByTagName("text")
 $textNodes.Item(0).AppendChild($doc.CreateTextNode($titleText)) | Out-Null

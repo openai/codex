@@ -8,6 +8,7 @@ license.workspace = true
 name = "codex_arg0"
 path = "src/lib.rs"
 
+# arg0/Cargo.toml
 [lints]
 workspace = true
 

@@ -126,6 +126,7 @@ fn test_apply_patch_cli_rejects_missing_file_delete() -> anyhow::Result<()> {
 #[test]
 fn test_apply_patch_cli_rejects_empty_update_hunk() -> anyhow::Result<()> {
     let tmp = tempdir()?;
+// apply-patch/tests/suite/tool.rs
 
     apply_patch_command(tmp.path())?
         .arg("*** Begin Patch\n*** Update File: foo.txt\n*** End Patch")

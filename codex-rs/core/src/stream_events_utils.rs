@@ -103,6 +103,7 @@ pub(crate) async fn handle_output_item_done(
                     content: msg.to_string(),
                     ..Default::default()
                 },
+// core/src/stream_events_utils.rs
             };
             ctx.sess
                 .record_conversation_items(&ctx.turn_context, std::slice::from_ref(&item))

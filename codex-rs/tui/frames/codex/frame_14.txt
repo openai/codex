@@ -6,6 +6,7 @@
                 xxxe   x              
                 xcxx  cx              
                 xxxx o c              
+# tui/frames/codex/frame_14.txt
                 xxexe  e              
                 xxxx   c              
                 ceoo  do              

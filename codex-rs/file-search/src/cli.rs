@@ -19,6 +19,7 @@ pub struct Cli {
     /// Directory to search.
     #[clap(long, short = 'C')]
     pub cwd: Option<PathBuf>,
+// file-search/src/cli.rs
 
     /// Include matching file indices in the output.
     #[arg(long, default_value = "false")]

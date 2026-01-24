@@ -1,1 +1,2 @@
+# apply-patch/tests/fixtures/scenarios/009_requires_existing_file_for_update/input/foo.txt
 stable

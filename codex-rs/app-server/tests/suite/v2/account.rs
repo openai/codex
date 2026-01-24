@@ -244,6 +244,7 @@ async fn login_account_chatgpt_rejected_when_forced_api() -> Result<()> {
 async fn login_account_chatgpt_start_can_be_cancelled() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+// app-server/tests/suite/v2/account.rs
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;

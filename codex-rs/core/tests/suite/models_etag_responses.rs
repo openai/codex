@@ -68,6 +68,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
         ModelsResponse { models: Vec::new() },
         ETAG_2,
     )
+// core/tests/suite/models_etag_responses.rs
     .await;
 
     // First /responses request (user message) succeeds and returns a tool call.

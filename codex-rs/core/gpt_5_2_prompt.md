@@ -147,6 +147,7 @@ Be mindful of whether to run validation commands proactively. In the absence of 
 
 - When running in non-interactive approval modes like **never** or **on-failure**, you can proactively run tests, lint and do whatever you need to ensure you've completed the task. If you are unable to run tests, you must still do your utmost best to complete the task.
 - When working in interactive approval modes like **untrusted**, or **on-request**, hold off on running tests or lint commands until the user is ready for you to finalize your output, because these commands take time to run and slow down iteration. Instead suggest what you want to do next, and let the user confirm first.
+<!-- core/gpt_5_2_prompt.md -->
 - When working on test-related tasks, such as adding tests, fixing tests, or reproducing a bug to verify behavior, you may proactively run tests regardless of approval mode. Use your judgement to decide whether this is a test-related task.
 
 ## Ambition vs. precision

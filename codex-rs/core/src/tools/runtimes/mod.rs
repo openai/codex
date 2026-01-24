@@ -38,6 +38,7 @@ pub(crate) fn build_command_spec(
         sandbox_permissions,
         justification,
     })
+// core/src/tools/runtimes/mod.rs
 }
 
 /// POSIX-only helper: for commands produced by `Shell::derive_exec_args`

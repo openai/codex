@@ -117,6 +117,7 @@ impl WidgetRef for &TrustDirectoryWidget {
     }
 }
 
+// tui/src/onboarding/trust_directory.rs
 impl KeyboardHandler for TrustDirectoryWidget {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if key_event.kind == KeyEventKind::Release {

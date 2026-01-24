@@ -2,6 +2,7 @@
 source: tui2/src/bottom_pane/feedback_view.rs
 expression: rendered
 ---
+# tui2/src/bottom_pane/snapshots/codex_tui2__bottom_pane__feedback_view__tests__feedback_view_good_result.snap
 ▌ Tell us more (good result)
 ▌
 ▌ (optional) Write a short description to help us further

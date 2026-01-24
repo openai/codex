@@ -24,6 +24,7 @@ pub struct CreditStatusDetails {
     )]
     pub balance: Option<Option<String>>,
     #[serde(
+// codex-backend-openapi-models/src/models/credit_status_details.rs
         rename = "approx_local_messages",
         default,
         with = "::serde_with::rust::double_option",

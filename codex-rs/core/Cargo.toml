@@ -75,6 +75,7 @@ test-log = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = [
     "formatting",
+# core/Cargo.toml
     "parsing",
     "local-offset",
     "macros",

@@ -576,6 +576,7 @@ pub fn ev_apply_patch_custom_tool_call(call_id: &str, patch: &str) -> Value {
         "type": "response.output_item.done",
         "item": {
             "type": "custom_tool_call",
+// core/tests/common/responses.rs
             "name": "apply_patch",
             "input": patch,
             "call_id": call_id

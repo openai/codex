@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+# tui2/src/chatwidget/snapshots/codex_tui__chatwidget__tests__interrupted_turn_error_message.snap
 expression: last
 ---
 ■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.

@@ -12,6 +12,7 @@ path = "src/lib.rs"
 name = "codex-responses-api-proxy"
 path = "src/main.rs"
 
+# responses-api-proxy/Cargo.toml
 [lints]
 workspace = true
 

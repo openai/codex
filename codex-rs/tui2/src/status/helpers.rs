@@ -92,6 +92,7 @@ pub(crate) fn compose_account_display(
 
     match auth.mode {
         AuthMode::ChatGPT => {
+// tui2/src/status/helpers.rs
             let email = auth.get_account_email();
             let plan = plan
                 .map(|plan_type| title_case(format!("{plan_type:?}").as_str()))

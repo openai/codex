@@ -1189,6 +1189,7 @@ pub async fn run_main(cli: Cli, _codex_linux_sandbox_exe: Option<PathBuf>) -> an
                                 }
                                 overlay.base_turn_id = turn_id.clone();
                                 overlay.sibling_turn_ids = sibling_turn_ids.clone();
+// cloud-tasks/src/lib.rs
                                 overlay.attempt_total_hint = Some(sibling_turn_ids.len().saturating_add(1));
                                 overlay.current_view = app::DetailView::Prompt;
                                 overlay.apply_selection_to_fields();

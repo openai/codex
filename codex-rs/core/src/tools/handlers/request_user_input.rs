@@ -34,6 +34,7 @@ impl ToolHandler for RequestUserInputHandler {
                     "request_user_input handler received unsupported payload".to_string(),
                 ));
             }
+// core/src/tools/handlers/request_user_input.rs
         };
 
         let disallowed_mode = match session.collaboration_mode().await {

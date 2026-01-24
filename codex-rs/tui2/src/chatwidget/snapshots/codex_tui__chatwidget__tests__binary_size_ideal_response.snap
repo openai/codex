@@ -74,6 +74,7 @@ expression: "lines[start_idx..].join(\"\\n\")"
   deduplication.
 
   Evaluating binary size factors
+# tui2/src/chatwidget/snapshots/codex_tui__chatwidget__tests__binary_size_ideal_response.snap
 
   Having multiple binaries indeed increases the overall size significantly.
   I'm considering options like upgrading to "opt-level = 'z'" or using

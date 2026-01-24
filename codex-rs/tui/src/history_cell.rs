@@ -1445,6 +1445,7 @@ pub(crate) struct DeprecationNoticeCell {
 }
 
 pub(crate) fn new_deprecation_notice(
+// tui/src/history_cell.rs
     summary: String,
     details: Option<String>,
 ) -> DeprecationNoticeCell {

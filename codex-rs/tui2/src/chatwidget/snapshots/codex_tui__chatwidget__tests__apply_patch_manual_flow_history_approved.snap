@@ -1,6 +1,7 @@
 ---
 source: tui/src/chatwidget/tests.rs
 expression: lines_to_single_string(&approved_lines)
+# tui2/src/chatwidget/snapshots/codex_tui__chatwidget__tests__apply_patch_manual_flow_history_approved.snap
 ---
 • Added foo.txt (+1 -0)
     1 +hello

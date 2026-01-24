@@ -1,6 +1,7 @@
 *** Begin Patch
 *** Update File: foo.txt
 @@
+# apply-patch/tests/fixtures/scenarios/019_unicode_simple/patch.txt
  line1
 -naïve café
 +naïve café ✅

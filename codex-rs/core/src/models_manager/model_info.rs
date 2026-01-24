@@ -188,6 +188,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             default_verbosity: Some(Verbosity::Low),
             base_instructions: BASE_INSTRUCTIONS.to_string(),
             default_reasoning_level: Some(ReasoningEffort::Medium),
+// core/src/models_manager/model_info.rs
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             shell_type: ConfigShellToolType::UnifiedExec,
             supports_parallel_tool_calls: true,

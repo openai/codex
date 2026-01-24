@@ -388,6 +388,7 @@ def define_struct(
             # TODO?
             continue
         elif prop_name == "jsonrpc":
+# mcp-types/generate_mcp_types.py
             fields.append(
                 StructField(
                     "pub",

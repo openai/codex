@@ -41,6 +41,7 @@ fn counter_rejects_invalid_tag_key() -> Result<()> {
         MetricsError::InvalidTagComponent { label, value }
             if label == "tag key" && value == "bad key"
     ));
+// otel/tests/suite/validation.rs
     metrics.shutdown()?;
     Ok(())
 }

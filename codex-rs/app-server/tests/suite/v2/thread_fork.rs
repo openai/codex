@@ -68,6 +68,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     .await??;
     let ThreadForkResponse { thread, .. } = to_response::<ThreadForkResponse>(fork_resp)?;
 
+// app-server/tests/suite/v2/thread_fork.rs
     let after_contents = std::fs::read_to_string(&original_path)?;
     assert_eq!(
         after_contents, original_contents,

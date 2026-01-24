@@ -2406,6 +2406,7 @@ mod handlers {
             .unwrap_or(None);
 
             let event = Event {
+// core/src/codex.rs
                 id: sub_id,
                 msg: EventMsg::GetHistoryEntryResponse(
                     crate::protocol::GetHistoryEntryResponseEvent {

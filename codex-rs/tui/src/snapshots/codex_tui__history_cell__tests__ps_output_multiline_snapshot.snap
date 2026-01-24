@@ -3,6 +3,7 @@ source: tui/src/history_cell.rs
 expression: rendered
 ---
 /ps
+# tui/src/snapshots/codex_tui__history_cell__tests__ps_output_multiline_snapshot.snap
 
 Background terminals
 

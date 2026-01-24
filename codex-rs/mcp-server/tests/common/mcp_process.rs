@@ -167,6 +167,7 @@ impl McpProcess {
             }),
             initialized
         );
+// mcp-server/tests/common/mcp_process.rs
 
         // Send notifications/initialized to ack the response.
         self.send_jsonrpc_message(JSONRPCMessage::Notification(JSONRPCNotification {

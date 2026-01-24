@@ -35,6 +35,7 @@ pub struct OtelSettings {
     pub service_version: String,
     pub codex_home: PathBuf,
     pub exporter: OtelExporter,
+// otel/src/config.rs
     pub trace_exporter: OtelExporter,
     pub metrics_exporter: OtelExporter,
 }

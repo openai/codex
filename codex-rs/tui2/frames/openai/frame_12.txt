@@ -6,6 +6,7 @@
               i oiiiieei              
               ioeeoaoaio              
               i   ieniin              
+# tui2/frames/openai/frame_12.txt
               i   epniio              
               op ieiipii              
               i   eionoa              

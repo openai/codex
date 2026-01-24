@@ -170,6 +170,7 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
                                 .push_str(part.utf8_text(src.as_bytes()).ok()?.to_owned().as_str());
                         }
                         "string" => {
+// core/src/bash.rs
                             if part.child_count() == 3
                                 && part.child(0)?.kind() == "\""
                                 && part.child(1)?.kind() == "string_content"

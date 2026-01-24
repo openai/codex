@@ -400,6 +400,7 @@ impl ModelClientSession {
     ) -> std::result::Result<&ApiWebSocketConnection, ApiError> {
         let needs_new = match self.connection.as_ref() {
             Some(conn) => conn.is_closed().await,
+// core/src/client.rs
             None => true,
         };
 

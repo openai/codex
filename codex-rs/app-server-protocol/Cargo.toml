@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+# app-server-protocol/Cargo.toml
 clap = { workspace = true, features = ["derive"] }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }

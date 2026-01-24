@@ -96,6 +96,7 @@ impl SkillPopup {
                     description: Some(description),
                     wrap_indent: None,
                 }
+// tui2/src/bottom_pane/skill_popup.rs
             })
             .collect()
     }

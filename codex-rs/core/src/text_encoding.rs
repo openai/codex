@@ -228,6 +228,7 @@ mod tests {
     }
 
     #[test]
+// core/src/text_encoding.rs
     fn test_iso8859_2_central_european_text() {
         // ISO-8859-2 (code page 28592) covers additional Central European glyphs.
         let (encoded, _, had_errors) = ISO_8859_2.encode("Příliš žluťoučký kůň");

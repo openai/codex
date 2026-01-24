@@ -261,6 +261,7 @@ mod windows_impl {
         }
 
         // Prepare named pipes for runner.
+// windows-sandbox-rs/src/elevated_impl.rs
         let stdin_name = pipe_name("stdin");
         let stdout_name = pipe_name("stdout");
         let stderr_name = pipe_name("stderr");

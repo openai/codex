@@ -16,6 +16,7 @@ rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "blocking"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+# login/Cargo.toml
 sha2 = { workspace = true }
 tempfile = { workspace = true }
 tiny_http = { workspace = true }

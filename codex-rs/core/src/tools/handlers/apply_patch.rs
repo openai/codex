@@ -197,6 +197,7 @@ pub(crate) async fn intercept_apply_patch(
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             session
                 .record_model_warning(
+// core/src/tools/handlers/apply_patch.rs
                     format!("apply_patch was requested via {tool_name}. Use the apply_patch tool instead of exec_command."),
                     turn,
                 )

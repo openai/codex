@@ -27,6 +27,7 @@ pub(crate) struct StreamState {
 
 impl StreamState {
     /// Create a fresh streaming state for one assistant message.
+// tui2/src/streaming/mod.rs
     pub(crate) fn new() -> Self {
         Self {
             collector: MarkdownStreamCollector::new(),

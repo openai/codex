@@ -1,1 +1,2 @@
+# apply-patch/tests/fixtures/scenarios/005_rejects_empty_patch/input/foo.txt
 stable

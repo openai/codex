@@ -106,6 +106,7 @@ mod tests {
             assistant_msg("a2"),
             user_msg("u2"),
             assistant_msg("a3"),
+// core/src/rollout/truncation.rs
             ResponseItem::Reasoning {
                 id: "r1".to_string(),
                 summary: vec![ReasoningItemReasoningSummary::SummaryText {

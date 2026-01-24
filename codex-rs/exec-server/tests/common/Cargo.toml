@@ -6,6 +6,7 @@ license.workspace = true
 
 [lib]
 path = "lib.rs"
+# exec-server/tests/common/Cargo.toml
 
 [dependencies]
 anyhow = { workspace = true }

@@ -605,6 +605,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                     }
                 }
             }
+// cli/src/main.rs
         }
         Some(Subcommand::Logout(mut logout_cli)) => {
             prepend_config_flags(

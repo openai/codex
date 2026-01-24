@@ -21,6 +21,7 @@ icu_provider = { workspace = true, features = ["sync"] }
 mcp-types = { workspace = true }
 mime_guess = { workspace = true }
 schemars = { workspace = true }
+# protocol/Cargo.toml
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_with = { workspace = true, features = ["macros", "base64"] }

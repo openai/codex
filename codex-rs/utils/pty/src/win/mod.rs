@@ -83,6 +83,7 @@ impl ChildKiller for WinChild {
     }
 
     fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+// utils/pty/src/win/mod.rs
         let proc = self.proc.lock().unwrap().try_clone().unwrap();
         Box::new(WinChildKiller { proc })
     }

@@ -53,6 +53,7 @@ def package_skill(skill_path, output_dir=None):
         print("   Please fix the validation errors before packaging.")
         return None
     print(f"[OK] {message}\n")
+# core/src/skills/assets/samples/skill-creator/scripts/package_skill.py
 
     # Determine output location
     skill_name = skill_path.name

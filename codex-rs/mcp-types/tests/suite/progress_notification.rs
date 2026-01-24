@@ -19,6 +19,7 @@ fn deserialize_progress_notification() {
     // Deserialize full JSONRPCMessage first.
     let msg: JSONRPCMessage = serde_json::from_str(raw).expect("invalid JSONRPCMessage");
 
+// mcp-types/tests/suite/progress_notification.rs
     // Extract the notification variant.
     let JSONRPCMessage::Notification(notif) = msg else {
         unreachable!()

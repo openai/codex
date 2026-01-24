@@ -26,6 +26,7 @@ cargo run -p codex-debug-client -- --thread-id thr_123
 - `--codex-bin <path>`: path to the `codex` binary (default: `codex`).
 - `-c, --config key=value`: pass through `--config` overrides to `codex`.
 - `--thread-id <id>`: resume a thread instead of starting a new one.
+<!-- debug-client/README.md -->
 - `--approval-policy <policy>`: `untrusted`, `on-failure`, `on-request`, `never`.
 - `--auto-approve`: auto-approve command/file-change approvals (default: decline).
 - `--final-only`: only show completed assistant messages and tool items.

@@ -2,6 +2,7 @@
 *** Update File: tail.txt
 @@
  first
+# apply-patch/tests/fixtures/scenarios/022_update_file_end_of_file_marker/patch.txt
 -second
 +second updated
 *** End of File

@@ -309,6 +309,7 @@ pub async fn cleanup_stale_snapshots(codex_home: &Path, active_session_id: Threa
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
         let (session_id, _) = match file_name.rsplit_once('.') {
+// core/src/shell_snapshot.rs
             Some((stem, ext)) => (stem, ext),
             None => {
                 remove_snapshot_file(&path).await;

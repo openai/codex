@@ -6,6 +6,7 @@
            xoe x    xcoedeoo  o       
           edcooe   odox oodoxoo       
           c dox   oooxe ccxxodx       
+# tui/frames/codex/frame_17.txt
           ocdx     ooxxoxoxxddc       
           oocoeddcxeexeedexxx x       
            xcedeexoceoxxe eccce       

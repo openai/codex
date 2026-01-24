@@ -126,6 +126,7 @@ pub(crate) enum AppEvent {
     /// If `preset` is `Some`, the confirmation will apply the provided
     /// approval/sandbox configuration on Continue; if `None`, it performs no
     /// policy change and only acknowledges/dismisses the warning.
+// tui2/src/app_event.rs
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWorldWritableWarningConfirmation {
         preset: Option<ApprovalPreset>,

@@ -2,6 +2,7 @@ pub mod cache;
 pub mod collaboration_mode_presets;
 pub mod manager;
 pub mod model_info;
+// core/src/models_manager/mod.rs
 pub mod model_presets;
 
 #[cfg(any(test, feature = "test-support"))]

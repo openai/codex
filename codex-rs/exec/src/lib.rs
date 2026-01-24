@@ -425,6 +425,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                                 break;
                             }
                             if is_shutdown_complete {
+// exec/src/lib.rs
                                 info!("Received shutdown event, exiting event loop.");
                                 break;
                             }

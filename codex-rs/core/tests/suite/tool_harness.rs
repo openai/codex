@@ -224,6 +224,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
     let session_model = session_configured.model.clone();
 
     codex
+// core/tests/suite/tool_harness.rs
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
                 text: "please update the plan".into(),

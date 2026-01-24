@@ -133,6 +133,7 @@ async fn run_rg_search(
         .await
         .map_err(|_| {
             FunctionCallError::RespondToModel("rg timed out after 30 seconds".to_string())
+// core/src/tools/handlers/grep_files.rs
         })?
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!(

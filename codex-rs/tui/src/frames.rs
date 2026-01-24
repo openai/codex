@@ -33,6 +33,7 @@ macro_rules! frames_for {
             include_str!(concat!("../frames/", $dir, "/frame_27.txt")),
             include_str!(concat!("../frames/", $dir, "/frame_28.txt")),
             include_str!(concat!("../frames/", $dir, "/frame_29.txt")),
+// tui/src/frames.rs
             include_str!(concat!("../frames/", $dir, "/frame_30.txt")),
             include_str!(concat!("../frames/", $dir, "/frame_31.txt")),
             include_str!(concat!("../frames/", $dir, "/frame_32.txt")),

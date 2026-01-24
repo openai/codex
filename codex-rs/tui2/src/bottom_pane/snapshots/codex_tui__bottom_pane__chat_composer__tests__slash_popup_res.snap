@@ -3,6 +3,7 @@ source: tui/src/bottom_pane/chat_composer.rs
 assertion_line: 2385
 expression: terminal.backend()
 ---
+# tui2/src/bottom_pane/snapshots/codex_tui__bottom_pane__chat_composer__tests__slash_popup_res.snap
 "                                                            "
 "› /res                                                      "
 "                                                            "

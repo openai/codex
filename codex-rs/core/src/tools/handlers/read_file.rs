@@ -493,6 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn reads_requested_range() -> anyhow::Result<()> {
+// core/src/tools/handlers/read_file.rs
         let mut temp = NamedTempFile::new()?;
         use std::io::Write as _;
         write!(

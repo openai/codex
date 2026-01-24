@@ -22,6 +22,7 @@ pub(crate) fn default_mode(models_manager: &ModelsManager) -> Option<Collaborati
     let presets = models_manager.list_collaboration_modes();
     presets
         .iter()
+// tui2/src/collaboration_modes.rs
         .find(|preset| matches!(preset, CollaborationMode::PairProgramming(_)))
         .cloned()
         .or_else(|| presets.into_iter().next())

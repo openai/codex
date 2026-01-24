@@ -51,6 +51,7 @@ pub(crate) async fn spawn_child_async(
     let mut cmd = Command::new(&program);
     #[cfg(unix)]
     cmd.arg0(arg0.map_or_else(|| program.to_string_lossy().to_string(), String::from));
+// core/src/spawn.rs
     cmd.args(args);
     cmd.current_dir(cwd);
     cmd.env_clear();

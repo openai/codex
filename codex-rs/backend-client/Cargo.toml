@@ -8,6 +8,7 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+# backend-client/Cargo.toml
 [dependencies]
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 keyring = { workspace = true, features = ["crypto-rust"] }
 tracing = { workspace = true }
+# keyring-store/Cargo.toml
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { workspace = true, features = ["linux-native-async-persistent"] }

@@ -52,6 +52,7 @@ async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
         ev_completed("r1"),
     ]);
 
+// core/tests/suite/json_result.rs
     let expected_schema: serde_json::Value = serde_json::from_str(SCHEMA)?;
     let match_json_text_param = move |req: &wiremock::Request| {
         let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap_or_default();

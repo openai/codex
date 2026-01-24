@@ -69,6 +69,7 @@ pub fn create_cwd_junction(requested_cwd: &Path, log_dir: Option<&Path>) -> Opti
                     log_dir,
                 );
                 return None;
+// windows-sandbox-rs/src/cwd_junction.rs
             }
         }
 

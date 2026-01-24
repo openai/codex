@@ -143,6 +143,7 @@ impl MetricsClient {
                 let exporter = build_otlp_metric_exporter(exporter, Temporality::Delta)?;
                 build_provider(resource, exporter, config.export_interval)
             }
+// otel/src/metrics/client.rs
         };
 
         Ok(Self(std::sync::Arc::new(MetricsClientInner {

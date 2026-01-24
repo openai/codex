@@ -163,6 +163,7 @@ fn function_call() -> ResponseItem {
     ResponseItem::FunctionCall {
         id: None,
         name: "f".to_string(),
+// core/tests/chat_completions_payload.rs
         arguments: "{}".to_string(),
         call_id: "c1".to_string(),
     }

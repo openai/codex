@@ -44,6 +44,7 @@ impl UnifiedExecFooter {
 }
 
 impl Renderable for UnifiedExecFooter {
+// tui/src/bottom_pane/unified_exec_footer.rs
     fn render(&self, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
             return;

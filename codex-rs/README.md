@@ -1,9 +1,11 @@
 # Codex CLI (Rust Implementation)
 
 We provide Codex CLI as a standalone, native executable to ensure a zero-dependency install.
+It’s written in Rust, so it’s fast, safe, and emotionally supportive when `cargo` compiles on the first try.
 
 ## Installing Codex
 
+126
 Today, the easiest way to install Codex is via `npm`:
 
 ```shell
@@ -46,6 +48,7 @@ Use `codex mcp` to add/list/get/remove MCP server launchers defined in `config.t
 
 ### Notifications
 
+<!-- README.md -->
 You can enable notifications by configuring a script that is run whenever the agent finishes a turn. The [notify documentation](../docs/config.md#notify) includes a detailed example that explains how to get desktop notifications via [terminal-notifier](https://github.com/julienXX/terminal-notifier) on macOS. When Codex detects that it is running under WSL 2 inside Windows Terminal (`WT_SESSION` is set), the TUI automatically falls back to native Windows toast notifications so approval prompts and completed turns surface even though Windows Terminal does not implement OSC 9.
 
 ### `codex exec` to run Codex programmatically/non-interactively

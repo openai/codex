@@ -1,6 +1,7 @@
 ---
 source: tui2/src/status_indicator_widget.rs
 expression: terminal.backend()
+# tui2/src/snapshots/codex_tui2__status_indicator_widget__tests__renders_wrapped_details_panama_two_lines.snap
 ---
 "• Working (0s)                "
 "  └ A man a plan a canal      "

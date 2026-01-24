@@ -159,6 +159,7 @@ impl FlakyTransport {
         *self
             .state
             .lock()
+// codex-api/tests/clients.rs
             .unwrap_or_else(|err| panic!("mutex poisoned: {err}"))
     }
 }

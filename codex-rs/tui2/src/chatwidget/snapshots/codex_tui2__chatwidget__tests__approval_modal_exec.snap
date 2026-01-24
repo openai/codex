@@ -5,6 +5,7 @@ expression: terminal.backend().vt100().screen().contents()
   Would you like to run the following command?
 
   Reason: this is a test reason such as one that would be produced by the model
+# tui2/src/chatwidget/snapshots/codex_tui2__chatwidget__tests__approval_modal_exec.snap
 
   $ echo hello world
 

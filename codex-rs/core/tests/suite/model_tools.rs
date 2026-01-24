@@ -77,6 +77,7 @@ async fn model_selects_expected_tools() {
     assert_eq!(
         gpt5_codex_tools,
         vec![
+// core/tests/suite/model_tools.rs
             "shell_command".to_string(),
             "list_mcp_resources".to_string(),
             "list_mcp_resource_templates".to_string(),

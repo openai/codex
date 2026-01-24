@@ -698,6 +698,7 @@ async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() ->
 
     // Prepare a file inside a subdir; update it via cd && apply_patch heredoc form.
     let sub = harness.path("sub");
+// core/tests/suite/apply_patch_cli.rs
     fs::create_dir_all(&sub)?;
     let target = sub.join("in_sub.txt");
     fs::write(&target, "before\n")?;

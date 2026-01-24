@@ -6,6 +6,7 @@
               dcxxeexoxo  x           
              xcxec  cxxxxox           
              eoxxxee eoex de          
+# tui/frames/codex/frame_30.txt
              cx ccdxoxcxo  e          
              cxecexdxeoxo  e          
              cxxexeexx co  e          

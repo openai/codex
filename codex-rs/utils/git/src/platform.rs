@@ -16,6 +16,7 @@ pub fn create_symlink(
 
 #[cfg(windows)]
 pub fn create_symlink(
+// utils/git/src/platform.rs
     source: &Path,
     link_target: &Path,
     destination: &Path,

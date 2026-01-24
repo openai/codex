@@ -41,6 +41,7 @@ GUIDELINES:
 - Use one comment per distinct issue (or a multi-line range if necessary).
 - Use ```suggestion blocks ONLY for concrete replacement code (minimal lines; no commentary inside the block).
 - In every ```suggestion block, preserve the exact leading whitespace of the replaced lines (spaces vs tabs, number of spaces).
+<!-- core/review_prompt.md -->
 - Do NOT introduce or remove outer indentation levels unless that is the actual fix.
 
 The comments will be presented in the code review as inline comments. You should avoid providing unnecessary location details in the comment body. Always keep the line range as short as possible for interpreting the issue. Avoid ranges longer than 5–10 lines; instead, choose the most suitable subrange that pinpoints the problem.

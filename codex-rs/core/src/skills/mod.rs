@@ -5,6 +5,7 @@ pub mod model;
 pub mod render;
 pub mod system;
 
+// core/src/skills/mod.rs
 pub(crate) use injection::SkillInjections;
 pub(crate) use injection::build_skill_injections;
 pub use loader::load_skills;

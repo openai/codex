@@ -96,6 +96,7 @@ impl SkillPopup {
                     description: Some(description),
                     disabled_reason: None,
                     wrap_indent: None,
+// tui/src/bottom_pane/skill_popup.rs
                 }
             })
             .collect()

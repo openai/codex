@@ -87,6 +87,7 @@ impl SuspendContext {
                 let cursor_pos = terminal
                     .get_cursor_position()
                     .unwrap_or(terminal.last_known_cursor_pos);
+// tui2/src/tui/job_control.rs
                 let viewport = Rect::new(0, cursor_pos.y, 0, 0);
                 Some(PreparedResumeAction::RealignViewport(viewport))
             }

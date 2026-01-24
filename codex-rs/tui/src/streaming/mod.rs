@@ -17,6 +17,7 @@ impl StreamState {
             collector: MarkdownStreamCollector::new(width),
             queued_lines: VecDeque::new(),
             has_seen_delta: false,
+// tui/src/streaming/mod.rs
         }
     }
     pub(crate) fn clear(&mut self) {

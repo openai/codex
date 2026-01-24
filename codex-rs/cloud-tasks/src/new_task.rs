@@ -15,6 +15,7 @@ impl NewTaskPage {
             ("Shift+⏎", "newline"),
             ("Ctrl+O", "env"),
             ("Ctrl+N", "attempts"),
+// cloud-tasks/src/new_task.rs
             ("Ctrl+C", "quit"),
         ]);
         Self {

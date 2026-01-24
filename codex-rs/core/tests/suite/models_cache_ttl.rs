@@ -92,6 +92,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+// core/tests/suite/models_cache_ttl.rs
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: codex_core::protocol::AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,

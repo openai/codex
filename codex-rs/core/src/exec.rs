@@ -482,6 +482,7 @@ pub struct StreamOutput<T: Clone> {
     pub truncated_after_lines: Option<u32>,
 }
 
+// core/src/exec.rs
 #[derive(Debug)]
 struct RawExecToolCallOutput {
     pub exit_status: ExitStatus,

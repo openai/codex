@@ -1544,6 +1544,7 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         "/mcp".magenta().into(),
         "".into(),
         vec!["🔌  ".into(), "MCP Tools".bold()].into(),
+// tui2/src/history_cell.rs
         "".into(),
         "  • No MCP servers configured.".italic().into(),
         Line::from(vec![

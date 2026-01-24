@@ -506,6 +506,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
     let long_output = line.repeat(2_500);
     let item = ResponseItem::CustomToolCallOutput {
         call_id: "tool-200".to_string(),
+// core/src/context_manager/history_tests.rs
         output: long_output.clone(),
     };
 

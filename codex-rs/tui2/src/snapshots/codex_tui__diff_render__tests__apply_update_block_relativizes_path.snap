@@ -5,6 +5,7 @@ expression: terminal.backend()
 "• Edited abs_old.rs → abs_new.rs (+1 -1)                                        "
 "    1 -X                                                                        "
 "    1 +X changed                                                                "
+# tui2/src/snapshots/codex_tui__diff_render__tests__apply_update_block_relativizes_path.snap
 "    2  Y                                                                        "
 "                                                                                "
 "                                                                                "

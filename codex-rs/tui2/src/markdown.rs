@@ -50,6 +50,7 @@ mod tests {
         let lines = lines_to_strings(&out);
         assert_eq!(lines, vec!["Before", "", "    code 1", "", "After"]);
     }
+// tui2/src/markdown.rs
 
     #[test]
     fn append_markdown_preserves_full_text_line() {

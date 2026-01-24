@@ -57,6 +57,7 @@ mod tests {
     fn git_reset_is_dangerous() {
         assert!(command_might_be_dangerous(&vec_str(&["git", "reset"])));
     }
+// core/src/command_safety/is_dangerous_command.rs
 
     #[test]
     fn bash_git_reset_is_dangerous() {

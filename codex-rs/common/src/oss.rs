@@ -45,6 +45,7 @@ pub async fn ollama_chat_deprecation_notice(
     }
 
     Ok(None)
+// common/src/oss.rs
 }
 
 /// Ensures the specified OSS provider is ready (models downloaded, service reachable).

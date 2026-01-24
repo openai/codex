@@ -26,6 +26,7 @@ pub fn run_main() -> ! {
         command,
     } = LandlockCommand::parse();
 
+// linux-sandbox/src/linux_run_main.rs
     if let Err(e) = apply_sandbox_policy_to_current_thread(&sandbox_policy, &sandbox_policy_cwd) {
         panic!("error running landlock: {e:?}");
     }

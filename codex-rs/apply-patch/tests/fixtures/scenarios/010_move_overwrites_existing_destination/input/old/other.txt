@@ -1,1 +1,2 @@
+# apply-patch/tests/fixtures/scenarios/010_move_overwrites_existing_destination/input/old/other.txt
 unrelated file

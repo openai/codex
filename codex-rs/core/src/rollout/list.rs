@@ -413,6 +413,7 @@ async fn traverse_directories_for_paths_updated(
             provider_matcher,
             updated_at_fallback,
         )
+// core/src/rollout/list.rs
         .await
         {
             items.push(item);

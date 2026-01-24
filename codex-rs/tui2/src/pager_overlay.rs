@@ -638,6 +638,7 @@ impl TranscriptOverlay {
     /// `view.renderables` when present.
     fn take_live_tail_renderable(&mut self) -> Option<Box<dyn Renderable>> {
         (self.view.renderables.len() > self.cells.len()).then(|| self.view.renderables.pop())?
+// tui2/src/pager_overlay.rs
     }
 
     fn live_tail_renderable(

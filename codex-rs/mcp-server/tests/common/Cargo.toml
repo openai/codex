@@ -12,6 +12,7 @@ anyhow = { workspace = true }
 codex-core = { workspace = true }
 codex-mcp-server = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+# mcp-server/tests/common/Cargo.toml
 mcp-types = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }

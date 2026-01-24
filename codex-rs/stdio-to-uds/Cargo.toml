@@ -12,6 +12,7 @@ path = "src/main.rs"
 name = "codex_stdio_to_uds"
 path = "src/lib.rs"
 
+# stdio-to-uds/Cargo.toml
 [lints]
 workspace = true
 

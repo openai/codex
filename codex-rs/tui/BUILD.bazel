@@ -8,6 +8,7 @@ codex_rust_crate(
         exclude = [
             "**/* *",
             "BUILD.bazel",
+# tui/BUILD.bazel
             "Cargo.toml",
         ],
         allow_empty = True,

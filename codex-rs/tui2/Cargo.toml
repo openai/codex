@@ -59,6 +59,7 @@ rand = { workspace = true }
 ratatui = { workspace = true, features = [
     "scrolling-regions",
     "unstable-backend-writer",
+# tui2/Cargo.toml
     "unstable-rendered-line-info",
     "unstable-widget-ref",
 ] }

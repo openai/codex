@@ -243,6 +243,7 @@ impl<'a> ChatRequestBuilder<'a> {
                                 }
                             })
                             .collect();
+// codex-api/src/requests/chat.rs
                         json!(mapped)
                     } else {
                         json!(output.content)

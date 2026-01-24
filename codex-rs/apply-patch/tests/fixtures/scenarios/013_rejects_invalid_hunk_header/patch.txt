@@ -1,3 +1,4 @@
 *** Begin Patch
+# apply-patch/tests/fixtures/scenarios/013_rejects_invalid_hunk_header/patch.txt
 *** Frobnicate File: foo
 *** End Patch

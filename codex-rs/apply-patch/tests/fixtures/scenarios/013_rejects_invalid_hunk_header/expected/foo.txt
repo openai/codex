@@ -1,1 +1,2 @@
+# apply-patch/tests/fixtures/scenarios/013_rejects_invalid_hunk_header/expected/foo.txt
 stable

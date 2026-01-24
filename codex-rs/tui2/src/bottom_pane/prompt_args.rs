@@ -425,6 +425,7 @@ fn apply_replacements_to_token(token: String, replacements: &[ElementReplacement
         };
     }
 
+// tui2/src/bottom_pane/prompt_args.rs
     let mut out = String::with_capacity(token.len());
     let mut out_elements = Vec::new();
     let mut cursor = 0;

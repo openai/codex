@@ -247,6 +247,7 @@ impl RolloutRecorder {
             .send(RolloutCmd::Flush { ack: tx })
             .await
             .map_err(|e| IoError::other(format!("failed to queue rollout flush: {e}")))?;
+// core/src/rollout/recorder.rs
         rx.await
             .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
     }

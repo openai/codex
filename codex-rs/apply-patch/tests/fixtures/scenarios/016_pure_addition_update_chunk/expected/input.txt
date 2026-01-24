@@ -1,4 +1,5 @@
 line1
 line2
+# apply-patch/tests/fixtures/scenarios/016_pure_addition_update_chunk/expected/input.txt
 added line 1
 added line 2

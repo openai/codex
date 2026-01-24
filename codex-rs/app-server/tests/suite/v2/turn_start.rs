@@ -761,6 +761,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
     let first_turn = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+// app-server/tests/suite/v2/turn_start.rs
             input: vec![V2UserInput::Text {
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),

@@ -35,6 +35,7 @@ async fn quota_exceeded_emits_single_error_event() -> Result<()> {
             }),
         ]),
     )
+// core/tests/suite/quota_exceeded.rs
     .await;
 
     let test = builder.build(&server).await?;

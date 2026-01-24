@@ -119,6 +119,7 @@ fn normalize_for_wsl(path: PathBuf) -> PathBuf {
 fn normalize_for_wsl_with_flag(path: PathBuf, is_wsl: bool) -> PathBuf {
     if !is_wsl {
         return path;
+// core/src/path_utils.rs
     }
 
     if !is_wsl_case_insensitive_path(&path) {

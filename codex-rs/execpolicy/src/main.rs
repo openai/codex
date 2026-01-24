@@ -7,6 +7,7 @@ use codex_execpolicy::execpolicycheck::ExecPolicyCheckCommand;
 #[command(name = "codex-execpolicy")]
 enum Cli {
     /// Evaluate a command against a policy.
+// execpolicy/src/main.rs
     Check(ExecPolicyCheckCommand),
 }
 

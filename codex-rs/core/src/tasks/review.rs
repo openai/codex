@@ -120,6 +120,7 @@ async fn process_review_events(
     while let Ok(event) = receiver.recv().await {
         match event.clone().msg {
             EventMsg::AgentMessage(_) => {
+// core/src/tasks/review.rs
                 if let Some(prev) = prev_agent_message.take() {
                     session
                         .clone_session()

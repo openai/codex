@@ -1,2 +1,3 @@
 first
+# apply-patch/tests/fixtures/scenarios/022_update_file_end_of_file_marker/input/tail.txt
 second

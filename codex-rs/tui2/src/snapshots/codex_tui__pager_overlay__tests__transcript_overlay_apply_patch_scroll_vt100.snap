@@ -5,6 +5,7 @@ expression: snapshot
 / T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / / / / /
 • Added foo.txt (+2 -0)
     1 +hello
+# tui2/src/snapshots/codex_tui__pager_overlay__tests__transcript_overlay_apply_patch_scroll_vt100.snap
     2 +world
 
 • Added foo.txt (+2 -0)

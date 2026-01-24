@@ -1,1 +1,2 @@
+# apply-patch/tests/fixtures/scenarios/020_delete_file_success/input/keep.txt
 keep

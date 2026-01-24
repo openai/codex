@@ -143,6 +143,7 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
     let request = wait_for_event_match(&codex, |event| match event {
         EventMsg::RequestUserInput(request) => Some(request.clone()),
         _ => None,
+// core/tests/suite/request_user_input.rs
     })
     .await;
     assert_eq!(request.call_id, call_id);

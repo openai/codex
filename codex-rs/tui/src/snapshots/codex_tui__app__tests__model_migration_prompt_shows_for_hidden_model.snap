@@ -2,6 +2,7 @@
 source: tui/src/app.rs
 expression: model_migration_copy_to_plain_text(&copy)
 ---
+# tui/src/snapshots/codex_tui__app__tests__model_migration_prompt_shows_for_hidden_model.snap
 **Codex just got an upgrade. Introducing gpt-5.2-codex.**
 
 Codex is now powered by gpt-5.2-codex, our latest frontier agentic coding model. It is smarter and faster than its predecessors and capable of long-running project-scale work. Learn more about gpt-5.2-codex at https://openai.com/index/introducing-gpt-5-2-codex

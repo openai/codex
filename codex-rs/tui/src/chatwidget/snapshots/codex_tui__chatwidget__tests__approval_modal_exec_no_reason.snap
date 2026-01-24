@@ -4,6 +4,7 @@ expression: terminal.backend().vt100().screen().contents()
 ---
   Would you like to run the following command?
 
+# tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__approval_modal_exec_no_reason.snap
   $ echo hello world
 
 › 1. Yes, proceed (y)

@@ -88,6 +88,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
         mcp.read_stream_until_response_message(RequestId::Integer(turn2_id)),
     )
     .await??;
+// app-server/tests/suite/v2/thread_rollback.rs
     let _completed2 = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),

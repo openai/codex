@@ -254,6 +254,7 @@ async fn forward_events(
                                 shutdown_delegate(&codex).await;
                                 break;
                             }
+// core/src/codex_delegate.rs
                         }
                     }
                 }

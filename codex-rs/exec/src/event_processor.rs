@@ -20,6 +20,7 @@ pub(crate) trait EventProcessor {
     );
 
     /// Handle a single event emitted by the agent.
+// exec/src/event_processor.rs
     fn process_event(&mut self, event: Event) -> CodexStatus;
 
     fn print_final_output(&mut self) {}

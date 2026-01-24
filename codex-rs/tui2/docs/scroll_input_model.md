@@ -303,6 +303,7 @@ Analysis of 16 scroll-probe logs (13,734 events) across 8 terminals shows large 
 - Scenarios captured: `wheel_single`, `wheel_small`, `wheel_long`, `trackpad_single`, `trackpad_slow`, `trackpad_fast` (directional up/down variants treated as distinct bursts).
 - Legacy `wheel_scroll_*` logs are mapped to `wheel_small` in analysis.
 
+<!-- tui2/docs/scroll_input_model.md -->
 ## 3. Cross-terminal comparison table
 
 | Terminal                                | Scenario        | Median Dt (ms) | P95 Dt (ms) | Typical burst | Notes       |

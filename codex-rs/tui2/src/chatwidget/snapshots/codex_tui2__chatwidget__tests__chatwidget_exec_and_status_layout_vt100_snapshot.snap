@@ -20,6 +20,7 @@ expression: term.backend().vt100().screen().contents()
 
 
 
+# tui2/src/chatwidget/snapshots/codex_tui2__chatwidget__tests__chatwidget_exec_and_status_layout_vt100_snapshot.snap
 
 
 

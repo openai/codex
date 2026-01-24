@@ -134,6 +134,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
                     text: preview.to_string(),
                     text_elements: text_elements.clone().into_iter().map(Into::into).collect(),
                 }]
+// app-server/tests/suite/v2/thread_resume.rs
             );
         }
         other => panic!("expected user message item, got {other:?}"),

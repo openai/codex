@@ -60,6 +60,7 @@ impl Backend for VT100Backend {
         self.crossterm_backend.draw(content)?;
         Ok(())
     }
+// tui/src/test_backend.rs
 
     fn hide_cursor(&mut self) -> io::Result<()> {
         self.crossterm_backend.hide_cursor()?;

@@ -1,1 +1,2 @@
+# apply-patch/tests/fixtures/scenarios/007_rejects_missing_file_delete/input/foo.txt
 stable

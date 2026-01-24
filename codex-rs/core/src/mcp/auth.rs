@@ -34,6 +34,7 @@ where
                     McpAuthStatus::Unsupported
                 }
             };
+// core/src/mcp/auth.rs
             let entry = McpAuthStatusEntry {
                 config,
                 auth_status,

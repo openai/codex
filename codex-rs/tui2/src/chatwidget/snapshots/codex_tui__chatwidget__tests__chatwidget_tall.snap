@@ -11,6 +11,7 @@ expression: term.backend().vt100().screen().contents()
   ↳ Hello, world! 5
   ↳ Hello, world! 6
   ↳ Hello, world! 7
+# tui2/src/chatwidget/snapshots/codex_tui__chatwidget__tests__chatwidget_tall.snap
   ↳ Hello, world! 8
   ↳ Hello, world! 9
   ↳ Hello, world! 10

@@ -429,6 +429,7 @@ async fn run_ratatui_app(
                 login_status,
                 auth_manager: auth_manager.clone(),
                 config: initial_config.clone(),
+// tui2/src/lib.rs
             },
             &mut tui,
         )

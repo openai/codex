@@ -35,6 +35,7 @@ impl MetricsConfig {
             service_version: service_version.into(),
             exporter: MetricsExporter::Otlp(exporter),
             export_interval: None,
+// otel/src/metrics/config.rs
             default_tags: BTreeMap::new(),
         }
     }

@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/mod.rs
+# tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__tests__status_hidden_when_height_too_small_height_1.snap
 expression: "render_snapshot(&pane, area1)"
 ---
 › Ask Codex to do a

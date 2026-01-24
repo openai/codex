@@ -9,6 +9,7 @@ Note that `codex-core` makes some assumptions about certain helper utilities bei
 ### macOS
 
 Expects `/usr/bin/sandbox-exec` to be present.
+<!-- core/README.md -->
 
 When using the workspace-write sandbox policy, the Seatbelt profile allows
 writes under the configured writable roots while keeping `.git` (directory or

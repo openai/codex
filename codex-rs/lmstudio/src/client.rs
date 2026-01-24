@@ -196,6 +196,7 @@ impl LMStudioClient {
             .connect_timeout(std::time::Duration::from_secs(5))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
+// lmstudio/src/client.rs
         Self {
             client,
             base_url: host_root.into(),

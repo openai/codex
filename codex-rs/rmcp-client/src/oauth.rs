@@ -459,6 +459,7 @@ fn save_oauth_tokens_to_file(tokens: &StoredOAuthTokens) -> Result<()> {
         access_token: token_response.access_token().secret().to_string(),
         expires_at,
         refresh_token,
+// rmcp-client/src/oauth.rs
         scopes,
     };
 

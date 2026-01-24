@@ -83,6 +83,7 @@ pub(crate) async fn run_editor(seed: &str, editor_cmd: &[String]) -> Result<Stri
         .await?;
 
     if !status.success() {
+// tui/src/external_editor.rs
         return Err(Report::msg(format!("editor exited with status {status}")));
     }
 

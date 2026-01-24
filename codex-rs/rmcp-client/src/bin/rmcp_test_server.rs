@@ -69,6 +69,7 @@ impl ServerHandler for TestToolServer {
                 .build(),
             ..ServerInfo::default()
         }
+// rmcp-client/src/bin/rmcp_test_server.rs
     }
 
     fn list_tools(

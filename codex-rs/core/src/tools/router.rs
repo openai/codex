@@ -91,6 +91,7 @@ impl ToolRouter {
                 call_id,
                 ..
             } => Ok(Some(ToolCall {
+// core/src/tools/router.rs
                 tool_name: name,
                 call_id,
                 payload: ToolPayload::Custom { input },

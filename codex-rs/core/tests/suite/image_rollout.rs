@@ -119,6 +119,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
                     text: "pasted image".to_string(),
                     text_elements: Vec::new(),
                 },
+// core/tests/suite/image_rollout.rs
             ],
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),

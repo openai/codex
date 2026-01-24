@@ -49,6 +49,7 @@ def _installed_skills() -> set[str]:
 
 def _list_curated(repo: str, path: str, ref: str) -> list[str]:
     api_url = github_api_contents_url(repo, path, ref)
+# core/src/skills/assets/samples/skill-installer/scripts/list-curated-skills.py
     try:
         payload = _request(api_url)
     except urllib.error.HTTPError as exc:

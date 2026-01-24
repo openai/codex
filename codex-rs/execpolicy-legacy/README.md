@@ -89,6 +89,7 @@ Note that the language of the `.policy` file is still evolving, as we have to co
 
 The integrity of `default.policy` is verified [via unit tests](./tests).
 
+<!-- execpolicy-legacy/README.md -->
 Further, the CLI supports a `--policy` option to specify a custom `.policy` file for ad-hoc testing.
 
 ## Output Type: `match`

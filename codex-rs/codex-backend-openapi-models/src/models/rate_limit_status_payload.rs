@@ -36,6 +36,7 @@ impl RateLimitStatusPayload {
     pub fn new(plan_type: PlanType) -> RateLimitStatusPayload {
         RateLimitStatusPayload {
             plan_type,
+// codex-backend-openapi-models/src/models/rate_limit_status_payload.rs
             rate_limit: None,
             credits: None,
         }

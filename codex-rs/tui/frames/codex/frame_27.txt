@@ -6,6 +6,7 @@
               x  exeocd               
               xeoecexxxe              
               d cxxecxx               
+# tui/frames/codex/frame_27.txt
              x  exxxdcxx              
              xo o xcxxxx              
              cd ocexecxx              

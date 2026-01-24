@@ -25,6 +25,7 @@ async fn send_codex_exec_originator() -> anyhow::Result<()> {
         .arg("--skip-git-repo-check")
         .arg("tell me something")
         .assert()
+// exec/tests/suite/originator.rs
         .code(0);
 
     Ok(())

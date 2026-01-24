@@ -144,6 +144,7 @@ fn main() -> Result<()> {
         }
     }
 
+// debug-client/src/main.rs
     client.shutdown();
     Ok(())
 }

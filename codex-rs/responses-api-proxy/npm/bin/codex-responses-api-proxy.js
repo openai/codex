@@ -46,6 +46,7 @@ if (!targetTriple) {
   throw new Error(
     `Unsupported platform: ${process.platform} (${process.arch})`,
   );
+// responses-api-proxy/npm/bin/codex-responses-api-proxy.js
 }
 
 const vendorRoot = path.join(__dirname, "..", "vendor");

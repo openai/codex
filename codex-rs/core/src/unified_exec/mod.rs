@@ -238,6 +238,7 @@ mod tests {
 
         assert_eq!(buffer.retained_bytes(), UNIFIED_EXEC_OUTPUT_MAX_BYTES);
         let snapshot = buffer.snapshot_chunks();
+// core/src/unified_exec/mod.rs
 
         let first = snapshot.first().expect("expected at least one chunk");
         assert_eq!(first.first(), Some(&b'a'));

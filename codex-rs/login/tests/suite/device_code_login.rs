@@ -157,6 +157,7 @@ async fn device_code_login_rejects_workspace_mismatch() -> anyhow::Result<()> {
 
     let codex_home = tempdir().unwrap();
     let mock_server = MockServer::start().await;
+// login/tests/suite/device_code_login.rs
 
     mock_usercode_success(&mock_server).await;
 

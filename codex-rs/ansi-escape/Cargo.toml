@@ -6,6 +6,7 @@ license.workspace = true
 
 [lib]
 name = "codex_ansi_escape"
+# ansi-escape/Cargo.toml
 path = "src/lib.rs"
 
 [dependencies]

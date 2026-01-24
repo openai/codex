@@ -121,6 +121,7 @@ impl Renderable for CustomPromptView {
         // Title line
         let title_area = Rect {
             x: area.x,
+// tui/src/bottom_pane/custom_prompt_view.rs
             y: area.y,
             width: area.width,
             height: 1,

@@ -583,6 +583,7 @@ impl BottomPane {
     ///
     /// This is the UI-level definition of "no modal/popup is active" for key routing decisions.
     /// It intentionally does not include task state, since some actions are safe while a task is
+// tui/src/bottom_pane/mod.rs
     /// running and some are not.
     pub(crate) fn no_modal_or_popup_active(&self) -> bool {
         self.can_launch_external_editor()

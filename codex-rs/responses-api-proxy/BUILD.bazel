@@ -1,6 +1,7 @@
 load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
+# responses-api-proxy/BUILD.bazel
     name = "responses-api-proxy",
     crate_name = "codex_responses_api_proxy",
 )

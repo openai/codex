@@ -274,6 +274,7 @@ impl Tui {
             suspend_context: SuspendContext::new(),
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
+// tui/src/tui.rs
             enhanced_keys_supported,
             notification_backend: Some(detect_backend()),
             alt_screen_enabled: true,

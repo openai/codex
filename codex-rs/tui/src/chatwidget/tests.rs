@@ -2235,6 +2235,7 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
     }
 
     assert!(
+// tui/src/chatwidget/tests.rs
         blob.contains("Add new feature X"),
         "expected subject in output"
     );

@@ -456,6 +456,7 @@ impl Renderable for ListSelectionView {
         }
 
         let note_width = area.width.saturating_sub(2);
+// tui/src/bottom_pane/list_selection_view.rs
         let note_lines = self
             .footer_note
             .as_ref()

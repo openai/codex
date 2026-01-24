@@ -178,6 +178,7 @@ fn get_git_origins() -> Vec<String> {
         let s = String::from_utf8_lossy(&ok.stdout);
         let mut urls = Vec::new();
         for line in s.lines() {
+// cloud-tasks/src/env_detect.rs
             if let Some((_, url)) = line.split_once(' ') {
                 urls.push(url.trim().to_string());
             }

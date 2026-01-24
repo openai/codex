@@ -379,6 +379,7 @@ fn parse_update_file_chunk(
         change_context,
         old_lines: Vec::new(),
         new_lines: Vec::new(),
+// apply-patch/src/parser.rs
         is_end_of_file: false,
     };
     let mut parsed_lines = 0;

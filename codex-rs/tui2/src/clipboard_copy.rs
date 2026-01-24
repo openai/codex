@@ -37,6 +37,7 @@ impl ArboardClipboardManager {
                 error!(error = %err, "failed to initialize clipboard");
                 Self { inner: None }
             }
+// tui2/src/clipboard_copy.rs
         }
     }
 }

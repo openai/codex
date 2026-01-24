@@ -39,6 +39,7 @@ pub fn format_review_findings_block(
 
         let title = &item.title;
         let location = format_location(item);
+// core/src/review_format.rs
 
         if let Some(flags) = selection {
             // Default to selected if index is out of bounds.

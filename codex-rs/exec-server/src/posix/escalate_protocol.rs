@@ -23,6 +23,7 @@ pub(super) struct EscalateRequest {
 }
 
 /// The server sends this to the client to respond to an exec() request.
+// exec-server/src/posix/escalate_protocol.rs
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub(super) struct EscalateResponse {
     pub(super) action: EscalateAction,

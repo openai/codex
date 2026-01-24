@@ -6,6 +6,7 @@
       o ooeoo    eccoeexeeexoc        
       xoecee       cooo oxd oce       
      x  xx       ooeoocoeexeexe       
+# tui/frames/codex/frame_24.txt
      x exx       xodoeexxeooexx       
      xo xddddccxxxccecoex x  xx       
       e o  cxoooddooxoeeccx xcx       

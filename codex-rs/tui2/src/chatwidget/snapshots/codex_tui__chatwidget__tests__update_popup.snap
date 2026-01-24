@@ -5,6 +5,7 @@ expression: terminal.backend().vt100().screen().contents()
   ✨ New version available! Would you like to update?
 
   Full release notes: https://github.com/openai/codex/releases/latest
+# tui2/src/chatwidget/snapshots/codex_tui__chatwidget__tests__update_popup.snap
 
 
 › 1. Yes, update now

@@ -21,6 +21,7 @@ pub fn is_wsl() -> bool {
         false
     }
 }
+// core/src/env.rs
 
 /// Returns true when Codex is likely running in an environment without a usable GUI.
 ///

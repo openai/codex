@@ -167,6 +167,7 @@ pub fn audit_everyone_writable(
                 let ft = match ent.file_type() {
                     Ok(ft) => ft,
                     Err(_) => continue,
+// windows-sandbox-rs/src/audit.rs
                 };
                 if ft.is_symlink() {
                     continue;

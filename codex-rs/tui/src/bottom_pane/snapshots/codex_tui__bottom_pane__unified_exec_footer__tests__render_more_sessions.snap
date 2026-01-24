@@ -5,6 +5,7 @@ expression: "format!(\"{buf:?}\")"
 Buffer {
     area: Rect { x: 0, y: 0, width: 50, height: 1 },
     content: [
+# tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__unified_exec_footer__tests__render_more_sessions.snap
         "  1 background terminal running · /ps to view     ",
     ],
     styles: [

@@ -2212,6 +2212,7 @@ trust_level = "trusted"
         assert_eq!(
             config.cli_auth_credentials_store_mode,
             AuthCredentialsStoreMode::File,
+// core/src/config/mod.rs
         );
 
         Ok(())

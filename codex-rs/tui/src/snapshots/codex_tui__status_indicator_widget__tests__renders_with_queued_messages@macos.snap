@@ -4,6 +4,7 @@ assertion_line: 289
 expression: terminal.backend()
 ---
 "• Working (0s • esc to interrupt)                                               "
+# tui/src/snapshots/codex_tui__status_indicator_widget__tests__renders_with_queued_messages@macos.snap
 "                                                                                "
 " ↳ first                                                                        "
 " ↳ second                                                                       "

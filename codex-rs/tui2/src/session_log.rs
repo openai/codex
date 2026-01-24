@@ -103,6 +103,7 @@ pub(crate) fn maybe_init(config: &Config) {
     if let Err(e) = LOGGER.open(path.clone()) {
         tracing::error!("failed to open session log {:?}: {}", path, e);
         return;
+// tui2/src/session_log.rs
     }
 
     // Write a header record so we can attach context.

@@ -84,6 +84,7 @@ async fn fork_thread_twice_drops_to_first_message() {
 
     // GetHistory flushes before returning the path; no wait needed.
 
+// core/tests/suite/fork_thread.rs
     // Helper: read rollout items (excluding SessionMeta) from a JSONL path.
     let read_items = |p: &std::path::Path| -> Vec<RolloutItem> {
         let text = std::fs::read_to_string(p).expect("read rollout file");

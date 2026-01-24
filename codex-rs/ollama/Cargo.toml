@@ -15,6 +15,7 @@ workspace = true
 async-stream = { workspace = true }
 bytes = { workspace = true }
 codex-core = { workspace = true }
+# ollama/Cargo.toml
 futures = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
 semver = { workspace = true }

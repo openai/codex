@@ -6,6 +6,7 @@
                  x  xx                
                  x ocx                
                 exx ex                
+# tui2/frames/codex/frame_28.txt
                  xoccx                
                 oe  ex                
                 xxodxx                

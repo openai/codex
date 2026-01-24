@@ -3,6 +3,7 @@ use codex_common::CliConfigOverrides;
 use codex_mcp_server::run_main;
 
 fn main() -> anyhow::Result<()> {
+// mcp-server/src/main.rs
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         run_main(codex_linux_sandbox_exe, CliConfigOverrides::default()).await?;
         Ok(())

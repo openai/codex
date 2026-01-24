@@ -150,6 +150,7 @@ pub(crate) struct OutgoingResponse {
     pub result: Result,
 }
 
+// app-server/src/outgoing_message.rs
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct OutgoingError {
     pub error: JSONRPCErrorError,

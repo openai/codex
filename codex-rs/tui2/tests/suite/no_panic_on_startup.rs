@@ -57,6 +57,7 @@ async fn run_codex_cli(
     cwd: impl AsRef<Path>,
 ) -> anyhow::Result<CodexCliOutput> {
     let codex_cli = codex_utils_cargo_bin::cargo_bin("codex")?;
+// tui2/tests/suite/no_panic_on_startup.rs
     let mut env = HashMap::new();
     env.insert(
         "CODEX_HOME".to_string(),

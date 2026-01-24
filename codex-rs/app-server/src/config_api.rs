@@ -75,6 +75,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
             policies
                 .into_iter()
+// app-server/src/config_api.rs
                 .map(codex_app_server_protocol::AskForApproval::from)
                 .collect()
         }),

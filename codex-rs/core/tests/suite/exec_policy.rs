@@ -52,6 +52,7 @@ async fn execpolicy_blocks_shell_invocation() -> Result<()> {
     mount_sse_once(
         &server,
         sse(vec![
+// core/tests/suite/exec_policy.rs
             ev_response_created("resp-1"),
             ev_function_call(call_id, "shell_command", &serde_json::to_string(&args)?),
             ev_completed("resp-1"),

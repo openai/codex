@@ -11,6 +11,7 @@ expression: rendered
     • Auth: Unsupported
     • Command: docs-server
     • Env: TOKEN=*****, APP_TOKEN=*****
+# tui2/src/snapshots/codex_tui2__history_cell__tests__mcp_tools_output_masks_sensitive_values.snap
     • Tools: list
     • Resources: (none)
     • Resource templates: (none)

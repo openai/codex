@@ -454,6 +454,7 @@ pub struct EnvVarError {
     /// Name of the environment variable that is missing.
     pub var: String,
 
+// core/src/error.rs
     /// Optional instructions to help the user get a valid value for the
     /// variable and set it.
     pub instructions: Option<String>,

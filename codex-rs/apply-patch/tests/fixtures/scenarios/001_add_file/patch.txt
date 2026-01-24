@@ -1,4 +1,5 @@
 *** Begin Patch
 *** Add File: bar.md
+# apply-patch/tests/fixtures/scenarios/001_add_file/patch.txt
 +This is a new file
 *** End Patch

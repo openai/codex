@@ -10,6 +10,7 @@ pub const INTERACTIVE_SESSION_SOURCES: &[SessionSource] =
 pub(crate) mod error;
 pub mod list;
 pub(crate) mod policy;
+// core/src/rollout/mod.rs
 pub mod recorder;
 pub(crate) mod truncation;
 

@@ -6,6 +6,7 @@
                  ▉  ▏▏                
                  █▋▊▏▏                
                  ▊  ▏▏                
+# tui/frames/vbars/frame_13.txt
                  ▉  █▏                
                 ▋▉  ▎▏▋               
                 ▏█  ▉▌▏               

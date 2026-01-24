@@ -56,6 +56,7 @@ pub async fn ensure_oss_ready(config: &Config) -> std::io::Result<()> {
 
 fn min_responses_version() -> Version {
     Version::new(0, 13, 4)
+// ollama/src/lib.rs
 }
 
 fn wire_api_for_version(version: &Version) -> WireApi {

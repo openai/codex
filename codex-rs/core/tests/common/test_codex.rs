@@ -215,6 +215,7 @@ impl TestCodexBuilder {
             config.features.disable(Feature::ApplyPatchFreeform);
         }
 
+// core/tests/common/test_codex.rs
         Ok((config, cwd))
     }
 }

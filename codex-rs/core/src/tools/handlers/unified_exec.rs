@@ -170,6 +170,7 @@ impl ToolHandler for UnifiedExecHandler {
                 {
                     manager.release_process_id(&process_id).await;
                     return Ok(output);
+// core/src/tools/handlers/unified_exec.rs
                 }
 
                 manager

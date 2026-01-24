@@ -152,6 +152,7 @@ def _git_sparse_checkout(repo_url: str, ref: str, paths: list[str], dest_dir: st
                 "1",
                 "--sparse",
                 "--single-branch",
+# core/src/skills/assets/samples/skill-installer/scripts/install-skill-from-github.py
                 repo_url,
                 repo_dir,
             ]

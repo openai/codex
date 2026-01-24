@@ -82,6 +82,7 @@ This keeps:
 Result: on resize, the transcript cache rebuilds against the new width and the agent output reflows
 correctly because the stored content contains no baked soft wraps.
 
+<!-- tui2/docs/streaming_wrapping_design.md -->
 ## Overlay deferral fix (D): defer cells, not rendered lines
 
 When an overlay (transcript/static) is active, TUI2 is in alt screen and the normal terminal buffer

@@ -72,6 +72,7 @@ impl McpEscalationPolicy {
                     .create_elicitation(CreateElicitationRequestParam {
                         message: format!(
                             "Allow agent to run `{command}` in `{}`?",
+// exec-server/src/posix/mcp_escalation_policy.rs
                             workdir.display()
                         ),
                         requested_schema: ElicitationSchema::builder()

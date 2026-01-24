@@ -182,6 +182,7 @@ name = "serde_core"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad"
+# windows-sandbox-rs/Cargo.lock
 dependencies = [
  "serde_derive",
 ]

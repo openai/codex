@@ -4,6 +4,7 @@ expression: term.backend()
 ---
 "/ S T A T I C / / / / / "
 "a very long line that   "
+# tui2/src/snapshots/codex_tui2__pager_overlay__tests__static_overlay_wraps_long_lines.snap
 "should wrap when        "
 "rendered within a narrow"
 "─────────────────── 0% ─"

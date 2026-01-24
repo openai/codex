@@ -15,6 +15,7 @@ pub enum GitToolingError {
         stderr: String,
     },
     #[error("git command `{command}` produced non-UTF-8 output")]
+// utils/git/src/errors.rs
     GitOutputUtf8 {
         command: String,
         #[source]

@@ -32,6 +32,7 @@ fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
 
     let (tx, rx) = mpsc::channel();
     let server_thread = thread::spawn(move || -> anyhow::Result<()> {
+// stdio-to-uds/tests/stdio_to_uds.rs
         let (mut connection, _) = listener
             .accept()
             .context("failed to accept test connection")?;

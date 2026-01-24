@@ -12,6 +12,7 @@ pub struct State {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PendingRequest {
     Start,
+// debug-client/src/state.rs
     Resume,
     List,
 }

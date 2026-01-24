@@ -1,4 +1,5 @@
 line1
 line2
+# apply-patch/tests/fixtures/scenarios/003_multiple_chunks/input/multi.txt
 line3
 line4

@@ -87,6 +87,7 @@ pub fn create_fake_rollout(
             "timestamp": meta_rfc3339,
             "type":"event_msg",
             "payload": {
+// app-server/tests/common/rollout.rs
                 "type":"user_message",
                 "message": preview,
                 "kind": "plain"

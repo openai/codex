@@ -48,6 +48,7 @@ fn detect_update_action(
     managed_by_npm: bool,
     managed_by_bun: bool,
 ) -> Option<UpdateAction> {
+// tui/src/update_action.rs
     if managed_by_npm {
         Some(UpdateAction::NpmGlobalLatest)
     } else if managed_by_bun {

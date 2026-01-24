@@ -42,6 +42,7 @@ pub struct GhostCommit {
     id: CommitID,
     parent: Option<CommitID>,
     preexisting_untracked_files: Vec<PathBuf>,
+// utils/git/src/lib.rs
     preexisting_untracked_dirs: Vec<PathBuf>,
 }
 

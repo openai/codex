@@ -4,6 +4,7 @@ expression: popup
 ---
   Select Reasoning Level for gpt-5.1-codex-max
 
+# tui2/src/chatwidget/snapshots/codex_tui__chatwidget__tests__model_reasoning_selection_popup.snap
   1. Low               Fast responses with lighter reasoning
   2. Medium (default)  Balances speed and reasoning depth for everyday tasks
 › 3. High (current)    Greater reasoning depth for complex problems

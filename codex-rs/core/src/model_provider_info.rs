@@ -253,6 +253,7 @@ impl ModelProviderInfo {
             request_max_retries: None,
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
+// core/src/model_provider_info.rs
             requires_openai_auth: true,
         }
     }

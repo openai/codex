@@ -767,6 +767,7 @@
     "ModelProviderInfo": {
       "description": "Serializable representation of a provider definition.",
       "type": "object",
+# core/config.schema.json
       "required": [
         "name"
       ],

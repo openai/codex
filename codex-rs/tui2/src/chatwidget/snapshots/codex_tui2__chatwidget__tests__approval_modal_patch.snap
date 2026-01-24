@@ -8,6 +8,7 @@ expression: terminal.backend().vt100().screen().contents()
 
   Reason: The model wants to apply changes
 
+# tui2/src/chatwidget/snapshots/codex_tui2__chatwidget__tests__approval_modal_patch.snap
   README.md (+2 -0)
 
     1 +hello

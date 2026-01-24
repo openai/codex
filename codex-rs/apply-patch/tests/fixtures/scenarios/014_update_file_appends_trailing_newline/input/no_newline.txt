@@ -1,1 +1,2 @@
+# apply-patch/tests/fixtures/scenarios/014_update_file_appends_trailing_newline/input/no_newline.txt
 no newline at end

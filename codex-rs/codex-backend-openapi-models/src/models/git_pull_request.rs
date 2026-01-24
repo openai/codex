@@ -36,6 +36,7 @@ pub struct GitPullRequest {
     #[serde(rename = "base_sha", skip_serializing_if = "Option::is_none")]
     pub base_sha: Option<String>,
     #[serde(rename = "head_sha", skip_serializing_if = "Option::is_none")]
+// codex-backend-openapi-models/src/models/git_pull_request.rs
     pub head_sha: Option<String>,
     #[serde(rename = "merge_commit_sha", skip_serializing_if = "Option::is_none")]
     pub merge_commit_sha: Option<String>,

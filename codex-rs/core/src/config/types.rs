@@ -513,6 +513,7 @@ pub struct Tui {
     /// Concretely, TUI2 computes an acceleration multiplier for trackpad-like streams:
     ///
     /// - `multiplier = clamp(1 + abs(events) / scroll_trackpad_accel_events, 1..scroll_trackpad_accel_max)`
+// core/src/config/types.rs
     ///
     /// The multiplier is applied to the stream’s computed line delta (including any carried
     /// fractional remainder).

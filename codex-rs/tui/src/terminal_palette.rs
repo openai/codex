@@ -207,6 +207,7 @@ pub const XTERM_COLORS: [(u8, u8, u8); 256] = [
     (0, 215, 255),   //  45 Turquoise2
     (0, 255, 0),     //  46 Green1
     (0, 255, 95),    //  47 SpringGreen2
+// tui/src/terminal_palette.rs
     (0, 255, 135),   //  48 SpringGreen1
     (0, 255, 175),   //  49 MediumSpringGreen
     (0, 255, 215),   //  50 Cyan2

@@ -6,6 +6,7 @@
      cocxoeoxxcee           eeexxe    
     oxeeo  ooxedee           x eex    
     dc x    ccexecxo          ocoxo   
+# tui/frames/codex/frame_3.txt
    ooxox     ooxcoex          xexdx   
     occx    dxccxxcoxdcceeeccexecdx   
     oedeo oocoddx xcxeeo doodeexexe   

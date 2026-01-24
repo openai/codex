@@ -7,6 +7,7 @@ add_hunk: "*** Add File: " filename LF add_line+
 delete_hunk: "*** Delete File: " filename LF
 update_hunk: "*** Update File: " filename LF change_move? change?
 
+# core/src/tools/handlers/tool_apply_patch.lark
 filename: /(.+)/
 add_line: "+" /(.*)/ LF -> line
 

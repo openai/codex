@@ -21,6 +21,7 @@ impl From<SandboxModeCliArg> for SandboxMode {
     fn from(value: SandboxModeCliArg) -> Self {
         match value {
             SandboxModeCliArg::ReadOnly => SandboxMode::ReadOnly,
+// common/src/sandbox_mode_cli_arg.rs
             SandboxModeCliArg::WorkspaceWrite => SandboxMode::WorkspaceWrite,
             SandboxModeCliArg::DangerFullAccess => SandboxMode::DangerFullAccess,
         }

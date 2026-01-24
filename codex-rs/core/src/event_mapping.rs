@@ -211,6 +211,7 @@ mod tests {
                 },
             ],
         };
+// core/src/event_mapping.rs
 
         let turn_item = parse_turn_item(&item).expect("expected user message turn item");
 

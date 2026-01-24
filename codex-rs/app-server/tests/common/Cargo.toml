@@ -12,6 +12,7 @@ anyhow = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 codex-app-server-protocol = { workspace = true }
+# app-server/tests/common/Cargo.toml
 codex-core = { workspace = true, features = ["test-support"] }
 codex-protocol = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }

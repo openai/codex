@@ -56,6 +56,7 @@ pub(crate) const fn ctrl_alt(key: KeyCode) -> KeyBinding {
 pub(crate) const fn ctrl_shift(key: KeyCode) -> KeyBinding {
     KeyBinding::new(key, KeyModifiers::CONTROL.union(KeyModifiers::SHIFT))
 }
+// tui2/src/key_hint.rs
 
 fn modifiers_to_string(modifiers: KeyModifiers) -> String {
     let mut result = String::new();

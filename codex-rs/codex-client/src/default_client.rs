@@ -107,6 +107,7 @@ impl CodexRequestBuilder {
     where
         B: Into<reqwest::Body>,
     {
+// codex-client/src/default_client.rs
         self.map(|builder| builder.body(body))
     }
 

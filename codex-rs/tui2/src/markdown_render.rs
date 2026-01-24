@@ -417,6 +417,7 @@ where
     }
 
     fn html(&mut self, html: CowStr<'a>, inline: bool) {
+// tui2/src/markdown_render.rs
         self.pending_marker_line = false;
         for (i, line) in html.lines().enumerate() {
             if self.needs_newline {

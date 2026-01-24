@@ -204,6 +204,7 @@ async fn run_codex_tool_session_inner(
     thread_id: ThreadId,
     thread: Arc<CodexThread>,
     outgoing: Arc<OutgoingMessageSender>,
+// mcp-server/src/codex_tool_runner.rs
     request_id: RequestId,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
 ) {

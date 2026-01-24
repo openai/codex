@@ -18,6 +18,7 @@ impl Drop for Timer {
     }
 }
 
+// otel/src/metrics/timer.rs
 impl Timer {
     pub(crate) fn new(name: &str, tags: &[(&str, &str)], client: &MetricsClient) -> Self {
         Self {

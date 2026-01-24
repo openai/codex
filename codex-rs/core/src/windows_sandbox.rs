@@ -22,6 +22,7 @@ pub fn sandbox_setup_is_complete(_codex_home: &Path) -> bool {
 pub fn run_elevated_setup(
     policy: &SandboxPolicy,
     policy_cwd: &Path,
+// core/src/windows_sandbox.rs
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
     codex_home: &Path,

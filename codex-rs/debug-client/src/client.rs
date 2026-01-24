@@ -199,6 +199,7 @@ impl AppServerClient {
 
     pub fn start_reader(
         &mut self,
+// debug-client/src/client.rs
         events: Sender<ReaderEvent>,
         auto_approve: bool,
         filtered_output: bool,

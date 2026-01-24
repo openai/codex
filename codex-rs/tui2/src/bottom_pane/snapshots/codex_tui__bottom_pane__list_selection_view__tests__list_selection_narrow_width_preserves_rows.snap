@@ -6,6 +6,7 @@ expression: "render_lines_with_width(&view, 24)"
   Debug                 
                         
 › 1. Item 1             
+# tui2/src/bottom_pane/snapshots/codex_tui__bottom_pane__list_selection_view__tests__list_selection_narrow_width_preserves_rows.snap
              xxxxxxxxx  
              x          
   2. Item 2             

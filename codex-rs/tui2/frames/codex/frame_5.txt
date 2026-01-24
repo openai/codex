@@ -6,6 +6,7 @@
      oeocoeecxeeo         e exexe     
      xxxxo eexedoxe          coxx     
     xox c   eeexecxo        ccxcxo    
+# tui2/frames/codex/frame_5.txt
     xoxec    oedxoex          cxex    
     xoxec   oexcoxcdexcxeeecoecxox    
      eexeoooccc xc ooedeodoooxocxe    

@@ -22,6 +22,7 @@ pub async fn wait_for_pid_file(path: &Path) -> anyhow::Result<String> {
 }
 
 pub fn process_is_alive(pid: &str) -> anyhow::Result<bool> {
+// core/tests/common/process.rs
     let status = std::process::Command::new("kill")
         .args(["-0", pid])
         .status()

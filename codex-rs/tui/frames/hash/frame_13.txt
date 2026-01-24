@@ -6,6 +6,7 @@
                  *  ..                
                  █A-..                
                  #  ..                
+# tui/frames/hash/frame_13.txt
                  #  █.                
                 A#  -..               
                 .█  #*.               

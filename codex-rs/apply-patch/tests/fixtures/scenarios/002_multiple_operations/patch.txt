@@ -2,6 +2,7 @@
 *** Add File: nested/new.txt
 +created
 *** Delete File: delete.txt
+# apply-patch/tests/fixtures/scenarios/002_multiple_operations/patch.txt
 *** Update File: modify.txt
 @@
 -line2

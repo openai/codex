@@ -6,6 +6,7 @@
               i  aiapon               
               iaeaoaiiia              
               n oiiaoii               
+# tui2/frames/openai/frame_27.txt
              i  aiiinoii              
              ie e ipiiii              
              on eoaiaoii              

@@ -1114,6 +1114,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .find_map(|(idx, body)| body_contains_text(body, SUMMARIZATION_PROMPT).then_some(idx))
         .expect("auto compact request missing");
     assert_eq!(
+// core/tests/suite/compact.rs
         auto_compact_index, 2,
         "auto compact should add a third request"
     );

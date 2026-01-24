@@ -4,6 +4,7 @@ mod render;
 pub(crate) use model::CommandOutput;
 #[cfg(test)]
 pub(crate) use model::ExecCall;
+// tui2/src/exec_cell/mod.rs
 pub(crate) use model::ExecCell;
 pub(crate) use render::OutputLinesParams;
 pub(crate) use render::TOOL_CALL_MAX_LINES;

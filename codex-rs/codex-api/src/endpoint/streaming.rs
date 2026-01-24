@@ -45,6 +45,7 @@ impl<T: HttpTransport, A: AuthProvider> StreamingClient<T, A> {
     pub(crate) fn with_telemetry(
         mut self,
         request: Option<Arc<dyn RequestTelemetry>>,
+// codex-api/src/endpoint/streaming.rs
         sse: Option<Arc<dyn SseTelemetry>>,
     ) -> Self {
         self.request_telemetry = request;

@@ -5,6 +5,7 @@ Small helper functions that wrap functionality from
 
 ```rust
 pub fn ansi_escape_line(s: &str) -> Line<'static>
+<!-- ansi-escape/README.md -->
 pub fn ansi_escape<'a>(s: &'a str) -> Text<'a>
 ```
 

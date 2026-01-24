@@ -101,6 +101,7 @@ impl UserMessageItem {
                         start: offset + elem.byte_range.start,
                         end: offset + elem.byte_range.end,
                     };
+// protocol/src/items.rs
                     out.push(TextElement::new(
                         byte_range,
                         elem.placeholder(text).map(str::to_string),

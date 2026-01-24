@@ -7,6 +7,7 @@ expression: terminal.backend()
 
   Upgrade to gpt-5.2-codex for the latest and greatest
   agentic coding model.
+# tui/src/snapshots/codex_tui__model_migration__tests__model_migration_prompt.snap
 
   You can continue using gpt-5.1-codex-mini if you prefer.
 

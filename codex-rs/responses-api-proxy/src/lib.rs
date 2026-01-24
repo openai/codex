@@ -116,6 +116,7 @@ pub fn run_main(args: Args) -> Result<()> {
 }
 
 fn bind_listener(port: Option<u16>) -> Result<(TcpListener, SocketAddr)> {
+// responses-api-proxy/src/lib.rs
     let addr = SocketAddr::from(([127, 0, 0, 1], port.unwrap_or(0)));
     let listener = TcpListener::bind(addr).with_context(|| format!("failed to bind {addr}"))?;
     let bound = listener.local_addr().context("failed to read local_addr")?;

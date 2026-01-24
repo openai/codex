@@ -4,6 +4,7 @@ expression: popup
 ---
   Select Approval Mode
 
+# tui2/src/chatwidget/snapshots/codex_tui__chatwidget__tests__approvals_selection_popup@windows.snap
 › 1. Read Only (current)  Requires approval to edit files and run commands.
   2. Agent                Read and edit files, and run commands.
   3. Agent (full access)  Codex can edit files outside this workspace and run

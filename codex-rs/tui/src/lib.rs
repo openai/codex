@@ -415,6 +415,7 @@ async fn run_ratatui_app(
         .await?;
         if onboarding_result.should_exit {
             restore();
+// tui/src/lib.rs
             session_log::log_session_end();
             let _ = tui.terminal.clear();
             return Ok(AppExitInfo {

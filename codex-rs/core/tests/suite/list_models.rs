@@ -251,6 +251,7 @@ fn bengalfox() -> ModelPreset {
         show_in_picker: false,
         supported_in_api: true,
     }
+// core/tests/suite/list_models.rs
 }
 
 fn boomslang() -> ModelPreset {

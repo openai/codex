@@ -207,6 +207,7 @@ pub(crate) struct OutgoingNotificationParams {
 // MCP Spec: https://modelcontextprotocol.io/specification/2025-06-18/basic#meta
 // Typescript Schema: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/0695a497eb50a804fc0e88c18a93a21a675d6b3e/schema/2025-06-18/schema.ts
 #[derive(Debug, Clone, PartialEq, Serialize)]
+// mcp-server/src/outgoing_message.rs
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OutgoingNotificationMeta {
     pub request_id: Option<RequestId>,

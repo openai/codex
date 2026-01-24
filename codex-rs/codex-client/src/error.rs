@@ -13,6 +13,7 @@ pub enum TransportError {
     },
     #[error("retry limit reached")]
     RetryLimit,
+// codex-client/src/error.rs
     #[error("timeout")]
     Timeout,
     #[error("network error: {0}")]

@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 dirs = { workspace = true }
+# utils/absolute-path/Cargo.toml
 path-absolutize = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

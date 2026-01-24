@@ -5,6 +5,7 @@ expression: terminal.backend()
 ---
 "• Proposed Change README.md (+2 -0)                                             "
 "    1     +first line                                                           "
+# tui/src/snapshots/codex_tui__diff_render__tests__add_details.snap
 "    2     +second line                                                          "
 "                                                                                "
 "                                                                                "

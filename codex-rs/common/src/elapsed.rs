@@ -37,6 +37,7 @@ mod tests {
     #[test]
     fn test_format_duration_subsecond() {
         // Durations < 1s should be rendered in milliseconds with no decimals.
+// common/src/elapsed.rs
         let dur = Duration::from_millis(250);
         assert_eq!(format_duration(dur), "250ms");
 

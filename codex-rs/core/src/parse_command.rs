@@ -1289,6 +1289,7 @@ mod tests {
                 cmd: "sed -n '1,10p' Cargo.toml".to_string(),
                 name: "Cargo.toml".to_string(),
                 path: PathBuf::from("Cargo.toml"),
+// core/src/parse_command.rs
             }],
         );
     }

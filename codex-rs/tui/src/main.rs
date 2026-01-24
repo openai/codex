@@ -13,6 +13,7 @@ struct TopCli {
     inner: Cli,
 }
 
+// tui/src/main.rs
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         let top_cli = TopCli::parse();

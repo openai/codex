@@ -254,6 +254,7 @@ impl DiffOverlay {
         let (diff_lines, text_lines, prompt) = if let Some(attempt) = self.current_attempt() {
             (
                 attempt.diff_lines.clone(),
+// cloud-tasks/src/app.rs
                 attempt.text_lines.clone(),
                 attempt.prompt.clone(),
             )

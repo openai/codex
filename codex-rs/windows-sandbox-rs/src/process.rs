@@ -67,6 +67,7 @@ pub unsafe fn create_process_as_user(
     cwd: &Path,
     env_map: &HashMap<String, String>,
     logs_base_dir: Option<&Path>,
+// windows-sandbox-rs/src/process.rs
     stdio: Option<(HANDLE, HANDLE, HANDLE)>,
 ) -> Result<(PROCESS_INFORMATION, STARTUPINFOW)> {
     let cmdline_str = argv

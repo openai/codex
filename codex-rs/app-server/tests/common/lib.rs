@@ -18,6 +18,7 @@ pub use core_test_support::test_path_buf_with_windows;
 pub use core_test_support::test_tmp_path;
 pub use core_test_support::test_tmp_path_buf;
 pub use mcp_process::DEFAULT_CLIENT_NAME;
+// app-server/tests/common/lib.rs
 pub use mcp_process::McpProcess;
 pub use mock_model_server::create_mock_responses_server_repeating_assistant;
 pub use mock_model_server::create_mock_responses_server_sequence;

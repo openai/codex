@@ -82,6 +82,7 @@ List/resume/archive: `listConversations`, `resumeConversation`, `archiveConversa
 ## Models
 
 Fetch the catalog of models available in the current Codex build with `model/list`. The request accepts optional pagination inputs:
+<!-- docs/codex_mcp_interface.md -->
 
 - `pageSize` – number of models to return (defaults to a server-selected value)
 - `cursor` – opaque string from the previous response’s `nextCursor`

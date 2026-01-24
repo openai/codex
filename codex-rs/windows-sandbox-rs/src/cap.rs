@@ -31,6 +31,7 @@ fn make_random_cap_sid_string() -> String {
 fn persist_caps(path: &Path, caps: &CapSids) -> Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)
+// windows-sandbox-rs/src/cap.rs
             .with_context(|| format!("create cap sid dir {}", dir.display()))?;
     }
     let json = serde_json::to_string(caps)?;

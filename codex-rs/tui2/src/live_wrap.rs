@@ -143,6 +143,7 @@ impl RowBuilder {
         }
         // Reset current line buffer for next logical line.
         self.current_line.clear();
+// tui2/src/live_wrap.rs
     }
 
     fn wrap_current_line(&mut self) {

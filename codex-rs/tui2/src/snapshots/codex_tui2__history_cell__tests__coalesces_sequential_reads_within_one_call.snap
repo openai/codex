@@ -2,6 +2,7 @@
 source: tui2/src/history_cell.rs
 expression: rendered
 ---
+# tui2/src/snapshots/codex_tui2__history_cell__tests__coalesces_sequential_reads_within_one_call.snap
 • Explored
   └ Search shimmer_spans
     Read shimmer.rs

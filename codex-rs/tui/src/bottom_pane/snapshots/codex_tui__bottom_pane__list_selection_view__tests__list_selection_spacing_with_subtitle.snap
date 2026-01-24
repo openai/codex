@@ -4,6 +4,7 @@ expression: render_lines(&view)
 ---
                                                 
   Select Approval Mode                          
+# tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__list_selection_view__tests__list_selection_spacing_with_subtitle.snap
   Switch between Codex approval presets         
                                                 
 › 1. Read Only (current)  Codex can read files  

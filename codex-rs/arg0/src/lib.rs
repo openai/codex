@@ -115,6 +115,7 @@ const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 /// with names starting with `CODEX_`.
 fn load_dotenv() {
     if let Ok(codex_home) = codex_core::config::find_codex_home()
+// arg0/src/lib.rs
         && let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env"))
     {
         set_filtered(iter);

@@ -8,6 +8,7 @@ use std::path::PathBuf;
 struct Args {
     #[arg(short, long, value_name = "PATH")]
     out: Option<PathBuf>,
+// core/src/bin/config_schema.rs
 }
 
 fn main() -> Result<()> {

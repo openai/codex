@@ -80,6 +80,7 @@ pub(crate) fn install_system_skills(codex_home: &Path) -> Result<(), SystemSkill
 
 fn read_marker(path: &AbsolutePathBuf) -> Result<String, SystemSkillsError> {
     Ok(fs::read_to_string(path.as_path())
+// core/src/skills/system.rs
         .map_err(|source| SystemSkillsError::io("read system skills marker", source))?
         .trim()
         .to_string())

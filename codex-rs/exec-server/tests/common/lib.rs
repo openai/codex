@@ -88,6 +88,7 @@ where
     S: Service<RoleClient> + ClientHandler,
 {
     let sandbox_state = SandboxState {
+// exec-server/tests/common/lib.rs
         sandbox_policy: SandboxPolicy::ReadOnly,
         codex_linux_sandbox_exe,
         sandbox_cwd: sandbox_cwd.as_ref().to_path_buf(),

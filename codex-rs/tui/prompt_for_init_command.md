@@ -18,6 +18,7 @@ Project Structure & Module Organization
 - Outline the project structure, including where the source code, tests, and assets are located.
 
 Build, Test, and Development Commands
+<!-- tui/prompt_for_init_command.md -->
 
 - List key commands for building, testing, and running locally (e.g., npm test, make build).
 - Briefly explain what each command does.

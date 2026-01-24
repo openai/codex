@@ -48,6 +48,7 @@ impl ToolHandler for ViewImageHandler {
 
         let args: ViewImageArgs = parse_arguments(&arguments)?;
 
+// core/src/tools/handlers/view_image.rs
         let abs_path = turn.resolve_path(Some(args.path));
 
         let metadata = fs::metadata(&abs_path).await.map_err(|error| {

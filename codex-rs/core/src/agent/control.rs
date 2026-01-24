@@ -186,6 +186,7 @@ mod tests {
             .expect_err("send_prompt should fail without a manager");
         assert_eq!(
             err.to_string(),
+// core/src/agent/control.rs
             "unsupported operation: thread manager dropped"
         );
     }

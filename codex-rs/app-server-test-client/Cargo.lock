@@ -647,6 +647,7 @@ version = "1.0.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7186006dcb21920990093f30e3dea63b7d6e977bf1256be20c3563a5db070da"
 dependencies = [
+# app-server-test-client/Cargo.lock
  "proc-macro2",
  "quote",
  "syn",

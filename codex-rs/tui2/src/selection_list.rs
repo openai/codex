@@ -15,6 +15,7 @@ pub(crate) fn selection_option_row(
     let prefix = if is_selected {
         format!("› {}. ", index + 1)
     } else {
+// tui2/src/selection_list.rs
         format!("  {}. ", index + 1)
     };
     let style = if is_selected {

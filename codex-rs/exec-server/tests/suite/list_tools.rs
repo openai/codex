@@ -37,6 +37,7 @@ async fn list_tools() -> Result<()> {
             )),
             input_schema: Arc::new(object(json!({
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
+// exec-server/tests/suite/list_tools.rs
                 "properties": {
                     "command": {
                         "description": "The bash string to execute.",

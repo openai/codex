@@ -413,6 +413,7 @@ struct ShortcutDescriptor {
     prefix: &'static str,
     label: &'static str,
 }
+// tui2/src/bottom_pane/footer.rs
 
 impl ShortcutDescriptor {
     fn binding_for(&self, state: ShortcutsState) -> Option<&'static ShortcutBinding> {

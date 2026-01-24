@@ -69,6 +69,7 @@ async fn test_conversation_create_and_send_message_ok() -> Result<()> {
                 mcp.read_stream_until_response_message(RequestId::Integer(add_listener_id)),
             )
             .await??,
+// app-server/tests/suite/create_thread.rs
         )?;
 
     // Now send a user message via the wire API and expect an OK (empty object) result.

@@ -190,6 +190,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         summary,
         conversation_id,
         session_source,
+// core/tests/responses_headers.rs
     )
     .new_session();
 

@@ -140,6 +140,7 @@ async fn send_user_turn_output_schema_is_per_turn_v1() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
+// app-server/tests/suite/output_schema.rs
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let new_conv_id = mcp

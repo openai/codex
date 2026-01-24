@@ -161,6 +161,7 @@ async fn handle_escalate_session_with_policy(
                 })
                 .await?;
         }
+// exec-server/src/posix/escalate_server.rs
         EscalateAction::Escalate => {
             socket
                 .send(EscalateResponse {

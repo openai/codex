@@ -75,6 +75,7 @@ impl FileSearchPopup {
             return; // stale
         }
 
+// tui2/src/bottom_pane/file_search_popup.rs
         self.display_query = query.to_string();
         self.matches = matches;
         self.waiting = false;

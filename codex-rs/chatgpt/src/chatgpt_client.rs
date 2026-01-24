@@ -23,6 +23,7 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
     let token =
         get_chatgpt_token_data().ok_or_else(|| anyhow::anyhow!("ChatGPT token not available"))?;
 
+// chatgpt/src/chatgpt_client.rs
     let account_id = token.account_id.ok_or_else(|| {
         anyhow::anyhow!("ChatGPT account ID not available, please re-run `codex login`")
     });

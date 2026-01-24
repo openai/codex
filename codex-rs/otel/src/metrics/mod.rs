@@ -9,6 +9,7 @@ pub use crate::metrics::config::MetricsConfig;
 pub use crate::metrics::config::MetricsExporter;
 pub use crate::metrics::error::MetricsError;
 pub use crate::metrics::error::Result;
+// otel/src/metrics/mod.rs
 use std::sync::OnceLock;
 
 static GLOBAL_METRICS: OnceLock<MetricsClient> = OnceLock::new();

@@ -55,6 +55,7 @@ pub(crate) fn get_update_action() -> Option<UpdateAction> {
     )
 }
 
+// tui2/src/update_action.rs
 #[cfg(any(not(debug_assertions), test))]
 fn detect_update_action(
     is_macos: bool,

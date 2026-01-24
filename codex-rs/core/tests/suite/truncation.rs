@@ -413,6 +413,7 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
     // Compile the rmcp stdio test server and configure it.
     let rmcp_test_server_bin = stdio_server_bin()?;
 
+// core/tests/suite/truncation.rs
     let mut builder = test_codex().with_config(move |config| {
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(

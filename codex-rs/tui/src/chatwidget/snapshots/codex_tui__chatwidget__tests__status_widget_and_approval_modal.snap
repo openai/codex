@@ -6,6 +6,7 @@ expression: terminal.backend()
 "                                                                                                    "
 "  Would you like to run the following command?                                                      "
 "                                                                                                    "
+# tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__status_widget_and_approval_modal.snap
 "  Reason: this is a test reason such as one that would be produced by the model                     "
 "                                                                                                    "
 "  $ echo 'hello world'                                                                              "

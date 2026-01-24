@@ -15,6 +15,7 @@ tokio = { workspace = true, features = ["io-util", "macros", "process", "rt-mult
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 
+# utils/pty/Cargo.toml
 [target.'cfg(windows)'.dependencies]
 filedescriptor = "0.8.3"
 lazy_static = { workspace = true }

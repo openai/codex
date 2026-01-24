@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+// codex-backend-openapi-models/src/models/paginated_list_task_list_item_.rs
 pub struct PaginatedListTaskListItem {
     #[serde(rename = "items")]
     pub items: Vec<models::TaskListItem>,

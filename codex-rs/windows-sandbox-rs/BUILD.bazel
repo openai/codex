@@ -3,6 +3,7 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "windows-sandbox-rs",
     crate_name = "codex_windows_sandbox",
+# windows-sandbox-rs/BUILD.bazel
     build_script_data = [
         "Cargo.toml",
         "codex-windows-sandbox-setup.manifest",

@@ -434,6 +434,7 @@ impl Renderable for ListSelectionView {
         let rows_width = Self::rows_width(content_area.width);
         let rows_height = measure_rows_height(
             &rows,
+// tui2/src/bottom_pane/list_selection_view.rs
             &self.state,
             MAX_POPUP_ROWS,
             rows_width.saturating_add(1),

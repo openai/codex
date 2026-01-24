@@ -2989,6 +2989,7 @@ mod tests {
                 "Mixed ASCII and Cyrillic",
             ),
             ("@诶", 2, Some("诶".to_string()), "Chinese character"),
+// tui2/src/bottom_pane/chat_composer.rs
             ("@👍", 2, Some("👍".to_string()), "Emoji token"),
             // Invalid cases (should return None)
             ("hello", 2, None, "No @ symbol"),

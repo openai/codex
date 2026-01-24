@@ -2,6 +2,7 @@
 name = "codex-utils-string"
 version.workspace = true
 edition.workspace = true
+# utils/string/Cargo.toml
 license.workspace = true
 
 [lints]

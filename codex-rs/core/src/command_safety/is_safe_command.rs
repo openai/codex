@@ -210,6 +210,7 @@ mod tests {
         assert!(is_safe_to_call_with_exec(&vec_str(&["base64"])));
         assert!(is_safe_to_call_with_exec(&vec_str(&[
             "sed", "-n", "1,5p", "file.txt"
+// core/src/command_safety/is_safe_command.rs
         ])));
         assert!(is_safe_to_call_with_exec(&vec_str(&[
             "nl",

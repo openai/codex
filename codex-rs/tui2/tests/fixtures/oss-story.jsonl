@@ -4018,6 +4018,7 @@
 {"ts":"2025-08-10T03:23:37.470Z","dir":"to_tui","kind":"codex_event","payload":{"id":"5","msg":{"type":"agent_message_delta","delta":" \""}}}
 {"ts":"2025-08-10T03:23:37.470Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-10T03:23:37.470Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
+# tui2/tests/fixtures/oss-story.jsonl
 {"ts":"2025-08-10T03:23:37.472Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
 {"ts":"2025-08-10T03:23:37.493Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-10T03:23:37.494Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}

@@ -104,6 +104,7 @@ pub(crate) fn remove_orphan_outputs(items: &mut Vec<ResponseItem>) {
         .collect();
 
     let local_shell_call_ids: HashSet<String> = items
+// core/src/context_manager/normalize.rs
         .iter()
         .filter_map(|i| match i {
             ResponseItem::LocalShellCall {

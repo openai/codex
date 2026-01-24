@@ -4497,6 +4497,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf33f538733d1a5a3494b836ba913207f14d9d4a1d3cd67030c5061bdd2cac85"
 dependencies = [
  "memchr",
+# Cargo.lock
  "unicode-segmentation",
 ]
 

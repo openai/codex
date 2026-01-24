@@ -35,6 +35,7 @@ rmcp = { workspace = true, default-features = false, features = [
     "server",
     "transport-child-process",
     "transport-streamable-http-client-reqwest",
+# rmcp-client/Cargo.toml
     "transport-streamable-http-server",
 ] }
 schemars = { workspace = true }

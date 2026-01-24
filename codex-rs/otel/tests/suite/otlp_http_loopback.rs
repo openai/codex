@@ -105,6 +105,7 @@ fn read_http_request(
             if n == 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
+// otel/tests/suite/otlp_http_loopback.rs
                     "EOF before body complete",
                 ));
             }

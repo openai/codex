@@ -21,6 +21,7 @@ pub async fn create_mock_chat_completions_server(responses: Vec<String>) -> Mock
 
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
+// mcp-server/tests/common/mock_model_server.rs
         .respond_with(seq_responder)
         .expect(num_calls as u64)
         .mount(&server)

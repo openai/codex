@@ -95,6 +95,7 @@ pub fn parse_id_token(id_token: &str) -> Result<IdTokenInfo, IdTokenInfoError> {
         _ => return Err(IdTokenInfoError::InvalidFormat),
     };
 
+// core/src/token_data.rs
     let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64)?;
     let claims: IdClaims = serde_json::from_slice(&payload_bytes)?;
 

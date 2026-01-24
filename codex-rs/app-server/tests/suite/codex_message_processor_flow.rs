@@ -255,6 +255,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
     )?;
 
     // Expect an ExecCommandApproval request (elicitation)
+// app-server/tests/suite/codex_message_processor_flow.rs
     let request = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_request_message(),

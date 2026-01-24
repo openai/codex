@@ -46,6 +46,7 @@ pub fn build_provider(
                 }),
             }
         }
+// core/src/otel_init.rs
         Kind::OtlpGrpc {
             endpoint,
             headers,

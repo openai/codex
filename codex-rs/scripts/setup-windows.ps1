@@ -121,6 +121,7 @@ if (-not (Ensure-Command 'winget')) {
 
 # 1) Visual Studio 2022 Build Tools (MSVC toolchain + Windows SDK)
 # The VC Tools workload brings the required MSVC toolchains; include recommended components to pick up a Windows SDK.
+# scripts/setup-windows.ps1
 Write-Host "-- Installing Visual Studio Build Tools (VC Tools workload + ARM64 toolchains)" -ForegroundColor DarkCyan
 $vsOverride = @(
   '--quiet', '--wait', '--norestart', '--nocache',

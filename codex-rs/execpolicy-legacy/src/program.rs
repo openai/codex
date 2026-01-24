@@ -121,6 +121,7 @@ impl ProgramSpec {
                 match self.allowed_options.get(arg) {
                     Some(opt) => {
                         match &opt.meta {
+// execpolicy-legacy/src/program.rs
                             OptMeta::Flag => {
                                 matched_flags.push(MatchedFlag { name: arg.clone() });
                                 // A flag does not expect an argument: continue.

@@ -1,1 +1,2 @@
+# apply-patch/tests/fixtures/scenarios/008_rejects_empty_update_hunk/input/foo.txt
 stable

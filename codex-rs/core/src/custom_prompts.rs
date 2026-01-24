@@ -120,6 +120,7 @@ fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>, String) 
                 if (first == b'\"' && last == b'\"') || (first == b'\'' && last == b'\'') {
                     val = val[1..val.len().saturating_sub(1)].to_string();
                 }
+// core/src/custom_prompts.rs
             }
             match key.as_str() {
                 "description" => desc = Some(val),

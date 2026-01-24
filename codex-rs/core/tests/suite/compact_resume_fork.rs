@@ -520,6 +520,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "store": false,
       "stream": true,
       "include": [
+// core/tests/suite/compact_resume_fork.rs
         "reasoning.encrypted_content"
       ],
       "prompt_cache_key": prompt_cache_key

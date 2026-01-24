@@ -18,6 +18,7 @@ use codex_exec::run_main;
 #[derive(Parser, Debug)]
 struct TopCli {
     #[clap(flatten)]
+// exec/src/main.rs
     config_overrides: CliConfigOverrides,
 
     #[clap(flatten)]

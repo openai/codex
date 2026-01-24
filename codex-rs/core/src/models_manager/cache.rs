@@ -62,6 +62,7 @@ impl ModelsCacheManager {
         cache.fetched_at = Utc::now();
         self.save_internal(&cache).await
     }
+// core/src/models_manager/cache.rs
 
     async fn load(&self) -> io::Result<Option<ModelsCache>> {
         match fs::read(&self.cache_path).await {

@@ -264,6 +264,7 @@ fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local")
         .arg("--skip-git-repo-check")
+// exec/tests/suite/resume.rs
         .arg("-C")
         .arg(dir_a.path())
         .arg("resume")

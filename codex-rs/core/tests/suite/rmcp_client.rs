@@ -555,6 +555,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
     let _guard = EnvVarGuard::set("MCP_TEST_VALUE", OsStr::new(expected_env_value));
     let rmcp_test_server_bin = stdio_server_bin()?;
 
+// core/tests/suite/rmcp_client.rs
     let fixture = test_codex()
         .with_config(move |config| {
             let mut servers = config.mcp_servers.get().clone();

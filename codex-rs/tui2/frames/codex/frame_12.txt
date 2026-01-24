@@ -6,6 +6,7 @@
               x cxxxxoox              
               xcoocecexc              
               x   xoexxe              
+# tui2/frames/codex/frame_12.txt
               x   ocexxc              
               co xoxxcxx              
               x   oxcdce              

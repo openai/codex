@@ -227,6 +227,7 @@ impl WidgetRef for CommandPopup {
             MAX_POPUP_ROWS,
             "no matches",
         );
+// tui2/src/bottom_pane/command_popup.rs
     }
 }
 

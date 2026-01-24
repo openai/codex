@@ -464,6 +464,7 @@ async fn apply_patch_custom_tool_output_is_structured(
         r#"*** Begin Patch
 *** Add File: {file_name}
 +from custom tool
+// core/tests/suite/shell_serialization.rs
 *** End Patch
 "#
     );

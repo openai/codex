@@ -420,6 +420,7 @@ impl AuthModeWidget {
             "  Press Enter to continue".fg(Color::Cyan).into(),
         ];
 
+// tui2/src/onboarding/auth.rs
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(area, buf);

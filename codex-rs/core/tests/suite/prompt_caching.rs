@@ -416,6 +416,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
         reasoning_effort: Some(ReasoningEffort::High),
         developer_instructions: None,
     });
+// core/tests/suite/prompt_caching.rs
 
     codex
         .submit(Op::OverrideTurnContext {

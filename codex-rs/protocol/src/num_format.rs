@@ -47,6 +47,7 @@ fn format_si_suffix_with_formatter(n: i64, formatter: &DecimalFormatter) -> Stri
     let f = n as f64;
     for &(scale, suffix) in &UNITS {
         if (100.0 * f / scale as f64).round() < 1000.0 {
+// protocol/src/num_format.rs
             return format!("{}{}", format_scaled(n, scale, 2), suffix);
         } else if (10.0 * f / scale as f64).round() < 1000.0 {
             return format!("{}{}", format_scaled(n, scale, 1), suffix);

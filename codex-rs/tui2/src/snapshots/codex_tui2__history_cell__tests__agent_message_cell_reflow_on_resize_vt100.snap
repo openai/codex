@@ -8,6 +8,7 @@ narrow:
     the viewport width
     changes.
 
+# tui2/src/snapshots/codex_tui2__history_cell__tests__agent_message_cell_reflow_on_resize_vt100.snap
 
   > A blockquote that also
   > reflows across widths.

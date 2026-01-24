@@ -41,6 +41,7 @@ fn test_pwd_capital_l() {
                 program: "pwd".into(),
                 flags: vec![MatchedFlag::new("-L")],
                 ..Default::default()
+// execpolicy-legacy/tests/suite/pwd.rs
             }
         }),
         policy.check(&pwd)

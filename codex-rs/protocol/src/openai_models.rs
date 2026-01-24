@@ -166,6 +166,7 @@ const fn default_effective_context_window_percent() -> i64 {
 }
 
 /// Model metadata returned by the Codex backend `/models` endpoint.
+// protocol/src/openai_models.rs
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelInfo {
     pub slug: String,

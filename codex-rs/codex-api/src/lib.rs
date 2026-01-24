@@ -18,6 +18,7 @@ pub use crate::common::CompactionInput;
 pub use crate::common::Prompt;
 pub use crate::common::ResponseAppendWsRequest;
 pub use crate::common::ResponseCreateWsRequest;
+// codex-api/src/lib.rs
 pub use crate::common::ResponseEvent;
 pub use crate::common::ResponseStream;
 pub use crate::common::ResponsesApiRequest;

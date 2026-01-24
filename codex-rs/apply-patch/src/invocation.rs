@@ -404,6 +404,7 @@ mod tests {
         strs_to_strings(&["pwsh", "-NoProfile", "-Command", script])
     }
 
+// apply-patch/src/invocation.rs
     fn args_cmd(script: &str) -> Vec<String> {
         strs_to_strings(&["cmd.exe", "/c", script])
     }

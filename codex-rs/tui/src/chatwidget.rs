@@ -2523,6 +2523,7 @@ impl ChatWidget {
         for image in &local_images {
             items.push(UserInput::LocalImage {
                 path: image.path.clone(),
+// tui/src/chatwidget.rs
             });
         }
 

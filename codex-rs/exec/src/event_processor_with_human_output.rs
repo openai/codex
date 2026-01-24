@@ -334,6 +334,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::McpToolCallEnd(tool_call_end_event) => {
                 let is_success = tool_call_end_event.is_success();
                 let McpToolCallEndEvent {
+// exec/src/event_processor_with_human_output.rs
                     call_id: _,
                     result,
                     invocation,

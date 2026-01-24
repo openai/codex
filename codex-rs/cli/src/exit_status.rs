@@ -9,6 +9,7 @@ pub(crate) fn handle_exit_status(status: std::process::ExitStatus) -> ! {
         std::process::exit(128 + signal);
     } else {
         std::process::exit(1);
+// cli/src/exit_status.rs
     }
 }
 

@@ -306,6 +306,7 @@ async fn history_metadata_for_file(path: &Path) -> (u64, usize) {
             Ok(0) => break,
             Ok(n) => {
                 count += buf[..n].iter().filter(|&&b| b == b'\n').count();
+// core/src/message_history.rs
             }
             Err(_) => return (log_id, 0),
         }

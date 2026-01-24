@@ -35,6 +35,7 @@ fn log_file_path(base_dir: &Path) -> Option<PathBuf> {
 }
 
 fn append_line(line: &str, base_dir: Option<&Path>) {
+// windows-sandbox-rs/src/logging.rs
     if let Some(dir) = base_dir {
         if let Some(path) = log_file_path(dir) {
             if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {

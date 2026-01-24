@@ -71,6 +71,7 @@ impl FieldFormatter {
 
         buf.push_str(label);
         buf.push(':');
+// tui/src/status/format.rs
 
         let label_width = UnicodeWidthStr::width(label);
         let padding = 3 + self.label_width.saturating_sub(label_width);

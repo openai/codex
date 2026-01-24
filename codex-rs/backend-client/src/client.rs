@@ -178,6 +178,7 @@ impl Client {
     ) -> Result<PaginatedListTaskListItem> {
         let url = match self.path_style {
             PathStyle::CodexApi => format!("{}/api/codex/tasks/list", self.base_url),
+// backend-client/src/client.rs
             PathStyle::ChatGptApi => format!("{}/wham/tasks/list", self.base_url),
         };
         let req = self.http.get(&url).headers(self.headers());

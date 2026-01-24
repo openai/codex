@@ -88,6 +88,7 @@ The `response_id` returned from each turn matches the OpenAI `response_id` store
 ## Transport
 
 Can operate over any transport that supports bi-directional streaming. - cross-thread channels - IPC channels - stdin/stdout - TCP - HTTP2 - gRPC
+<!-- docs/protocol_v1.md -->
 
 Non-framed transports, such as stdin/stdout and TCP, should use newline-delimited JSON in sending messages.
 

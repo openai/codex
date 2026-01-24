@@ -10,6 +10,7 @@ expression: sanitized
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date     │
 │ information on rate limits and credits                            │
 │                                                                   │
+# tui2/src/status/snapshots/codex_tui__status__tests__status_snapshot_includes_credits_and_limits.snap
 │  Model:            gpt-5.1-codex (reasoning none, summaries auto) │
 │  Directory: [[workspace]]                                         │
 │  Approval:         on-request                                     │

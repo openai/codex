@@ -1,6 +1,7 @@
 ---
 source: tui/src/chatwidget/tests.rs
 expression: lines_to_single_string(&aborted_multi)
+# tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__exec_approval_history_decision_aborted_multiline.snap
 ---
 ✗ You canceled the request to run echo line1 ...
 

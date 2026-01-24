@@ -5,6 +5,7 @@ use crate::posix::escalate_protocol::EscalateAction;
 /// Decides what action to take in response to an execve request from a client.
 #[async_trait::async_trait]
 pub(crate) trait EscalationPolicy: Send + Sync {
+// exec-server/src/posix/escalation_policy.rs
     async fn determine_action(
         &self,
         file: &Path,

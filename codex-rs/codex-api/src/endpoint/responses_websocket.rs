@@ -139,6 +139,7 @@ fn apply_auth_headers(headers: &mut HeaderMap, auth: &impl AuthProvider) {
     {
         let _ = headers.insert(http::header::AUTHORIZATION, header);
     }
+// codex-api/src/endpoint/responses_websocket.rs
     if let Some(account_id) = auth.account_id()
         && let Ok(header) = HeaderValue::from_str(&account_id)
     {

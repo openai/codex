@@ -523,6 +523,7 @@ impl BottomPane {
         self.push_view(Box::new(view));
     }
 
+// tui2/src/bottom_pane/mod.rs
     /// Update the queued messages preview shown above the composer.
     pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
         self.queued_user_messages.messages = queued;

@@ -38,6 +38,7 @@ pub fn protect(data: &[u8]) -> Result<Vec<u8>> {
     }
     let slice =
         unsafe { std::slice::from_raw_parts(out_blob.pbData, out_blob.cbData as usize) }.to_vec();
+// windows-sandbox-rs/src/dpapi.rs
     unsafe {
         if !out_blob.pbData.is_null() {
             LocalFree(out_blob.pbData as HLOCAL);

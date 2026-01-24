@@ -627,6 +627,7 @@ impl TranscriptOverlay {
         is_stream_continuation: bool,
     ) -> Box<dyn Renderable> {
         let paragraph = Paragraph::new(Text::from(lines));
+// tui/src/pager_overlay.rs
         let mut renderable: Box<dyn Renderable> = Box::new(CachedRenderable::new(paragraph));
         if has_prior_cells && !is_stream_continuation {
             renderable = Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));

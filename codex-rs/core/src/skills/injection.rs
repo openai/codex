@@ -47,6 +47,7 @@ pub(crate) async fn build_skill_injections(
                     name: skill.name,
                     path: skill.path.to_string_lossy().into_owned(),
                     contents,
+// core/src/skills/injection.rs
                 }));
             }
             Err(err) => {

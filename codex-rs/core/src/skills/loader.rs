@@ -847,6 +847,7 @@ default_prompt = "{too_long}"
             ),
         );
 
+// core/src/skills/loader.rs
         let cfg = make_config(&codex_home).await;
         let outcome = load_skills(&cfg);
 

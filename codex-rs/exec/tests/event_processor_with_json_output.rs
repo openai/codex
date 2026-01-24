@@ -537,6 +537,7 @@ fn agent_message_produces_item_completed_agent_message() {
 
 #[test]
 fn error_event_produces_error() {
+// exec/tests/event_processor_with_json_output.rs
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let out = ep.collect_thread_events(&event(
         "e1",

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 struct Args {
     /// Output directory where generated files will be written
     #[arg(short = 'o', long = "out", value_name = "DIR")]
+// app-server-protocol/src/bin/export.rs
     out_dir: PathBuf,
 
     /// Optional Prettier executable path to format generated TypeScript files

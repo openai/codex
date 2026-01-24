@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/footer.rs
+# tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__footer__tests__footer_context_only_queue_hint_disabled.snap
 expression: terminal.backend()
 ---
 "  100% context left                                                             "

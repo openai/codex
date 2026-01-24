@@ -58,6 +58,7 @@ async fn models_client_hits_models_endpoint() {
             description: Some("desc".to_string()),
             default_reasoning_level: Some(ReasoningEffort::Medium),
             supported_reasoning_levels: vec![
+// codex-api/tests/models_integration.rs
                 ReasoningEffortPreset {
                     effort: ReasoningEffort::Low,
                     description: ReasoningEffort::Low.to_string(),

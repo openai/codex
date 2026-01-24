@@ -7,6 +7,7 @@ expression: terminal.backend()
   Codex is now powered by gpt-5.1-codex-max, our latest
   frontier agentic coding model. It is smarter and faster
   than its predecessors and capable of long-running
+# tui2/src/snapshots/codex_tui__model_migration__tests__model_migration_prompt.snap
   project-scale work.
 
   Learn more at https://openai.com/index/gpt-5-1-codex-max/.

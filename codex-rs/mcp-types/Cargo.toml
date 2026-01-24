@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [lints]
+# mcp-types/Cargo.toml
 workspace = true
 
 [dependencies]

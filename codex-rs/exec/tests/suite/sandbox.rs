@@ -179,6 +179,7 @@ async fn sandbox_distinguishes_command_and_policy_cwds() {
     let mut child = spawn_command_under_sandbox(
         vec![
             "bash".to_string(),
+// exec/tests/suite/sandbox.rs
             "-lc".to_string(),
             "echo forbidden > forbidden.txt".to_string(),
         ],

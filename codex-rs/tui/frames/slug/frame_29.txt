@@ -6,6 +6,7 @@
                 o xge  e              
                 etxee dd              
                 eooeee d              
+# tui/frames/slug/frame_29.txt
                 eeoxe                 
                 eexpe   e             
                 deoee   e             

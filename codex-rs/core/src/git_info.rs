@@ -565,6 +565,7 @@ pub async fn local_git_branches(cwd: &Path) -> Vec<String> {
     {
         String::from_utf8_lossy(&out.stdout)
             .lines()
+// core/src/git_info.rs
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect()

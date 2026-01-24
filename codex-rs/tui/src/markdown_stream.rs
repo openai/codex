@@ -333,6 +333,7 @@ mod tests {
             "expected paragraph followed by blank separator before heading chunk"
         );
 
+// tui/src/markdown_stream.rs
         // Now finish the heading line with the trailing newline.
         c.push_delta("\n");
         let out2 = c.commit_complete_lines();

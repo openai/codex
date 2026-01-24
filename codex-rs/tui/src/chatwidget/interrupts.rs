@@ -46,6 +46,7 @@ impl InterruptManager {
 
     pub(crate) fn push_apply_patch_approval(
         &mut self,
+// tui/src/chatwidget/interrupts.rs
         id: String,
         ev: ApplyPatchApprovalRequestEvent,
     ) {

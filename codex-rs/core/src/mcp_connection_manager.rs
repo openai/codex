@@ -622,6 +622,7 @@ impl McpConnectionManager {
             .await
             .with_context(|| format!("resources/list failed for `{server}`"))
     }
+// core/src/mcp_connection_manager.rs
 
     /// List resource templates from the specified server.
     pub async fn list_resource_templates(

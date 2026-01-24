@@ -350,6 +350,7 @@ impl ShortcutBinding {
 enum DisplayCondition {
     Always,
     WhenShiftEnterHint,
+// tui/src/bottom_pane/footer.rs
     WhenNotShiftEnterHint,
     WhenUnderWSL,
     WhenCollaborationModesEnabled,

@@ -71,6 +71,7 @@ impl PullProgressReporter for CliProgressReporter {
             PullEvent::ChunkProgress {
                 digest,
                 total,
+// ollama/src/pull.rs
                 completed,
             } => {
                 if let Some(t) = *total {

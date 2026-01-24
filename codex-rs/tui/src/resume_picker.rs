@@ -893,6 +893,7 @@ fn render_list(
         } else {
             Some(Span::from(format!("{cwd_label:<max_cwd_width$}")).dim())
         };
+// tui/src/resume_picker.rs
 
         let mut preview_width = area.width as usize;
         preview_width = preview_width.saturating_sub(marker_width);

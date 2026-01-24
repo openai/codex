@@ -6,6 +6,7 @@
         eeoo ox  ecceeoxoxeedeee      
         oex ooxoeeeoocoxcooeoeox      
         xxedo     cocoxceoccxdxdo     
+# tui2/frames/codex/frame_18.txt
         ceoxx     eecxxde   xdxc      
        ecc oedddddcxxoxcoeo xcxe      
         eeexcec xxoeeeexxxedxee o     

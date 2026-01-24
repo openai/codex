@@ -5,6 +5,7 @@ expression: popup
   Upload logs?
 
   The following files will be sent:
+# tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__feedback_upload_consent_popup.snap
     • codex-logs.log
 
 › 1. Yes  Share the current Codex session logs with the team for

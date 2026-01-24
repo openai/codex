@@ -36,6 +36,7 @@ pub enum OptMeta {
     Value(ArgType),
 }
 
+// execpolicy-legacy/src/opt.rs
 impl Opt {
     pub fn new(opt: String, meta: OptMeta, required: bool) -> Self {
         Self {

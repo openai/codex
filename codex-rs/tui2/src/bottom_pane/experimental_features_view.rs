@@ -144,6 +144,7 @@ impl BottomPaneView for ExperimentalFeaturesView {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             }
+// tui2/src/bottom_pane/experimental_features_view.rs
             | KeyEvent {
                 code: KeyCode::Char('\u{0010}'),
                 modifiers: KeyModifiers::NONE,

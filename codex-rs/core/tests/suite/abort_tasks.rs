@@ -118,6 +118,7 @@ async fn interrupt_tool_records_history_entries() {
 
     codex
         .submit(Op::UserInput {
+// core/tests/suite/abort_tasks.rs
             items: vec![UserInput::Text {
                 text: "follow up".into(),
                 text_elements: Vec::new(),

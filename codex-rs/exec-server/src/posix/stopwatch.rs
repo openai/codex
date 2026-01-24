@@ -103,6 +103,7 @@ impl Stopwatch {
 
     async fn resume(&self) {
         let mut guard = self.inner.lock().await;
+// exec-server/src/posix/stopwatch.rs
         if guard.active_pauses == 0 {
             return;
         }

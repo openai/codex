@@ -223,6 +223,7 @@ impl CodexLogSnapshot {
         &self,
         classification: &str,
         reason: Option<&str>,
+// feedback/src/lib.rs
         include_logs: bool,
         rollout_path: Option<&std::path::Path>,
         session_source: Option<SessionSource>,

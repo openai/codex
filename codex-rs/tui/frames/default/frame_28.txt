@@ -6,6 +6,7 @@
                  |  ~|                
                  | -"|                
                 ^|~ _|                
+# tui/frames/default/frame_28.txt
                  |-""|                
                 /\  _|                
                 ||.:~|                

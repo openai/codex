@@ -563,6 +563,7 @@ async fn test_get_thread_contents() {
     let path = &page.items[0].path;
 
     let content = tokio::fs::read_to_string(path).await.unwrap();
+// core/src/rollout/tests.rs
 
     // Page equality (single item)
     let expected_path = home

@@ -137,6 +137,7 @@ impl ExecTool {
                 self.preserve_program_paths,
             ),
         );
+// exec-server/src/posix/mcp.rs
 
         let result = escalate_server
             .exec(params, cancel_token, &sandbox_state)

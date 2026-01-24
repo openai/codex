@@ -11,6 +11,7 @@ Buffer {
         "    …                                   ",
         "    ⌥ + ↑ edit                          ",
     ],
+# tui2/src/bottom_pane/snapshots/codex_tui2__bottom_pane__queued_user_messages__tests__render_many_line_message.snap
     styles: [
         x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
         x: 4, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM | ITALIC,

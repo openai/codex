@@ -164,6 +164,7 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     .await;
     assert_eq!(delta_event.stream, ExecOutputStream::Stdout);
     let chunk_text =
+// core/tests/suite/user_shell_cmd.rs
         String::from_utf8(delta_event.chunk.clone()).expect("user command chunk is valid utf-8");
     assert_eq!(chunk_text.trim(), "not-set");
 

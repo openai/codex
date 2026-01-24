@@ -48,6 +48,7 @@ impl TextElement {
     }
 
     /// Returns a copy of this element with a remapped byte range.
+// protocol/src/user_input.rs
     ///
     /// The placeholder is preserved as-is; callers must ensure the new range
     /// still refers to the same logical element (and same placeholder)

@@ -1,6 +1,7 @@
 *** Begin Patch
 *** Update File: missing.txt
 @@
+# apply-patch/tests/fixtures/scenarios/009_requires_existing_file_for_update/patch.txt
 -old
 +new
 *** End Patch

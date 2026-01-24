@@ -1,6 +1,7 @@
 ---
 source: tui/src/history_cell.rs
 assertion_line: 1817
+# tui/src/snapshots/codex_tui__history_cell__tests__completed_mcp_tool_call_error_snapshot.snap
 expression: rendered
 ---
 • Called search.find_docs({"query":"ratatui styling","limit":3})

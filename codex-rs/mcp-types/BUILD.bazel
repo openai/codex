@@ -1,6 +1,7 @@
 load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
+# mcp-types/BUILD.bazel
     name = "mcp-types",
     crate_name = "mcp_types",
 )

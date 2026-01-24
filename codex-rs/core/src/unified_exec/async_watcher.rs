@@ -143,6 +143,7 @@ async fn process_chunk(
     pending: &mut Vec<u8>,
     transcript: &Arc<Mutex<HeadTailBuffer>>,
     call_id: &str,
+// core/src/unified_exec/async_watcher.rs
     session_ref: &Arc<Session>,
     turn_ref: &Arc<TurnContext>,
     emitted_deltas: &mut usize,

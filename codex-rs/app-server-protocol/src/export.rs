@@ -471,6 +471,7 @@ fn annotate_object(map: &mut Map<String, Value>, base: Option<&str>) {
     let owner = map.get("title").and_then(Value::as_str).map(str::to_owned);
     if let Some(owner) = owner.as_deref()
         && let Some(Value::Object(props)) = map.get_mut("properties")
+// app-server-protocol/src/export.rs
     {
         set_discriminator_titles(props, owner);
     }

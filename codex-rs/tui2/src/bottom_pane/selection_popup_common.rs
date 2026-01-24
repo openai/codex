@@ -207,6 +207,7 @@ fn build_full_line(row: &GenericDisplayRow, desc_col: usize) -> Line<'static> {
         let gap = desc_col.saturating_sub(this_name_width);
         if gap > 0 {
             full_spans.push(" ".repeat(gap).into());
+// tui2/src/bottom_pane/selection_popup_common.rs
         }
         full_spans.push(desc.clone().dim());
     }

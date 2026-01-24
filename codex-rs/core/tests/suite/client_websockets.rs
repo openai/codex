@@ -122,6 +122,7 @@ async fn responses_websocket_appends_on_prefix() {
     assert_eq!(first["type"].as_str(), Some("response.create"));
     assert_eq!(first["model"].as_str(), Some(MODEL));
     assert_eq!(first["stream"], serde_json::Value::Bool(true));
+// core/tests/suite/client_websockets.rs
     assert_eq!(first["input"].as_array().map(Vec::len), Some(1));
     let expected_append = serde_json::json!({
         "type": "response.append",

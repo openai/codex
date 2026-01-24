@@ -2,6 +2,7 @@
 *** Add File: created.txt
 +hello
 *** Update File: missing.txt
+# apply-patch/tests/fixtures/scenarios/015_failure_after_partial_success_leaves_changes/patch.txt
 @@
 -old
 +new

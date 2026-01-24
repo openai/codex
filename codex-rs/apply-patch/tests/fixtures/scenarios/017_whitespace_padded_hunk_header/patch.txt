@@ -1,6 +1,7 @@
 *** Begin Patch
   *** Update File: foo.txt
 @@
+# apply-patch/tests/fixtures/scenarios/017_whitespace_padded_hunk_header/patch.txt
 -old
 +new
 *** End Patch

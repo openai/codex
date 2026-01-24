@@ -4,6 +4,7 @@ expression: "render_lines_with_width(&view, 80)"
 ---
                                                                                 
   Select Model and Effort                                                       
+# tui2/src/bottom_pane/snapshots/codex_tui__bottom_pane__list_selection_view__tests__list_selection_model_picker_width_80.snap
                                                                                 
 › 1. gpt-5.1-codex (current)  Optimized for Codex. Balance of reasoning         
                               quality and coding ability.                       

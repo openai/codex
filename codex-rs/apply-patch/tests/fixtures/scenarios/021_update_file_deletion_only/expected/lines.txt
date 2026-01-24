@@ -1,2 +1,3 @@
 line1
+# apply-patch/tests/fixtures/scenarios/021_update_file_deletion_only/expected/lines.txt
 line3

@@ -85,6 +85,7 @@ fn reorder_pathext_for_stubs(env_map: &mut HashMap<String, String>) {
         }
     }
     let rest: Vec<String> = exts
+// windows-sandbox-rs/src/env.rs
         .into_iter()
         .enumerate()
         .filter(|(i, _)| {

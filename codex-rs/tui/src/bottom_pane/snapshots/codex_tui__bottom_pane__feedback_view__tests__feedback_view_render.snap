@@ -6,6 +6,7 @@ expression: rendered
 
   Logs may include the full conversation history of this Codex process
   These logs are retained for 90 days and are used solely for troubles
+# tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__feedback_view__tests__feedback_view_render.snap
 
   You can review the exact content of the logs before they’re uploaded
   <LOG_PATH>

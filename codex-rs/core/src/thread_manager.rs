@@ -251,6 +251,7 @@ impl ThreadManager {
     pub async fn fork_thread(
         &self,
         nth_user_message: usize,
+// core/src/thread_manager.rs
         config: Config,
         path: PathBuf,
     ) -> CodexResult<NewThread> {

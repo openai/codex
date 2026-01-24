@@ -3,6 +3,7 @@ source: tui/src/bottom_pane/footer.rs
 assertion_line: 535
 expression: terminal.backend()
 ---
+# tui/src/bottom_pane/snapshots/codex_tui__bottom_pane__footer__tests__footer_shortcuts_collaboration_modes_enabled.snap
 "  / for commands                             ! for shell commands               "
 "  ctrl + j for newline                       tab to queue message               "
 "  @ for file paths                           ctrl + v to paste images           "

@@ -36,6 +36,7 @@ fn test_windows_1252_smart_decoding() {
 #[test]
 fn test_smart_decoding_improves_over_lossy_utf8() {
     // Regression guard: String::from_utf8_lossy() alone used to emit replacement chars here.
+// core/tests/suite/text_encoding_fix.rs
     let bytes = b"\x93\x94 test \x96 dash";
     assert!(
         String::from_utf8_lossy(bytes).contains('\u{FFFD}'),

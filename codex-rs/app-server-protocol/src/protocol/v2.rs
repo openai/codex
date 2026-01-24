@@ -1301,6 +1301,7 @@ pub struct SkillInterface {
     #[ts(optional)]
     pub short_description: Option<String>,
     #[ts(optional)]
+// app-server-protocol/src/protocol/v2.rs
     pub icon_small: Option<PathBuf>,
     #[ts(optional)]
     pub icon_large: Option<PathBuf>,

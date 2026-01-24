@@ -154,6 +154,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     )
     .await?;
     let codex = harness.test().codex.clone();
+// core/tests/suite/compact_remote.rs
 
     mount_sse_once(
         harness.server(),

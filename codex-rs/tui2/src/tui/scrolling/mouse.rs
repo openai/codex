@@ -550,6 +550,7 @@ impl MouseScrollState {
             return None;
         }
 
+// tui2/src/tui/scrolling/mouse.rs
         let mut next = STREAM_GAP.saturating_sub(gap);
 
         // If we've accumulated at least one whole line but haven't flushed yet (because the last

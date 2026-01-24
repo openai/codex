@@ -6,6 +6,7 @@
                  o  ii                
                  oepii                
                  p  ii                
+# tui/frames/openai/frame_13.txt
                  p  oi                
                 ep  aie               
                 io  pni               

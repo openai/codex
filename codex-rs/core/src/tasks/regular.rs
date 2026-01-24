@@ -18,6 +18,7 @@ pub(crate) struct RegularTask;
 #[async_trait]
 impl SessionTask for RegularTask {
     fn kind(&self) -> TaskKind {
+// core/src/tasks/regular.rs
         TaskKind::Regular
     }
 

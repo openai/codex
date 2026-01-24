@@ -337,6 +337,7 @@ where
         self.needs_newline = !inline;
     }
 
+// tui/src/markdown_render.rs
     fn hard_break(&mut self) {
         self.push_line(Line::default());
     }

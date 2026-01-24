@@ -40,6 +40,7 @@ fn resume_history(
         rollout_path: rollout_path.to_path_buf(),
     })
 }
+// core/tests/suite/resume_warning.rs
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn emits_warning_when_resumed_model_differs() {

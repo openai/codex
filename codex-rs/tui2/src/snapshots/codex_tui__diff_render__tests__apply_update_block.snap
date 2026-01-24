@@ -6,6 +6,7 @@ expression: terminal.backend()
 "    1  line one                                                                 "
 "    2 -line two                                                                 "
 "    2 +line two changed                                                         "
+# tui2/src/snapshots/codex_tui__diff_render__tests__apply_update_block.snap
 "    3  line three                                                               "
 "                                                                                "
 "                                                                                "

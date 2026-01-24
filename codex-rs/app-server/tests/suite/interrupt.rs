@@ -79,6 +79,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     let new_conv_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
+// app-server/tests/suite/interrupt.rs
     )
     .await??;
     let new_conv_resp = to_response::<NewConversationResponse>(new_conv_resp)?;

@@ -291,6 +291,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
         ev_completed("resp-1"),
     ]);
     responses::mount_sse_once(&server, first_response).await;
+// core/tests/suite/view_image.rs
 
     let second_response = sse(vec![
         ev_assistant_message("msg-1", "done"),

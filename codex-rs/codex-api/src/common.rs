@@ -100,6 +100,7 @@ pub struct TextControls {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verbosity: Option<OpenAiVerbosity>,
     #[serde(skip_serializing_if = "Option::is_none")]
+// codex-api/src/common.rs
     pub format: Option<TextFormat>,
 }
 

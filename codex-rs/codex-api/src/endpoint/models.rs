@@ -137,6 +137,7 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct DummyAuth;
+// codex-api/src/endpoint/models.rs
 
     impl AuthProvider for DummyAuth {
         fn bearer_token(&self) -> Option<String> {
