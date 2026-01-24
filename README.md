@@ -637,6 +637,7 @@ This repository is licensed under the [Apache-2.0 License](LICENSE).
 ### Postman collection
 
 - Import `postman.collection.json` in Postman to get pre-built requests for every path in the SmallWallets API.
+- To generate a Postman collection from the OpenAPI file, run `pnpm run export:postman` and import `postman/SmallWallets.postman_collection.json`.
 - Set the environment variables before sending requests:
   - `baseUrl` (defaults to `https://sandbox.smallwallets.dev/v1`)
   - `token` (replace with a valid JWT)
@@ -647,4 +648,5 @@ This repository is licensed under the [Apache-2.0 License](LICENSE).
 A workflow is available at `.github/workflows/smallwallets-toolbox.yml`. It runs on pushes and pull requests that touch the SmallWallets toolbox files and performs the following checks:
 
 1. Lints `smallwallets-openapi.json` with `@redocly/cli`.
-2. Verifies `postman.collection.json` is up to date with `python scripts/generate_postman_collection.py --check`.
+2. Exports `postman/SmallWallets.postman_collection.json` from OpenAPI and checks it in.
+3. Verifies `postman.collection.json` is up to date with `python scripts/generate_postman_collection.py --check`.

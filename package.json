@@ -11,6 +11,7 @@
     "lint": "pnpm --filter @openai/codex run lint",
     "lint:fix": "pnpm --filter @openai/codex run lint:fix",
     "typecheck": "pnpm --filter @openai/codex run typecheck",
+    "export:postman": "node scripts/export-postman.mjs",
     "changelog": "git-cliff --config cliff.toml --output CHANGELOG.ignore.md $LAST_RELEASE_TAG..HEAD",
     "prepare": "husky",
     "husky:add": "husky add"
@@ -19,6 +20,7 @@
     "git-cliff": "^2.8.0",
     "husky": "^9.1.7",
     "lint-staged": "^15.5.1",
+    "openapi-to-postmanv2": "^5.8.0",
     "prettier": "^3.5.3"
   },
   "resolutions": {
