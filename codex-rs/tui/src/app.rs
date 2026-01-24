@@ -2236,7 +2236,6 @@ mod tests {
     use codex_core::CodexAuth;
     use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
-    use codex_core::features::Feature;
     use codex_core::models_manager::manager::ModelsManager;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
@@ -2584,11 +2583,6 @@ mod tests {
                 app.chat_widget.current_model(),
                 event,
                 is_first,
-                app.chat_widget
-                    .config_ref()
-                    .features
-                    .enabled(Feature::CollaborationModes),
-                app.chat_widget.stored_collaboration_mode().clone(),
             )) as Arc<dyn HistoryCell>
         };
 

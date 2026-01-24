@@ -746,8 +746,6 @@ impl ChatWidget {
             &model_for_header,
             event,
             self.show_welcome_banner,
-            self.collaboration_modes_enabled(),
-            self.stored_collaboration_mode.clone(),
         );
         self.apply_session_info_cell(session_info_cell);
 
@@ -1951,11 +1949,7 @@ impl ChatWidget {
             }
         };
 
-        let active_cell = Some(Self::placeholder_session_header_cell(
-            &config,
-            config.features.enabled(Feature::CollaborationModes),
-            stored_collaboration_mode.clone(),
-        ));
+        let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -2076,11 +2070,7 @@ impl ChatWidget {
             }
         };
 
-        let active_cell = Some(Self::placeholder_session_header_cell(
-            &config,
-            config.features.enabled(Feature::CollaborationModes),
-            stored_collaboration_mode.clone(),
-        ));
+        let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -4692,7 +4682,7 @@ impl ChatWidget {
     ///
     /// When collaboration modes are enabled, the current mode is attached to *every*
     /// submission as `Op::UserTurn { collaboration_mode: Some(...) }`.
-    pub(crate) fn set_collaboration_mode(&mut self, mut mode: CollaborationMode) {
+    pub(crate) fn set_collaboration_mode(&mut self, mode: CollaborationMode) {
         if !self.collaboration_modes_enabled() {
             return;
         }
@@ -4704,11 +4694,7 @@ impl ChatWidget {
     }
 
     /// Build a placeholder header cell while the session is configuring.
-    fn placeholder_session_header_cell(
-        config: &Config,
-        is_collaboration: bool,
-        collaboration_mode: CollaborationMode,
-    ) -> Box<dyn HistoryCell> {
+    fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
         let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
         Box::new(history_cell::SessionHeaderHistoryCell::new_with_style(
             DEFAULT_MODEL_DISPLAY_NAME.to_string(),
@@ -4716,8 +4702,6 @@ impl ChatWidget {
             None,
             config.cwd.clone(),
             CODEX_CLI_VERSION,
-            is_collaboration,
-            collaboration_mode,
         ))
     }
 
@@ -5336,11 +5320,10 @@ fn initial_collaboration_mode(
         }
     }
 
-    collaboration_modes::default_mode(models_manager)
-        .unwrap_or(CollaborationMode {
-            mode: ModeKind::Custom,
-            settings: fallback_custom,
-        })
+    collaboration_modes::default_mode(models_manager).unwrap_or(CollaborationMode {
+        mode: ModeKind::Custom,
+        settings: fallback_custom,
+    })
 }
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {

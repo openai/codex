@@ -1229,7 +1229,11 @@ async fn submit_user_message_with_mode_sets_execute_collaboration_mode() {
 
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            collaboration_mode: Some(CollaborationMode { mode: ModeKind::Execute, .. }),
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Execute,
+                    ..
+                }),
             personality: None,
             ..
         } => {}
@@ -2261,7 +2265,11 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            collaboration_mode: Some(CollaborationMode { mode: ModeKind::PairProgramming, .. }),
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::PairProgramming,
+                    ..
+                }),
             personality: None,
             ..
         } => {}
@@ -2275,7 +2283,11 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            collaboration_mode: Some(CollaborationMode { mode: ModeKind::PairProgramming, .. }),
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::PairProgramming,
+                    ..
+                }),
             personality: None,
             ..
         } => {}
@@ -2296,7 +2308,11 @@ async fn collab_mode_defaults_to_pair_programming_when_enabled() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            collaboration_mode: Some(CollaborationMode { mode: ModeKind::PairProgramming, .. }),
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::PairProgramming,
+                    ..
+                }),
             personality: None,
             ..
         } => {}
@@ -2310,7 +2326,10 @@ async fn collab_mode_defaults_to_pair_programming_when_enabled() {
 async fn collab_mode_enabling_sets_pair_programming_default() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
-    assert_eq!(chat.stored_collaboration_mode.mode, ModeKind::PairProgramming);
+    assert_eq!(
+        chat.stored_collaboration_mode.mode,
+        ModeKind::PairProgramming
+    );
 }
 
 #[tokio::test]
