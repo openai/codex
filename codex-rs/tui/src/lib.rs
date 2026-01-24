@@ -1039,8 +1039,9 @@ mod tests {
         std::fs::create_dir_all(&trusted)?;
         std::fs::create_dir_all(&untrusted)?;
 
-        let trusted_display = trusted.display();
-        let untrusted_display = untrusted.display();
+        // TOML keys need escaped backslashes on Windows paths.
+        let trusted_display = trusted.display().to_string().replace('\\', "\\\\");
+        let untrusted_display = untrusted.display().to_string().replace('\\', "\\\\");
         let config_toml = format!(
             r#"[projects."{trusted_display}"]
 trust_level = "trusted"
