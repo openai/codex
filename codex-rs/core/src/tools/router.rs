@@ -16,6 +16,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 #[derive(Clone, Debug)]
@@ -133,6 +134,7 @@ impl ToolRouter {
         turn: Arc<TurnContext>,
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
+        cancellation_token: CancellationToken,
     ) -> Result<ResponseInputItem, FunctionCallError> {
         let ToolCall {
             tool_name,
@@ -149,6 +151,7 @@ impl ToolRouter {
             call_id,
             tool_name,
             payload,
+            cancellation_token,
         };
 
         match self.registry.dispatch(invocation).await {

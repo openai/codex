@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use super::approval_overlay_ext;
+pub use super::approval_overlay_ext::MultiQuestionState;
+pub use super::approval_overlay_ext::MultiSelectState;
+
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
@@ -23,6 +27,8 @@ use codex_core::protocol::ExecPolicyAmendment;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_protocol::protocol_ext::PlanExitPermissionMode;
+use codex_protocol::protocol_ext::UserQuestion;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -56,19 +62,35 @@ pub(crate) enum ApprovalRequest {
         request_id: RequestId,
         message: String,
     },
+    /// Plan Mode approval request - user approves or rejects the plan.
+    Plan {
+        plan_content: String,
+        plan_file_path: String,
+    },
+    /// Plan Mode entry request - LLM requests to enter plan mode.
+    EnterPlanMode,
+    /// User question request - LLM asks the user questions.
+    UserQuestion {
+        tool_call_id: String,
+        questions: Vec<UserQuestion>,
+    },
 }
 
 /// Modal overlay asking the user to approve or deny one or more requests.
 pub(crate) struct ApprovalOverlay {
-    current_request: Option<ApprovalRequest>,
-    current_variant: Option<ApprovalVariant>,
+    pub(super) current_request: Option<ApprovalRequest>,
+    pub(super) current_variant: Option<ApprovalVariant>,
     queue: Vec<ApprovalRequest>,
-    app_event_tx: AppEventSender,
-    list: ListSelectionView,
-    options: Vec<ApprovalOption>,
-    current_complete: bool,
+    pub(super) app_event_tx: AppEventSender,
+    pub(super) list: ListSelectionView,
+    pub(super) options: Vec<ApprovalOption>,
+    pub(super) current_complete: bool,
     done: bool,
-    features: Features,
+    pub(super) features: Features,
+    /// State for multi-question flow (answering questions one at a time)
+    pub(super) multi_question_state: Option<MultiQuestionState>,
+    /// State for multiSelect toggle (checkbox-style selection)
+    pub(super) multi_select_state: Option<MultiSelectState>,
 }
 
 impl ApprovalOverlay {
@@ -83,6 +105,8 @@ impl ApprovalOverlay {
             current_complete: false,
             done: false,
             features,
+            multi_question_state: None,
+            multi_select_state: None,
         };
         view.set_current(request);
         view
@@ -94,10 +118,15 @@ impl ApprovalOverlay {
 
     fn set_current(&mut self, request: ApprovalRequest) {
         self.current_request = Some(request.clone());
-        let ApprovalRequestState { variant, header } = ApprovalRequestState::from(request);
+        let ApprovalRequestState { variant, header } = ApprovalRequestState::from(request.clone());
         self.current_variant = Some(variant.clone());
         self.current_complete = false;
-        let (options, params) = Self::build_options(variant, header, &self.features);
+
+        // Initialize ext state (multi-question, multi-select) via delegation
+        approval_overlay_ext::init_ext_state(self, &request);
+
+        let (options, params) =
+            Self::build_options(variant, header, &self.features, &self.multi_question_state);
         self.options = options;
         self.list = ListSelectionView::new(params, self.app_event_tx.clone());
     }
@@ -106,6 +135,7 @@ impl ApprovalOverlay {
         variant: ApprovalVariant,
         header: Box<dyn Renderable>,
         features: &Features,
+        multi_question_state: &Option<MultiQuestionState>,
     ) -> (Vec<ApprovalOption>, SelectionViewParams) {
         let (options, title) = match &variant {
             ApprovalVariant::Exec {
@@ -123,6 +153,8 @@ impl ApprovalOverlay {
                 elicitation_options(),
                 format!("{server_name} needs your approval."),
             ),
+            // Delegate ext variants (Plan, EnterPlanMode, UserQuestion) to ext module
+            _ => approval_overlay_ext::build_ext_options(&variant, multi_question_state),
         };
 
         let header = Box::new(ColumnRenderable::with([
@@ -163,16 +195,20 @@ impl ApprovalOverlay {
         if self.current_complete {
             return;
         }
-        let Some(option) = self.options.get(actual_idx) else {
+        let Some(option) = self.options.get(actual_idx).cloned() else {
             return;
         };
-        if let Some(variant) = self.current_variant.as_ref() {
-            match (variant, &option.decision) {
+        if let Some(variant) = self.current_variant.clone() {
+            match (&variant, &option.decision) {
                 (ApprovalVariant::Exec { id, command, .. }, ApprovalDecision::Review(decision)) => {
                     self.handle_exec_decision(id, command, decision.clone());
+                    self.current_complete = true;
+                    self.advance_queue();
                 }
                 (ApprovalVariant::ApplyPatch { id, .. }, ApprovalDecision::Review(decision)) => {
                     self.handle_patch_decision(id, decision.clone());
+                    self.current_complete = true;
+                    self.advance_queue();
                 }
                 (
                     ApprovalVariant::McpElicitation {
@@ -182,13 +218,22 @@ impl ApprovalOverlay {
                     ApprovalDecision::McpElicitation(decision),
                 ) => {
                     self.handle_elicitation_decision(server_name, request_id, *decision);
+                    self.current_complete = true;
+                    self.advance_queue();
                 }
-                _ => {}
+                // Delegate ext variants (Plan, EnterPlanMode, UserQuestion) to ext module
+                _ => {
+                    if approval_overlay_ext::handle_ext_selection(
+                        self,
+                        &variant,
+                        &option.decision,
+                        actual_idx,
+                    ) {
+                        return;
+                    }
+                }
             }
         }
-
-        self.current_complete = true;
-        self.advance_queue();
     }
 
     fn handle_exec_decision(&self, id: &str, command: &[String], decision: ReviewDecision) {
@@ -221,7 +266,7 @@ impl ApprovalOverlay {
             }));
     }
 
-    fn advance_queue(&mut self) {
+    pub(super) fn advance_queue(&mut self) {
         if let Some(next) = self.queue.pop() {
             self.set_current(next);
         } else {
@@ -296,6 +341,8 @@ impl BottomPaneView for ApprovalOverlay {
                         ElicitationAction::Cancel,
                     );
                 }
+                // Delegate ext variants (Plan, EnterPlanMode, UserQuestion) to ext module
+                _ => approval_overlay_ext::handle_ext_cancel(self, variant),
             }
         }
         self.queue.clear();
@@ -330,13 +377,18 @@ impl Renderable for ApprovalOverlay {
     }
 }
 
-struct ApprovalRequestState {
-    variant: ApprovalVariant,
-    header: Box<dyn Renderable>,
+pub(super) struct ApprovalRequestState {
+    pub(super) variant: ApprovalVariant,
+    pub(super) header: Box<dyn Renderable>,
 }
 
 impl From<ApprovalRequest> for ApprovalRequestState {
     fn from(value: ApprovalRequest) -> Self {
+        // Try ext variants first (Plan, EnterPlanMode, UserQuestion)
+        if let Some(state) = approval_overlay_ext::build_ext_request_state(value.clone()) {
+            return state;
+        }
+
         match value {
             ApprovalRequest::Exec {
                 id,
@@ -405,12 +457,14 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     header: Box::new(header),
                 }
             }
+            // Ext variants handled above by build_ext_request_state()
+            _ => unreachable!("ext variants should be handled by build_ext_request_state"),
         }
     }
 }
 
 #[derive(Clone)]
-enum ApprovalVariant {
+pub(super) enum ApprovalVariant {
     Exec {
         id: String,
         command: Vec<String>,
@@ -423,20 +477,46 @@ enum ApprovalVariant {
         server_name: String,
         request_id: RequestId,
     },
+    Plan,
+    EnterPlanMode,
+    UserQuestion {
+        tool_call_id: String,
+        questions: Vec<UserQuestion>,
+    },
 }
 
 #[derive(Clone)]
-enum ApprovalDecision {
+#[allow(dead_code)]
+pub(super) enum ApprovalDecision {
     Review(ReviewDecision),
     McpElicitation(ElicitationAction),
+    /// Plan Mode approval decision.
+    PlanApproval {
+        approved: bool,
+        permission_mode: Option<PlanExitPermissionMode>,
+    },
+    /// Enter Plan Mode approval decision.
+    EnterPlanModeApproval {
+        approved: bool,
+    },
+    /// User Question answer decision (single-select or option toggle for multi-select).
+    UserQuestionAnswer {
+        tool_call_id: String,
+        answers: HashMap<String, String>,
+    },
+    /// User Question multi-select confirm (sends all toggled selections).
+    UserQuestionConfirm {
+        tool_call_id: String,
+        header: String,
+    },
 }
 
 #[derive(Clone)]
-struct ApprovalOption {
-    label: String,
-    decision: ApprovalDecision,
-    display_shortcut: Option<KeyBinding>,
-    additional_shortcuts: Vec<KeyBinding>,
+pub(super) struct ApprovalOption {
+    pub label: String,
+    pub decision: ApprovalDecision,
+    pub display_shortcut: Option<KeyBinding>,
+    pub additional_shortcuts: Vec<KeyBinding>,
 }
 
 impl ApprovalOption {

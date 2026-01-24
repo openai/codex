@@ -134,6 +134,11 @@ fn provider(name: &str, wire: WireApi) -> Provider {
             retry_transport: true,
         },
         stream_idle_timeout: Duration::from_millis(10),
+        adapter: None,
+        model_parameters: None,
+        interceptors: Vec::new(),
+        request_timeout: None,
+        streaming: true,
     }
 }
 
@@ -202,7 +207,7 @@ async fn chat_client_uses_chat_completions_path_for_chat_wire() -> Result<()> {
     let client = ChatClient::new(transport, provider("openai", WireApi::Chat), NoAuth);
 
     let body = serde_json::json!({ "echo": true });
-    let _stream = client.stream(body, HeaderMap::new()).await?;
+    let _stream = client.stream(body, HeaderMap::new(), None).await?;
 
     let requests = state.take_stream_requests();
     assert_path_ends_with(&requests, "/chat/completions");
@@ -216,7 +221,7 @@ async fn chat_client_uses_responses_path_for_responses_wire() -> Result<()> {
     let client = ChatClient::new(transport, provider("openai", WireApi::Responses), NoAuth);
 
     let body = serde_json::json!({ "echo": true });
-    let _stream = client.stream(body, HeaderMap::new()).await?;
+    let _stream = client.stream(body, HeaderMap::new(), None).await?;
 
     let requests = state.take_stream_requests();
     assert_path_ends_with(&requests, "/responses");
@@ -313,6 +318,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
         tools: Vec::<Value>::new(),
         parallel_tool_calls: false,
         output_schema: None,
+        previous_response_id: None,
     };
 
     let options = ResponsesOptions::default();

@@ -1,11 +1,13 @@
 use crate::common::Reasoning;
 use crate::common::ResponsesApiRequest;
 use crate::common::TextControls;
+use crate::common::UltrathinkConfig;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::requests::headers::build_conversation_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
+use crate::requests::responses_ext::filter_input_for_openai;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
@@ -19,6 +21,7 @@ pub enum Compression {
 }
 
 /// Assembled request body plus headers for a Responses stream request.
+#[derive(Debug)]
 pub struct ResponsesRequest {
     pub body: Value,
     pub headers: HeaderMap,
@@ -29,7 +32,7 @@ pub struct ResponsesRequest {
 pub struct ResponsesRequestBuilder<'a> {
     model: Option<&'a str>,
     instructions: Option<&'a str>,
-    input: Option<&'a [ResponseItem]>,
+    pub(crate) input: Option<&'a [ResponseItem]>,
     tools: Option<&'a [Value]>,
     parallel_tool_calls: bool,
     reasoning: Option<Reasoning>,
@@ -41,6 +44,14 @@ pub struct ResponsesRequestBuilder<'a> {
     store_override: Option<bool>,
     headers: HeaderMap,
     compression: Compression,
+    /// Previous response ID for conversation continuity
+    pub(crate) previous_response_id: Option<String>,
+    /// Whether to stream the response (default: true)
+    pub(crate) stream: bool,
+    /// Model parameters (temperature, max_tokens, etc.)
+    pub(crate) model_parameters: Option<Value>,
+    /// Ultrathink config when ultrathink is active (for adapters)
+    pub(crate) ultrathink_config: Option<UltrathinkConfig>,
 }
 
 impl<'a> ResponsesRequestBuilder<'a> {
@@ -49,6 +60,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
             model: Some(model),
             instructions: Some(instructions),
             input: Some(input),
+            stream: true, // Default to streaming
             ..Default::default()
         }
     }
@@ -108,6 +120,16 @@ impl<'a> ResponsesRequestBuilder<'a> {
         self
     }
 
+    pub fn model_parameters(mut self, params: Option<Value>) -> Self {
+        self.model_parameters = params;
+        self
+    }
+
+    pub fn ultrathink_config(mut self, config: Option<UltrathinkConfig>) -> Self {
+        self.ultrathink_config = config;
+        self
+    }
+
     pub fn build(self, provider: &Provider) -> Result<ResponsesRequest, ApiError> {
         let model = self
             .model
@@ -118,6 +140,18 @@ impl<'a> ResponsesRequestBuilder<'a> {
         let input = self
             .input
             .ok_or_else(|| ApiError::Stream("missing input for responses request".into()))?;
+
+        // Filter adapter encrypted_content when sending to native OpenAI (no adapter).
+        // Adapter-format encrypted_content ("codex-ec:*") cannot be verified by OpenAI,
+        // so we strip it before sending. Native OpenAI encrypted_content is preserved.
+        let filtered;
+        let input = if provider.adapter.is_none() {
+            filtered = filter_input_for_openai(input);
+            &filtered[..]
+        } else {
+            input
+        };
+
         let tools = self.tools.unwrap_or_default();
 
         let store = self
@@ -133,10 +167,12 @@ impl<'a> ResponsesRequestBuilder<'a> {
             parallel_tool_calls: self.parallel_tool_calls,
             reasoning: self.reasoning,
             store,
-            stream: true,
+            stream: self.stream,
             include: self.include,
             prompt_cache_key: self.prompt_cache_key,
             text: self.text,
+            previous_response_id: self.previous_response_id,
+            model_parameters: self.model_parameters,
         };
 
         let mut body = serde_json::to_value(&req)
@@ -212,6 +248,11 @@ mod tests {
                 retry_transport: true,
             },
             stream_idle_timeout: Duration::from_secs(5),
+            adapter: None,
+            model_parameters: None,
+            interceptors: Vec::new(),
+            request_timeout: None,
+            streaming: true,
         }
     }
 

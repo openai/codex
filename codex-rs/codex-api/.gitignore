@@ -1,0 +1,6 @@
+# Test environment files with credentials
+.env.test
+.env
+
+# Ignore any local test outputs
+test-output/

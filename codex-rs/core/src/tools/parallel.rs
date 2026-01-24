@@ -84,7 +84,7 @@ impl ToolCallRuntime {
                         };
 
                         router
-                            .dispatch_tool_call(session, turn, tracker, call.clone())
+                            .dispatch_tool_call(session, turn, tracker, call.clone(), cancellation_token.clone())
                             .instrument(dispatch_span.clone())
                             .await
                     } => res,

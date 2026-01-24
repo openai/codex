@@ -42,6 +42,8 @@ use codex_core::config_loader::ConfigLayerStackOrdering;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
+use codex_core::config::edit_ext::ConfigEditsBuilderExt;
+use codex_core::models_manager::manager::ModelsManager;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_core::protocol::DeprecationNoticeEvent;
@@ -54,6 +56,8 @@ use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
 use codex_otel::OtelManager;
+use codex_core::thinking::ThinkingState;
+use codex_lsp::LspServerManager;
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelPreset;
@@ -467,6 +471,7 @@ async fn handle_model_migration_prompt_if_needed(
                 app_event_tx.send(AppEvent::PersistModelSelection {
                     model: target_model.clone(),
                     effort: mapped_effort,
+                    model_provider: None,
                 });
             }
             ModelMigrationOutcome::Rejected => {
@@ -497,6 +502,8 @@ pub(crate) struct App {
     pub(crate) auth_manager: Arc<AuthManager>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
+    pub(crate) current_model: String,
+    pub(crate) current_output_style: String,
     pub(crate) active_profile: Option<String>,
 
     pub(crate) file_search: FileSearchManager,
@@ -528,7 +535,7 @@ pub(crate) struct App {
     /// stopping a thread (e.g., before starting a new one).
     suppress_shutdown_complete: bool,
 
-    windows_sandbox: WindowsSandboxState,
+    pub(crate) windows_sandbox: WindowsSandboxState,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     active_thread_id: Option<ThreadId>,
@@ -539,10 +546,13 @@ pub(crate) struct App {
 }
 
 #[derive(Default)]
-struct WindowsSandboxState {
+pub(crate) struct WindowsSandboxState {
     setup_started_at: Option<Instant>,
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
+
+    /// Session-level thinking state for ultrathink toggle.
+    pub(crate) thinking_state: ThinkingState,
 }
 
 impl App {
@@ -831,6 +841,8 @@ impl App {
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
         ollama_chat_support_notice: Option<DeprecationNoticeEvent>,
+        lsp_manager: Option<Arc<LspServerManager>>,
+        retrieval_manager: Option<Arc<codex_retrieval::RetrievalFacade>>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -842,6 +854,8 @@ impl App {
             config.codex_home.clone(),
             auth_manager.clone(),
             SessionSource::Cli,
+            lsp_manager,
+            retrieval_manager,
         ));
         let mut model = thread_manager
             .get_models_manager()
@@ -968,6 +982,17 @@ impl App {
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+
+        // Initialize retrieval service early (background task)
+        // This starts indexing immediately when cwd is known, rather than waiting
+        // for the first code_search or repomap tool invocation.
+        codex_core::spawn_retrieval_init(
+            &config.cwd,
+            config
+                .features
+                .enabled(codex_core::features::Feature::Retrieval),
+        );
+
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -978,6 +1003,8 @@ impl App {
             chat_widget,
             auth_manager: auth_manager.clone(),
             config,
+            current_model: model.clone(),
+            current_output_style: String::from("default"),
             active_profile,
             file_search,
             enhanced_keys_supported,
@@ -1097,6 +1124,8 @@ impl App {
             }
         };
         tui.terminal.clear()?;
+        // Shutdown LSP servers before exit
+        crate::app_ext::shutdown_lsp_on_exit(&app.server).await;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
             thread_id: app.chat_widget.thread_id(),
@@ -1384,6 +1413,17 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            // Extension events - batch delegation to app_ext.rs to minimize upstream conflicts.
+            // Simple events that only need ChatWidget access are handled in app_ext.
+            ext @ (AppEvent::PluginResult(_)
+            | AppEvent::PluginCommandExpanded(_)
+            | AppEvent::PluginCommandsLoaded(_)
+            | AppEvent::SetOutputStyle { .. }
+            | AppEvent::TogglePlanMode
+            | AppEvent::ToggleUltrathink
+            | AppEvent::SpawnTaskResult { .. }) => {
+                crate::app_ext::handle_simple_ext_event(self, ext);
+            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);
@@ -1406,8 +1446,8 @@ impl App {
                 self.chat_widget.set_collaboration_mode(mode);
                 self.chat_widget.set_model(&model);
             }
-            AppEvent::OpenReasoningPopup { model } => {
-                self.chat_widget.open_reasoning_popup(model);
+            AppEvent::OpenReasoningPopup { model, provider_id } => {
+                self.chat_widget.open_reasoning_popup(model, provider_id);
             }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
@@ -1622,11 +1662,16 @@ impl App {
                     let _ = (preset, mode);
                 }
             }
-            AppEvent::PersistModelSelection { model, effort } => {
+            AppEvent::PersistModelSelection {
+                model,
+                effort,
+                model_provider,
+            } => {
                 let profile = self.active_profile.as_deref();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
                     .set_model(Some(model.as_str()), effort)
+                    .set_model_provider(model_provider.as_deref())
                     .apply()
                     .await
                 {
@@ -1635,6 +1680,11 @@ impl App {
                         if let Some(label) = Self::reasoning_label_for(&model, effort) {
                             message.push(' ');
                             message.push_str(label);
+                        }
+                        if let Some(ref provider) = model_provider {
+                            message.push_str(" (provider: ");
+                            message.push_str(provider);
+                            message.push(')');
                         }
                         if let Some(profile) = profile {
                             message.push_str(" for ");
@@ -1888,6 +1938,16 @@ impl App {
             AppEvent::ManageSkillsClosed => {
                 self.chat_widget.handle_manage_skills_closed();
             }
+            // Spawn events - batch delegation to app_ext.rs
+            ext @ (AppEvent::StartSpawnTask { .. }
+            | AppEvent::SpawnListRequest
+            | AppEvent::SpawnStatusRequest { .. }
+            | AppEvent::SpawnKillRequest { .. }
+            | AppEvent::SpawnDropRequest { .. }
+            | AppEvent::SpawnMergeRequest { .. }) => {
+                crate::app_ext::handle_spawn_event(self, ext).await;
+            }
+            // Note: SpawnTaskResult is handled in batch delegation above
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
                     let _ = tui.enter_alt_screen();
@@ -1922,6 +1982,15 @@ impl App {
                         vec![Box::new(paragraph)],
                         "E L I C I T A T I O N".to_string(),
                     ));
+                }
+                // Plan-related approval requests - batch delegation to app_ext.rs
+                ref req @ (ApprovalRequest::Plan { .. }
+                | ApprovalRequest::EnterPlanMode
+                | ApprovalRequest::UserQuestion { .. }) => {
+                    if let Some(overlay) = crate::app_ext::build_plan_approval_overlay(req) {
+                        let _ = tui.enter_alt_screen();
+                        self.overlay = Some(overlay);
+                    }
                 }
             },
         }
@@ -2274,6 +2343,8 @@ mod tests {
             chat_widget,
             auth_manager,
             config,
+            current_model: model.clone(),
+            current_output_style: String::from("default"),
             active_profile: None,
             file_search,
             transcript_cells: Vec::new(),
@@ -2322,6 +2393,8 @@ mod tests {
                 chat_widget,
                 auth_manager,
                 config,
+                current_model: model.clone(),
+                current_output_style: String::from("default"),
                 active_profile: None,
                 file_search,
                 transcript_cells: Vec::new(),

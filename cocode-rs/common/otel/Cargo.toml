@@ -1,0 +1,55 @@
+[package]
+name = "cocode-otel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+name = "cocode_otel"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[features]
+## Disables the built-in default metrics exporter.
+##
+## Intended for use from `dev-dependencies` so unit/integration tests never
+## attempt to export metrics over the network.
+disable-default-metrics-exporter = []
+
+[dependencies]
+chrono = { workspace = true }
+cocode-utils-absolute-path = { workspace = true }
+eventsource-stream = { workspace = true }
+opentelemetry = { workspace = true, features = ["logs", "metrics", "trace"] }
+opentelemetry-appender-tracing = { workspace = true }
+opentelemetry-otlp = { workspace = true, features = [
+    "grpc-tonic",
+    "http-proto",
+    "http-json",
+    "logs",
+    "metrics",
+    "trace",
+    "reqwest-blocking-client",
+    "reqwest-rustls",
+    "tls",
+    "tls-roots",
+]}
+opentelemetry-semantic-conventions = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = ["logs", "metrics", "rt-tokio", "testing", "trace"] }
+http = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+strum = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
+pretty_assertions = { workspace = true }

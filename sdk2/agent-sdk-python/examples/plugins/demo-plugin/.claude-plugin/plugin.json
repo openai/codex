@@ -1,0 +1,8 @@
+{
+  "name": "demo-plugin",
+  "description": "A demo plugin showing how to extend Codex with custom commands",
+  "version": "1.0.0",
+  "author": {
+    "name": "Codex Team"
+  }
+}

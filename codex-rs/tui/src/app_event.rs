@@ -91,6 +91,15 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
+    /// Result of executing a `/plugin` command.
+    PluginResult(String),
+
+    /// Submit expanded plugin command as user message.
+    PluginCommandExpanded(String),
+
+    /// Plugin commands loaded from plugin service.
+    PluginCommandsLoaded(Vec<crate::plugin_commands::PluginCommandEntry>),
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     StartCommitAnimation,
@@ -110,11 +119,13 @@ pub(crate) enum AppEvent {
     PersistModelSelection {
         model: String,
         effort: Option<ReasoningEffort>,
+        model_provider: Option<String>,
     },
 
     /// Open the reasoning selection popup after picking a model.
     OpenReasoningPopup {
         model: ModelPreset,
+        provider_id: Option<String>,
     },
 
     /// Open the full model picker (non-auto models).
@@ -262,6 +273,51 @@ pub(crate) enum AppEvent {
 
     /// Launch the external editor after a normal draw has completed.
     LaunchExternalEditor,
+
+    /// Set the output style for Claude responses.
+    SetOutputStyle {
+        style_name: String,
+    },
+
+    /// Toggle plan mode on/off via keyboard shortcut (Shift+Tab).
+    TogglePlanMode,
+
+    /// Toggle ultrathink mode on/off via keyboard shortcut (Ctrl+E).
+    ToggleUltrathink,
+
+    /// Start a spawn task with the given arguments.
+    StartSpawnTask {
+        args: codex_core::spawn_task::SpawnCommandArgs,
+    },
+
+    /// Result of spawn task creation (success or error message).
+    SpawnTaskResult {
+        message: String,
+    },
+
+    /// Request to list all spawn tasks.
+    SpawnListRequest,
+
+    /// Request to get status of a spawn task.
+    SpawnStatusRequest {
+        task_id: String,
+    },
+
+    /// Request to kill a running spawn task.
+    SpawnKillRequest {
+        task_id: String,
+    },
+
+    /// Request to drop spawn task metadata.
+    SpawnDropRequest {
+        task_id: String,
+    },
+
+    /// Request to merge spawn task branches.
+    SpawnMergeRequest {
+        task_ids: Vec<String>,
+        prompt: Option<String>,
+    },
 }
 
 /// The exit strategy requested by the UI layer.

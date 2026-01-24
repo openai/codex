@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# Pre-push hook to run lint checks (matches .github/workflows/lint.yml)
+
+echo "Running lint checks before push..."
+echo ""
+
+# Run ruff check
+echo "→ Running ruff check..."
+python -m ruff check src/ tests/
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "❌ ruff check failed. Fix lint issues before pushing."
+    echo "   Run: python -m ruff check src/ tests/ --fix"
+    exit 1
+fi
+
+# Run ruff format check
+echo "→ Running ruff format check..."
+python -m ruff format --check src/ tests/
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "❌ ruff format check failed. Fix formatting before pushing."
+    echo "   Run: python -m ruff format src/ tests/"
+    exit 1
+fi
+
+echo ""
+echo "✓ All lint checks passed!"
+exit 0

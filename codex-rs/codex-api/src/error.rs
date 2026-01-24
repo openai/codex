@@ -16,6 +16,10 @@ pub enum ApiError {
     ContextWindowExceeded,
     #[error("quota exceeded")]
     QuotaExceeded,
+    #[error("previous response not found")]
+    PreviousResponseNotFound,
+    #[error("encrypted content could not be verified")]
+    EncryptedContentInvalid,
     #[error("usage not included")]
     UsageNotIncluded,
     #[error("retryable error: {message}")]
@@ -27,6 +31,8 @@ pub enum ApiError {
     RateLimit(String),
     #[error("invalid request: {message}")]
     InvalidRequest { message: String },
+    #[error("generation blocked: {0}")]
+    GenerationBlocked(String),
 }
 
 impl From<RateLimitError> for ApiError {

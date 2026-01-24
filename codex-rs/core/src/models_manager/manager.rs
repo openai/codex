@@ -31,6 +31,11 @@ const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 
+// Extension: Default model constants for fallback selection
+const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
+const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "gpt-4o";
+const OPENAI_DEFAULT_API_MODEL: &str = "gpt-4o";
+
 /// Strategy for refreshing available models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefreshStrategy {
@@ -147,6 +152,35 @@ impl ModelsManager {
             model_info::find_model_info_for_slug(model)
         };
         model_info::with_config_overrides(model, config)
+    }
+
+    pub async fn get_model(&self, model: &Option<String>, config: &Config) -> String {
+        // 1. Explicit model override from config.model
+        if let Some(model) = model.as_ref() {
+            return model.to_string();
+        }
+        // 2. Provider's model_name as fallback
+        if let Some(model_name) = &config.model_provider.ext.model_name {
+            return model_name.clone();
+        }
+        // 3. OpenAI defaults
+        if let Err(err) = self.refresh_available_models(config, RefreshStrategy::OnlineIfUncached).await {
+            error!("failed to refresh available models: {err}");
+        }
+        // if codex-auto-balanced exists & signed in with chatgpt mode, return it, otherwise return the default model
+        let auth_mode = self.auth_manager.get_auth_mode();
+        let remote_models = self.get_remote_models(config).await;
+        if auth_mode == Some(AuthMode::ChatGPT) {
+            let has_auto_balanced = self
+                .build_available_models(remote_models)
+                .iter()
+                .any(|model| model.model == CODEX_AUTO_BALANCED_MODEL && model.show_in_picker);
+            if has_auto_balanced {
+                return CODEX_AUTO_BALANCED_MODEL.to_string();
+            }
+            return OPENAI_DEFAULT_CHATGPT_MODEL.to_string();
+        }
+        OPENAI_DEFAULT_API_MODEL.to_string()
     }
 
     /// Refresh models if the provided ETag differs from the cached ETag.
@@ -342,6 +376,10 @@ impl ModelsManager {
     #[cfg(any(test, feature = "test-support"))]
     /// Build `ModelInfo` without consulting remote state or cache.
     pub fn construct_model_info_offline(model: &str, config: &Config) -> ModelInfo {
+        // Use provider's pre-computed model_info if model_id was set
+        if let Some(ref model_info) = config.model_provider.ext.model_info {
+            return model_info.clone();
+        }
         model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config)
     }
 }
@@ -432,6 +470,7 @@ mod tests {
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(5_000),
             requires_openai_auth: false,
+            ext: Default::default(),
         }
     }
 

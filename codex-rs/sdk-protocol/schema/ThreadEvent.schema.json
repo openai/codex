@@ -1,0 +1,789 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ThreadEvent",
+  "description": "Top-level JSONL events emitted by codex exec.",
+  "oneOf": [
+    {
+      "description": "Emitted when a new thread is started as the first event.",
+      "type": "object",
+      "required": [
+        "thread_id",
+        "type"
+      ],
+      "properties": {
+        "thread_id": {
+          "description": "The identifier of the new thread.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "thread.started"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Emitted when a turn is started by sending a new prompt to the model.",
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "turn.started"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Emitted when a turn is completed.",
+      "type": "object",
+      "required": [
+        "type",
+        "usage"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "turn.completed"
+          ]
+        },
+        "usage": {
+          "$ref": "#/definitions/Usage"
+        }
+      }
+    },
+    {
+      "description": "Indicates that a turn failed with an error.",
+      "type": "object",
+      "required": [
+        "error",
+        "type"
+      ],
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/ThreadErrorEvent"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "turn.failed"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Emitted when a new item is added to the thread.",
+      "type": "object",
+      "required": [
+        "item",
+        "type"
+      ],
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/ThreadItem"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "item.started"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Emitted when an item is updated.",
+      "type": "object",
+      "required": [
+        "item",
+        "type"
+      ],
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/ThreadItem"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "item.updated"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Signals that an item has reached a terminal state.",
+      "type": "object",
+      "required": [
+        "item",
+        "type"
+      ],
+      "properties": {
+        "item": {
+          "$ref": "#/definitions/ThreadItem"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "item.completed"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Represents an unrecoverable error emitted directly by the event stream.",
+      "type": "object",
+      "required": [
+        "message",
+        "type"
+      ],
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "error"
+          ]
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "Annotations": {
+      "description": "Optional annotations for the client. The client can use annotations to inform how objects are used or displayed",
+      "type": "object",
+      "properties": {
+        "audience": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Role"
+          }
+        },
+        "lastModified": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    },
+    "AudioContent": {
+      "description": "Audio provided to or from an LLM.",
+      "type": "object",
+      "required": [
+        "data",
+        "mimeType",
+        "type"
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "BlobResourceContents": {
+      "type": "object",
+      "required": [
+        "blob",
+        "uri"
+      ],
+      "properties": {
+        "blob": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "type": "string"
+        }
+      }
+    },
+    "CommandExecutionStatus": {
+      "description": "The status of a command execution.",
+      "type": "string",
+      "enum": [
+        "in_progress",
+        "completed",
+        "failed",
+        "declined"
+      ]
+    },
+    "ContentBlock": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TextContent"
+        },
+        {
+          "$ref": "#/definitions/ImageContent"
+        },
+        {
+          "$ref": "#/definitions/AudioContent"
+        },
+        {
+          "$ref": "#/definitions/ResourceLink"
+        },
+        {
+          "$ref": "#/definitions/EmbeddedResource"
+        }
+      ]
+    },
+    "EmbeddedResource": {
+      "description": "The contents of a resource, embedded into a prompt or tool call result.\n\nIt is up to the client how best to render embedded resources for the benefit of the LLM and/or the user.",
+      "type": "object",
+      "required": [
+        "resource",
+        "type"
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource": {
+          "$ref": "#/definitions/EmbeddedResourceResource"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "EmbeddedResourceResource": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TextResourceContents"
+        },
+        {
+          "$ref": "#/definitions/BlobResourceContents"
+        }
+      ]
+    },
+    "FileUpdateChange": {
+      "description": "A file update change.",
+      "type": "object",
+      "required": [
+        "kind",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/PatchChangeKind"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "ImageContent": {
+      "description": "An image provided to or from an LLM.",
+      "type": "object",
+      "required": [
+        "data",
+        "mimeType",
+        "type"
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "McpToolCallItemError": {
+      "description": "Error details reported by a failed MCP tool invocation.",
+      "type": "object",
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "McpToolCallItemResult": {
+      "description": "Result payload produced by an MCP tool invocation.",
+      "type": "object",
+      "required": [
+        "content"
+      ],
+      "properties": {
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ContentBlock"
+          }
+        },
+        "structured_content": true
+      }
+    },
+    "McpToolCallStatus": {
+      "description": "The status of an MCP tool call.",
+      "type": "string",
+      "enum": [
+        "in_progress",
+        "completed",
+        "failed"
+      ]
+    },
+    "PatchApplyStatus": {
+      "description": "The status of a file change.",
+      "type": "string",
+      "enum": [
+        "in_progress",
+        "completed",
+        "failed"
+      ]
+    },
+    "PatchChangeKind": {
+      "description": "Indicates the type of the file change.",
+      "type": "string",
+      "enum": [
+        "add",
+        "delete",
+        "update"
+      ]
+    },
+    "ResourceLink": {
+      "description": "A resource that the server is capable of reading, included in a prompt or tool call result.\n\nNote: resource links returned by tools are not guaranteed to appear in the results of `resources/list` requests.",
+      "type": "object",
+      "required": [
+        "name",
+        "type",
+        "uri"
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      }
+    },
+    "Role": {
+      "description": "The sender or recipient of messages and data in a conversation.",
+      "type": "string",
+      "enum": [
+        "assistant",
+        "user"
+      ]
+    },
+    "TextContent": {
+      "description": "Text provided to or from an LLM.",
+      "type": "object",
+      "required": [
+        "text",
+        "type"
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "TextResourceContents": {
+      "type": "object",
+      "required": [
+        "text",
+        "uri"
+      ],
+      "properties": {
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      }
+    },
+    "ThreadErrorEvent": {
+      "description": "Fatal error emitted by the stream.",
+      "type": "object",
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "ThreadItem": {
+      "description": "Canonical representation of a thread item and its domain-specific payload.",
+      "type": "object",
+      "oneOf": [
+        {
+          "description": "Response from the agent.",
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "agent_message"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Agent's reasoning summary.",
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "reasoning"
+              ]
+            }
+          }
+        },
+        {
+          "description": "A command executed by the agent.",
+          "type": "object",
+          "required": [
+            "aggregated_output",
+            "command",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "aggregated_output": {
+              "type": "string"
+            },
+            "command": {
+              "type": "string"
+            },
+            "exit_code": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            },
+            "status": {
+              "$ref": "#/definitions/CommandExecutionStatus"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "command_execution"
+              ]
+            }
+          }
+        },
+        {
+          "description": "A set of file changes by the agent.",
+          "type": "object",
+          "required": [
+            "changes",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "changes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/FileUpdateChange"
+              }
+            },
+            "status": {
+              "$ref": "#/definitions/PatchApplyStatus"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "file_change"
+              ]
+            }
+          }
+        },
+        {
+          "description": "A call to an MCP tool.",
+          "type": "object",
+          "required": [
+            "server",
+            "status",
+            "tool",
+            "type"
+          ],
+          "properties": {
+            "arguments": {
+              "default": null
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/McpToolCallItemError"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "result": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/McpToolCallItemResult"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "server": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/McpToolCallStatus"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "mcp_tool_call"
+              ]
+            }
+          }
+        },
+        {
+          "description": "A web search request.",
+          "type": "object",
+          "required": [
+            "query",
+            "type"
+          ],
+          "properties": {
+            "query": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "web_search"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Agent's to-do list.",
+          "type": "object",
+          "required": [
+            "items",
+            "type"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/TodoItem"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "todo_list"
+              ]
+            }
+          }
+        },
+        {
+          "description": "A non-fatal error surfaced as an item.",
+          "type": "object",
+          "required": [
+            "message",
+            "type"
+          ],
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            }
+          }
+        }
+      ],
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "TodoItem": {
+      "description": "An item in agent's to-do list.",
+      "type": "object",
+      "required": [
+        "completed",
+        "text"
+      ],
+      "properties": {
+        "completed": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "Usage": {
+      "description": "Describes the usage of tokens during a turn.",
+      "type": "object",
+      "required": [
+        "cached_input_tokens",
+        "input_tokens",
+        "output_tokens"
+      ],
+      "properties": {
+        "cached_input_tokens": {
+          "description": "The number of cached input tokens used during the turn.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "input_tokens": {
+          "description": "The number of input tokens used during the turn.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "output_tokens": {
+          "description": "The number of output tokens used during the turn.",
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    }
+  }
+}

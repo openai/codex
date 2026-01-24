@@ -301,6 +301,8 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
         )
+    } else if slug.starts_with("gemini-") {
+        super::model_info_ext::find_gemini_model_info(slug)
     } else {
         warn!("Unknown model {slug} is used. This will degrade the performance of Codex.");
         model_info!(

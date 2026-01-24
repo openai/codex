@@ -172,6 +172,11 @@ pub enum InputResult {
     },
     Command(SlashCommand),
     CommandWithArgs(SlashCommand, String),
+    /// Plugin command execution request.
+    PluginCommand {
+        name: String,
+        args: String,
+    },
     None,
 }
 
@@ -220,10 +225,13 @@ pub(crate) struct ChatComposer {
     input_enabled: bool,
     input_disabled_placeholder: Option<String>,
     /// Non-bracketed paste burst tracker (see `bottom_pane/paste_burst.rs`).
+    is_plan_mode: bool,
+    // Non-bracketed paste burst tracker.
     paste_burst: PasteBurst,
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    plugin_commands: Vec<crate::plugin_commands::PluginCommandEntry>,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     footer_flash: Option<FooterFlash>,
@@ -283,9 +291,11 @@ impl ChatComposer {
             is_task_running: false,
             input_enabled: true,
             input_disabled_placeholder: None,
+            is_plan_mode: false,
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            plugin_commands: Vec::new(),
             footer_mode: FooterMode::ShortcutSummary,
             footer_hint_override: None,
             footer_flash: None,
@@ -896,6 +906,17 @@ impl ChatComposer {
                                 }
                             }
                         }
+                        CommandItem::PluginCommand(ref name) => {
+                            // Tab completion: insert command name
+                            let starts_with_cmd =
+                                first_line.trim_start().starts_with(&format!("/{name}"));
+                            if !starts_with_cmd {
+                                self.textarea.set_text_clearing_elements(&format!("/{name} "));
+                            }
+                            if !self.textarea.text().is_empty() {
+                                cursor_target = Some(self.textarea.text().len());
+                            }
+                        }
                     }
                     if let Some(pos) = cursor_target {
                         self.textarea.set_cursor(pos);
@@ -982,6 +1003,23 @@ impl ChatComposer {
                                 }
                             }
                             return (InputResult::None, true);
+                        }
+                        CommandItem::PluginCommand(ref name) => {
+                            // Return a PluginCommand result to be handled asynchronously
+                            // Extract args from the command line
+                            let args = first_line
+                                .strip_prefix(&format!("/{name}"))
+                                .map(|s| s.trim().to_string())
+                                .unwrap_or_default();
+                            let name_owned = name.clone();
+                            self.textarea.set_text_clearing_elements("");
+                            return (
+                                InputResult::PluginCommand {
+                                    name: name_owned,
+                                    args,
+                                },
+                                true,
+                            );
                         }
                     }
                 }
@@ -2121,6 +2159,20 @@ impl ChatComposer {
             return false;
         }
 
+        // Handle Shift+Tab (BackTab) for plan mode toggle
+        if matches!(key_event.code, KeyCode::BackTab) {
+            self.app_event_tx.send(AppEvent::TogglePlanMode);
+            return true;
+        }
+
+        // Handle Ctrl+E for ultrathink toggle
+        if matches!(key_event.code, KeyCode::Char('e'))
+            && key_event.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            self.app_event_tx.send(AppEvent::ToggleUltrathink);
+            return true;
+        }
+
         let toggles = matches!(key_event.code, KeyCode::Char('?'))
             && !has_ctrl_or_alt(key_event.modifiers)
             && self.is_empty()
@@ -2147,6 +2199,7 @@ impl ChatComposer {
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
+            is_plan_mode: self.is_plan_mode,
         }
     }
 
@@ -2307,13 +2360,13 @@ impl ChatComposer {
             }
             _ => {
                 if is_editing_slash_command_name {
-                    let collaboration_modes_enabled = self.collaboration_modes_enabled;
-                    let mut command_popup = CommandPopup::new(
-                        self.custom_prompts.clone(),
-                        CommandPopupFlags {
-                            collaboration_modes_enabled,
-                        },
-                    );
+                    let skills_enabled = self.skills_enabled();
+                    let flags = CommandPopupFlags {
+                        collaboration_modes_enabled: skills_enabled,
+                    };
+                    let mut command_popup =
+                        CommandPopup::new(self.custom_prompts.clone(), flags);
+                    command_popup.set_plugin_commands(self.plugin_commands.clone());
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
@@ -2335,6 +2388,16 @@ impl ChatComposer {
         self.custom_prompts = prompts.clone();
         if let ActivePopup::Command(popup) = &mut self.active_popup {
             popup.set_prompts(prompts);
+        }
+    }
+
+    pub(crate) fn set_plugin_commands(
+        &mut self,
+        commands: Vec<crate::plugin_commands::PluginCommandEntry>,
+    ) {
+        self.plugin_commands = commands.clone();
+        if let ActivePopup::Command(popup) = &mut self.active_popup {
+            popup.set_plugin_commands(commands);
         }
     }
 
@@ -2417,6 +2480,10 @@ impl ChatComposer {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+    }
+
+    pub fn set_plan_mode(&mut self, active: bool) {
+        self.is_plan_mode = active;
     }
 
     pub(crate) fn set_context_window(&mut self, percent: Option<i64>, used_tokens: Option<i64>) {
@@ -3754,6 +3821,9 @@ mod tests {
                 Some(CommandItem::UserPrompt(_)) => {
                     panic!("unexpected prompt selected for '/mo'")
                 }
+                Some(CommandItem::PluginCommand(_)) => {
+                    panic!("unexpected plugin command selected for '/mo'")
+                }
                 None => panic!("no selected command for '/mo'"),
             },
             _ => panic!("slash popup not active after typing '/mo'"),
@@ -3810,6 +3880,9 @@ mod tests {
                 }
                 Some(CommandItem::UserPrompt(_)) => {
                     panic!("unexpected prompt selected for '/res'")
+                }
+                Some(CommandItem::PluginCommand(_)) => {
+                    panic!("unexpected plugin command selected for '/res'")
                 }
                 None => panic!("no selected command for '/res'"),
             },
@@ -3871,6 +3944,9 @@ mod tests {
             }
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
+            }
+            InputResult::PluginCommand { .. } => {
+                panic!("expected builtin command dispatch for '/init'")
             }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
@@ -3973,6 +4049,9 @@ mod tests {
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch after Tab completion, got literal queue")
             }
+            InputResult::PluginCommand { .. } => {
+                panic!("expected builtin command dispatch for '/diff'")
+            }
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
         assert!(composer.textarea.is_empty());
@@ -4011,6 +4090,9 @@ mod tests {
             }
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
+            }
+            InputResult::PluginCommand { .. } => {
+                panic!("expected builtin command dispatch for '/mention'")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }

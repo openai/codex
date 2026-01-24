@@ -17,6 +17,8 @@ use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::shell_ext::try_handle_shell_background;
+use crate::tools::handlers::shell_ext::try_handle_shell_command_background;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -101,10 +103,19 @@ impl ToolHandler for ShellHandler {
             call_id,
             tool_name,
             payload,
+            ..
         } = invocation;
 
         match payload {
             ToolPayload::Function { arguments } => {
+                // Intercept background execution request
+                if let Some(output) =
+                    try_handle_shell_background(&arguments, turn.as_ref(), session.conversation_id)
+                        .await?
+                {
+                    return Ok(output);
+                }
+
                 let params: ShellToolCallParams = parse_arguments(&arguments)?;
                 let exec_params = Self::to_exec_params(params, turn.as_ref());
                 Self::run_exec_like(
@@ -170,6 +181,7 @@ impl ToolHandler for ShellCommandHandler {
             call_id,
             tool_name,
             payload,
+            ..
         } = invocation;
 
         let ToolPayload::Function { arguments } = payload else {
@@ -177,6 +189,18 @@ impl ToolHandler for ShellCommandHandler {
                 "unsupported payload for shell_command handler: {tool_name}"
             )));
         };
+
+        // Intercept background execution request
+        if let Some(output) = try_handle_shell_command_background(
+            &arguments,
+            session.as_ref(),
+            turn.as_ref(),
+            session.conversation_id,
+        )
+        .await?
+        {
+            return Ok(output);
+        }
 
         let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
         let exec_params = Self::to_exec_params(params, session.as_ref(), turn.as_ref());

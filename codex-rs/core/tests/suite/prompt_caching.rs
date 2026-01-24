@@ -38,9 +38,14 @@ fn text_user_input(text: String) -> serde_json::Value {
 
 fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
     let shell_name = shell.name();
+    let platform = std::env::consts::OS;
+    let cpu_arch = std::env::consts::ARCH;
     format!(
         r#"<environment_context>
   <cwd>{cwd}</cwd>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{cpu_arch}</cpu_arch>
   <shell>{shell_name}</shell>
 </environment_context>"#
     )
@@ -116,6 +121,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -127,6 +133,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -141,6 +148,14 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "apply_patch",
         "web_search",
         "view_image",
+        "glob_files",
+        "think",
+        "write_file",
+        "BashOutput",
+        "KillShell",
+        "ExitPlanMode",
+        "EnterPlanMode",
+        "AskUserQuestion",
     ];
     let body0 = req1.single_request().body_json();
 
@@ -192,6 +207,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
 
@@ -203,6 +219,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
 
@@ -256,6 +273,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -267,6 +285,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -334,6 +353,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -366,6 +386,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -442,6 +463,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
 
@@ -562,6 +584,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -614,11 +637,16 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
 
     let expected_env_text_2 = format!(
         r#"<environment_context>
-  <cwd>{}</cwd>
-  <shell>{}</shell>
+  <cwd>{cwd}</cwd>
+  <is_git_repo>false</is_git_repo>
+  <platform>{platform}</platform>
+  <cpu_arch>{cpu_arch}</cpu_arch>
+  <shell>{shell_name}</shell>
 </environment_context>"#,
-        new_cwd.path().display(),
-        shell.name()
+        cwd = new_cwd.path().display(),
+        platform = std::env::consts::OS,
+        cpu_arch = std::env::consts::ARCH,
+        shell_name = shell.name()
     );
     let expected_env_msg_2 = serde_json::json!({
         "type": "message",

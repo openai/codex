@@ -1,6 +1,8 @@
 pub mod context;
 pub mod events;
+pub(crate) mod ext;
 pub(crate) mod handlers;
+pub mod names;
 pub mod orchestrator;
 pub mod parallel;
 pub mod registry;
@@ -8,6 +10,7 @@ pub mod router;
 pub mod runtimes;
 pub mod sandboxing;
 pub mod spec;
+pub(crate) mod spec_ext;
 
 use crate::exec::ExecToolCallOutput;
 use crate::truncate::TruncationPolicy;
@@ -15,6 +18,7 @@ use crate::truncate::formatted_truncate_text;
 use crate::truncate::truncate_text;
 pub use router::ToolRouter;
 use serde::Serialize;
+pub(crate) use spec_ext::log_loaded_tools;
 
 // Telemetry preview limits: keep log events smaller than model budgets.
 pub(crate) const TELEMETRY_PREVIEW_MAX_BYTES: usize = 2 * 1024; // 2 KiB

@@ -1,6 +1,6 @@
 use crate::config::ConfigToml;
 use crate::config::types::RawMcpServerConfig;
-use crate::features::FEATURES;
+use crate::features::all_features;
 use schemars::r#gen::SchemaGenerator;
 use schemars::r#gen::SchemaSettings;
 use schemars::schema::InstanceType;
@@ -20,7 +20,7 @@ pub(crate) fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
     };
 
     let mut validation = ObjectValidation::default();
-    for feature in FEATURES {
+    for feature in all_features() {
         validation
             .properties
             .insert(feature.key.to_string(), schema_gen.subschema_for::<bool>());

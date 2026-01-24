@@ -25,6 +25,7 @@ base64 = { workspace = true }
 chardetng = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
+dashmap = { workspace = true }
 codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
@@ -33,10 +34,14 @@ codex-client = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git = { workspace = true }
+codex-hooks = { workspace = true }
 codex-keyring-store = { workspace = true }
+codex-lsp = { workspace = true }
 codex-otel = { workspace = true }
+codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-utils-common = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
@@ -97,6 +102,19 @@ url = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
+
+bytes = { workspace = true }
+codex-file-ignore = { workspace = true }
+codex-retrieval = { workspace = true }
+glob = { workspace = true }
+grep = { workspace = true }
+grep-regex = { workspace = true }
+grep-searcher = { workspace = true }
+html2text = { workspace = true }
+ignore = { workspace = true }
+lru = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "ansi"] }
+opentelemetry-appender-tracing = { workspace = true }
 
 [features]
 deterministic_process_ids = []

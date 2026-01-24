@@ -219,3 +219,20 @@ pub struct Settings {
     pub reasoning_effort: Option<ReasoningEffort>,
     pub developer_instructions: Option<String>,
 }
+
+
+/// Plan Mode approval policy - controls whether EnterPlanMode/ExitPlanMode require user approval.
+/// This is independent from subsequent tool approval (controlled by AskForApproval).
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum PlanModeApprovalPolicy {
+    /// Require user approval for EnterPlanMode and ExitPlanMode (default for interactive TUI)
+    #[default]
+    RequireApproval,
+
+    /// Auto-approve EnterPlanMode and ExitPlanMode without user interaction
+    AutoApprove,
+}

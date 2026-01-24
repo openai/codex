@@ -1,0 +1,3 @@
+# Ignore bundled CLI binaries (downloaded during build)
+codex
+codex.exe

@@ -96,12 +96,15 @@ pub async fn run_main(
         })?;
 
     // Task: process incoming messages.
+    // Note: LSP and retrieval are disabled by default for mcp-server (pass None)
     let processor_handle = tokio::spawn({
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
         let mut processor = MessageProcessor::new(
             outgoing_message_sender,
             codex_linux_sandbox_exe,
             std::sync::Arc::new(config),
+            None, // lsp_manager - disabled for mcp-server
+            None, // retrieval_manager - disabled for mcp-server
         );
         async move {
             while let Some(msg) = incoming_rx.recv().await {

@@ -1,0 +1,604 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ControlRequestEnvelope",
+  "description": "Envelope for control requests.",
+  "type": "object",
+  "required": [
+    "request",
+    "request_id"
+  ],
+  "properties": {
+    "request": {
+      "description": "The actual request payload.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ControlRequest"
+        }
+      ]
+    },
+    "request_id": {
+      "description": "Unique request identifier for correlation.",
+      "type": "string"
+    }
+  },
+  "definitions": {
+    "ControlRequest": {
+      "description": "Unified control request (both directions).",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/OutboundControlRequest"
+        },
+        {
+          "$ref": "#/definitions/InboundControlRequest"
+        }
+      ]
+    },
+    "HookEvent": {
+      "description": "Hook event types.",
+      "oneOf": [
+        {
+          "description": "Before a tool is used.",
+          "type": "string",
+          "enum": [
+            "PreToolUse"
+          ]
+        },
+        {
+          "description": "After a tool is used.",
+          "type": "string",
+          "enum": [
+            "PostToolUse"
+          ]
+        },
+        {
+          "description": "When user submits a prompt.",
+          "type": "string",
+          "enum": [
+            "UserPromptSubmit"
+          ]
+        },
+        {
+          "description": "When the agent is about to stop.",
+          "type": "string",
+          "enum": [
+            "Stop"
+          ]
+        },
+        {
+          "description": "When a subagent is about to stop.",
+          "type": "string",
+          "enum": [
+            "SubagentStop"
+          ]
+        },
+        {
+          "description": "Before compacting conversation history.",
+          "type": "string",
+          "enum": [
+            "PreCompact"
+          ]
+        }
+      ]
+    },
+    "HookInput": {
+      "description": "Input data for hook callbacks.",
+      "type": "object",
+      "anyOf": [
+        {
+          "description": "PreToolUse input.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PreToolUseInput"
+            }
+          ]
+        },
+        {
+          "description": "PostToolUse input.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PostToolUseInput"
+            }
+          ]
+        },
+        {
+          "description": "UserPromptSubmit input.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UserPromptSubmitInput"
+            }
+          ]
+        },
+        {
+          "description": "Stop input.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/StopInput"
+            }
+          ]
+        },
+        {
+          "description": "SubagentStop input.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SubagentStopInput"
+            }
+          ]
+        },
+        {
+          "description": "PreCompact input.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PreCompactInput"
+            }
+          ]
+        }
+      ],
+      "required": [
+        "hook_event_name"
+      ],
+      "properties": {
+        "hook_event_name": {
+          "description": "The hook event type.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookEvent"
+            }
+          ]
+        }
+      }
+    },
+    "InboundControlRequest": {
+      "description": "Control requests sent from CLI to SDK.",
+      "oneOf": [
+        {
+          "description": "Request permission decision for tool usage.",
+          "type": "object",
+          "required": [
+            "agent_id",
+            "input",
+            "subtype",
+            "tool_name",
+            "tool_use_id"
+          ],
+          "properties": {
+            "agent_id": {
+              "description": "Agent making the request.",
+              "type": "string"
+            },
+            "blocked_path": {
+              "description": "Path that triggered the permission check (if applicable).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decision_reason": {
+              "description": "Formatted reason for the permission check.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "input": {
+              "description": "Tool input parameters."
+            },
+            "permission_suggestions": {
+              "description": "Suggested permission updates.",
+              "default": [],
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/PermissionSuggestion"
+              }
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "can_use_tool"
+              ]
+            },
+            "tool_name": {
+              "description": "Name of the tool being invoked.",
+              "type": "string"
+            },
+            "tool_use_id": {
+              "description": "Unique tool use identifier.",
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Execute a hook callback.",
+          "type": "object",
+          "required": [
+            "callback_id",
+            "hook_event",
+            "input",
+            "subtype"
+          ],
+          "properties": {
+            "callback_id": {
+              "description": "SDK-assigned callback identifier.",
+              "type": "string"
+            },
+            "hook_event": {
+              "description": "Hook event type.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/HookEvent"
+                }
+              ]
+            },
+            "input": {
+              "description": "Hook input data.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/HookInput"
+                }
+              ]
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "hook_callback"
+              ]
+            },
+            "tool_use_id": {
+              "description": "Associated tool use ID (if applicable).",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Route an MCP message.",
+          "type": "object",
+          "required": [
+            "message",
+            "server_name",
+            "subtype"
+          ],
+          "properties": {
+            "message": {
+              "description": "MCP protocol message."
+            },
+            "server_name": {
+              "description": "MCP server name.",
+              "type": "string"
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "mcp_message"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "OutboundControlRequest": {
+      "description": "Control requests sent from SDK to CLI.",
+      "oneOf": [
+        {
+          "description": "Interrupt current operation.",
+          "type": "object",
+          "required": [
+            "subtype"
+          ],
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "interrupt"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Set permission mode.",
+          "type": "object",
+          "required": [
+            "mode",
+            "subtype"
+          ],
+          "properties": {
+            "mode": {
+              "$ref": "#/definitions/PermissionMode"
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "set_permission_mode"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Set model for subsequent turns.",
+          "type": "object",
+          "required": [
+            "subtype"
+          ],
+          "properties": {
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "set_model"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Rewind files to a previous checkpoint.",
+          "type": "object",
+          "required": [
+            "subtype",
+            "user_message_id"
+          ],
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "rewind_files"
+              ]
+            },
+            "user_message_id": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Stream additional input messages.",
+          "type": "object",
+          "required": [
+            "input",
+            "subtype"
+          ],
+          "properties": {
+            "input": {
+              "type": "array",
+              "items": true
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "stream_input"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "PermissionMode": {
+      "description": "Permission mode for tool usage.",
+      "oneOf": [
+        {
+          "description": "Default permission mode - prompt for dangerous operations.",
+          "type": "string",
+          "enum": [
+            "default"
+          ]
+        },
+        {
+          "description": "Accept all edits automatically.",
+          "type": "string",
+          "enum": [
+            "acceptEdits"
+          ]
+        },
+        {
+          "description": "Plan mode - don't execute, just plan.",
+          "type": "string",
+          "enum": [
+            "plan"
+          ]
+        },
+        {
+          "description": "Bypass all permission checks (dangerous).",
+          "type": "string",
+          "enum": [
+            "bypassPermissions"
+          ]
+        }
+      ]
+    },
+    "PermissionSuggestion": {
+      "description": "A suggested permission update.",
+      "oneOf": [
+        {
+          "description": "Allow this invocation once.",
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "allow_once"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Deny this invocation once.",
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "deny_once"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Allow always with a pattern.",
+          "type": "object",
+          "required": [
+            "pattern",
+            "type"
+          ],
+          "properties": {
+            "pattern": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "allow_always"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Deny always with a pattern.",
+          "type": "object",
+          "required": [
+            "pattern",
+            "type"
+          ],
+          "properties": {
+            "pattern": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "deny_always"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "PostToolUseInput": {
+      "description": "PostToolUse hook input.",
+      "type": "object",
+      "required": [
+        "tool_input",
+        "tool_name",
+        "tool_output"
+      ],
+      "properties": {
+        "agent_id": {
+          "description": "Agent ID that made the call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_input": {
+          "description": "Tool input parameters."
+        },
+        "tool_name": {
+          "description": "Name of the tool that was invoked.",
+          "type": "string"
+        },
+        "tool_output": {
+          "description": "Tool output."
+        }
+      }
+    },
+    "PreCompactInput": {
+      "description": "PreCompact hook input.",
+      "type": "object",
+      "required": [
+        "max_tokens",
+        "token_count"
+      ],
+      "properties": {
+        "max_tokens": {
+          "description": "Maximum allowed tokens.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "token_count": {
+          "description": "Current conversation token count.",
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "PreToolUseInput": {
+      "description": "PreToolUse hook input.",
+      "type": "object",
+      "required": [
+        "tool_input",
+        "tool_name"
+      ],
+      "properties": {
+        "agent_id": {
+          "description": "Agent ID making the call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_input": {
+          "description": "Tool input parameters."
+        },
+        "tool_name": {
+          "description": "Name of the tool being invoked.",
+          "type": "string"
+        }
+      }
+    },
+    "StopInput": {
+      "description": "Stop hook input.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "description": "Reason for stopping.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SubagentStopInput": {
+      "description": "SubagentStop hook input.",
+      "type": "object",
+      "required": [
+        "agent_id"
+      ],
+      "properties": {
+        "agent_id": {
+          "description": "Subagent ID.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Reason for stopping.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "UserPromptSubmitInput": {
+      "description": "UserPromptSubmit hook input.",
+      "type": "object",
+      "required": [
+        "prompt"
+      ],
+      "properties": {
+        "prompt": {
+          "description": "The user's prompt text.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

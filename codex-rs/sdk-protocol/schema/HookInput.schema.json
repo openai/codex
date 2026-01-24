@@ -1,0 +1,236 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HookInput",
+  "description": "Input data for hook callbacks.",
+  "type": "object",
+  "anyOf": [
+    {
+      "description": "PreToolUse input.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/PreToolUseInput"
+        }
+      ]
+    },
+    {
+      "description": "PostToolUse input.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/PostToolUseInput"
+        }
+      ]
+    },
+    {
+      "description": "UserPromptSubmit input.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/UserPromptSubmitInput"
+        }
+      ]
+    },
+    {
+      "description": "Stop input.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/StopInput"
+        }
+      ]
+    },
+    {
+      "description": "SubagentStop input.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/SubagentStopInput"
+        }
+      ]
+    },
+    {
+      "description": "PreCompact input.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/PreCompactInput"
+        }
+      ]
+    }
+  ],
+  "required": [
+    "hook_event_name"
+  ],
+  "properties": {
+    "hook_event_name": {
+      "description": "The hook event type.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookEvent"
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "HookEvent": {
+      "description": "Hook event types.",
+      "oneOf": [
+        {
+          "description": "Before a tool is used.",
+          "type": "string",
+          "enum": [
+            "PreToolUse"
+          ]
+        },
+        {
+          "description": "After a tool is used.",
+          "type": "string",
+          "enum": [
+            "PostToolUse"
+          ]
+        },
+        {
+          "description": "When user submits a prompt.",
+          "type": "string",
+          "enum": [
+            "UserPromptSubmit"
+          ]
+        },
+        {
+          "description": "When the agent is about to stop.",
+          "type": "string",
+          "enum": [
+            "Stop"
+          ]
+        },
+        {
+          "description": "When a subagent is about to stop.",
+          "type": "string",
+          "enum": [
+            "SubagentStop"
+          ]
+        },
+        {
+          "description": "Before compacting conversation history.",
+          "type": "string",
+          "enum": [
+            "PreCompact"
+          ]
+        }
+      ]
+    },
+    "PostToolUseInput": {
+      "description": "PostToolUse hook input.",
+      "type": "object",
+      "required": [
+        "tool_input",
+        "tool_name",
+        "tool_output"
+      ],
+      "properties": {
+        "agent_id": {
+          "description": "Agent ID that made the call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_input": {
+          "description": "Tool input parameters."
+        },
+        "tool_name": {
+          "description": "Name of the tool that was invoked.",
+          "type": "string"
+        },
+        "tool_output": {
+          "description": "Tool output."
+        }
+      }
+    },
+    "PreCompactInput": {
+      "description": "PreCompact hook input.",
+      "type": "object",
+      "required": [
+        "max_tokens",
+        "token_count"
+      ],
+      "properties": {
+        "max_tokens": {
+          "description": "Maximum allowed tokens.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "token_count": {
+          "description": "Current conversation token count.",
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "PreToolUseInput": {
+      "description": "PreToolUse hook input.",
+      "type": "object",
+      "required": [
+        "tool_input",
+        "tool_name"
+      ],
+      "properties": {
+        "agent_id": {
+          "description": "Agent ID making the call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_input": {
+          "description": "Tool input parameters."
+        },
+        "tool_name": {
+          "description": "Name of the tool being invoked.",
+          "type": "string"
+        }
+      }
+    },
+    "StopInput": {
+      "description": "Stop hook input.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "description": "Reason for stopping.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SubagentStopInput": {
+      "description": "SubagentStop hook input.",
+      "type": "object",
+      "required": [
+        "agent_id"
+      ],
+      "properties": {
+        "agent_id": {
+          "description": "Subagent ID.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Reason for stopping.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "UserPromptSubmitInput": {
+      "description": "UserPromptSubmit hook input.",
+      "type": "object",
+      "required": [
+        "prompt"
+      ],
+      "properties": {
+        "prompt": {
+          "description": "The user's prompt text.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -32,6 +32,7 @@ const USE_LOGIN_SHELL: bool = false;
 /// Verify that when using a read-only sandbox and an execpolicy that prompts,
 /// the proper elicitation is sent. Upon auto-approving the elicitation, the
 /// command should be run privileged outside the sandbox.
+#[ignore = "environment PATH mismatch: codex-bash uses /usr/bin/git but test uses homebrew git"]
 #[tokio::test(flavor = "current_thread")]
 async fn accept_elicitation_for_prompt_rule() -> Result<()> {
     // Configure a stdio transport that will launch the MCP server using

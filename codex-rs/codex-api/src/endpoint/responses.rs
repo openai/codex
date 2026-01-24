@@ -3,6 +3,7 @@ use crate::common::Prompt as ApiPrompt;
 use crate::common::Reasoning;
 use crate::common::ResponseStream;
 use crate::common::TextControls;
+use crate::common::UltrathinkConfig;
 use crate::endpoint::streaming::StreamingClient;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -23,7 +24,7 @@ use std::sync::OnceLock;
 use tracing::instrument;
 
 pub struct ResponsesClient<T: HttpTransport, A: AuthProvider> {
-    streaming: StreamingClient<T, A>,
+    pub(crate) streaming: StreamingClient<T, A>,
 }
 
 #[derive(Default)]
@@ -38,6 +39,11 @@ pub struct ResponsesOptions {
     pub extra_headers: HeaderMap,
     pub compression: Compression,
     pub turn_state: Option<Arc<OnceLock<String>>>,
+    /// Dynamic ultrathink config when ultrathink is active (keyword or toggle).
+    /// Adapters pick the field they need:
+    /// - effort: OpenAI/Gemini effort-based models
+    /// - budget_tokens: Claude/Anthropic budget-based models
+    pub ultrathink_config: Option<UltrathinkConfig>,
 }
 
 impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
@@ -67,6 +73,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             request.headers,
             request.compression,
             turn_state,
+            None,
         )
         .await
     }
@@ -78,6 +85,15 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         prompt: &ApiPrompt,
         options: ResponsesOptions,
     ) -> Result<ResponseStream, ApiError> {
+        // Try adapter routing for non-OpenAI providers (ext)
+        if let Some(stream) = self
+            .try_adapter(model, prompt, options.ultrathink_config.clone())
+            .await?
+        {
+            return Ok(stream);
+        }
+
+        // Built-in OpenAI format
         let ResponsesOptions {
             reasoning,
             include,
@@ -89,8 +105,15 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             extra_headers,
             compression,
             turn_state,
+            ultrathink_config,
         } = options;
 
+        // Build interceptor context for this request
+        let _ctx = self
+            .streaming
+            .build_interceptor_context(Some(model), conversation_id.as_deref());
+
+        let provider = self.streaming.provider();
         let request = ResponsesRequestBuilder::new(model, &prompt.instructions, &prompt.input)
             .tools(&prompt.tools)
             .parallel_tool_calls(prompt.parallel_tool_calls)
@@ -102,13 +125,16 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             .session_source(session_source)
             .store_override(store_override)
             .extra_headers(extra_headers)
+            .model_parameters(provider.model_parameters.clone())
+            .ultrathink_config(ultrathink_config)
+            .stream(provider.streaming)
             .compression(compression)
             .build(self.streaming.provider())?;
 
         self.stream_request(request, turn_state).await
     }
 
-    fn path(&self) -> &'static str {
+    pub(crate) fn path(&self) -> &'static str {
         match self.streaming.provider().wire {
             WireApi::Responses | WireApi::Compact => "responses",
             WireApi::Chat => "chat/completions",
@@ -121,6 +147,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         extra_headers: HeaderMap,
         compression: Compression,
         turn_state: Option<Arc<OnceLock<String>>>,
+        ctx: Option<&crate::interceptors::InterceptorContext>,
     ) -> Result<ResponseStream, ApiError> {
         let compression = match compression {
             Compression::None => RequestCompression::None,
@@ -132,6 +159,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
                 self.path(),
                 body,
                 extra_headers,
+                ctx,
                 compression,
                 spawn_response_stream,
                 turn_state,

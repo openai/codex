@@ -15,6 +15,9 @@ pub(crate) struct SessionState {
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
+    /// Last response ID for adapter conversation continuity.
+    /// Stored after each successful response, used to enable tweakcc message sending.
+    pub(crate) last_response_id: Option<String>,
 }
 
 impl SessionState {
@@ -26,6 +29,7 @@ impl SessionState {
             history,
             latest_rate_limits: None,
             server_reasoning_included: false,
+            last_response_id: None,
         }
     }
 
@@ -91,6 +95,19 @@ impl SessionState {
 
     pub(crate) fn server_reasoning_included(&self) -> bool {
         self.server_reasoning_included
+    }
+
+    // Response ID helpers for adapter conversation continuity
+    pub(crate) fn get_last_response_id(&self) -> Option<&str> {
+        self.last_response_id.as_deref()
+    }
+
+    pub(crate) fn set_last_response_id(&mut self, id: Option<String>) {
+        self.last_response_id = id;
+    }
+
+    pub(crate) fn clear_last_response_id(&mut self) {
+        self.last_response_id = None;
     }
 }
 

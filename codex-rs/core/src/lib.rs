@@ -11,6 +11,7 @@ pub mod auth;
 pub mod bash;
 mod client;
 mod client_common;
+mod client_ultrathink_ext;
 pub mod codex;
 mod codex_thread;
 mod compact_remote;
@@ -26,11 +27,13 @@ mod context_manager;
 pub mod custom_prompts;
 pub mod env;
 mod environment_context;
+mod environment_context_ext;
 pub mod error;
 pub mod exec;
 pub mod exec_env;
 mod exec_policy;
 pub mod features;
+pub mod features_ext;
 mod flags;
 pub mod git_info;
 pub mod instructions;
@@ -51,6 +54,7 @@ pub mod sandboxing;
 mod session_prefix;
 mod stream_events_utils;
 mod text_encoding;
+pub mod thinking;
 pub mod token_data;
 mod truncate;
 mod unified_exec;
@@ -147,4 +151,33 @@ pub use codex_protocol::models::ResponseItem;
 pub use compact::content_items_to_text;
 pub use event_mapping::parse_turn_item;
 pub mod compact;
+pub mod compact_v2;
 pub mod otel_init;
+
+mod error_ext;
+mod model_provider_info_ext;
+pub use model_provider_info_ext::ModelProviderInfoExt;
+
+// Subagent system (Claude Code compatible)
+pub mod subagent;
+
+// Extension modules for lifecycle management
+pub mod codex_ext;
+pub mod hooks_ext;
+pub use codex_ext::spawn_retrieval_init;
+
+// System reminder module
+pub mod system_reminder;
+mod system_reminder_inject;
+
+// Plan mode module
+pub mod plan_mode;
+
+// Background shell module
+pub mod shell_background;
+
+// Loop driver module for iterative execution
+pub mod loop_driver;
+
+// SpawnTask framework for long-running tasks
+pub mod spawn_task;

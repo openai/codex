@@ -33,6 +33,7 @@ use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
+use codex_lsp::LspServerManager;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::config_types::ModeKind;
@@ -244,6 +245,8 @@ impl Codex {
         conversation_history: InitialHistory,
         session_source: SessionSource,
         agent_control: AgentControl,
+        lsp_manager: Option<Arc<LspServerManager>>,
+        retrieval_manager: Option<Arc<codex_retrieval::RetrievalFacade>>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -338,6 +341,8 @@ impl Codex {
             session_source_clone,
             skills_manager,
             agent_control,
+            lsp_manager,
+            retrieval_manager,
         )
         .await
         .map_err(|e| {
@@ -411,7 +416,7 @@ pub(crate) struct Session {
     pub(crate) conversation_id: ThreadId,
     tx_event: Sender<Event>,
     agent_status: watch::Sender<AgentStatus>,
-    state: Mutex<SessionState>,
+    pub(crate) state: Mutex<SessionState>,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     features: Features,
@@ -443,6 +448,8 @@ pub(crate) struct TurnContext {
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
+    /// Critical instruction for system reminder injection.
+    pub(crate) critical_instruction: Option<String>,
 }
 
 impl TurnContext {
@@ -497,7 +504,7 @@ pub(crate) struct SessionConfiguration {
     cwd: PathBuf,
 
     // TODO(pakrym): Remove config from here
-    original_config_do_not_use: Arc<Config>,
+    pub(crate) original_config_do_not_use: Arc<Config>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
 }
@@ -593,11 +600,20 @@ impl Session {
             session_configuration.session_source.clone(),
         );
 
-        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &per_turn_config.features,
             web_search_mode: per_turn_config.web_search_mode,
+            web_search_config: None,
         });
+
+        // Apply tool filters and log loaded tools (extracted to codex_ext.rs)
+        crate::codex_ext::apply_tool_filter(
+            &mut tools_config,
+            per_turn_config.ext.tool_filter.as_ref(),
+            conversation_id,
+            session_configuration.original_config_do_not_use.model.as_deref().unwrap_or(""),
+        );
 
         TurnContext {
             sub_id,
@@ -616,6 +632,11 @@ impl Session {
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
+            critical_instruction: per_turn_config
+                .ext
+                .system_reminder
+                .critical_instruction
+                .clone(),
         }
     }
 
@@ -632,6 +653,8 @@ impl Session {
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
         agent_control: AgentControl,
+        lsp_manager: Option<Arc<LspServerManager>>,
+        retrieval_manager: Option<Arc<codex_retrieval::RetrievalFacade>>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -809,6 +832,8 @@ impl Session {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            lsp_manager,
+            retrieval_manager,
         };
 
         let sess = Arc::new(Session {
@@ -871,6 +896,14 @@ impl Session {
             )
             .await;
 
+        // Initialize session-scoped state before any code that might access it.
+        // record_initial_history -> new_default_turn -> apply_tool_filter -> expect_session_state
+        crate::subagent::init_session_state(
+            conversation_id,
+            &config.codex_home,
+            &session_configuration.cwd,
+        );
+
         // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
         sess.record_initial_history(initial_history).await;
 
@@ -901,7 +934,7 @@ impl Session {
         format!("auto-compact-{id}")
     }
 
-    async fn get_total_token_usage(&self) -> i64 {
+    pub(crate) async fn get_total_token_usage(&self) -> i64 {
         let state = self.state.lock().await;
         state.get_total_token_usage(state.server_reasoning_included())
     }
@@ -2208,6 +2241,18 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Review { review_request } => {
                 handlers::review(&sess, &config, sub.id.clone(), review_request).await;
             }
+            // Extension ops - dispatch to codex_ext.rs for detailed handling
+            Op::SetPlanMode { .. }
+            | Op::PlanModeApproval { .. }
+            | Op::EnterPlanModeApproval { .. }
+            | Op::UserQuestionAnswer { .. } => {
+                crate::codex_ext::handle_ext_op(
+                    sess.conversation_id,
+                    &sess.tx_event,
+                    sub.op.clone(),
+                )
+                .await;
+            }
             _ => {} // Ignore unknown ops; enum is non_exhaustive to allow extensions.
         }
     }
@@ -2270,6 +2315,8 @@ mod handlers {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) {
+        // Note: Model changes are now handled through collaboration_mode.settings
+        // The model field was removed from SessionSettingsUpdate
         let previous_context = sess
             .new_default_turn_with_sub_id(sess.next_internal_sub_id())
             .await;
@@ -2352,6 +2399,7 @@ mod handlers {
             Op::UserInput {
                 items,
                 final_output_json_schema,
+                ultrathink_enabled: _, // TODO: Wire to SessionSettingsUpdate.thinking_state
             } => (
                 items,
                 SessionSettingsUpdate {
@@ -2615,6 +2663,12 @@ mod handlers {
     }
 
     pub async fn compact(sess: &Arc<Session>, sub_id: String) {
+        // Clear response_id before compacting (forces full message send after compact)
+        {
+            let mut state = sess.state.lock().await;
+            state.clear_last_response_id();
+        }
+
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
         sess.spawn_task(
@@ -2711,6 +2765,9 @@ mod handlers {
             sess.send_event_raw(event).await;
         }
 
+        // Clean up subagent stores for this conversation
+        crate::codex_ext::cleanup_session_resources(&sess.conversation_id);
+
         let event = Event {
             id: sub_id,
             msg: EventMsg::ShutdownComplete,
@@ -2779,6 +2836,7 @@ async fn spawn_review_thread(
         model_info: &review_model_info,
         features: &review_features,
         web_search_mode: Some(review_web_search_mode),
+        web_search_config: None, // Reviews don't use web_search
     });
 
     let review_prompt = resolved.prompt.clone();
@@ -2827,6 +2885,7 @@ async fn spawn_review_thread(
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         truncation_policy: model_info.truncation_policy.into(),
+        critical_instruction: parent_turn_context.critical_instruction.clone(),
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2969,11 +3028,26 @@ pub(crate) async fn run_turn(
             .collect::<Vec<ResponseItem>>();
 
         // Construct the input that we will send to the model.
-        let sampling_request_input: Vec<ResponseItem> = {
+        let mut sampling_request_input: Vec<ResponseItem> = {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
             sess.clone_history().await.for_prompt()
         };
+
+        // Inject system reminders (background tasks, plan reminders, changed files, etc.)
+        // Count is tracked internally per main agent call
+        let diagnostics_store = sess
+            .services
+            .lsp_manager
+            .as_ref()
+            .map(|m| m.diagnostics().clone());
+        crate::codex_ext::maybe_inject_system_reminders(
+            &mut sampling_request_input,
+            &turn_context.cwd,
+            Some(&sess.conversation_id),
+            turn_context.critical_instruction.as_deref(),
+            diagnostics_store,
+        ).await;
 
         let sampling_request_input_messages = sampling_request_input
             .iter()
@@ -3055,6 +3129,11 @@ pub(crate) async fn run_turn(
 }
 
 async fn run_auto_compact(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
+    // Try V2 compact first (encapsulates Feature::CompactV2 check)
+    if crate::compact_v2::try_auto_compact(sess.clone(), turn_context.clone()).await {
+        return;
+    }
+    // Fall back to legacy compact
     if should_use_remote_compact_task(sess.as_ref(), &turn_context.client.get_provider()) {
         run_inline_remote_auto_compact_task(Arc::clone(sess), Arc::clone(turn_context)).await;
     } else {
@@ -3171,6 +3250,12 @@ async fn run_sampling_request(
 
     let base_instructions = sess.get_base_instructions().await;
 
+    // Get previous_response_id from session state for conversation continuity
+    let previous_response_id = {
+        let state = sess.state.lock().await;
+        state.get_last_response_id().map(String::from)
+    };
+
     let prompt = Prompt {
         input,
         tools: router.specs(),
@@ -3178,6 +3263,7 @@ async fn run_sampling_request(
         base_instructions,
         personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),
+        previous_response_id,
     };
 
     let mut retries = 0;
@@ -3204,6 +3290,16 @@ async fn run_sampling_request(
                     sess.update_rate_limits(&turn_context, rate_limits).await;
                 }
                 return Err(CodexErr::UsageLimitReached(e));
+            }
+            Err(CodexErr::PreviousResponseNotFound) => {
+                // Server doesn't recognize the previous_response_id (expired or invalid).
+                // Clear stale tracking and retry with full history.
+                sess.state.lock().await.clear_last_response_id();
+                tracing::warn!(
+                    "Previous response ID not found on server - cleared tracking, retrying with full history"
+                );
+                // Don't count this against retry budget - it's a logical error, not a network error
+                continue;
             }
             Err(err) => err,
         };
@@ -3414,9 +3510,15 @@ async fn try_run_sampling_request(
                     .await;
             }
             ResponseEvent::Completed {
-                response_id: _,
+                response_id,
                 token_usage,
             } => {
+                // Store response_id for next turn (universal field, always store)
+                if !response_id.is_empty() {
+                    let mut state = sess.state.lock().await;
+                    state.set_last_response_id(Some(response_id.clone()));
+                }
+
                 sess.update_token_usage_info(&turn_context, token_usage.as_ref())
                     .await;
                 should_emit_turn_diff = true;
@@ -4247,6 +4349,8 @@ mod tests {
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let conversation_id = ThreadId::default();
+        // Initialize session-scoped state for tests
+        crate::subagent::init_session_state(conversation_id, &config.codex_home, &config.cwd);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(
@@ -4315,6 +4419,8 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            lsp_manager: None,
+            retrieval_manager: None,
         };
 
         let turn_context = Session::make_turn_context(
@@ -4355,6 +4461,8 @@ mod tests {
         let config = build_test_config(codex_home.path()).await;
         let config = Arc::new(config);
         let conversation_id = ThreadId::default();
+        // Initialize session-scoped state for tests
+        crate::subagent::init_session_state(conversation_id, &config.codex_home, &config.cwd);
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let models_manager = Arc::new(ModelsManager::new(
@@ -4423,6 +4531,8 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            lsp_manager: None,
+            retrieval_manager: None,
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
@@ -4732,6 +4842,7 @@ mod tests {
                 Arc::clone(&turn_context),
                 tracker,
                 call,
+                CancellationToken::new(),
             )
             .await
             .expect_err("expected fatal error");
@@ -4926,6 +5037,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                cancellation_token: CancellationToken::new(),
             })
             .await;
 
@@ -4963,6 +5075,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                cancellation_token: CancellationToken::new(),
             })
             .await;
 
@@ -5016,6 +5129,7 @@ mod tests {
                     })
                     .to_string(),
                 },
+                cancellation_token: CancellationToken::new(),
             })
             .await;
 

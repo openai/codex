@@ -73,6 +73,7 @@ async fn continue_after_stream_error() {
         stream_max_retries: Some(1),
         stream_idle_timeout_ms: Some(2_000),
         requires_openai_auth: false,
+        ext: Default::default(),
     };
 
     let TestCodex { codex, .. } = test_codex()
@@ -91,6 +92,7 @@ async fn continue_after_stream_error() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -110,6 +112,7 @@ async fn continue_after_stream_error() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();

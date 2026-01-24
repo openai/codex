@@ -1,0 +1,21 @@
+[package]
+name = "codex-file-ignore"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "File ignore service for consistent filtering across codex tools"
+
+[lib]
+name = "codex_file_ignore"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+globset = { workspace = true }
+ignore = { workspace = true }
+walkdir = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

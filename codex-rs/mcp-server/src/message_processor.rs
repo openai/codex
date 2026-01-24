@@ -16,6 +16,8 @@ use codex_core::config::Config;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::protocol::Submission;
+use codex_lsp::LspServerManager;
+use codex_retrieval::RetrievalFacade;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::ClientRequest as McpClientRequest;
@@ -51,6 +53,8 @@ impl MessageProcessor {
         outgoing: OutgoingMessageSender,
         codex_linux_sandbox_exe: Option<PathBuf>,
         config: Arc<Config>,
+        lsp_manager: Option<Arc<LspServerManager>>,
+        retrieval_manager: Option<Arc<RetrievalFacade>>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
         let auth_manager = AuthManager::shared(
@@ -62,6 +66,8 @@ impl MessageProcessor {
             config.codex_home.clone(),
             auth_manager,
             SessionSource::Mcp,
+            lsp_manager,
+            retrieval_manager,
         ));
         Self {
             outgoing,

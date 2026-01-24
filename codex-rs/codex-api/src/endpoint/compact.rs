@@ -136,6 +136,11 @@ mod tests {
                 retry_transport: true,
             },
             stream_idle_timeout: Duration::from_secs(1),
+            adapter: None,
+            model_parameters: None,
+            interceptors: Vec::new(),
+            request_timeout: None,
+            streaming: true,
         }
     }
 

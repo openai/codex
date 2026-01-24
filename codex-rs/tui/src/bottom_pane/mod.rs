@@ -38,6 +38,7 @@ use std::time::Duration;
 
 mod approval_overlay;
 mod request_user_input;
+mod approval_overlay_ext;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use request_user_input::RequestUserInputOverlay;
@@ -51,6 +52,7 @@ pub(crate) struct LocalImageAttachment {
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
+mod command_popup_ext;
 pub mod custom_prompt_view;
 mod experimental_features_view;
 mod file_search_popup;
@@ -494,6 +496,10 @@ impl BottomPane {
         }
     }
 
+    pub fn set_plan_mode(&mut self, active: bool) {
+        self.composer.set_plan_mode(active);
+    }
+
     /// Hide the status indicator while leaving task-running state untouched.
     pub(crate) fn hide_status_indicator(&mut self) {
         if self.status.take().is_some() {
@@ -553,6 +559,15 @@ impl BottomPane {
     /// Update custom prompts available for the slash popup.
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.composer.set_custom_prompts(prompts);
+        self.request_redraw();
+    }
+
+    /// Update plugin commands available for the slash popup.
+    pub(crate) fn set_plugin_commands(
+        &mut self,
+        commands: Vec<crate::plugin_commands::PluginCommandEntry>,
+    ) {
+        self.composer.set_plugin_commands(commands);
         self.request_redraw();
     }
 

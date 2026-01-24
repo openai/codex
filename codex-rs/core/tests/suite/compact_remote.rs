@@ -77,6 +77,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -91,6 +92,7 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -199,6 +201,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
     let message = wait_for_event_match(&codex, |ev| match ev {
@@ -280,6 +283,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

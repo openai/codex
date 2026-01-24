@@ -1,0 +1,1863 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CliMessage",
+  "description": "Messages that can be sent from CLI to SDK via stdout.",
+  "oneOf": [
+    {
+      "description": "CLI hello for version negotiation.",
+      "type": "object",
+      "required": [
+        "session_id",
+        "type",
+        "version"
+      ],
+      "properties": {
+        "capabilities": {
+          "description": "Capabilities this CLI supports.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "description": "Session identifier.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "cli_hello"
+          ]
+        },
+        "version": {
+          "description": "Protocol version (e.g., \"1.0\").",
+          "type": "string"
+        }
+      }
+    },
+    {
+      "description": "Stream event.",
+      "type": "object",
+      "required": [
+        "event",
+        "session_id",
+        "type",
+        "uuid"
+      ],
+      "properties": {
+        "event": {
+          "description": "The thread event.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadEvent"
+            }
+          ]
+        },
+        "session_id": {
+          "description": "Session ID.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "stream_event"
+          ]
+        },
+        "uuid": {
+          "description": "Unique event ID.",
+          "type": "string"
+        }
+      }
+    },
+    {
+      "description": "Result message.",
+      "type": "object",
+      "required": [
+        "is_error",
+        "session_id",
+        "subtype",
+        "type"
+      ],
+      "properties": {
+        "error": {
+          "description": "Error message (if any).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "is_error": {
+          "description": "Whether the result indicates an error.",
+          "type": "boolean"
+        },
+        "response": {
+          "description": "Final response text (if any).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "description": "Session ID.",
+          "type": "string"
+        },
+        "subtype": {
+          "description": "Result subtype.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResultSubtype"
+            }
+          ]
+        },
+        "thread_id": {
+          "description": "Thread ID for resumption.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "result"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Control request (CLI asking SDK).",
+      "type": "object",
+      "required": [
+        "request",
+        "request_id",
+        "type"
+      ],
+      "properties": {
+        "request": {
+          "description": "The actual request payload.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ControlRequest"
+            }
+          ]
+        },
+        "request_id": {
+          "description": "Unique request identifier for correlation.",
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "control_request"
+          ]
+        }
+      }
+    },
+    {
+      "description": "Control response (answering SDK's request).",
+      "type": "object",
+      "required": [
+        "request_id",
+        "response",
+        "type"
+      ],
+      "properties": {
+        "request_id": {
+          "description": "Request ID this response correlates to.",
+          "type": "string"
+        },
+        "response": {
+          "description": "The actual response payload.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ControlResponse"
+            }
+          ]
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "control_response"
+          ]
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "Annotations": {
+      "description": "Optional annotations for the client. The client can use annotations to inform how objects are used or displayed",
+      "type": "object",
+      "properties": {
+        "audience": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Role"
+          }
+        },
+        "lastModified": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    },
+    "AudioContent": {
+      "description": "Audio provided to or from an LLM.",
+      "type": "object",
+      "required": [
+        "data",
+        "mimeType",
+        "type"
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "BlobResourceContents": {
+      "type": "object",
+      "required": [
+        "blob",
+        "uri"
+      ],
+      "properties": {
+        "blob": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "type": "string"
+        }
+      }
+    },
+    "CommandExecutionStatus": {
+      "description": "The status of a command execution.",
+      "type": "string",
+      "enum": [
+        "in_progress",
+        "completed",
+        "failed",
+        "declined"
+      ]
+    },
+    "ContentBlock": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TextContent"
+        },
+        {
+          "$ref": "#/definitions/ImageContent"
+        },
+        {
+          "$ref": "#/definitions/AudioContent"
+        },
+        {
+          "$ref": "#/definitions/ResourceLink"
+        },
+        {
+          "$ref": "#/definitions/EmbeddedResource"
+        }
+      ]
+    },
+    "ControlRequest": {
+      "description": "Unified control request (both directions).",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/OutboundControlRequest"
+        },
+        {
+          "$ref": "#/definitions/InboundControlRequest"
+        }
+      ]
+    },
+    "ControlResponse": {
+      "description": "Unified control response (both directions).",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/OutboundControlResponse"
+        },
+        {
+          "$ref": "#/definitions/InboundControlResponse"
+        }
+      ]
+    },
+    "EmbeddedResource": {
+      "description": "The contents of a resource, embedded into a prompt or tool call result.\n\nIt is up to the client how best to render embedded resources for the benefit of the LLM and/or the user.",
+      "type": "object",
+      "required": [
+        "resource",
+        "type"
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource": {
+          "$ref": "#/definitions/EmbeddedResourceResource"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "EmbeddedResourceResource": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TextResourceContents"
+        },
+        {
+          "$ref": "#/definitions/BlobResourceContents"
+        }
+      ]
+    },
+    "FileUpdateChange": {
+      "description": "A file update change.",
+      "type": "object",
+      "required": [
+        "kind",
+        "path"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/PatchChangeKind"
+        },
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "HookEvent": {
+      "description": "Hook event types.",
+      "oneOf": [
+        {
+          "description": "Before a tool is used.",
+          "type": "string",
+          "enum": [
+            "PreToolUse"
+          ]
+        },
+        {
+          "description": "After a tool is used.",
+          "type": "string",
+          "enum": [
+            "PostToolUse"
+          ]
+        },
+        {
+          "description": "When user submits a prompt.",
+          "type": "string",
+          "enum": [
+            "UserPromptSubmit"
+          ]
+        },
+        {
+          "description": "When the agent is about to stop.",
+          "type": "string",
+          "enum": [
+            "Stop"
+          ]
+        },
+        {
+          "description": "When a subagent is about to stop.",
+          "type": "string",
+          "enum": [
+            "SubagentStop"
+          ]
+        },
+        {
+          "description": "Before compacting conversation history.",
+          "type": "string",
+          "enum": [
+            "PreCompact"
+          ]
+        }
+      ]
+    },
+    "HookInput": {
+      "description": "Input data for hook callbacks.",
+      "type": "object",
+      "anyOf": [
+        {
+          "description": "PreToolUse input.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PreToolUseInput"
+            }
+          ]
+        },
+        {
+          "description": "PostToolUse input.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PostToolUseInput"
+            }
+          ]
+        },
+        {
+          "description": "UserPromptSubmit input.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UserPromptSubmitInput"
+            }
+          ]
+        },
+        {
+          "description": "Stop input.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/StopInput"
+            }
+          ]
+        },
+        {
+          "description": "SubagentStop input.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SubagentStopInput"
+            }
+          ]
+        },
+        {
+          "description": "PreCompact input.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PreCompactInput"
+            }
+          ]
+        }
+      ],
+      "required": [
+        "hook_event_name"
+      ],
+      "properties": {
+        "hook_event_name": {
+          "description": "The hook event type.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookEvent"
+            }
+          ]
+        }
+      }
+    },
+    "HookPermissionDecision": {
+      "description": "Hook permission decision.",
+      "oneOf": [
+        {
+          "description": "Block the operation.",
+          "type": "string",
+          "enum": [
+            "block"
+          ]
+        }
+      ]
+    },
+    "HookSpecificOutput": {
+      "description": "Hook-specific output data.",
+      "type": "object",
+      "required": [
+        "hook_event_name"
+      ],
+      "properties": {
+        "hook_event_name": {
+          "description": "Hook event name.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookEvent"
+            }
+          ]
+        },
+        "modified_tool_input": {
+          "description": "Modified tool input (for PreToolUse)."
+        },
+        "modified_tool_output": {
+          "description": "Modified tool output (for PostToolUse)."
+        },
+        "permission_decision": {
+          "description": "Permission decision (for PreToolUse).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_decision_reason": {
+          "description": "Reason for the permission decision.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ImageContent": {
+      "description": "An image provided to or from an LLM.",
+      "type": "object",
+      "required": [
+        "data",
+        "mimeType",
+        "type"
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "InboundControlRequest": {
+      "description": "Control requests sent from CLI to SDK.",
+      "oneOf": [
+        {
+          "description": "Request permission decision for tool usage.",
+          "type": "object",
+          "required": [
+            "agent_id",
+            "input",
+            "subtype",
+            "tool_name",
+            "tool_use_id"
+          ],
+          "properties": {
+            "agent_id": {
+              "description": "Agent making the request.",
+              "type": "string"
+            },
+            "blocked_path": {
+              "description": "Path that triggered the permission check (if applicable).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decision_reason": {
+              "description": "Formatted reason for the permission check.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "input": {
+              "description": "Tool input parameters."
+            },
+            "permission_suggestions": {
+              "description": "Suggested permission updates.",
+              "default": [],
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/PermissionSuggestion"
+              }
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "can_use_tool"
+              ]
+            },
+            "tool_name": {
+              "description": "Name of the tool being invoked.",
+              "type": "string"
+            },
+            "tool_use_id": {
+              "description": "Unique tool use identifier.",
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Execute a hook callback.",
+          "type": "object",
+          "required": [
+            "callback_id",
+            "hook_event",
+            "input",
+            "subtype"
+          ],
+          "properties": {
+            "callback_id": {
+              "description": "SDK-assigned callback identifier.",
+              "type": "string"
+            },
+            "hook_event": {
+              "description": "Hook event type.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/HookEvent"
+                }
+              ]
+            },
+            "input": {
+              "description": "Hook input data.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/HookInput"
+                }
+              ]
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "hook_callback"
+              ]
+            },
+            "tool_use_id": {
+              "description": "Associated tool use ID (if applicable).",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Route an MCP message.",
+          "type": "object",
+          "required": [
+            "message",
+            "server_name",
+            "subtype"
+          ],
+          "properties": {
+            "message": {
+              "description": "MCP protocol message."
+            },
+            "server_name": {
+              "description": "MCP server name.",
+              "type": "string"
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "mcp_message"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "InboundControlResponse": {
+      "description": "Responses to inbound control requests.",
+      "oneOf": [
+        {
+          "description": "Response to can_use_tool.",
+          "type": "object",
+          "required": [
+            "behavior",
+            "subtype"
+          ],
+          "properties": {
+            "behavior": {
+              "description": "The permission decision.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/PermissionBehavior"
+                }
+              ]
+            },
+            "message": {
+              "description": "Optional message to display.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "can_use_tool_response"
+              ]
+            },
+            "tool_use_id": {
+              "description": "Tool use ID this response is for.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Response to hook_callback.",
+          "type": "object",
+          "required": [
+            "subtype"
+          ],
+          "properties": {
+            "continue": {
+              "description": "Whether to continue execution.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "decision": {
+              "description": "Permission decision (for PreToolUse).",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/HookPermissionDecision"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "hook_specific_output": {
+              "description": "Hook-specific output.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/HookSpecificOutput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "reason": {
+              "description": "Reason for the decision.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "stop_reason": {
+              "description": "Reason for stopping (if stopping).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "hook_callback_response"
+              ]
+            },
+            "suppress_output": {
+              "description": "Whether to suppress output.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "system_message": {
+              "description": "System message to inject.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Response to mcp_message.",
+          "type": "object",
+          "required": [
+            "mcp_response",
+            "subtype"
+          ],
+          "properties": {
+            "mcp_response": {
+              "description": "MCP protocol response."
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "mcp_message_response"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Error response.",
+          "type": "object",
+          "required": [
+            "message",
+            "subtype"
+          ],
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "McpToolCallItemError": {
+      "description": "Error details reported by a failed MCP tool invocation.",
+      "type": "object",
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "McpToolCallItemResult": {
+      "description": "Result payload produced by an MCP tool invocation.",
+      "type": "object",
+      "required": [
+        "content"
+      ],
+      "properties": {
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ContentBlock"
+          }
+        },
+        "structured_content": true
+      }
+    },
+    "McpToolCallStatus": {
+      "description": "The status of an MCP tool call.",
+      "type": "string",
+      "enum": [
+        "in_progress",
+        "completed",
+        "failed"
+      ]
+    },
+    "OutboundControlRequest": {
+      "description": "Control requests sent from SDK to CLI.",
+      "oneOf": [
+        {
+          "description": "Interrupt current operation.",
+          "type": "object",
+          "required": [
+            "subtype"
+          ],
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "interrupt"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Set permission mode.",
+          "type": "object",
+          "required": [
+            "mode",
+            "subtype"
+          ],
+          "properties": {
+            "mode": {
+              "$ref": "#/definitions/PermissionMode"
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "set_permission_mode"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Set model for subsequent turns.",
+          "type": "object",
+          "required": [
+            "subtype"
+          ],
+          "properties": {
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "set_model"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Rewind files to a previous checkpoint.",
+          "type": "object",
+          "required": [
+            "subtype",
+            "user_message_id"
+          ],
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "rewind_files"
+              ]
+            },
+            "user_message_id": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Stream additional input messages.",
+          "type": "object",
+          "required": [
+            "input",
+            "subtype"
+          ],
+          "properties": {
+            "input": {
+              "type": "array",
+              "items": true
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "stream_input"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "OutboundControlResponse": {
+      "description": "Response to outbound control requests.",
+      "oneOf": [
+        {
+          "description": "Success response.",
+          "type": "object",
+          "required": [
+            "subtype"
+          ],
+          "properties": {
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "success"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Error response.",
+          "type": "object",
+          "required": [
+            "message",
+            "subtype"
+          ],
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "subtype": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "PatchApplyStatus": {
+      "description": "The status of a file change.",
+      "type": "string",
+      "enum": [
+        "in_progress",
+        "completed",
+        "failed"
+      ]
+    },
+    "PatchChangeKind": {
+      "description": "Indicates the type of the file change.",
+      "type": "string",
+      "enum": [
+        "add",
+        "delete",
+        "update"
+      ]
+    },
+    "PermissionBehavior": {
+      "description": "Permission behavior decision.",
+      "oneOf": [
+        {
+          "description": "Allow the tool invocation.",
+          "type": "string",
+          "enum": [
+            "allow"
+          ]
+        },
+        {
+          "description": "Deny the tool invocation.",
+          "type": "string",
+          "enum": [
+            "deny"
+          ]
+        },
+        {
+          "description": "Prompt the user (for interactive mode).",
+          "type": "string",
+          "enum": [
+            "prompt"
+          ]
+        }
+      ]
+    },
+    "PermissionMode": {
+      "description": "Permission mode for tool usage.",
+      "oneOf": [
+        {
+          "description": "Default permission mode - prompt for dangerous operations.",
+          "type": "string",
+          "enum": [
+            "default"
+          ]
+        },
+        {
+          "description": "Accept all edits automatically.",
+          "type": "string",
+          "enum": [
+            "acceptEdits"
+          ]
+        },
+        {
+          "description": "Plan mode - don't execute, just plan.",
+          "type": "string",
+          "enum": [
+            "plan"
+          ]
+        },
+        {
+          "description": "Bypass all permission checks (dangerous).",
+          "type": "string",
+          "enum": [
+            "bypassPermissions"
+          ]
+        }
+      ]
+    },
+    "PermissionSuggestion": {
+      "description": "A suggested permission update.",
+      "oneOf": [
+        {
+          "description": "Allow this invocation once.",
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "allow_once"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Deny this invocation once.",
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "deny_once"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Allow always with a pattern.",
+          "type": "object",
+          "required": [
+            "pattern",
+            "type"
+          ],
+          "properties": {
+            "pattern": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "allow_always"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Deny always with a pattern.",
+          "type": "object",
+          "required": [
+            "pattern",
+            "type"
+          ],
+          "properties": {
+            "pattern": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "deny_always"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "PostToolUseInput": {
+      "description": "PostToolUse hook input.",
+      "type": "object",
+      "required": [
+        "tool_input",
+        "tool_name",
+        "tool_output"
+      ],
+      "properties": {
+        "agent_id": {
+          "description": "Agent ID that made the call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_input": {
+          "description": "Tool input parameters."
+        },
+        "tool_name": {
+          "description": "Name of the tool that was invoked.",
+          "type": "string"
+        },
+        "tool_output": {
+          "description": "Tool output."
+        }
+      }
+    },
+    "PreCompactInput": {
+      "description": "PreCompact hook input.",
+      "type": "object",
+      "required": [
+        "max_tokens",
+        "token_count"
+      ],
+      "properties": {
+        "max_tokens": {
+          "description": "Maximum allowed tokens.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "token_count": {
+          "description": "Current conversation token count.",
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "PreToolUseInput": {
+      "description": "PreToolUse hook input.",
+      "type": "object",
+      "required": [
+        "tool_input",
+        "tool_name"
+      ],
+      "properties": {
+        "agent_id": {
+          "description": "Agent ID making the call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_input": {
+          "description": "Tool input parameters."
+        },
+        "tool_name": {
+          "description": "Name of the tool being invoked.",
+          "type": "string"
+        }
+      }
+    },
+    "ResourceLink": {
+      "description": "A resource that the server is capable of reading, included in a prompt or tool call result.\n\nNote: resource links returned by tools are not guaranteed to appear in the results of `resources/list` requests.",
+      "type": "object",
+      "required": [
+        "name",
+        "type",
+        "uri"
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      }
+    },
+    "ResultSubtype": {
+      "description": "Result subtypes.",
+      "oneOf": [
+        {
+          "description": "Successful completion.",
+          "type": "string",
+          "enum": [
+            "success"
+          ]
+        },
+        {
+          "description": "Error occurred.",
+          "type": "string",
+          "enum": [
+            "error"
+          ]
+        },
+        {
+          "description": "Interrupted by user/SDK.",
+          "type": "string",
+          "enum": [
+            "interrupted"
+          ]
+        },
+        {
+          "description": "Max turns reached.",
+          "type": "string",
+          "enum": [
+            "max_turns"
+          ]
+        }
+      ]
+    },
+    "Role": {
+      "description": "The sender or recipient of messages and data in a conversation.",
+      "type": "string",
+      "enum": [
+        "assistant",
+        "user"
+      ]
+    },
+    "StopInput": {
+      "description": "Stop hook input.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "description": "Reason for stopping.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SubagentStopInput": {
+      "description": "SubagentStop hook input.",
+      "type": "object",
+      "required": [
+        "agent_id"
+      ],
+      "properties": {
+        "agent_id": {
+          "description": "Subagent ID.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Reason for stopping.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "TextContent": {
+      "description": "Text provided to or from an LLM.",
+      "type": "object",
+      "required": [
+        "text",
+        "type"
+      ],
+      "properties": {
+        "annotations": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Annotations"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      }
+    },
+    "TextResourceContents": {
+      "type": "object",
+      "required": [
+        "text",
+        "uri"
+      ],
+      "properties": {
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        }
+      }
+    },
+    "ThreadErrorEvent": {
+      "description": "Fatal error emitted by the stream.",
+      "type": "object",
+      "required": [
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "ThreadEvent": {
+      "description": "Top-level JSONL events emitted by codex exec.",
+      "oneOf": [
+        {
+          "description": "Emitted when a new thread is started as the first event.",
+          "type": "object",
+          "required": [
+            "thread_id",
+            "type"
+          ],
+          "properties": {
+            "thread_id": {
+              "description": "The identifier of the new thread.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "thread.started"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Emitted when a turn is started by sending a new prompt to the model.",
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "turn.started"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Emitted when a turn is completed.",
+          "type": "object",
+          "required": [
+            "type",
+            "usage"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "turn.completed"
+              ]
+            },
+            "usage": {
+              "$ref": "#/definitions/Usage"
+            }
+          }
+        },
+        {
+          "description": "Indicates that a turn failed with an error.",
+          "type": "object",
+          "required": [
+            "error",
+            "type"
+          ],
+          "properties": {
+            "error": {
+              "$ref": "#/definitions/ThreadErrorEvent"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "turn.failed"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Emitted when a new item is added to the thread.",
+          "type": "object",
+          "required": [
+            "item",
+            "type"
+          ],
+          "properties": {
+            "item": {
+              "$ref": "#/definitions/ThreadItem"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "item.started"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Emitted when an item is updated.",
+          "type": "object",
+          "required": [
+            "item",
+            "type"
+          ],
+          "properties": {
+            "item": {
+              "$ref": "#/definitions/ThreadItem"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "item.updated"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Signals that an item has reached a terminal state.",
+          "type": "object",
+          "required": [
+            "item",
+            "type"
+          ],
+          "properties": {
+            "item": {
+              "$ref": "#/definitions/ThreadItem"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "item.completed"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Represents an unrecoverable error emitted directly by the event stream.",
+          "type": "object",
+          "required": [
+            "message",
+            "type"
+          ],
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ThreadItem": {
+      "description": "Canonical representation of a thread item and its domain-specific payload.",
+      "type": "object",
+      "oneOf": [
+        {
+          "description": "Response from the agent.",
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "agent_message"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Agent's reasoning summary.",
+          "type": "object",
+          "required": [
+            "text",
+            "type"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "reasoning"
+              ]
+            }
+          }
+        },
+        {
+          "description": "A command executed by the agent.",
+          "type": "object",
+          "required": [
+            "aggregated_output",
+            "command",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "aggregated_output": {
+              "type": "string"
+            },
+            "command": {
+              "type": "string"
+            },
+            "exit_code": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32"
+            },
+            "status": {
+              "$ref": "#/definitions/CommandExecutionStatus"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "command_execution"
+              ]
+            }
+          }
+        },
+        {
+          "description": "A set of file changes by the agent.",
+          "type": "object",
+          "required": [
+            "changes",
+            "status",
+            "type"
+          ],
+          "properties": {
+            "changes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/FileUpdateChange"
+              }
+            },
+            "status": {
+              "$ref": "#/definitions/PatchApplyStatus"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "file_change"
+              ]
+            }
+          }
+        },
+        {
+          "description": "A call to an MCP tool.",
+          "type": "object",
+          "required": [
+            "server",
+            "status",
+            "tool",
+            "type"
+          ],
+          "properties": {
+            "arguments": {
+              "default": null
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/McpToolCallItemError"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "result": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/McpToolCallItemResult"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "server": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/McpToolCallStatus"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "mcp_tool_call"
+              ]
+            }
+          }
+        },
+        {
+          "description": "A web search request.",
+          "type": "object",
+          "required": [
+            "query",
+            "type"
+          ],
+          "properties": {
+            "query": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "web_search"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Agent's to-do list.",
+          "type": "object",
+          "required": [
+            "items",
+            "type"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/TodoItem"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "todo_list"
+              ]
+            }
+          }
+        },
+        {
+          "description": "A non-fatal error surfaced as an item.",
+          "type": "object",
+          "required": [
+            "message",
+            "type"
+          ],
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "error"
+              ]
+            }
+          }
+        }
+      ],
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "TodoItem": {
+      "description": "An item in agent's to-do list.",
+      "type": "object",
+      "required": [
+        "completed",
+        "text"
+      ],
+      "properties": {
+        "completed": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "Usage": {
+      "description": "Describes the usage of tokens during a turn.",
+      "type": "object",
+      "required": [
+        "cached_input_tokens",
+        "input_tokens",
+        "output_tokens"
+      ],
+      "properties": {
+        "cached_input_tokens": {
+          "description": "The number of cached input tokens used during the turn.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "input_tokens": {
+          "description": "The number of input tokens used during the turn.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "output_tokens": {
+          "description": "The number of output tokens used during the turn.",
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "UserPromptSubmitInput": {
+      "description": "UserPromptSubmit hook input.",
+      "type": "object",
+      "required": [
+        "prompt"
+      ],
+      "properties": {
+        "prompt": {
+          "description": "The user's prompt text.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -109,6 +109,29 @@ pub enum Feature {
     CollaborationModes,
     /// Use the Responses API WebSocket transport for OpenAI by default.
     ResponsesWebsockets,
+
+    /// Smart Edit tool with instruction-based matching (Gemini-optimized).
+    SmartEdit,
+    /// Rich grep tool with line content output (ripgrep JSON mode).
+    RichGrep,
+    /// Enhanced list_dir with ignore file support (.gitignore, .ignore).
+    EnhancedListDir,
+    /// Enable the web_fetch tool for fetching URL content.
+    WebFetch,
+    /// Enable retrieval tool (experimental, requires retrieval.toml configuration).
+    Retrieval,
+    /// Enable LSP tool for code intelligence (requires pre-installed LSP servers).
+    Lsp,
+    /// Enable MCP resource tools (list_mcp_resources, list_mcp_resource_templates, read_mcp_resource).
+    McpResourceTools,
+    /// Enable subagent tools (Task, TaskOutput) for spawning specialized subagents.
+    Subagent,
+    /// Enable Compact V2 with two-tier architecture (micro-compact → full compact).
+    CompactV2,
+    /// Enable micro-compact (fast tool result compression without API call).
+    MicroCompact,
+    /// Enable custom web_search tool (DuckDuckGo/Tavily providers).
+    WebSearch,
 }
 
 impl Feature {
@@ -125,8 +148,7 @@ impl Feature {
     }
 
     fn info(self) -> &'static FeatureSpec {
-        FEATURES
-            .iter()
+        all_features()
             .find(|spec| spec.id == self)
             .unwrap_or_else(|| unreachable!("missing FeatureSpec for {:?}", self))
     }
@@ -166,7 +188,7 @@ impl Features {
     /// Starts with built-in defaults.
     pub fn with_defaults() -> Self {
         let mut set = BTreeSet::new();
-        for spec in FEATURES {
+        for spec in all_features() {
             if spec.default_enabled {
                 set.insert(spec.id);
             }
@@ -291,7 +313,7 @@ impl Features {
 
 /// Keys accepted in `[features]` tables.
 fn feature_for_key(key: &str) -> Option<Feature> {
-    for spec in FEATURES {
+    for spec in all_features() {
         if spec.key == key {
             return Some(spec.id);
         }
@@ -320,7 +342,16 @@ pub struct FeatureSpec {
     pub default_enabled: bool,
 }
 
-pub const FEATURES: &[FeatureSpec] = &[
+/// Returns all feature specifications (core + ext).
+/// Use this instead of accessing FEATURES directly.
+pub fn all_features() -> impl Iterator<Item = &'static FeatureSpec> {
+    FEATURES
+        .iter()
+        .chain(crate::features_ext::EXT_FEATURES.iter())
+}
+
+/// Core feature specifications. Use `all_features()` to include ext features.
+const FEATURES: &[FeatureSpec] = &[
     // Stable features.
     FeatureSpec {
         id: Feature::GhostCommit,

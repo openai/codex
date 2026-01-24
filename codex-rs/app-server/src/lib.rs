@@ -280,6 +280,7 @@ pub async fn run_main(
     }
 
     // Task: process incoming messages.
+    // Note: LSP and retrieval are disabled by default for app-server (pass None)
     let processor_handle = tokio::spawn({
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
         let cli_overrides: Vec<(String, TomlValue)> = cli_kv_overrides.clone();
@@ -292,6 +293,8 @@ pub async fn run_main(
             loader_overrides,
             feedback.clone(),
             config_warnings,
+            None, // lsp_manager - disabled for app-server
+            None, // retrieval_manager - disabled for app-server
         );
         let mut thread_created_rx = processor.thread_created_receiver();
         async move {

@@ -300,6 +300,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -399,6 +400,7 @@ async fn includes_conversation_id_and_model_headers_in_request() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -453,6 +455,7 @@ async fn includes_base_instructions_override_in_request() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -510,6 +513,7 @@ async fn chatgpt_auth_sends_correct_request() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -590,6 +594,8 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         codex_home.path().to_path_buf(),
         auth_manager,
         SessionSource::Exec,
+        None, // lsp_manager
+        None, // retrieval_manager
     );
     let NewThread { thread: codex, .. } = thread_manager
         .start_thread(config)
@@ -603,6 +609,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -645,6 +652,7 @@ async fn includes_user_instructions_message_in_request() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -725,6 +733,7 @@ async fn skills_append_to_instructions() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -778,6 +787,7 @@ async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -816,6 +826,7 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -852,6 +863,7 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -950,6 +962,7 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -990,6 +1003,7 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1024,6 +1038,7 @@ async fn includes_default_verbosity_in_request() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1065,6 +1080,7 @@ async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::R
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1105,6 +1121,7 @@ async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1161,6 +1178,7 @@ async fn includes_developer_instructions_message_in_request() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1227,6 +1245,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
         requires_openai_auth: false,
+        ext: Default::default(),
     };
 
     let codex_home = TempDir::new().unwrap();
@@ -1412,6 +1431,7 @@ async fn token_count_includes_rate_limits_snapshot() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1571,6 +1591,7 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .expect("submission should succeed while emitting usage limit error events");
@@ -1642,6 +1663,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
 
@@ -1654,6 +1676,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
 
@@ -1750,6 +1773,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
+        ext: Default::default(),
     };
 
     // Init session
@@ -1775,6 +1799,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1834,6 +1859,7 @@ async fn env_var_overrides_loaded_auth() {
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
+        ext: Default::default(),
     };
 
     // Init session
@@ -1859,6 +1885,7 @@ async fn env_var_overrides_loaded_auth() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1934,6 +1961,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1947,6 +1975,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1960,6 +1989,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();

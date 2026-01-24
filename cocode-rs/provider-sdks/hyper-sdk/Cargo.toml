@@ -1,0 +1,49 @@
+[package]
+name = "hyper-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Unified multi-provider AI model SDK for Rust"
+
+[dependencies]
+# Provider SDKs
+anthropic-sdk = { workspace = true }
+google-genai-sdk = { workspace = true }
+openai-sdk = { workspace = true }
+volcengine-ark-sdk = { workspace = true }
+z-ai-sdk = { workspace = true }
+
+# Async runtime
+async-trait = { workspace = true }
+futures = { workspace = true, default-features = false, features = ["std"] }
+tokio = { workspace = true, features = ["sync", "rt"] }
+tokio-stream = { workspace = true }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# HTTP
+reqwest = { workspace = true, features = ["json", "stream"] }
+http = { workspace = true }
+bytes = { workspace = true }
+base64 = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Utilities
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+regex-lite = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tokio-stream = { workspace = true }
+wiremock = { workspace = true }
+pretty_assertions = { workspace = true }
+dotenvy = { workspace = true }
+anyhow = { workspace = true }
+
+[lints]
+workspace = true

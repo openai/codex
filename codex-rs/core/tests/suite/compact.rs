@@ -164,6 +164,7 @@ async fn summarize_context_three_requests_and_instructions() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -186,6 +187,7 @@ async fn summarize_context_three_requests_and_instructions() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -580,6 +582,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .expect("submit user input");
@@ -1057,6 +1060,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1070,6 +1074,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1083,6 +1088,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1401,6 +1407,7 @@ async fn auto_compact_persists_rollout_entries() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1413,6 +1420,7 @@ async fn auto_compact_persists_rollout_entries() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1425,6 +1433,7 @@ async fn auto_compact_persists_rollout_entries() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1518,6 +1527,7 @@ async fn manual_compact_retries_after_context_window_error() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1652,6 +1662,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1667,6 +1678,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1682,6 +1694,7 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1863,6 +1876,7 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
+                ultrathink_enabled: false,
             })
             .await
             .unwrap();
@@ -1977,6 +1991,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -1990,6 +2005,7 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -2109,6 +2125,7 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
+                ultrathink_enabled: false,
             })
             .await
             .unwrap();

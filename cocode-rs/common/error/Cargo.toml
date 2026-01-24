@@ -1,0 +1,13 @@
+[package]
+name = "cocode-error"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+snafu.workspace = true
+snafu-virtstack.workspace = true
+strum.workspace = true
+
+[lints]
+workspace = true

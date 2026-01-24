@@ -72,10 +72,16 @@ use toml_edit::DocumentMut;
 
 mod constraint;
 pub mod edit;
+pub mod edit_ext;
+pub mod mod_ext;
+pub mod output_style;
+pub mod output_style_loader;
 pub mod profile;
 pub mod schema;
 pub mod service;
+pub mod system_reminder;
 pub mod types;
+pub mod types_ext;
 pub use constraint::Constrained;
 pub use constraint::ConstraintError;
 pub use constraint::ConstraintResult;
@@ -83,6 +89,8 @@ pub use constraint::ConstraintResult;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
 
+use mod_ext::ConfigTomlExt;
+pub use system_reminder::SystemReminderConfig;
 pub use codex_git::GhostSnapshotConfig;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
@@ -349,6 +357,8 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
+
+    pub ext: crate::config::mod_ext::ConfigExt,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -952,6 +962,10 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio", "ollama", or "ollama-chat".
     pub oss_provider: Option<String>,
+
+    /// Extension fields for additional configuration
+    #[serde(flatten, default)]
+    pub ext: ConfigTomlExt,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -1233,6 +1247,12 @@ impl Config {
         let requirements = config_layer_stack.requirements().clone();
         let user_instructions = Self::load_instructions(Some(&codex_home));
 
+        // Initialize model family registry with user-defined families.
+        // This must happen before derive_model_info() is called.
+        if let Err(e) = crate::models_manager::init_registry(&codex_home) {
+            tracing::warn!("Failed to load model_families.toml: {e}");
+        }
+
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
             model,
@@ -1356,6 +1376,10 @@ impl Config {
             provider.wire_api = crate::model_provider_info::WireApi::ResponsesWebsocket;
         }
         // Merge user-defined providers into the built-in list.
+        tracing::debug!(
+            "User-defined model_providers from config.toml: {:?}",
+            cfg.model_providers.keys().collect::<Vec<_>>()
+        );
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
         }
@@ -1364,7 +1388,7 @@ impl Config {
             .or(config_profile.model_provider)
             .or(cfg.model_provider)
             .unwrap_or_else(|| "openai".to_string());
-        let model_provider = model_providers
+        let mut model_provider = model_providers
             .get(&model_provider_id)
             .ok_or_else(|| {
                 std::io::Error::new(
@@ -1373,6 +1397,9 @@ impl Config {
                 )
             })?
             .clone();
+
+        // Derive model_info from model_name for adapters to use proper system instructions
+        model_provider.ext.derive_model_info();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
 
@@ -1609,6 +1636,14 @@ impl Config {
                     metrics_exporter: OtelExporterKind::Statsig,
                 }
             },
+            ext: crate::config::mod_ext::ConfigExt {
+                web_search_config: Default::default(),
+                web_fetch_config: Default::default(),
+                logging: cfg.ext.logging.unwrap_or_default(),
+                compact: cfg.ext.compact.unwrap_or_default(),
+                tool_filter: None,
+                system_reminder: cfg.ext.system_reminder.unwrap_or_default(),
+            },
         };
         Ok(config)
     }
@@ -1741,6 +1776,7 @@ mod tests {
     use crate::config::edit::ConfigEdit;
     use crate::config::edit::ConfigEditsBuilder;
     use crate::config::edit::apply_blocking;
+    use crate::config::mod_ext::ConfigExt;
     use crate::config::types::FeedbackConfigToml;
     use crate::config::types::HistoryPersistence;
     use crate::config::types::McpServerTransportConfig;
@@ -3618,6 +3654,7 @@ model_verbosity = "high"
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
             requires_openai_auth: false,
+            ext: Default::default(),
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();
@@ -3732,6 +3769,7 @@ model_verbosity = "high"
                 feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
                 otel: OtelConfig::default(),
+                ext: ConfigExt::default(),
             },
             o3_profile_config
         );
@@ -3814,6 +3852,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
+            ext: ConfigExt::default(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -3911,6 +3950,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
+            ext: ConfigExt::default(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -3994,6 +4034,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
+            ext: ConfigExt::default(),
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);

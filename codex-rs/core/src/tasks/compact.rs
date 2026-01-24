@@ -3,6 +3,7 @@ use std::sync::Arc;
 use super::SessionTask;
 use super::SessionTaskContext;
 use crate::codex::TurnContext;
+use crate::features::Feature;
 use crate::state::TaskKind;
 use async_trait::async_trait;
 use codex_protocol::user_input::UserInput;
@@ -25,7 +26,10 @@ impl SessionTask for CompactTask {
         _cancellation_token: CancellationToken,
     ) -> Option<String> {
         let session = session.clone_session();
-        if crate::compact::should_use_remote_compact_task(
+        if session.enabled(Feature::CompactV2) {
+            // Use V2 manual compact dispatch
+            crate::compact_v2::manual_compact_dispatch(session, ctx, input).await;
+        } else if crate::compact::should_use_remote_compact_task(
             session.as_ref(),
             &ctx.client.get_provider(),
         ) {

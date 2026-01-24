@@ -1,0 +1,163 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HookOutput",
+  "description": "Output from hook callbacks.",
+  "type": "object",
+  "properties": {
+    "continue": {
+      "description": "Whether to continue execution.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "decision": {
+      "description": "Permission decision (for PreToolUse).",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/HookPermissionDecision"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "hook_specific_output": {
+      "description": "Hook-specific output.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/HookSpecificOutput"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reason": {
+      "description": "Reason for the decision.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stop_reason": {
+      "description": "Reason for stopping (if stopping).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "suppress_output": {
+      "description": "Whether to suppress output.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "system_message": {
+      "description": "System message to inject.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "definitions": {
+    "HookEvent": {
+      "description": "Hook event types.",
+      "oneOf": [
+        {
+          "description": "Before a tool is used.",
+          "type": "string",
+          "enum": [
+            "PreToolUse"
+          ]
+        },
+        {
+          "description": "After a tool is used.",
+          "type": "string",
+          "enum": [
+            "PostToolUse"
+          ]
+        },
+        {
+          "description": "When user submits a prompt.",
+          "type": "string",
+          "enum": [
+            "UserPromptSubmit"
+          ]
+        },
+        {
+          "description": "When the agent is about to stop.",
+          "type": "string",
+          "enum": [
+            "Stop"
+          ]
+        },
+        {
+          "description": "When a subagent is about to stop.",
+          "type": "string",
+          "enum": [
+            "SubagentStop"
+          ]
+        },
+        {
+          "description": "Before compacting conversation history.",
+          "type": "string",
+          "enum": [
+            "PreCompact"
+          ]
+        }
+      ]
+    },
+    "HookPermissionDecision": {
+      "description": "Hook permission decision.",
+      "oneOf": [
+        {
+          "description": "Block the operation.",
+          "type": "string",
+          "enum": [
+            "block"
+          ]
+        }
+      ]
+    },
+    "HookSpecificOutput": {
+      "description": "Hook-specific output data.",
+      "type": "object",
+      "required": [
+        "hook_event_name"
+      ],
+      "properties": {
+        "hook_event_name": {
+          "description": "Hook event name.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookEvent"
+            }
+          ]
+        },
+        "modified_tool_input": {
+          "description": "Modified tool input (for PreToolUse)."
+        },
+        "modified_tool_output": {
+          "description": "Modified tool output (for PostToolUse)."
+        },
+        "permission_decision": {
+          "description": "Permission decision (for PreToolUse).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permission_decision_reason": {
+          "description": "Reason for the permission decision.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -27,7 +27,7 @@ const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
 const MAX_STREAM_MAX_RETRIES: u64 = 100;
 /// Hard cap for user-configured `request_max_retries`.
 const MAX_REQUEST_MAX_RETRIES: u64 = 100;
-pub const CHAT_WIRE_API_DEPRECATION_SUMMARY: &str = r#"Support for the "chat" wire API is deprecated and will soon be removed. Update your model provider definition in config.toml to use wire_api = "responses"."#;
+pub const CHAT_WIRE_API_DEPRECATION_SUMMARY: &str = "";
 
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 
@@ -53,7 +53,7 @@ pub enum WireApi {
 }
 
 /// Serializable representation of a provider definition.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ModelProviderInfo {
     /// Friendly display name.
@@ -105,6 +105,11 @@ pub struct ModelProviderInfo {
     /// and API key (if needed) comes from the "env_key" environment variable.
     #[serde(default)]
     pub requires_openai_auth: bool,
+
+    /// Extended provider configuration (adapter support, streaming, model parameters).
+    /// Flattened into this struct for convenient access.
+    #[serde(flatten)]
+    pub ext: crate::model_provider_info_ext::ModelProviderInfoExt,
 }
 
 impl ModelProviderInfo {
@@ -168,6 +173,15 @@ impl ModelProviderInfo {
             headers,
             retry,
             stream_idle_timeout: self.stream_idle_timeout(),
+            adapter: self.ext.adapter.clone(),
+            model_parameters: self
+                .ext
+                .model_parameters
+                .as_ref()
+                .and_then(|p| serde_json::to_value(p).ok()),
+            interceptors: self.ext.interceptors.clone(),
+            request_timeout: self.ext.request_timeout_ms.map(Duration::from_millis),
+            streaming: self.ext.streaming,
         })
     }
 
@@ -254,6 +268,7 @@ impl ModelProviderInfo {
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: true,
+            ext: Default::default(),
         }
     }
 
@@ -332,6 +347,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
         requires_openai_auth: false,
+        ext: Default::default(),
     }
 }
 
@@ -360,6 +376,7 @@ base_url = "http://localhost:11434/v1"
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            ext: Default::default(),
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -390,6 +407,7 @@ query_params = { api-version = "2025-04-01-preview" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            ext: Default::default(),
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -423,6 +441,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            ext: Default::default(),
         };
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -454,6 +473,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
+                ext: Default::default(),
             };
             let api = provider.to_api_provider(None).expect("api provider");
             assert!(
@@ -476,6 +496,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
             stream_max_retries: None,
             stream_idle_timeout_ms: None,
             requires_openai_auth: false,
+            ext: Default::default(),
         };
         let named_api = named_provider.to_api_provider(None).expect("api provider");
         assert!(named_api.is_azure_responses_endpoint());
@@ -500,6 +521,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
                 stream_max_retries: None,
                 stream_idle_timeout_ms: None,
                 requires_openai_auth: false,
+                ext: Default::default(),
             };
             let api = provider.to_api_provider(None).expect("api provider");
             assert!(

@@ -67,3 +67,31 @@ mcp-server-run *args:
 # Regenerate the json schema for config.toml from the current config types.
 write-config-schema:
     cargo run -p codex-core --bin codex-write-config-schema
+
+# ============================================================================
+# Live Integration Tests (codex-api)
+# ============================================================================
+
+# Run all codex-api live integration tests
+live-test:
+    cargo test -p codex-api --ignored -- --test-threads=1
+
+# Run live tests for a specific provider
+live-test-genai:
+    cargo test -p codex-api --ignored genai -- --test-threads=1
+
+live-test-anthropic:
+    cargo test -p codex-api --ignored anthropic -- --test-threads=1
+
+live-test-openai:
+    cargo test -p codex-api --ignored openai -- --test-threads=1
+
+live-test-volc-ark:
+    cargo test -p codex-api --ignored volc_ark -- --test-threads=1
+
+live-test-zai:
+    cargo test -p codex-api --ignored zai -- --test-threads=1
+
+# Run live tests for a specific feature category
+live-test-feature feature:
+    cargo test -p codex-api --ignored {{feature}} -- --test-threads=1

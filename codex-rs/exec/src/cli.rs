@@ -93,6 +93,16 @@ pub struct Cli {
     #[arg(long = "output-last-message", short = 'o', value_name = "FILE")]
     pub last_message_file: Option<PathBuf>,
 
+    /// Number of iterations to run (e.g., 5). Each iteration continues from
+    /// where the previous one left off, using git-based context.
+    #[arg(long = "iter", value_name = "COUNT", conflicts_with = "time")]
+    pub iter: Option<i32>,
+
+    /// Duration to run (e.g., "1h", "30m", "5s"). The agent will continue
+    /// running iterations until the time limit is reached.
+    #[arg(long = "time", value_name = "DURATION", conflicts_with = "iter")]
+    pub time: Option<String>,
+
     /// Initial instructions for the agent. If not provided as an argument (or
     /// if `-` is used), instructions are read from stdin.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]

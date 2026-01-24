@@ -57,6 +57,7 @@ async fn run_remote_compact_task_inner_impl(
         base_instructions: sess.get_base_instructions().await,
         personality: turn_context.personality,
         output_schema: None,
+        previous_response_id: None,
     };
 
     let mut new_history = turn_context

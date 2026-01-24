@@ -1,0 +1,413 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CodexAgentOptions",
+  "description": "Configuration options for the Codex Agent SDK.",
+  "type": "object",
+  "properties": {
+    "allowed_tools": {
+      "description": "List of allowed tool patterns.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "config_file": {
+      "description": "Custom configuration file path.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "disable_conversation_history": {
+      "description": "Whether to disable conversation history.",
+      "default": null,
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "env": {
+      "description": "Custom environment variables.",
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "hooks": {
+      "description": "Hook configurations.",
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/HookConfig"
+        }
+      }
+    },
+    "internet_access": {
+      "description": "Whether to enable internet access.",
+      "default": null,
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "max_thinking_budget": {
+      "description": "Maximum thinking budget tokens.",
+      "default": null,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32"
+    },
+    "max_turns": {
+      "description": "Maximum number of turns.",
+      "default": null,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32"
+    },
+    "mcp_servers": {
+      "description": "MCP server configurations.",
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/McpServerConfig"
+      }
+    },
+    "model": {
+      "description": "Model to use.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "permission_mode": {
+      "description": "Permission mode for tool usage.",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PermissionMode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reasoning_output": {
+      "description": "Whether to enable reasoning output.",
+      "default": null,
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "sandbox_mode": {
+      "description": "Sandbox mode.",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SandboxMode"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "system_prompt": {
+      "description": "Custom system prompt or a preset.",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SystemPromptConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "tools": {
+      "description": "List of tools to enable or a preset.",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ToolsConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "working_directory": {
+      "description": "Working directory for the session.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "definitions": {
+    "HookCallbackConfig": {
+      "description": "Hook callback configuration.",
+      "type": "object",
+      "required": [
+        "callback_id"
+      ],
+      "properties": {
+        "callback_id": {
+          "description": "Callback identifier.",
+          "type": "string"
+        },
+        "timeout": {
+          "description": "Timeout in milliseconds.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      }
+    },
+    "HookCommandConfig": {
+      "description": "Hook command configuration.",
+      "type": "object",
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "command": {
+          "description": "Command to execute.",
+          "type": "string"
+        },
+        "timeout": {
+          "description": "Timeout in milliseconds.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      }
+    },
+    "HookConfig": {
+      "description": "Hook configuration.",
+      "anyOf": [
+        {
+          "description": "Command to execute.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookCommandConfig"
+            }
+          ]
+        },
+        {
+          "description": "SDK callback.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HookCallbackConfig"
+            }
+          ]
+        }
+      ]
+    },
+    "McpServerConfig": {
+      "description": "MCP server configuration.",
+      "type": "object",
+      "required": [
+        "command"
+      ],
+      "properties": {
+        "args": {
+          "description": "Arguments to pass to the command.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "command": {
+          "description": "Command to run the server.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Working directory for the server.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "description": "Environment variables for the server.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "PermissionMode": {
+      "description": "Permission mode for tool usage.",
+      "oneOf": [
+        {
+          "description": "Default permission mode - prompt for dangerous operations.",
+          "type": "string",
+          "enum": [
+            "default"
+          ]
+        },
+        {
+          "description": "Accept all edits automatically.",
+          "type": "string",
+          "enum": [
+            "acceptEdits"
+          ]
+        },
+        {
+          "description": "Plan mode - don't execute, just plan.",
+          "type": "string",
+          "enum": [
+            "plan"
+          ]
+        },
+        {
+          "description": "Bypass all permission checks (dangerous).",
+          "type": "string",
+          "enum": [
+            "bypassPermissions"
+          ]
+        }
+      ]
+    },
+    "SandboxMode": {
+      "description": "Sandbox mode for execution.",
+      "oneOf": [
+        {
+          "description": "Read-only access to the filesystem.",
+          "type": "string",
+          "enum": [
+            "read-only"
+          ]
+        },
+        {
+          "description": "Write access to the workspace only.",
+          "type": "string",
+          "enum": [
+            "workspace-write"
+          ]
+        },
+        {
+          "description": "Full access (dangerous).",
+          "type": "string",
+          "enum": [
+            "danger-full-access"
+          ]
+        }
+      ]
+    },
+    "SystemPromptConfig": {
+      "description": "System prompt configuration.",
+      "anyOf": [
+        {
+          "description": "Custom system prompt text.",
+          "type": "string"
+        },
+        {
+          "description": "A preset name.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/SystemPromptPreset"
+            }
+          ]
+        }
+      ]
+    },
+    "SystemPromptPreset": {
+      "description": "Predefined system prompt presets.",
+      "oneOf": [
+        {
+          "description": "Default system prompt.",
+          "type": "string",
+          "enum": [
+            "default"
+          ]
+        },
+        {
+          "description": "Minimal system prompt.",
+          "type": "string",
+          "enum": [
+            "minimal"
+          ]
+        },
+        {
+          "description": "No system prompt.",
+          "type": "string",
+          "enum": [
+            "none"
+          ]
+        }
+      ]
+    },
+    "ToolsConfig": {
+      "description": "Tools configuration.",
+      "anyOf": [
+        {
+          "description": "List of specific tool names.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "A preset name.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolsPreset"
+            }
+          ]
+        }
+      ]
+    },
+    "ToolsPreset": {
+      "description": "Predefined tool presets.",
+      "oneOf": [
+        {
+          "description": "All available tools.",
+          "type": "string",
+          "enum": [
+            "all"
+          ]
+        },
+        {
+          "description": "Default set of tools.",
+          "type": "string",
+          "enum": [
+            "default"
+          ]
+        },
+        {
+          "description": "Read-only tools.",
+          "type": "string",
+          "enum": [
+            "readonly"
+          ]
+        },
+        {
+          "description": "No tools.",
+          "type": "string",
+          "enum": [
+            "none"
+          ]
+        }
+      ]
+    }
+  }
+}

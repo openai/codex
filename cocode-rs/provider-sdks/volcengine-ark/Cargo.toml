@@ -1,0 +1,21 @@
+[package]
+name = "volcengine-ark-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rust SDK for Volcengine Ark Response API"
+
+[dependencies]
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+wiremock = { workspace = true }
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

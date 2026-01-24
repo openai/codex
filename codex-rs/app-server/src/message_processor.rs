@@ -29,8 +29,10 @@ use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_originator;
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
+use codex_lsp::LspServerManager;
 use codex_protocol::protocol::SessionSource;
 use tokio::sync::broadcast;
+use codex_retrieval::RetrievalFacade;
 use toml::Value as TomlValue;
 
 pub(crate) struct MessageProcessor {
@@ -52,6 +54,8 @@ impl MessageProcessor {
         loader_overrides: LoaderOverrides,
         feedback: CodexFeedback,
         config_warnings: Vec<ConfigWarningNotification>,
+        lsp_manager: Option<Arc<LspServerManager>>,
+        retrieval_manager: Option<Arc<RetrievalFacade>>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
         let auth_manager = AuthManager::shared(
@@ -63,6 +67,8 @@ impl MessageProcessor {
             config.codex_home.clone(),
             auth_manager.clone(),
             SessionSource::VSCode,
+            lsp_manager,
+            retrieval_manager,
         ));
         let codex_message_processor = CodexMessageProcessor::new(
             auth_manager,

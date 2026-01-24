@@ -46,6 +46,7 @@ async fn quota_exceeded_emits_single_error_event() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();

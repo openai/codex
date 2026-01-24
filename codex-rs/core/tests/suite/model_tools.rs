@@ -69,6 +69,14 @@ async fn model_selects_expected_tools() {
             "request_user_input".to_string(),
             "web_search".to_string(),
             "view_image".to_string()
+            "glob_files".to_string(),
+            "think".to_string(),
+            "write_file".to_string(),
+            "BashOutput".to_string(),
+            "KillShell".to_string(),
+            "ExitPlanMode".to_string(),
+            "EnterPlanMode".to_string(),
+            "AskUserQuestion".to_string(),
         ],
         "codex-mini-latest should expose the local shell tool",
     );
@@ -85,7 +93,15 @@ async fn model_selects_expected_tools() {
             "request_user_input".to_string(),
             "apply_patch".to_string(),
             "web_search".to_string(),
-            "view_image".to_string()
+            "view_image".to_string(),
+            "glob_files".to_string(),
+            "think".to_string(),
+            "write_file".to_string(),
+            "BashOutput".to_string(),
+            "KillShell".to_string(),
+            "ExitPlanMode".to_string(),
+            "EnterPlanMode".to_string(),
+            "AskUserQuestion".to_string(),
         ],
         "gpt-5-codex should expose the apply_patch tool",
     );
@@ -103,6 +119,14 @@ async fn model_selects_expected_tools() {
             "apply_patch".to_string(),
             "web_search".to_string(),
             "view_image".to_string()
+            "glob_files".to_string(),
+            "think".to_string(),
+            "write_file".to_string(),
+            "BashOutput".to_string(),
+            "KillShell".to_string(),
+            "ExitPlanMode".to_string(),
+            "EnterPlanMode".to_string(),
+            "AskUserQuestion".to_string(),
         ],
         "gpt-5.1-codex should expose the apply_patch tool",
     );
@@ -119,8 +143,16 @@ async fn model_selects_expected_tools() {
             "request_user_input".to_string(),
             "web_search".to_string(),
             "view_image".to_string()
+            "glob_files".to_string(),
+            "think".to_string(),
+            "write_file".to_string(),
+            "BashOutput".to_string(),
+            "KillShell".to_string(),
+            "ExitPlanMode".to_string(),
+            "EnterPlanMode".to_string(),
+            "AskUserQuestion".to_string(),
         ],
-        "gpt-5 should expose the apply_patch tool",
+        "gpt-5 should expose the shell tool",
     );
 
     let gpt51_tools = collect_tool_identifiers_for_model("gpt-5.1").await;
@@ -136,6 +168,14 @@ async fn model_selects_expected_tools() {
             "apply_patch".to_string(),
             "web_search".to_string(),
             "view_image".to_string()
+            "glob_files".to_string(),
+            "think".to_string(),
+            "write_file".to_string(),
+            "BashOutput".to_string(),
+            "KillShell".to_string(),
+            "ExitPlanMode".to_string(),
+            "EnterPlanMode".to_string(),
+            "AskUserQuestion".to_string(),
         ],
         "gpt-5.1 should expose the apply_patch tool",
     );
@@ -153,6 +193,14 @@ async fn model_selects_expected_tools() {
             "apply_patch".to_string(),
             "web_search".to_string(),
             "view_image".to_string()
+            "glob_files".to_string(),
+            "think".to_string(),
+            "write_file".to_string(),
+            "BashOutput".to_string(),
+            "KillShell".to_string(),
+            "ExitPlanMode".to_string(),
+            "EnterPlanMode".to_string(),
+            "AskUserQuestion".to_string(),
         ],
         "exp-5.1 should expose the apply_patch tool",
     );

@@ -16,7 +16,7 @@ storybook-static/
 
 # ignore README for publishing
 codex-cli/README.md
-
+.codex
 # ignore Nix derivation results
 result
 
@@ -29,8 +29,6 @@ result
 *~
 
 # cli tools
-CLAUDE.md
-.claude/
 AGENTS.override.md
 
 # caches

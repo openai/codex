@@ -8,31 +8,12 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use std::collections::HashSet;
 use std::path::Path;
-use std::process::Command as StdCommand;
 
 const MODEL_WITH_TOOL: &str = "test-gpt-5.1-codex";
-
-fn ripgrep_available() -> bool {
-    StdCommand::new("rg")
-        .arg("--version")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-}
-
-macro_rules! skip_if_ripgrep_missing {
-    ($ret:expr $(,)?) => {{
-        if !ripgrep_available() {
-            eprintln!("rg not available in PATH; skipping test");
-            return $ret;
-        }
-    }};
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn grep_files_tool_collects_matches() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_ripgrep_missing!(Ok(()));
 
     let server = start_mock_server().await;
     let test = build_test_codex(&server).await?;
@@ -90,7 +71,6 @@ async fn grep_files_tool_collects_matches() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn grep_files_tool_reports_empty_results() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    skip_if_ripgrep_missing!(Ok(()));
 
     let server = start_mock_server().await;
     let test = build_test_codex(&server).await?;

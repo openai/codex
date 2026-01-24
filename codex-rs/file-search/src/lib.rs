@@ -1,3 +1,5 @@
+use codex_file_ignore::IgnoreConfig;
+use codex_file_ignore::IgnoreService;
 use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
 use nucleo_matcher::Matcher;
@@ -162,34 +164,43 @@ pub fn run(
 
     // Use the same tree-walker library that ripgrep uses. We use it directly so
     // that we can leverage the parallelism it provides.
-    let mut walk_builder = WalkBuilder::new(search_directory);
-    walk_builder
-        .threads(num_walk_builder_threads)
-        // Allow hidden entries.
-        .hidden(false)
-        // Follow symlinks to search their contents.
-        .follow_links(true)
-        // Don't require git to be present to apply to apply git-related ignore rules.
-        .require_git(false);
-    if !respect_gitignore {
-        walk_builder
+    let mut walk_builder = if respect_gitignore {
+        // Use IgnoreService for comprehensive ignore support (.gitignore + .ignore)
+        let config = IgnoreConfig::default()
+            .with_hidden(false) // Don't show hidden files
+            .with_follow_links(true) // Follow symlinks (original behavior)
+            .with_excludes(exclude);
+        IgnoreService::new(config).create_walk_builder(search_directory)
+    } else {
+        // Direct WalkBuilder, no ignore rules
+        let mut builder = WalkBuilder::new(search_directory);
+        builder
+            .hidden(false)
+            .follow_links(true)
+            .require_git(false)
             .git_ignore(false)
             .git_global(false)
             .git_exclude(false)
             .ignore(false)
             .parents(false);
-    }
 
-    if !exclude.is_empty() {
-        let mut override_builder = OverrideBuilder::new(search_directory);
-        for exclude in exclude {
-            // The `!` prefix is used to indicate an exclude pattern.
-            let exclude_pattern = format!("!{exclude}");
-            override_builder.add(&exclude_pattern)?;
+        // Still apply custom excludes if provided
+        if !exclude.is_empty() {
+            let mut override_builder = OverrideBuilder::new(search_directory);
+            for pattern in &exclude {
+                override_builder.add(&format!("!{pattern}"))?;
+            }
+            if let Ok(overrides) = override_builder.build() {
+                builder.overrides(overrides);
+            }
         }
-        let override_matcher = override_builder.build()?;
-        walk_builder.overrides(override_matcher);
-    }
+
+        builder
+    };
+
+    // Set thread count (applies to both paths)
+    walk_builder.threads(num_walk_builder_threads);
+
     let walker = walk_builder.build_parallel();
 
     // Each worker created by `WalkParallel::run()` will have its own

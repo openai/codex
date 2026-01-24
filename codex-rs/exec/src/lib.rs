@@ -9,6 +9,8 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
+mod lib_ext;
+pub mod sdk_v2;
 
 pub use cli::Cli;
 pub use cli::Command;
@@ -30,8 +32,10 @@ use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::format_config_error_with_source;
+use codex_core::features::Feature;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::models_manager::manager::RefreshStrategy;
+use codex_core::loop_driver::LoopCondition;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -59,6 +63,9 @@ use tracing_subscriber::prelude::*;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
+use crate::lib_ext::LoopState;
+use crate::lib_ext::NextTurnParams;
+use crate::lib_ext::submit_next_iteration;
 use codex_core::default_client::set_default_originator;
 use codex_core::find_thread_path_by_id_str;
 
@@ -73,6 +80,11 @@ enum InitialOperation {
 }
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+    // Check SDK mode FIRST, before any other initialization
+    if sdk_v2::is_sdk_mode() {
+        return sdk_v2::run_sdk_mode(cli).await;
+    }
+
     if let Err(err) = set_default_originator("codex_exec".to_string()) {
         tracing::warn!(?err, "Failed to set codex exec originator override {err:?}");
     }
@@ -96,7 +108,27 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         prompt,
         output_schema: output_schema_path,
         config_overrides,
+        iter,
+        time,
     } = cli;
+
+    // Parse loop condition from --iter or --time
+    let loop_condition: Option<LoopCondition> = match (&iter, &time) {
+        (Some(count), None) => Some(LoopCondition::Iters { count: *count }),
+        (None, Some(duration_str)) => match LoopCondition::parse(duration_str) {
+            Ok(cond) => Some(cond),
+            Err(e) => {
+                eprintln!("Invalid --time value: {e}");
+                std::process::exit(1);
+            }
+        },
+        (None, None) => None,
+        (Some(_), Some(_)) => {
+            // This should be caught by clap conflicts_with, but just in case
+            eprintln!("Cannot specify both --iter and --time");
+            std::process::exit(1);
+        }
+    };
 
     let (stdout_with_ansi, stderr_with_ansi) = match color {
         cli::Color::Always => (true, true),
@@ -106,19 +138,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             supports_color::on_cached(Stream::Stderr).is_some(),
         ),
     };
-
-    // Build fmt layer (existing logging) to compose with OTEL layer.
-    let default_level = "error";
-
-    // Build env_filter separately and attach via with_filter.
-    let env_filter = EnvFilter::try_from_default_env()
-        .or_else(|_| EnvFilter::try_new(default_level))
-        .unwrap_or_else(|_| EnvFilter::new(default_level));
-
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_ansi(stderr_with_ansi)
-        .with_writer(std::io::stderr)
-        .with_filter(env_filter);
 
     let sandbox_mode = if full_auto {
         Some(SandboxMode::WorkspaceWrite)
@@ -267,6 +286,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
+    // Build fmt layer using config-driven settings (timezone, log levels, etc.)
+    let fmt_layer = codex_utils_common::configure_fmt_layer!(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(stderr_with_ansi)
+            .with_writer(std::io::stderr),
+        &config.ext.logging,
+        "error"
+    );
+
     let _ = tracing_subscriber::registry()
         .with(fmt_layer)
         .with(otel_tracing_layer)
@@ -311,6 +339,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let default_effort = config.model_reasoning_effort;
     let default_summary = config.model_reasoning_summary;
 
+    // Initialize retrieval service early (background task)
+    // This starts indexing immediately when cwd is known, rather than waiting
+    // for the first code_search or repomap tool invocation.
+    codex_core::spawn_retrieval_init(
+        &default_cwd,
+        config
+            .features
+            .enabled(codex_core::features::Feature::Retrieval),
+    );
+
     // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
     // since the user is explicitly running in an externally sandboxed environment.
     if !skip_git_repo_check
@@ -326,10 +364,24 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         true,
         config.cli_auth_credentials_store_mode,
     );
+    // Create LspServerManager if Feature::Lsp is enabled
+    let lsp_manager = if config.features.enabled(Feature::Lsp) {
+        Some(codex_lsp::create_manager(Some(config.cwd.clone())))
+    } else {
+        None
+    };
+    // Create RetrievalFacade if Feature::Retrieval is enabled
+    let retrieval_manager = if config.features.enabled(Feature::Retrieval) {
+        codex_retrieval::create_manager(Some(config.cwd.clone())).await
+    } else {
+        None
+    };
     let thread_manager = ThreadManager::new(
         config.codex_home.clone(),
         auth_manager.clone(),
         SessionSource::Exec,
+        lsp_manager,
+        retrieval_manager,
     );
     let default_model = thread_manager
         .get_models_manager()
@@ -467,10 +519,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             let task_id = thread
                 .submit(Op::UserTurn {
                     items,
-                    cwd: default_cwd,
+                    cwd: default_cwd.clone(),
                     approval_policy: default_approval_policy,
                     sandbox_policy: default_sandbox_policy.clone(),
-                    model: default_model,
+                    model: default_model.clone(),
                     effort: default_effort,
                     summary: default_summary,
                     final_output_json_schema: output_schema,
@@ -492,6 +544,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // Track whether a fatal error was reported by the server so we can
     // exit with a non-zero status for automation-friendly signaling.
     let mut error_seen = false;
+    let mut loop_state = LoopState::new(loop_condition, prompt_summary.clone());
+
     while let Some(event) = rx.recv().await {
         if let EventMsg::ElicitationRequest(ev) = &event.msg {
             // Automatically cancel elicitation requests in exec mode.
@@ -510,7 +564,25 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         match shutdown {
             CodexStatus::Running => continue,
             CodexStatus::InitiateShutdown => {
-                thread.submit(Op::Shutdown).await?;
+                loop_state.track_iteration(error_seen);
+
+                if loop_state.should_continue() {
+                    loop_state.log_iteration_start();
+                    error_seen = false; // Reset for new iteration
+
+                    let params = NextTurnParams {
+                        cwd: default_cwd.clone(),
+                        approval_policy: default_approval_policy,
+                        sandbox_policy: default_sandbox_policy.clone(),
+                        model: default_model.clone(),
+                        effort: default_effort,
+                        summary: default_summary,
+                    };
+                    submit_next_iteration(&thread, &loop_state, &params).await?;
+                } else {
+                    loop_state.log_loop_complete();
+                    thread.submit(Op::Shutdown).await?;
+                }
             }
             CodexStatus::Shutdown => {
                 break;
@@ -518,7 +590,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     }
     event_processor.print_final_output();
-    if error_seen {
+    if error_seen || loop_state.has_failures() {
         std::process::exit(1);
     }
 

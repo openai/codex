@@ -1,0 +1,23 @@
+[package]
+name = "anthropic-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rust SDK for the Anthropic Claude API"
+
+[dependencies]
+base64 = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true, default-features = false, features = ["std"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+wiremock = { workspace = true }
+
+[lints]
+workspace = true

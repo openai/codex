@@ -1,0 +1,26 @@
+[package]
+name = "cocode-file-search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cocode-file-search"
+path = "src/main.rs"
+
+[lib]
+name = "cocode_file_search"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+cocode-file-ignore = { workspace = true }
+ignore = { workspace = true }
+nucleo-matcher = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

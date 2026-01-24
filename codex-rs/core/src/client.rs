@@ -21,6 +21,7 @@ use codex_api::ResponsesWebsocketClient as ApiWebSocketResponsesClient;
 use codex_api::ResponsesWebsocketConnection as ApiWebSocketConnection;
 use codex_api::SseTelemetry;
 use codex_api::TransportError;
+use codex_api::UltrathinkConfig as ApiUltrathinkConfig;
 use codex_api::build_conversation_headers;
 use codex_api::common::Reasoning;
 use codex_api::common::ResponsesWsRequest;
@@ -54,12 +55,13 @@ use crate::auth::RefreshTokenError;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
+use crate::client_ultrathink_ext::build_reasoning_for_request;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
-use crate::features::FEATURES;
 use crate::features::Feature;
+use crate::features::all_features;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
@@ -173,6 +175,10 @@ impl ModelClient {
 
     /// Returns the currently configured model slug.
     pub fn get_model(&self) -> String {
+        // Use provider's explicit model_name for custom endpoints
+        if let Some(model_name) = &self.state.provider.ext.model_name {
+            return model_name.clone();
+        }
         self.state.model_info.slug.clone()
     }
 
@@ -218,8 +224,9 @@ impl ModelClient {
             .with_telemetry(Some(request_telemetry));
 
         let instructions = prompt.base_instructions.text.clone();
+        let model = self.get_model();
         let payload = ApiCompactionInput {
-            model: &self.state.model_info.slug,
+            model: &model,
             input: &prompt.input,
             instructions: &instructions,
         };
@@ -244,6 +251,15 @@ impl ModelClient {
 }
 
 impl ModelClientSession {
+    /// Returns the model name to use in API requests.
+    /// Priority: provider.ext.model_name > model_info.slug
+    fn get_model(&self) -> String {
+        if let Some(model_name) = &self.state.provider.ext.model_name {
+            return model_name.clone();
+        }
+        self.state.model_info.slug.clone()
+    }
+
     /// Streams a single model turn using either the Responses or Chat
     /// Completions wire API, depending on the configured provider.
     ///
@@ -284,15 +300,26 @@ impl ModelClientSession {
     ) -> ApiResponsesOptions {
         let model_info = &self.state.model_info;
 
-        let default_reasoning_effort = model_info.default_reasoning_level;
-        let reasoning = if model_info.supports_reasoning_summaries {
-            Some(Reasoning {
-                effort: self.state.effort.or(default_reasoning_effort),
-                summary: if self.state.summary == ReasoningSummaryConfig::None {
-                    None
-                } else {
-                    Some(self.state.summary)
-                },
+        // Use build_reasoning_for_request for full priority chain:
+        // 1. "ultrathink" keyword → provider's ultrathink_config.effort
+        // 2. Per-turn effort override
+        // 3. Global config.model_reasoning_effort
+        // 4. Model default
+        let reasoning_result = build_reasoning_for_request(
+            &prompt.input,
+            self.state.effort,
+            self.state.config.model_reasoning_effort,
+            model_info,
+            self.state.provider.ext.ultrathink_config.as_ref(),
+            self.state.summary,
+        );
+        let reasoning = reasoning_result.reasoning;
+
+        // Build ultrathink config when active (for adapters)
+        let ultrathink_config = if reasoning_result.ultrathink_active {
+            Some(ApiUltrathinkConfig {
+                effort: reasoning_result.effort,
+                budget_tokens: reasoning_result.budget_tokens,
             })
         } else {
             None
@@ -333,6 +360,7 @@ impl ModelClientSession {
             extra_headers: build_responses_headers(&self.state.config, Some(&self.turn_state)),
             compression,
             turn_state: Some(Arc::clone(&self.turn_state)),
+            ultrathink_config,
         }
     }
 
@@ -373,7 +401,7 @@ impl ModelClientSession {
 
         let store = store_override.unwrap_or(false);
         let payload = ResponseCreateWsRequest {
-            model: self.state.model_info.slug.clone(),
+            model: self.get_model(),
             instructions: api_prompt.instructions.clone(),
             input: api_prompt.input.clone(),
             tools: api_prompt.tools.clone(),
@@ -448,6 +476,7 @@ impl ModelClientSession {
         let api_prompt = build_api_prompt(prompt, instructions, tools_json);
         let conversation_id = self.state.conversation_id.to_string();
         let session_source = self.state.session_source.clone();
+        let model = self.get_model();
 
         let mut auth_recovery = auth_manager
             .as_ref()
@@ -469,7 +498,7 @@ impl ModelClientSession {
 
             let stream_result = client
                 .stream_prompt(
-                    &self.state.model_info.slug,
+                    &model,
                     &api_prompt,
                     Some(conversation_id.clone()),
                     Some(session_source.clone()),
@@ -504,6 +533,7 @@ impl ModelClientSession {
 
         let auth_manager = self.state.auth_manager.clone();
         let api_prompt = self.build_responses_request(prompt)?;
+        let model = self.get_model();
 
         let mut auth_recovery = auth_manager
             .as_ref()
@@ -527,9 +557,7 @@ impl ModelClientSession {
 
             let options = self.build_responses_options(prompt, compression);
 
-            let stream_result = client
-                .stream_prompt(&self.state.model_info.slug, &api_prompt, options)
-                .await;
+            let stream_result = client.stream_prompt(&model, &api_prompt, options).await;
 
             match stream_result {
                 Ok(stream) => {
@@ -622,12 +650,12 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
         tools: tools_json,
         parallel_tool_calls: prompt.parallel_tool_calls,
         output_schema: prompt.output_schema.clone(),
+        previous_response_id: prompt.previous_response_id.clone(),
     }
 }
 
 fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
-    let enabled = FEATURES
-        .iter()
+    let enabled = all_features()
         .filter_map(|spec| {
             if spec.stage.beta_menu_description().is_some() && config.features.enabled(spec.id) {
                 Some(spec.key)

@@ -76,6 +76,11 @@ fn provider(name: &str, wire: WireApi) -> Provider {
             retry_transport: true,
         },
         stream_idle_timeout: Duration::from_millis(50),
+        adapter: None,
+        model_parameters: None,
+        interceptors: Vec::new(),
+        request_timeout: None,
+        streaming: true,
     }
 }
 

@@ -75,6 +75,17 @@ pub enum CodexErr {
     )]
     ContextWindowExceeded,
 
+    /// Returned when the API reports that the previous_response_id is not found or invalid.
+    /// This is a retryable error - the session loop should clear the stored response_id
+    /// and retry with full conversation history.
+    #[error("previous response id not found - will retry with full history")]
+    PreviousResponseNotFound,
+
+    /// Returned when the API cannot verify encrypted reasoning content.
+    /// This typically means the conversation's reasoning chain is broken and may need to restart.
+    #[error("encrypted reasoning content could not be verified - conversation may need to restart")]
+    EncryptedContentInvalid,
+
     #[error("no thread with id: {0}")]
     ThreadNotFound(ThreadId),
 
@@ -205,8 +216,10 @@ impl CodexErr {
             | CodexErr::AgentLimitReached { .. }
             | CodexErr::Spawn
             | CodexErr::SessionConfiguredNotFirstEvent
-            | CodexErr::UsageLimitReached(_) => false,
+            | CodexErr::UsageLimitReached(_)
+            | CodexErr::EncryptedContentInvalid => false,
             CodexErr::Stream(..)
+            | CodexErr::PreviousResponseNotFound
             | CodexErr::Timeout
             | CodexErr::UnexpectedStatus(_)
             | CodexErr::ResponseStreamFailed(_)

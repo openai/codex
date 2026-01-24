@@ -1,0 +1,179 @@
+[workspace]
+members = [
+    "common/error",
+    "common/protocol",
+    "common/config",
+    "common/otel",
+    "utils/file-ignore",
+    "utils/file-search",
+    "provider-sdks/anthropic",
+    "provider-sdks/openai",
+    "provider-sdks/volcengine-ark",
+    "provider-sdks/z-ai",
+    "provider-sdks/google-genai",
+    "provider-sdks/hyper-sdk",
+    "utils/common",
+    "utils/absolute-path",
+    "utils/cargo-bin",
+    "utils/git",
+    "utils/cache",
+    "utils/image",
+    "utils/json-to-toml",
+    "utils/pty",
+    "utils/readiness",
+    "utils/string",
+    "utils/async-utils",
+    "utils/keyring-store",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.0"
+# Track the edition for all workspace crates in one place. Individual
+# crates can still override this value, but keeping it here means new
+# crates created with `cargo new -w ...` automatically inherit the 2024
+# edition.
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# Internal - common
+cocode-error = { path = "common/error" }
+cocode-protocol = { path = "common/protocol" }
+cocode-config = { path = "common/config" }
+cocode-otel = { path = "common/otel" }
+
+# Internal - provider SDKs (keep original names)
+anthropic-sdk = { path = "provider-sdks/anthropic" }
+openai-sdk = { path = "provider-sdks/openai" }
+volcengine-ark-sdk = { path = "provider-sdks/volcengine-ark" }
+z-ai-sdk = { path = "provider-sdks/z-ai" }
+google-genai-sdk = { path = "provider-sdks/google-genai" }
+hyper-sdk = { path = "provider-sdks/hyper-sdk" }
+
+# Internal - utilities (renamed codex → cocode)
+cocode-async-utils = { path = "utils/async-utils" }
+cocode-keyring-store = { path = "utils/keyring-store" }
+cocode-file-ignore = { path = "utils/file-ignore" }
+cocode-file-search = { path = "utils/file-search" }
+cocode-git = { path = "utils/git" }
+cocode-utils-absolute-path = { path = "utils/absolute-path" }
+cocode-utils-cache = { path = "utils/cache" }
+cocode-utils-cargo-bin = { path = "utils/cargo-bin" }
+cocode-utils-common = { path = "utils/common" }
+cocode-utils-image = { path = "utils/image" }
+cocode-utils-json-to-toml = { path = "utils/json-to-toml" }
+cocode-utils-pty = { path = "utils/pty" }
+cocode-utils-readiness = { path = "utils/readiness" }
+cocode-utils-string = { path = "utils/string" }
+
+# External (only those actually used by existing crates)
+anyhow = "1"
+assert_cmd = "2"
+assert_matches = "1.5.0"
+async-trait = "0.1.89"
+base64 = "0.22.1"
+bytes = "1.10.1"
+chrono = "0.4.42"
+clap = "4"
+dotenvy = "0.15.7"
+eventsource-stream = "0.2.3"
+futures = { version = "0.3", default-features = false }
+globset = "0.4"
+http = "1.3.1"
+ignore = "0.4.23"
+image = { version = "^0.25.9", default-features = false }
+keyring = "3"
+lazy_static = "1"
+log = "0.4"
+lru = "0.16.3"
+nucleo-matcher = "0.3.1"
+once_cell = "1.20.2"
+opentelemetry = "0.31.0"
+opentelemetry-appender-tracing = "0.31.0"
+opentelemetry-otlp = "0.31.0"
+opentelemetry-semantic-conventions = "0.31.0"
+opentelemetry_sdk = "0.31.0"
+path-absolutize = "3.1.1"
+portable-pty = "0.9.0"
+pretty_assertions = "1.4.1"
+regex = "1.12.2"
+regex-lite = "0.1.8"
+reqwest = "0.12"
+schemars = "0.8.22"
+serde = "1"
+serde_json = "1"
+snafu = "0.8"
+snafu-virtstack = "0.1"
+strum = { version = "0.27", features = ["derive"] }
+sha1 = "0.10.6"
+tempfile = "3.23.0"
+thiserror = "2.0.17"
+time = "0.3"
+tokio = "1"
+tokio-stream = "0.1.18"
+tonic = "0.12"
+tokio-util = "0.7"
+toml = "0.9.5"
+tracing = "0.1.43"
+tracing-opentelemetry = "0.32.0"
+tracing-subscriber = "0.3.22"
+ts-rs = "11"
+uuid = "1"
+walkdir = "2.5.0"
+wiremock = "0.6"
+
+[workspace.lints]
+rust = {}
+
+[workspace.lints.clippy]
+expect_used = "deny"
+identity_op = "deny"
+manual_clamp = "deny"
+manual_filter = "deny"
+manual_find = "deny"
+manual_flatten = "deny"
+manual_map = "deny"
+manual_memcpy = "deny"
+manual_non_exhaustive = "deny"
+manual_ok_or = "deny"
+manual_range_contains = "deny"
+manual_retain = "deny"
+manual_strip = "deny"
+manual_try_fold = "deny"
+manual_unwrap_or = "deny"
+needless_borrow = "deny"
+needless_borrowed_reference = "deny"
+needless_collect = "deny"
+needless_late_init = "deny"
+needless_option_as_deref = "deny"
+needless_question_mark = "deny"
+needless_update = "deny"
+redundant_clone = "deny"
+redundant_closure = "deny"
+redundant_closure_for_method_calls = "deny"
+redundant_static_lifetimes = "deny"
+trivially_copy_pass_by_ref = "deny"
+uninlined_format_args = "deny"
+unnecessary_filter_map = "deny"
+unnecessary_lazy_evaluations = "deny"
+unnecessary_sort_by = "deny"
+unnecessary_to_owned = "deny"
+unwrap_used = "deny"
+
+[workspace.metadata.cargo-shear]
+ignored = ["cocode-utils-readiness"]
+
+[profile.release]
+lto = "fat"
+# Because we bundle some of these executables with the TypeScript CLI, we
+# remove everything to make the binary as small as possible.
+strip = "symbols"
+
+# See https://github.com/openai/codex/issues/1411 for details.
+codegen-units = 1
+
+[profile.ci-test]
+debug = 1         # Reduce debug symbol size
+inherits = "test"
+opt-level = 0

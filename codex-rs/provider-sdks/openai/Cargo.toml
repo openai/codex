@@ -1,0 +1,24 @@
+[package]
+name = "openai-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rust SDK for OpenAI Responses API"
+
+[dependencies]
+bytes = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+wiremock = { workspace = true }
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

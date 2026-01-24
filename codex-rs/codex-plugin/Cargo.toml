@@ -1,0 +1,44 @@
+[package]
+name = "codex-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Plugin system for Codex - compatible with Claude Code plugins (V2 schema)"
+
+[dependencies]
+# Internal
+codex-hooks = { workspace = true }
+codex-protocol = { workspace = true }
+
+# Serialization
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# Async
+tokio = { workspace = true, features = ["fs", "process", "sync"] }
+futures = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Utilities
+tracing = { workspace = true }
+dashmap = { workspace = true }
+dirs = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+walkdir = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
+semver = { workspace = true }
+serde_yaml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+serial_test = { workspace = true }
+
+[lints]
+workspace = true
