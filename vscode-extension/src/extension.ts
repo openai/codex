@@ -406,7 +406,14 @@ type SessionRuntime = {
   legacyWebSearchTargetByCallId: Map<string, string>;
   pendingApprovals: Map<
     string,
-    { title: string; detail: string; canAcceptForSession: boolean }
+    {
+      title: string;
+      detail: string;
+      canAcceptForSession: boolean;
+      method: string;
+      itemId: string;
+      reason: string | null;
+    }
   >;
   approvalResolvers: Map<
     string,
@@ -486,6 +493,9 @@ export function activate(context: vscode.ExtensionContext): void {
       title,
       detail,
       canAcceptForSession: true,
+      method: req.method,
+      itemId: req.params.itemId,
+      reason,
     });
     chatView?.refresh();
     void showCodexMineViewContainer();
@@ -718,7 +728,9 @@ export function activate(context: vscode.ExtensionContext): void {
             bm.threadRollback(session, { numTurns }),
             REWIND_STEP_TIMEOUT_MS,
           );
-          hydrateRuntimeFromThread(session.id, rolledBack.thread, { force: true });
+          hydrateRuntimeFromThread(session.id, rolledBack.thread, {
+            force: true,
+          });
 
           upsertBlock(session.id, {
             id: rewindBlockId,
@@ -772,7 +784,9 @@ export function activate(context: vscode.ExtensionContext): void {
     },
     async (session) => {
       if (!backendManager) throw new Error("backendManager is not initialized");
-      const res = await backendManager.loginAccount(session, { type: "chatgpt" });
+      const res = await backendManager.loginAccount(session, {
+        type: "chatgpt",
+      });
       if (res.type !== "chatgpt") {
         throw new Error(`Unexpected login response: ${JSON.stringify(res)}`);
       }
@@ -802,7 +816,8 @@ export function activate(context: vscode.ExtensionContext): void {
       const next = normalizeCliVariant(variant);
       if (next === "codex-mine") {
         const mineProbe = await probeCliVersion(mineCmd);
-        const mineDetected = mineProbe.ok && mineProbe.version.includes("-mine.");
+        const mineDetected =
+          mineProbe.ok && mineProbe.version.includes("-mine.");
         if (!mineDetected) {
           throw new Error(
             mineProbe.ok
@@ -1621,7 +1636,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!sessions) throw new Error("sessions is not initialized");
       const bm = backendManager;
 
-      const session = activeSessionId ? sessions.getById(activeSessionId) : null;
+      const session = activeSessionId
+        ? sessions.getById(activeSessionId)
+        : null;
       if (!session) {
         void vscode.window.showErrorMessage("No session selected.");
         return;
@@ -1667,7 +1684,8 @@ export function activate(context: vscode.ExtensionContext): void {
       const validateName = (name: string): string | null => {
         const trimmed = name.trim();
         if (trimmed.length === 0) return "Account name cannot be empty.";
-        if (trimmed.length > 64) return "Account name is too long (max 64 chars).";
+        if (trimmed.length > 64)
+          return "Account name is too long (max 64 chars).";
         if (!/^[A-Za-z0-9_-]+$/.test(trimmed))
           return "Invalid account name. Use only [A-Za-z0-9_-].";
         return null;
@@ -3024,7 +3042,8 @@ async function handleSlashCommand(
     const validateAccountName = (name: string): string | null => {
       const trimmedName = name.trim();
       if (!trimmedName) return "Missing account name.";
-      if (trimmedName.length > 64) return "Account name is too long (max 64 chars).";
+      if (trimmedName.length > 64)
+        return "Account name is too long (max 64 chars).";
       if (!/^[A-Za-z0-9_-]+$/.test(trimmedName))
         return "Invalid account name. Use only [A-Za-z0-9_-].";
       return null;
@@ -3037,7 +3056,8 @@ async function handleSlashCommand(
     const nameArg = args[1] ?? "";
     const hasExtra = args.length > 2;
 
-    const usage = "Usage: /account [<name>] | /account create <name> | /account logout";
+    const usage =
+      "Usage: /account [<name>] | /account create <name> | /account logout";
 
     if (!arg) {
       const accounts = await backendManager.listAccounts(session);
@@ -4399,7 +4419,9 @@ function applyServerNotification(
       };
       const err = p?.error ?? {};
       const rawMessage =
-        typeof err?.message === "string" ? err.message : String(err?.message ?? "");
+        typeof err?.message === "string"
+          ? err.message
+          : String(err?.message ?? "");
       const message = rawMessage.trim();
 
       const additionalDetails =
@@ -4412,7 +4434,7 @@ function applyServerNotification(
         typeof rawInfo === "string"
           ? rawInfo
           : rawInfo && typeof rawInfo === "object"
-            ? Object.keys(rawInfo as Record<string, unknown>)[0] ?? null
+            ? (Object.keys(rawInfo as Record<string, unknown>)[0] ?? null)
             : null;
       const infoValue =
         infoKey && rawInfo && typeof rawInfo === "object"
@@ -4420,7 +4442,8 @@ function applyServerNotification(
           : null;
       const httpStatusCode =
         infoValue && typeof infoValue === "object"
-          ? (infoValue as any).httpStatusCode ?? (infoValue as any).http_status_code
+          ? ((infoValue as any).httpStatusCode ??
+            (infoValue as any).http_status_code)
           : null;
 
       const willRetry = !!p?.willRetry;
@@ -4428,10 +4451,18 @@ function applyServerNotification(
       let title = "Error";
       if (infoKey === "rateLimited" || infoKey === "rate_limited") {
         title =
-          typeof httpStatusCode === "number" ? `Rate limited (HTTP ${httpStatusCode})` : "Rate limited";
-      } else if (infoKey === "usageLimitExceeded" || infoKey === "usage_limit_exceeded") {
+          typeof httpStatusCode === "number"
+            ? `Rate limited (HTTP ${httpStatusCode})`
+            : "Rate limited";
+      } else if (
+        infoKey === "usageLimitExceeded" ||
+        infoKey === "usage_limit_exceeded"
+      ) {
         title = "Usage limit exceeded";
-      } else if (infoKey === "contextWindowExceeded" || infoKey === "context_window_exceeded") {
+      } else if (
+        infoKey === "contextWindowExceeded" ||
+        infoKey === "context_window_exceeded"
+      ) {
         title = "Context window exceeded";
       }
 
@@ -4456,13 +4487,15 @@ function applyServerNotification(
     }
     case "item/started":
     case "item/completed": {
+      const item = (n as any).params.item as ThreadItem;
       applyItemLifecycle(
         rt,
         sessionId,
         String((n as any).params.threadId ?? ""),
-        (n as any).params.item as ThreadItem,
+        item,
         n.method === "item/completed",
       );
+      updatePendingApprovalsFromItem(rt, item);
       chatView?.refresh();
       return;
     }
@@ -5286,7 +5319,10 @@ function applyGlobalNotification(
       return;
     }
     case "account/updated": {
-      const p = (n as any).params as { authMode?: unknown; activeAccount?: unknown };
+      const p = (n as any).params as {
+        authMode?: unknown;
+        activeAccount?: unknown;
+      };
       const authMode = String(p?.authMode ?? "null");
       const activeAccount =
         typeof p?.activeAccount === "string" ? p.activeAccount : null;
@@ -5980,6 +6016,21 @@ function formatApprovalDetail(
   }
 
   return lines.join("\n");
+}
+
+function updatePendingApprovalsFromItem(
+  rt: SessionRuntime,
+  item: ThreadItem,
+): void {
+  if (rt.pendingApprovals.size === 0) return;
+  for (const approval of rt.pendingApprovals.values()) {
+    if (approval.itemId !== item.id) continue;
+    approval.detail = formatApprovalDetail(
+      approval.method,
+      item,
+      approval.reason,
+    );
+  }
 }
 
 const SESSIONS_KEY = "codexMine.sessions.v1";
