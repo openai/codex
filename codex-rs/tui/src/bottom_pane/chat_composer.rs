@@ -1727,7 +1727,7 @@ impl ChatComposer {
         if text.is_empty() && self.attached_images.is_empty() {
             return None;
         }
-        if !text.is_empty() {
+        if matches!(mode, PrepareMode::ForSubmit) && !text.is_empty() {
             self.history.record_local_submission(&text);
         }
         let pending_pastes = self.pending_pastes.clone();
