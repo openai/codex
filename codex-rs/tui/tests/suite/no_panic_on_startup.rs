@@ -62,10 +62,6 @@ async fn run_codex_cli(
         "CODEX_HOME".to_string(),
         codex_home.as_ref().display().to_string(),
     );
-    // Force the CLI into sandboxed mode so reqwest disables system proxy detection,
-    // which can panic under macOS CI/test environments (#8912).
-    env.insert("CODEX_SANDBOX".to_string(), "seatbelt".to_string());
-    env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
 
     let args = vec!["-c".to_string(), "analytics.enabled=false".to_string()];
     let spawned = codex_utils_pty::spawn_pty_process(
