@@ -29,8 +29,23 @@ jobs:
         with:
           node-version: 20
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.8.1
+          run_install: false
+
+      - name: Install dependencies
+        run: pnpm install --filter .
+
       - name: Lint OpenAPI definition
         run: npx --yes @redocly/cli@latest lint smallwallets-openapi.json
+
+      - name: Export Postman collection
+        run: pnpm run export:postman
+
+      - name: Check generated Postman collection is up to date
+        run: git diff --exit-code -- postman/SmallWallets.postman_collection.json
 
       - name: Check Postman collection is up to date
         run: python scripts/generate_postman_collection.py --check
