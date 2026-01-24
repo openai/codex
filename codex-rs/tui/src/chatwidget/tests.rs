@@ -329,6 +329,73 @@ async fn submission_preserves_text_elements_and_local_images() {
 }
 
 #[tokio::test]
+async fn submission_shows_status_indicator_before_turn_started() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    assert!(
+        !chat.bottom_pane.status_indicator_visible(),
+        "expected status indicator to start hidden"
+    );
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let _ = next_submit_op(&mut op_rx);
+
+    assert!(
+        chat.bottom_pane.status_indicator_visible(),
+        "expected status indicator to show while waiting for TurnStarted"
+    );
+    assert!(
+        !chat.bottom_pane.is_task_running(),
+        "expected pending submission not to mark task running"
+    );
+    assert_eq!(chat.current_status_header, "Working");
+
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("expected status widget");
+    assert!(
+        !status.interrupt_hint_visible(),
+        "expected interrupt hint to be hidden before TurnStarted"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+        }),
+    });
+
+    assert!(
+        chat.bottom_pane.is_task_running(),
+        "expected task running after TurnStarted"
+    );
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("expected status widget");
+    assert!(
+        status.interrupt_hint_visible(),
+        "expected interrupt hint to show once task is running"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    assert!(
+        !chat.bottom_pane.status_indicator_visible(),
+        "expected status indicator hidden after turn completes"
+    );
+}
+
+#[tokio::test]
 async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
