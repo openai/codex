@@ -65,6 +65,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -555,6 +556,23 @@ struct WindowsSandboxState {
     skip_world_writable_scan_once: bool,
 }
 
+fn normalize_harness_overrides_for_cwd(
+    mut overrides: ConfigOverrides,
+    base_cwd: &Path,
+) -> Result<ConfigOverrides> {
+    if overrides.additional_writable_roots.is_empty() {
+        return Ok(overrides);
+    }
+
+    let mut normalized = Vec::with_capacity(overrides.additional_writable_roots.len());
+    for root in overrides.additional_writable_roots.drain(..) {
+        let absolute = AbsolutePathBuf::resolve_path_against_base(root, base_cwd)?;
+        normalized.push(absolute.into_path_buf());
+    }
+    overrides.additional_writable_roots = normalized;
+    Ok(overrides)
+}
+
 impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
@@ -882,6 +900,8 @@ impl App {
         emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
         emit_project_config_warnings(&app_event_tx, &config);
 
+        let harness_overrides =
+            normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
         let thread_manager = Arc::new(ThreadManager::new(
             config.codex_home.clone(),
             auth_manager.clone(),
@@ -2344,6 +2364,25 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use tempfile::tempdir;
+
+    #[test]
+    fn normalize_harness_overrides_resolves_relative_add_dirs() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let base_cwd = temp_dir.path().join("base");
+        std::fs::create_dir_all(&base_cwd)?;
+
+        let overrides = ConfigOverrides {
+            additional_writable_roots: vec![PathBuf::from("rel")],
+            ..Default::default()
+        };
+        let normalized = normalize_harness_overrides_for_cwd(overrides, &base_cwd)?;
+
+        assert_eq!(
+            normalized.additional_writable_roots,
+            vec![base_cwd.join("rel")]
+        );
+        Ok(())
+    }
 
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
