@@ -21,7 +21,6 @@ pub struct Args {}
 pub struct NetworkProxyBuilder {
     state: Option<Arc<NetworkProxyState>>,
     http_addr: Option<SocketAddr>,
-    socks_addr: Option<SocketAddr>,
     admin_addr: Option<SocketAddr>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 }
@@ -34,11 +33,6 @@ impl NetworkProxyBuilder {
 
     pub fn http_addr(mut self, addr: SocketAddr) -> Self {
         self.http_addr = Some(addr);
-        self
-    }
-
-    pub fn socks_addr(mut self, addr: SocketAddr) -> Self {
-        self.socks_addr = Some(addr);
         self
     }
 
@@ -70,7 +64,7 @@ impl NetworkProxyBuilder {
         // Reapply bind clamping for caller overrides so unix-socket proxying stays loopback-only.
         let (http_addr, socks_addr, admin_addr) = config::clamp_bind_addrs(
             self.http_addr.unwrap_or(runtime.http_addr),
-            self.socks_addr.unwrap_or(runtime.socks_addr),
+            runtime.socks_addr,
             self.admin_addr.unwrap_or(runtime.admin_addr),
             &current_cfg.network_proxy,
         );
