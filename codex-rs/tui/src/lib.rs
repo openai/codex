@@ -585,40 +585,18 @@ async fn run_ratatui_app(
     };
 
     let current_cwd = config.cwd.clone();
-    let history_cwd_if_resume_or_fork = match &session_selection {
-        resume_picker::SessionSelection::Resume(path) => {
-            Some((read_session_cwd(path).await, CwdPromptAction::Resume))
-        }
-        resume_picker::SessionSelection::Fork(path) => {
-            Some((read_session_cwd(path).await, CwdPromptAction::Fork))
-        }
+    let allow_prompt = cli.cwd.is_none();
+    let action_and_path_if_resume_or_fork = match &session_selection {
+        resume_picker::SessionSelection::Resume(path) => Some((CwdPromptAction::Resume, path)),
+        resume_picker::SessionSelection::Fork(path) => Some((CwdPromptAction::Fork, path)),
         _ => None,
     };
-
-    let selected_cwd = match history_cwd_if_resume_or_fork.as_ref() {
-        Some((Some(history_cwd), prompt_action))
-            if cli.cwd.is_none() && should_prompt_for_cwd(&current_cwd, history_cwd) =>
-        {
-            Some(
-                cwd_prompt::run_cwd_selection_prompt(
-                    &mut tui,
-                    *prompt_action,
-                    &current_cwd,
-                    history_cwd,
-                )
-                .await?,
-            )
+    let fallback_cwd = match action_and_path_if_resume_or_fork {
+        Some((action, path)) => {
+            resolve_cwd_for_resume_or_fork(&mut tui, &current_cwd, path, action, allow_prompt)
+                .await?
         }
-        _ => None,
-    };
-
-    let fallback_cwd = match selected_cwd {
-        Some(CwdSelection::Current) => Some(current_cwd.clone()),
-        // None when no cwd prompt was shown (e.g. --cd provided, not resuming/forking,
-        // no cwd in rollout, or cwd already matches).
-        Some(CwdSelection::Session) | None => history_cwd_if_resume_or_fork
-            .as_ref()
-            .and_then(|(cwd, _)| cwd.clone()),
+        None => None,
     };
 
     let config = match &session_selection {
@@ -666,7 +644,7 @@ async fn run_ratatui_app(
     app_result
 }
 
-async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
+pub(crate) async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
     // Prefer the latest TurnContext cwd so resume/fork reflects the most recent
     // session directory (for the changed-cwd prompt). The alternative would be
     // mutating the SessionMeta line when the session cwd changes, but the rollout
@@ -706,7 +684,7 @@ async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
     None
 }
 
-fn should_prompt_for_cwd(current_cwd: &Path, session_cwd: &Path) -> bool {
+pub(crate) fn should_prompt_for_cwd(current_cwd: &Path, session_cwd: &Path) -> bool {
     match (
         path_utils::normalize_for_path_comparison(current_cwd),
         path_utils::normalize_for_path_comparison(session_cwd),
@@ -714,6 +692,27 @@ fn should_prompt_for_cwd(current_cwd: &Path, session_cwd: &Path) -> bool {
         (Ok(current), Ok(session)) => current != session,
         _ => current_cwd != session_cwd,
     }
+}
+
+pub(crate) async fn resolve_cwd_for_resume_or_fork(
+    tui: &mut Tui,
+    current_cwd: &Path,
+    path: &Path,
+    action: CwdPromptAction,
+    allow_prompt: bool,
+) -> color_eyre::Result<Option<PathBuf>> {
+    let Some(history_cwd) = read_session_cwd(path).await else {
+        return Ok(None);
+    };
+    if allow_prompt && should_prompt_for_cwd(current_cwd, &history_cwd) {
+        let selection =
+            cwd_prompt::run_cwd_selection_prompt(tui, action, current_cwd, &history_cwd).await?;
+        return Ok(Some(match selection {
+            CwdSelection::Current => current_cwd.to_path_buf(),
+            CwdSelection::Session => history_cwd,
+        }));
+    }
+    Ok(Some(history_cwd))
 }
 
 #[expect(

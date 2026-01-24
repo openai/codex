@@ -12,6 +12,7 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
+use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::external_editor;
@@ -1203,6 +1204,19 @@ impl App {
                 .await?
                 {
                     SessionSelection::Resume(path) => {
+                        let current_cwd = self.config.cwd.clone();
+                        let mut resume_config = self.config.clone();
+                        if let Some(resolved_cwd) = crate::resolve_cwd_for_resume_or_fork(
+                            tui,
+                            &current_cwd,
+                            &path,
+                            CwdPromptAction::Resume,
+                            true,
+                        )
+                        .await?
+                        {
+                            resume_config.cwd = resolved_cwd;
+                        }
                         let summary = session_summary(
                             self.chat_widget.token_usage(),
                             self.chat_widget.thread_id(),
@@ -1210,7 +1224,7 @@ impl App {
                         match self
                             .server
                             .resume_thread_from_rollout(
-                                self.config.clone(),
+                                resume_config,
                                 path.clone(),
                                 self.auth_manager.clone(),
                             )
