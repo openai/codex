@@ -7,6 +7,9 @@ use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::SelectionItem;
+use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::diff_render::DiffSummary;
@@ -28,11 +31,14 @@ use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use codex_ansi_escape::ansi_escape_line;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
+use codex_core::CodexAuth;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config_loader::ConfigLayerStackOrdering;
 #[cfg(target_os = "windows")]
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
@@ -47,10 +53,13 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
+use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
+use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::SessionConfiguredEvent;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -62,6 +71,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
@@ -70,11 +80,16 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 use tokio::select;
+use tokio::sync::Mutex;
 use tokio::sync::broadcast;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
+const THREAD_EVENT_CHANNEL_CAPACITY: usize = 1024;
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -159,10 +174,160 @@ fn emit_deprecation_notice(app_event_tx: &AppEventSender, notice: Option<Depreca
     )));
 }
 
+fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) {
+    let mut disabled_folders = Vec::new();
+
+    for layer in config
+        .config_layer_stack
+        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+    {
+        let ConfigLayerSource::Project { dot_codex_folder } = &layer.name else {
+            continue;
+        };
+        if layer.disabled_reason.is_none() {
+            continue;
+        }
+        disabled_folders.push((
+            dot_codex_folder.as_path().display().to_string(),
+            layer
+                .disabled_reason
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "Config folder disabled.".to_string()),
+        ));
+    }
+
+    if disabled_folders.is_empty() {
+        return;
+    }
+
+    let mut message = "The following config folders are disabled:\n".to_string();
+    for (index, (folder, reason)) in disabled_folders.iter().enumerate() {
+        let display_index = index + 1;
+        message.push_str(&format!("    {display_index}. {folder}\n"));
+        message.push_str(&format!("       {reason}\n"));
+    }
+
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        history_cell::new_warning_event(message),
+    )));
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
     usage_line: String,
     resume_command: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ThreadEventSnapshot {
+    session_configured: Option<Event>,
+    events: Vec<Event>,
+}
+
+#[derive(Debug)]
+struct ThreadEventStore {
+    session_configured: Option<Event>,
+    buffer: VecDeque<Event>,
+    user_message_ids: HashSet<String>,
+    capacity: usize,
+    active: bool,
+}
+
+impl ThreadEventStore {
+    fn new(capacity: usize) -> Self {
+        Self {
+            session_configured: None,
+            buffer: VecDeque::new(),
+            user_message_ids: HashSet::new(),
+            capacity,
+            active: false,
+        }
+    }
+
+    fn new_with_session_configured(capacity: usize, event: Event) -> Self {
+        let mut store = Self::new(capacity);
+        store.session_configured = Some(event);
+        store
+    }
+
+    fn push_event(&mut self, event: Event) {
+        match &event.msg {
+            EventMsg::SessionConfigured(_) => {
+                self.session_configured = Some(event);
+                return;
+            }
+            EventMsg::ItemCompleted(completed) => {
+                if let TurnItem::UserMessage(item) = &completed.item {
+                    if !event.id.is_empty() && self.user_message_ids.contains(&event.id) {
+                        return;
+                    }
+                    let legacy = Event {
+                        id: event.id,
+                        msg: item.as_legacy_event(),
+                    };
+                    self.push_legacy_event(legacy);
+                    return;
+                }
+            }
+            _ => {}
+        }
+
+        self.push_legacy_event(event);
+    }
+
+    fn push_legacy_event(&mut self, event: Event) {
+        if let EventMsg::UserMessage(_) = &event.msg
+            && !event.id.is_empty()
+            && !self.user_message_ids.insert(event.id.clone())
+        {
+            return;
+        }
+        self.buffer.push_back(event);
+        if self.buffer.len() > self.capacity
+            && let Some(removed) = self.buffer.pop_front()
+            && matches!(removed.msg, EventMsg::UserMessage(_))
+            && !removed.id.is_empty()
+        {
+            self.user_message_ids.remove(&removed.id);
+        }
+    }
+
+    fn snapshot(&self) -> ThreadEventSnapshot {
+        ThreadEventSnapshot {
+            session_configured: self.session_configured.clone(),
+            events: self.buffer.iter().cloned().collect(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ThreadEventChannel {
+    sender: mpsc::Sender<Event>,
+    receiver: Option<mpsc::Receiver<Event>>,
+    store: Arc<Mutex<ThreadEventStore>>,
+}
+
+impl ThreadEventChannel {
+    fn new(capacity: usize) -> Self {
+        let (sender, receiver) = mpsc::channel(capacity);
+        Self {
+            sender,
+            receiver: Some(receiver),
+            store: Arc::new(Mutex::new(ThreadEventStore::new(capacity))),
+        }
+    }
+
+    fn new_with_session_configured(capacity: usize, event: Event) -> Self {
+        let (sender, receiver) = mpsc::channel(capacity);
+        Self {
+            sender,
+            receiver: Some(receiver),
+            store: Arc::new(Mutex::new(ThreadEventStore::new_with_session_configured(
+                capacity, event,
+            ))),
+        }
+    }
 }
 
 fn should_show_model_migration_prompt(
@@ -326,6 +491,7 @@ async fn handle_model_migration_prompt_if_needed(
 
 pub(crate) struct App {
     pub(crate) server: Arc<ThreadManager>,
+    pub(crate) otel_manager: OtelManager,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     pub(crate) auth_manager: Arc<AuthManager>,
@@ -362,15 +528,21 @@ pub(crate) struct App {
     /// stopping a thread (e.g., before starting a new one).
     suppress_shutdown_complete: bool,
 
+    windows_sandbox: WindowsSandboxState,
+
+    thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
+    active_thread_id: Option<ThreadId>,
+    active_thread_rx: Option<mpsc::Receiver<Event>>,
+    primary_thread_id: Option<ThreadId>,
+    primary_session_configured: Option<SessionConfiguredEvent>,
+    pending_primary_events: VecDeque<Event>,
+}
+
+#[derive(Default)]
+struct WindowsSandboxState {
+    setup_started_at: Option<Instant>,
     // One-shot suppression of the next world-writable scan after user confirmation.
     skip_world_writable_scan_once: bool,
-
-    // TODO(jif) drop once new UX is here.
-    // Track external agent approvals spawned via AgentControl.
-    /// Map routed approval IDs to their originating external threads and original IDs.
-    external_approval_routes: HashMap<String, (ThreadId, String)>,
-    /// Buffered Codex events while external approvals are pending.
-    paused_codex_events: VecDeque<Event>,
 }
 
 impl App {
@@ -391,6 +563,7 @@ impl App {
             feedback: self.feedback.clone(),
             is_first_run: false,
             model: Some(self.chat_widget.current_model().to_string()),
+            otel_manager: self.otel_manager.clone(),
         }
     }
 
@@ -401,6 +574,248 @@ impl App {
             self.suppress_shutdown_complete = true;
             self.chat_widget.submit_op(Op::Shutdown);
             self.server.remove_thread(&thread_id).await;
+        }
+    }
+
+    fn ensure_thread_channel(&mut self, thread_id: ThreadId) -> &mut ThreadEventChannel {
+        self.thread_event_channels
+            .entry(thread_id)
+            .or_insert_with(|| ThreadEventChannel::new(THREAD_EVENT_CHANNEL_CAPACITY))
+    }
+
+    async fn set_thread_active(&mut self, thread_id: ThreadId, active: bool) {
+        if let Some(channel) = self.thread_event_channels.get_mut(&thread_id) {
+            let mut store = channel.store.lock().await;
+            store.active = active;
+        }
+    }
+
+    async fn activate_thread_channel(&mut self, thread_id: ThreadId) {
+        if self.active_thread_id.is_some() {
+            return;
+        }
+        self.set_thread_active(thread_id, true).await;
+        let receiver = if let Some(channel) = self.thread_event_channels.get_mut(&thread_id) {
+            channel.receiver.take()
+        } else {
+            None
+        };
+        self.active_thread_id = Some(thread_id);
+        self.active_thread_rx = receiver;
+    }
+
+    async fn store_active_thread_receiver(&mut self) {
+        let Some(active_id) = self.active_thread_id else {
+            return;
+        };
+        let Some(receiver) = self.active_thread_rx.take() else {
+            return;
+        };
+        if let Some(channel) = self.thread_event_channels.get_mut(&active_id) {
+            let mut store = channel.store.lock().await;
+            store.active = false;
+            channel.receiver = Some(receiver);
+        }
+    }
+
+    async fn activate_thread_for_replay(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Option<(mpsc::Receiver<Event>, ThreadEventSnapshot)> {
+        let channel = self.thread_event_channels.get_mut(&thread_id)?;
+        let receiver = channel.receiver.take()?;
+        let mut store = channel.store.lock().await;
+        store.active = true;
+        let snapshot = store.snapshot();
+        Some((receiver, snapshot))
+    }
+
+    async fn clear_active_thread(&mut self) {
+        if let Some(active_id) = self.active_thread_id.take() {
+            self.set_thread_active(active_id, false).await;
+        }
+        self.active_thread_rx = None;
+    }
+
+    async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
+        let (sender, store) = {
+            let channel = self.ensure_thread_channel(thread_id);
+            (channel.sender.clone(), Arc::clone(&channel.store))
+        };
+
+        let should_send = {
+            let mut guard = store.lock().await;
+            guard.push_event(event.clone());
+            guard.active
+        };
+
+        if should_send && let Err(err) = sender.send(event).await {
+            tracing::warn!("thread {thread_id} event channel closed: {err}");
+        }
+        Ok(())
+    }
+
+    async fn enqueue_primary_event(&mut self, event: Event) -> Result<()> {
+        if let Some(thread_id) = self.primary_thread_id {
+            return self.enqueue_thread_event(thread_id, event).await;
+        }
+
+        if let EventMsg::SessionConfigured(session) = &event.msg {
+            let thread_id = session.session_id;
+            self.primary_thread_id = Some(thread_id);
+            self.primary_session_configured = Some(session.clone());
+            self.ensure_thread_channel(thread_id);
+            self.activate_thread_channel(thread_id).await;
+
+            let pending = std::mem::take(&mut self.pending_primary_events);
+            for pending_event in pending {
+                self.enqueue_thread_event(thread_id, pending_event).await?;
+            }
+            self.enqueue_thread_event(thread_id, event).await?;
+        } else {
+            self.pending_primary_events.push_back(event);
+        }
+        Ok(())
+    }
+
+    fn open_agent_picker(&mut self) {
+        if self.thread_event_channels.is_empty() {
+            self.chat_widget
+                .add_info_message("No agents available yet.".to_string(), None);
+            return;
+        }
+
+        let mut thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
+        thread_ids.sort_by_key(ToString::to_string);
+
+        let mut initial_selected_idx = None;
+        let items: Vec<SelectionItem> = thread_ids
+            .iter()
+            .enumerate()
+            .map(|(idx, thread_id)| {
+                if self.active_thread_id == Some(*thread_id) {
+                    initial_selected_idx = Some(idx);
+                }
+                let id = *thread_id;
+                SelectionItem {
+                    name: thread_id.to_string(),
+                    is_current: self.active_thread_id == Some(*thread_id),
+                    actions: vec![Box::new(move |tx| {
+                        tx.send(AppEvent::SelectAgentThread(id));
+                    })],
+                    dismiss_on_select: true,
+                    search_value: Some(thread_id.to_string()),
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        self.chat_widget.show_selection_view(SelectionViewParams {
+            title: Some("Agents".to_string()),
+            subtitle: Some("Select a thread to focus".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx,
+            ..Default::default()
+        });
+    }
+
+    async fn select_agent_thread(&mut self, tui: &mut tui::Tui, thread_id: ThreadId) -> Result<()> {
+        if self.active_thread_id == Some(thread_id) {
+            return Ok(());
+        }
+
+        let thread = match self.server.get_thread(thread_id).await {
+            Ok(thread) => thread,
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to attach to agent thread {thread_id}: {err}"
+                ));
+                return Ok(());
+            }
+        };
+
+        let previous_thread_id = self.active_thread_id;
+        self.store_active_thread_receiver().await;
+        self.active_thread_id = None;
+        let Some((receiver, snapshot)) = self.activate_thread_for_replay(thread_id).await else {
+            self.chat_widget
+                .add_error_message(format!("Agent thread {thread_id} is already active."));
+            if let Some(previous_thread_id) = previous_thread_id {
+                self.activate_thread_channel(previous_thread_id).await;
+            }
+            return Ok(());
+        };
+
+        self.active_thread_id = Some(thread_id);
+        self.active_thread_rx = Some(receiver);
+
+        let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+        let codex_op_tx = crate::chatwidget::spawn_op_forwarder(thread);
+        self.chat_widget = ChatWidget::new_with_op_sender(init, codex_op_tx);
+
+        self.reset_for_thread_switch(tui)?;
+        self.replay_thread_snapshot(snapshot);
+        self.drain_active_thread_events(tui).await?;
+
+        Ok(())
+    }
+
+    fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        self.overlay = None;
+        self.transcript_cells.clear();
+        self.deferred_history_lines.clear();
+        self.has_emitted_history_lines = false;
+        self.backtrack = BacktrackState::default();
+        self.backtrack_render_pending = false;
+        tui.terminal.clear_scrollback()?;
+        tui.terminal.clear()?;
+        Ok(())
+    }
+
+    fn reset_thread_event_state(&mut self) {
+        self.thread_event_channels.clear();
+        self.active_thread_id = None;
+        self.active_thread_rx = None;
+        self.primary_thread_id = None;
+        self.pending_primary_events.clear();
+    }
+
+    async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        let Some(mut rx) = self.active_thread_rx.take() else {
+            return Ok(());
+        };
+
+        let mut disconnected = false;
+        loop {
+            match rx.try_recv() {
+                Ok(event) => self.handle_codex_event_now(event),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+
+        if !disconnected {
+            self.active_thread_rx = Some(rx);
+        } else {
+            self.clear_active_thread().await;
+        }
+
+        if self.backtrack_render_pending {
+            tui.frame_requester().schedule_frame();
+        }
+        Ok(())
+    }
+
+    fn replay_thread_snapshot(&mut self, snapshot: ThreadEventSnapshot) {
+        if let Some(event) = snapshot.session_configured {
+            self.handle_codex_event_replay(event);
+        }
+        for event in snapshot.events {
+            self.handle_codex_event_replay(event);
         }
     }
 
@@ -421,6 +836,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
+        emit_project_config_warnings(&app_event_tx, &config);
 
         let thread_manager = Arc::new(ThreadManager::new(
             config.codex_home.clone(),
@@ -450,6 +866,24 @@ impl App {
             model = updated_model;
         }
 
+        let auth = auth_manager.auth().await;
+        let auth_ref = auth.as_ref();
+        let model_info = thread_manager
+            .get_models_manager()
+            .get_model_info(model.as_str(), &config)
+            .await;
+        let otel_manager = OtelManager::new(
+            ThreadId::new(),
+            model.as_str(),
+            model_info.slug.as_str(),
+            auth_ref.and_then(CodexAuth::get_account_id),
+            auth_ref.and_then(CodexAuth::get_account_email),
+            auth_ref.map(|auth| auth.mode),
+            config.otel.log_user_prompt,
+            codex_core::terminal::user_agent(),
+            SessionSource::Cli,
+        );
+
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let mut chat_widget = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
@@ -469,6 +903,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     model: Some(model.clone()),
+                    otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new(init, thread_manager.clone())
             }
@@ -496,6 +931,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     model: config.model.clone(),
+                    otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, resumed.thread, resumed.session_configured)
             }
@@ -523,6 +959,7 @@ impl App {
                     feedback: feedback.clone(),
                     is_first_run,
                     model: config.model.clone(),
+                    otel_manager: otel_manager.clone(),
                 };
                 ChatWidget::new_from_existing(init, forked.thread, forked.session_configured)
             }
@@ -536,6 +973,7 @@ impl App {
 
         let mut app = Self {
             server: thread_manager.clone(),
+            otel_manager: otel_manager.clone(),
             app_event_tx,
             chat_widget,
             auth_manager: auth_manager.clone(),
@@ -553,9 +991,13 @@ impl App {
             feedback: feedback.clone(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
-            skip_world_writable_scan_once: false,
-            external_approval_routes: HashMap::new(),
-            paused_codex_events: VecDeque::new(),
+            windows_sandbox: WindowsSandboxState::default(),
+            thread_event_channels: HashMap::new(),
+            active_thread_id: None,
+            active_thread_rx: None,
+            primary_thread_id: None,
+            primary_session_configured: None,
+            pending_primary_events: VecDeque::new(),
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -615,6 +1057,20 @@ impl App {
             let control = select! {
                 Some(event) = app_event_rx.recv() => {
                     app.handle_event(tui, event).await?
+                }
+                active = async {
+                    if let Some(rx) = app.active_thread_rx.as_mut() {
+                        rx.recv().await
+                    } else {
+                        None
+                    }
+                }, if app.active_thread_rx.is_some() => {
+                    if let Some(event) = active {
+                        app.handle_active_thread_event(tui, event)?;
+                    } else {
+                        app.clear_active_thread().await;
+                    }
+                    AppRunControl::Continue
                 }
                 Some(event) = tui_events.next() => {
                     app.handle_tui_event(tui, event).await?
@@ -723,8 +1179,10 @@ impl App {
                     feedback: self.feedback.clone(),
                     is_first_run: false,
                     model: Some(model),
+                    otel_manager: self.otel_manager.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
+                self.reset_thread_event_state();
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
@@ -769,6 +1227,7 @@ impl App {
                                     resumed.thread,
                                     resumed.session_configured,
                                 );
+                                self.reset_thread_event_state();
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
@@ -818,6 +1277,7 @@ impl App {
                                 forked.thread,
                                 forked.session_configured,
                             );
+                            self.reset_thread_event_state();
                             if let Some(summary) = summary {
                                 let mut lines: Vec<Line<'static>> =
                                     vec![summary.usage_line.clone().into()];
@@ -894,18 +1354,7 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::CodexEvent(event) => {
-                if !self.external_approval_routes.is_empty() {
-                    // Store the events while the approval is pending.
-                    self.paused_codex_events.push_back(event);
-                    return Ok(AppRunControl::Continue);
-                }
-                self.handle_codex_event_now(event);
-                if self.backtrack_render_pending {
-                    tui.frame_requester().schedule_frame();
-                }
-            }
-            AppEvent::ExternalApprovalRequest { thread_id, event } => {
-                self.handle_external_approval_request(thread_id, event);
+                self.enqueue_primary_event(event).await?;
             }
             AppEvent::Exit(mode) => match mode {
                 ExitMode::ShutdownFirst => self.chat_widget.submit_op(Op::Shutdown),
@@ -916,72 +1365,9 @@ impl App {
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
-            AppEvent::CodexOp(op) => match op {
-                // Catch potential approvals coming from an external thread and treat them
-                // directly. This support both command and patch approval. In such case
-                // the approval get transferred to the corresponding thread and the external
-                // approval map (`external_approval_routes`) is updated.
-                Op::ExecApproval { id, decision } => {
-                    if let Some((thread_id, original_id)) =
-                        self.external_approval_routes.remove(&id)
-                    {
-                        // Approval of a sub-agent.
-                        self.forward_external_op(
-                            thread_id,
-                            Op::ExecApproval {
-                                id: original_id,
-                                decision,
-                            },
-                        )
-                        .await;
-                        self.finish_external_approval();
-                    } else {
-                        // This is an approval but not external.
-                        self.chat_widget
-                            .submit_op(Op::ExecApproval { id, decision });
-                    }
-                }
-                Op::PatchApproval { id, decision } => {
-                    if let Some((thread_id, original_id)) =
-                        self.external_approval_routes.remove(&id)
-                    {
-                        // Approval of a sub-agent.
-                        self.forward_external_op(
-                            thread_id,
-                            Op::PatchApproval {
-                                id: original_id,
-                                decision,
-                            },
-                        )
-                        .await;
-                        self.finish_external_approval();
-                    } else {
-                        // This is an approval but not external.
-                        self.chat_widget
-                            .submit_op(Op::PatchApproval { id, decision });
-                    }
-                }
-                Op::UserInputAnswer { id, response } => {
-                    if let Some((thread_id, original_id)) =
-                        self.external_approval_routes.remove(&id)
-                    {
-                        self.forward_external_op(
-                            thread_id,
-                            Op::UserInputAnswer {
-                                id: original_id,
-                                response,
-                            },
-                        )
-                        .await;
-                        self.finish_external_approval();
-                    } else {
-                        self.chat_widget
-                            .submit_op(Op::UserInputAnswer { id, response });
-                    }
-                }
-                // Standard path where this is not an external approval response.
-                _ => self.chat_widget.submit_op(op),
-            },
+            AppEvent::CodexOp(op) => {
+                self.chat_widget.submit_op(op);
+            }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();
@@ -1026,8 +1412,12 @@ impl App {
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
             }
-            AppEvent::OpenFullAccessConfirmation { preset } => {
-                self.chat_widget.open_full_access_confirmation(preset);
+            AppEvent::OpenFullAccessConfirmation {
+                preset,
+                return_to_permissions,
+            } => {
+                self.chat_widget
+                    .open_full_access_confirmation(preset, return_to_permissions);
             }
             AppEvent::OpenWorldWritableWarningConfirmation {
                 preset,
@@ -1060,7 +1450,16 @@ impl App {
                 self.chat_widget.open_windows_sandbox_enable_prompt(preset);
             }
             AppEvent::OpenWindowsSandboxFallbackPrompt { preset, reason } => {
+                self.otel_manager
+                    .counter("codex.windows_sandbox.fallback_prompt_shown", 1, &[]);
                 self.chat_widget.clear_windows_sandbox_setup_status();
+                if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
+                    self.otel_manager.record_duration(
+                        "codex.windows_sandbox.elevated_setup_duration_ms",
+                        started_at.elapsed(),
+                        &[("result", "failure")],
+                    );
+                }
                 self.chat_widget
                     .open_windows_sandbox_fallback_prompt(preset, reason);
             }
@@ -1087,6 +1486,8 @@ impl App {
                     }
 
                     self.chat_widget.show_windows_sandbox_setup_status();
+                    self.windows_sandbox.setup_started_at = Some(Instant::now());
+                    let otel_manager = self.otel_manager.clone();
                     tokio::task::spawn_blocking(move || {
                         let result = codex_core::windows_sandbox::run_elevated_setup(
                             &policy,
@@ -1096,11 +1497,23 @@ impl App {
                             codex_home.as_path(),
                         );
                         let event = match result {
-                            Ok(()) => AppEvent::EnableWindowsSandboxForAgentMode {
-                                preset: preset.clone(),
-                                mode: WindowsSandboxEnableMode::Elevated,
-                            },
+                            Ok(()) => {
+                                otel_manager.counter(
+                                    "codex.windows_sandbox.elevated_setup_success",
+                                    1,
+                                    &[],
+                                );
+                                AppEvent::EnableWindowsSandboxForAgentMode {
+                                    preset: preset.clone(),
+                                    mode: WindowsSandboxEnableMode::Elevated,
+                                }
+                            }
                             Err(err) => {
+                                otel_manager.counter(
+                                    "codex.windows_sandbox.elevated_setup_failure",
+                                    1,
+                                    &[],
+                                );
                                 tracing::error!(
                                     error = %err,
                                     "failed to run elevated Windows sandbox setup"
@@ -1123,6 +1536,13 @@ impl App {
                 #[cfg(target_os = "windows")]
                 {
                     self.chat_widget.clear_windows_sandbox_setup_status();
+                    if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
+                        self.otel_manager.record_duration(
+                            "codex.windows_sandbox.elevated_setup_duration_ms",
+                            started_at.elapsed(),
+                            &[("result", "success")],
+                        );
+                    }
                     let profile = self.active_profile.as_deref();
                     let feature_key = Feature::WindowsSandbox.key();
                     let elevated_key = Feature::WindowsSandboxElevated.key();
@@ -1166,6 +1586,7 @@ impl App {
                                         effort: None,
                                         summary: None,
                                         collaboration_mode: None,
+                                        personality: None,
                                     },
                                 ));
                                 self.app_event_tx
@@ -1272,8 +1693,8 @@ impl App {
                 #[cfg(target_os = "windows")]
                 {
                     // One-shot suppression if the user just confirmed continue.
-                    if self.skip_world_writable_scan_once {
-                        self.skip_world_writable_scan_once = false;
+                    if self.windows_sandbox.skip_world_writable_scan_once {
+                        self.windows_sandbox.skip_world_writable_scan_once = false;
                         return Ok(AppRunControl::Continue);
                     }
 
@@ -1334,7 +1755,7 @@ impl App {
                 }
             }
             AppEvent::SkipNextWorldWritableScan => {
-                self.skip_world_writable_scan_once = true;
+                self.windows_sandbox.skip_world_writable_scan_once = true;
             }
             AppEvent::UpdateFullAccessWarningAcknowledged(ack) => {
                 self.chat_widget.set_full_access_warning_acknowledged(ack);
@@ -1412,6 +1833,42 @@ impl App {
             AppEvent::OpenApprovalsPopup => {
                 self.chat_widget.open_approvals_popup();
             }
+            AppEvent::OpenAgentPicker => {
+                self.open_agent_picker();
+            }
+            AppEvent::SelectAgentThread(thread_id) => {
+                self.select_agent_thread(tui, thread_id).await?;
+            }
+            AppEvent::OpenSkillsList => {
+                self.chat_widget.open_skills_list();
+            }
+            AppEvent::OpenManageSkillsPopup => {
+                self.chat_widget.open_manage_skills_popup();
+            }
+            AppEvent::SetSkillEnabled { path, enabled } => {
+                let edits = [ConfigEdit::SetSkillConfig {
+                    path: path.clone(),
+                    enabled,
+                }];
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits(edits)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        self.chat_widget.update_skill_enabled(path.clone(), enabled);
+                    }
+                    Err(err) => {
+                        let path_display = path.display();
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to update skill config for {path_display}: {err}"
+                        ));
+                    }
+                }
+            }
+            AppEvent::OpenPermissionsPopup => {
+                self.chat_widget.open_permissions_popup();
+            }
             AppEvent::OpenReviewBranchPicker(cwd) => {
                 self.chat_widget.show_review_branch_picker(&cwd).await;
             }
@@ -1420,6 +1877,16 @@ impl App {
             }
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
+            }
+            AppEvent::SubmitUserMessageWithMode {
+                text,
+                collaboration_mode,
+            } => {
+                self.chat_widget
+                    .submit_user_message_with_mode(text, collaboration_mode);
+            }
+            AppEvent::ManageSkillsClosed => {
+                self.chat_widget.handle_manage_skills_closed();
             }
             AppEvent::FullScreenApprovalRequest(request) => match request {
                 ApprovalRequest::ApplyPatch { cwd, changes, .. } => {
@@ -1475,56 +1942,23 @@ impl App {
         self.chat_widget.handle_codex_event(event);
     }
 
-    /// Routes external approval request events through the chat widget by
-    /// rewriting the event id to include the originating thread.
-    ///
-    /// `thread_id` is the external thread that issued the approval request.
-    /// `event` is the approval request event whose id is rewritten so replies
-    /// can be routed back to the correct thread.
-    fn handle_external_approval_request(&mut self, thread_id: ThreadId, mut event: Event) {
-        match &mut event.msg {
-            EventMsg::RequestUserInput(ev) => {
-                let original_id = ev.turn_id.clone();
-                let routing_id = format!("{thread_id}:{original_id}");
-                self.external_approval_routes
-                    .insert(routing_id.clone(), (thread_id, original_id));
-                ev.turn_id = routing_id.clone();
-                event.id = routing_id;
-            }
-            EventMsg::ExecApprovalRequest(_) | EventMsg::ApplyPatchApprovalRequest(_) => {
-                let original_id = event.id.clone();
-                let routing_id = format!("{thread_id}:{original_id}");
-                self.external_approval_routes
-                    .insert(routing_id.clone(), (thread_id, original_id));
-                event.id = routing_id;
-            }
-            _ => return,
-        }
-        self.chat_widget.handle_codex_event(event);
+    fn handle_codex_event_replay(&mut self, event: Event) {
+        self.handle_backtrack_event(&event.msg);
+        self.chat_widget.handle_codex_event_replay(event);
     }
 
-    async fn forward_external_op(&self, thread_id: ThreadId, op: Op) {
-        let thread = match self.server.get_thread(thread_id).await {
-            Ok(thread) => thread,
-            Err(err) => {
-                tracing::warn!("failed to find thread {thread_id} for approval response: {err}");
-                return;
-            }
-        };
-        if let Err(err) = thread.submit(op).await {
-            tracing::warn!("failed to submit approval response to thread {thread_id}: {err}");
+    fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+        self.handle_codex_event_now(event);
+        if self.backtrack_render_pending {
+            tui.frame_requester().schedule_frame();
         }
-    }
-
-    fn finish_external_approval(&mut self) {
-        if self.external_approval_routes.is_empty() {
-            while let Some(event) = self.paused_codex_events.pop_front() {
-                self.handle_codex_event_now(event);
-            }
-        }
+        Ok(())
     }
 
     async fn handle_thread_created(&mut self, thread_id: ThreadId) -> Result<()> {
+        if self.thread_event_channels.contains_key(&thread_id) {
+            return Ok(());
+        }
         let thread = match self.server.get_thread(thread_id).await {
             Ok(thread) => thread,
             Err(err) => {
@@ -1532,7 +1966,15 @@ impl App {
                 return Ok(());
             }
         };
-        let app_event_tx = self.app_event_tx.clone();
+        let event = Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(self.session_configured_for_thread(thread_id)),
+        };
+        let channel =
+            ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
+        let sender = channel.sender.clone();
+        let store = Arc::clone(&channel.store);
+        self.thread_event_channels.insert(thread_id, channel);
         tokio::spawn(async move {
             loop {
                 let event = match thread.next_event().await {
@@ -1542,17 +1984,45 @@ impl App {
                         break;
                     }
                 };
-                match event.msg {
-                    EventMsg::ExecApprovalRequest(_)
-                    | EventMsg::ApplyPatchApprovalRequest(_)
-                    | EventMsg::RequestUserInput(_) => {
-                        app_event_tx.send(AppEvent::ExternalApprovalRequest { thread_id, event });
-                    }
-                    _ => {}
+                let should_send = {
+                    let mut guard = store.lock().await;
+                    guard.push_event(event.clone());
+                    guard.active
+                };
+                if should_send && let Err(err) = sender.send(event).await {
+                    tracing::debug!("external thread {thread_id} channel closed: {err}");
+                    break;
                 }
             }
         });
         Ok(())
+    }
+
+    fn session_configured_for_thread(&self, thread_id: ThreadId) -> SessionConfiguredEvent {
+        let mut session_configured =
+            self.primary_session_configured
+                .clone()
+                .unwrap_or_else(|| SessionConfiguredEvent {
+                    session_id: thread_id,
+                    forked_from_id: None,
+                    model: self.chat_widget.current_model().to_string(),
+                    model_provider_id: self.config.model_provider_id.clone(),
+                    approval_policy: *self.config.approval_policy.get(),
+                    sandbox_policy: self.config.sandbox_policy.get().clone(),
+                    cwd: self.config.cwd.clone(),
+                    reasoning_effort: None,
+                    history_log_id: 0,
+                    history_entry_count: 0,
+                    initial_messages: None,
+                    rollout_path: PathBuf::new(),
+                });
+        session_configured.session_id = thread_id;
+        session_configured.forked_from_id = None;
+        session_configured.history_log_id = 0;
+        session_configured.history_entry_count = 0;
+        session_configured.initial_messages = None;
+        session_configured.rollout_path = PathBuf::new();
+        session_configured
     }
 
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
@@ -1766,12 +2236,16 @@ mod tests {
     use codex_core::CodexAuth;
     use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
+    use codex_core::models_manager::manager::ModelsManager;
     use codex_core::protocol::AskForApproval;
     use codex_core::protocol::Event;
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SandboxPolicy;
     use codex_core::protocol::SessionConfiguredEvent;
+    use codex_core::protocol::SessionSource;
+    use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
+    use codex_protocol::user_input::TextElement;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
@@ -1790,9 +2264,12 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let otel_manager = test_otel_manager(&config, model.as_str());
 
         App {
             server,
+            otel_manager,
             app_event_tx,
             chat_widget,
             auth_manager,
@@ -1810,9 +2287,13 @@ mod tests {
             feedback: codex_feedback::CodexFeedback::new(),
             pending_update_action: None,
             suppress_shutdown_complete: false,
-            skip_world_writable_scan_once: false,
-            external_approval_routes: HashMap::new(),
-            paused_codex_events: VecDeque::new(),
+            windows_sandbox: WindowsSandboxState::default(),
+            thread_event_channels: HashMap::new(),
+            active_thread_id: None,
+            active_thread_rx: None,
+            primary_thread_id: None,
+            primary_session_configured: None,
+            pending_primary_events: VecDeque::new(),
         }
     }
 
@@ -1830,10 +2311,13 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let model = ModelsManager::get_model_offline(config.model.as_deref());
+        let otel_manager = test_otel_manager(&config, model.as_str());
 
         (
             App {
                 server,
+                otel_manager,
                 app_event_tx,
                 chat_widget,
                 auth_manager,
@@ -1851,12 +2335,31 @@ mod tests {
                 feedback: codex_feedback::CodexFeedback::new(),
                 pending_update_action: None,
                 suppress_shutdown_complete: false,
-                skip_world_writable_scan_once: false,
-                external_approval_routes: HashMap::new(),
-                paused_codex_events: VecDeque::new(),
+                windows_sandbox: WindowsSandboxState::default(),
+                thread_event_channels: HashMap::new(),
+                active_thread_id: None,
+                active_thread_rx: None,
+                primary_thread_id: None,
+                primary_session_configured: None,
+                pending_primary_events: VecDeque::new(),
             },
             rx,
             op_rx,
+        )
+    }
+
+    fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
+        let model_info = ModelsManager::construct_model_info_offline(model, config);
+        OtelManager::new(
+            ThreadId::new(),
+            model,
+            model_info.slug.as_str(),
+            None,
+            None,
+            None,
+            false,
+            "test".to_string(),
+            SessionSource::Cli,
         )
     }
 
@@ -2043,11 +2546,14 @@ mod tests {
     async fn backtrack_selection_with_duplicate_history_targets_unique_turn() {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
 
-        let user_cell = |text: &str| -> Arc<dyn HistoryCell> {
+        let user_cell = |text: &str,
+                         text_elements: Vec<TextElement>,
+                         local_image_paths: Vec<PathBuf>|
+         -> Arc<dyn HistoryCell> {
             Arc::new(UserHistoryCell {
                 message: text.to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
+                text_elements,
+                local_image_paths,
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
@@ -2077,26 +2583,31 @@ mod tests {
                 app.chat_widget.current_model(),
                 event,
                 is_first,
-                app.chat_widget
-                    .config_ref()
-                    .features
-                    .enabled(codex_core::features::Feature::CollaborationModes),
-                app.chat_widget.stored_collaboration_mode().clone(),
             )) as Arc<dyn HistoryCell>
         };
+
+        let placeholder = "[Image #1]";
+        let edited_text = format!("follow-up (edited) {placeholder}");
+        let edited_range = edited_text.len().saturating_sub(placeholder.len())..edited_text.len();
+        let edited_text_elements = vec![TextElement::new(edited_range.into(), None)];
+        let edited_local_image_paths = vec![PathBuf::from("/tmp/fake-image.png")];
 
         // Simulate a transcript with duplicated history (e.g., from prior backtracks)
         // and an edited turn appended after a session header boundary.
         app.transcript_cells = vec![
             make_header(true),
-            user_cell("first question"),
+            user_cell("first question", Vec::new(), Vec::new()),
             agent_cell("answer first"),
-            user_cell("follow-up"),
+            user_cell("follow-up", Vec::new(), Vec::new()),
             agent_cell("answer follow-up"),
             make_header(false),
-            user_cell("first question"),
+            user_cell("first question", Vec::new(), Vec::new()),
             agent_cell("answer first"),
-            user_cell("follow-up (edited)"),
+            user_cell(
+                &edited_text,
+                edited_text_elements.clone(),
+                edited_local_image_paths.clone(),
+            ),
             agent_cell("answer edited"),
         ];
 
@@ -2129,7 +2640,9 @@ mod tests {
             .confirm_backtrack_from_main()
             .expect("backtrack selection");
         assert_eq!(selection.nth_user_message, 1);
-        assert_eq!(selection.prefill, "follow-up (edited)");
+        assert_eq!(selection.prefill, edited_text);
+        assert_eq!(selection.text_elements, edited_text_elements);
+        assert_eq!(selection.local_image_paths, edited_local_image_paths);
 
         app.apply_backtrack_rollback(selection);
 

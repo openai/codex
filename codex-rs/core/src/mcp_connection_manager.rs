@@ -153,6 +153,8 @@ pub(crate) struct ToolInfo {
     pub(crate) server_name: String,
     pub(crate) tool_name: String,
     pub(crate) tool: Tool,
+    pub(crate) connector_id: Option<String>,
+    pub(crate) connector_name: Option<String>,
 }
 
 type ResponderMap = HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>;
@@ -899,14 +901,16 @@ async fn list_tools_for_client(
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
 ) -> Result<Vec<ToolInfo>> {
-    let resp = client.list_tools(None, timeout).await?;
+    let resp = client.list_tools_with_connector_ids(None, timeout).await?;
     Ok(resp
         .tools
         .into_iter()
         .map(|tool| ToolInfo {
             server_name: server_name.to_owned(),
-            tool_name: tool.name.clone(),
-            tool,
+            tool_name: tool.tool.name.clone(),
+            tool: tool.tool,
+            connector_id: tool.connector_id,
+            connector_name: tool.connector_name,
         })
         .collect())
 }
@@ -1004,6 +1008,8 @@ mod tests {
                 output_schema: None,
                 title: None,
             },
+            connector_id: None,
+            connector_name: None,
         }
     }
 

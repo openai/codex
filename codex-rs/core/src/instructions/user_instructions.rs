@@ -38,6 +38,7 @@ impl From<UserInstructions> for ResponseItem {
                     contents = ui.text
                 ),
             }],
+            end_turn: None,
         }
     }
 }
@@ -71,6 +72,7 @@ impl From<SkillInstructions> for ResponseItem {
                     si.name, si.path, si.contents
                 ),
             }],
+            end_turn: None,
         }
     }
 }

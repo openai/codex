@@ -48,6 +48,7 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::RateLimitWindow;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
+use codex_core::protocol::SessionSource;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TerminalInteractionEvent;
 use codex_core::protocol::TokenCountEvent;
@@ -59,9 +60,12 @@ use codex_core::protocol::UndoCompletedEvent;
 use codex_core::protocol::UndoStartedEvent;
 use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
+use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::parse_command::ParsedCommand;
@@ -700,6 +704,7 @@ async fn helpers_are_available_and_do_not_panic() {
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config().await;
     let resolved_model = ModelsManager::get_model_offline(cfg.model.as_deref());
+    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
     let thread_manager = Arc::new(ThreadManager::with_models_provider(
         CodexAuth::from_api_key("test"),
         cfg.model_provider.clone(),
@@ -716,10 +721,26 @@ async fn helpers_are_available_and_do_not_panic() {
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         model: Some(resolved_model),
+        otel_manager,
     };
     let mut w = ChatWidget::new(init, thread_manager);
     // Basic construction sanity.
     let _ = &mut w;
+}
+
+fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
+    let model_info = ModelsManager::construct_model_info_offline(model, config);
+    OtelManager::new(
+        ThreadId::new(),
+        model,
+        model_info.slug.as_str(),
+        None,
+        None,
+        None,
+        false,
+        "test".to_string(),
+        SessionSource::Cli,
+    )
 }
 
 // --- Helpers for tests that need direct construction and event draining ---
@@ -740,6 +761,7 @@ async fn make_chatwidget_manual(
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
+    let otel_manager = test_otel_manager(&cfg, resolved_model.as_str());
     let mut bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
         frame_requester: FrameRequester::test_dummy(),
@@ -759,18 +781,24 @@ async fn make_chatwidget_manual(
     let reasoning_effort = None;
     let stored_collaboration_mode = if collaboration_modes_enabled {
         collaboration_modes::default_mode(models_manager.as_ref()).unwrap_or_else(|| {
-            CollaborationMode::Custom(Settings {
+            CollaborationMode {
+                mode: ModeKind::Custom,
+                settings: Settings {
+                    model: resolved_model.clone(),
+                    reasoning_effort,
+                    developer_instructions: None,
+                },
+            }
+        })
+    } else {
+        CollaborationMode {
+            mode: ModeKind::Custom,
+            settings: Settings {
                 model: resolved_model.clone(),
                 reasoning_effort,
                 developer_instructions: None,
-            })
-        })
-    } else {
-        CollaborationMode::Custom(Settings {
-            model: resolved_model.clone(),
-            reasoning_effort,
-            developer_instructions: None,
-        })
+            },
+        }
     };
     let widget = ChatWidget {
         app_event_tx,
@@ -782,6 +810,7 @@ async fn make_chatwidget_manual(
         stored_collaboration_mode,
         auth_manager,
         models_manager,
+        otel_manager,
         session_header: SessionHeader::new(resolved_model),
         initial_user_message: None,
         token_info: None,
@@ -793,6 +822,8 @@ async fn make_chatwidget_manual(
         stream_controller: None,
         running_commands: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
+        skills_all: Vec::new(),
+        skills_initial_state: None,
         last_unified_wait: None,
         unified_exec_wait_streak: None,
         task_complete_pending: false,
@@ -817,6 +848,8 @@ async fn make_chatwidget_manual(
         pre_review_token_info: None,
         needs_final_message_separator: false,
         had_work_activity: false,
+        saw_plan_update_this_turn: false,
+        last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
@@ -845,6 +878,16 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
     ));
+}
+
+#[tokio::test]
+async fn worked_elapsed_from_resets_when_timer_restarts() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    assert_eq!(chat.worked_elapsed_from(5), 5);
+    assert_eq!(chat.worked_elapsed_from(9), 4);
+    // Simulate status timer resetting (e.g., status indicator recreated for a new task).
+    assert_eq!(chat.worked_elapsed_from(3), 3);
+    assert_eq!(chat.worked_elapsed_from(7), 4);
 }
 
 pub(crate) async fn make_chatwidget_manual_with_sender() -> (
@@ -1134,6 +1177,185 @@ async fn rate_limit_switch_prompt_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("rate_limit_switch_prompt_popup", popup);
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.open_plan_implementation_prompt();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("plan_implementation_popup", popup);
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_no_selected_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.open_plan_implementation_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("plan_implementation_popup_no_selected", popup);
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_yes_emits_submit_message_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.open_plan_implementation_prompt();
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    let AppEvent::SubmitUserMessageWithMode {
+        text,
+        collaboration_mode,
+    } = event
+    else {
+        panic!("expected SubmitUserMessageWithMode, got {event:?}");
+    };
+    assert_eq!(text, PLAN_IMPLEMENTATION_EXECUTE_MESSAGE);
+    assert_eq!(collaboration_mode.mode, ModeKind::Execute);
+}
+
+#[tokio::test]
+async fn submit_user_message_with_mode_sets_execute_collaboration_mode() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    let execute_mode = collaboration_modes::execute_mode(chat.models_manager.as_ref())
+        .expect("expected execute collaboration mode");
+    chat.submit_user_message_with_mode("Implement the plan.".to_string(), execute_mode);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::Execute,
+                    ..
+                }),
+            personality: None,
+            ..
+        } => {}
+        other => {
+            panic!("expected Op::UserTurn with execute collab mode, got {other:?}")
+        }
+    }
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_skips_replayed_turn_complete() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.stored_collaboration_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: chat.current_model().to_string(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
+        last_agent_message: Some("Plan details".to_string()),
+    })]);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected no plan popup for replayed turn, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_skips_when_messages_queued() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.stored_collaboration_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: chat.current_model().to_string(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+    chat.bottom_pane.set_task_running(true);
+    chat.queue_user_message("Queued message".into());
+
+    chat.on_task_complete(Some("Plan details".to_string()), false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        !popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected no plan popup with queued messages, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_shows_on_plan_update_without_message() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.stored_collaboration_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: chat.current_model().to_string(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    chat.on_task_started();
+    chat.on_plan_update(UpdatePlanArgs {
+        explanation: None,
+        plan: vec![PlanItemArg {
+            step: "First".to_string(),
+            status: StepStatus::Pending,
+        }],
+    });
+    chat.on_task_complete(None, false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup after plan update, got {popup:?}"
+    );
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.stored_collaboration_mode = CollaborationMode {
+        mode: ModeKind::Plan,
+        settings: Settings {
+            model: chat.current_model().to_string(),
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    };
+
+    chat.on_task_started();
+    chat.on_plan_update(UpdatePlanArgs {
+        explanation: None,
+        plan: vec![PlanItemArg {
+            step: "First".to_string(),
+            status: StepStatus::Pending,
+        }],
+    });
+    chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
+    chat.on_task_complete(None, false);
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert!(
+        popup.contains("Approaching rate limits"),
+        "expected rate limit popup, got {popup:?}"
+    );
+    assert!(
+        !popup.contains(PLAN_IMPLEMENTATION_TITLE),
+        "expected plan popup to be skipped, got {popup:?}"
+    );
 }
 
 // (removed experimental resize snapshot test)
@@ -1722,7 +1944,7 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
     );
     drain_insert_history(&mut rx);
 
-    chat.on_task_complete(None);
+    chat.on_task_complete(None, false);
     end_exec(&mut chat, begin, "", "", 0);
 
     let cells = drain_insert_history(&mut rx);
@@ -1736,7 +1958,7 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
 async fn unified_exec_interaction_after_task_complete_is_suppressed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
-    chat.on_task_complete(None);
+    chat.on_task_complete(None, false);
 
     chat.handle_codex_event(Event {
         id: "call-1".to_string(),
@@ -2007,16 +2229,10 @@ async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert!(matches!(
-        chat.stored_collaboration_mode,
-        CollaborationMode::Execute(_)
-    ));
+    assert_eq!(chat.stored_collaboration_mode.mode, ModeKind::Execute);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert!(matches!(
-        chat.stored_collaboration_mode,
-        CollaborationMode::Plan(_)
-    ));
+    assert_eq!(chat.stored_collaboration_mode.mode, ModeKind::Plan);
 
     chat.on_task_started();
     let before = chat.stored_collaboration_mode.clone();
@@ -2049,7 +2265,12 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            collaboration_mode: Some(CollaborationMode::PairProgramming(_)),
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::PairProgramming,
+                    ..
+                }),
+            personality: None,
             ..
         } => {}
         other => {
@@ -2062,7 +2283,12 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            collaboration_mode: Some(CollaborationMode::PairProgramming(_)),
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::PairProgramming,
+                    ..
+                }),
+            personality: None,
             ..
         } => {}
         other => {
@@ -2082,7 +2308,12 @@ async fn collab_mode_defaults_to_pair_programming_when_enabled() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            collaboration_mode: Some(CollaborationMode::PairProgramming(_)),
+            collaboration_mode:
+                Some(CollaborationMode {
+                    mode: ModeKind::PairProgramming,
+                    ..
+                }),
+            personality: None,
             ..
         } => {}
         other => {
@@ -2095,10 +2326,10 @@ async fn collab_mode_defaults_to_pair_programming_when_enabled() {
 async fn collab_mode_enabling_sets_pair_programming_default() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
-    assert!(matches!(
-        chat.stored_collaboration_mode,
-        CollaborationMode::PairProgramming(_)
-    ));
+    assert_eq!(
+        chat.stored_collaboration_mode.mode,
+        ModeKind::PairProgramming
+    );
 }
 
 #[tokio::test]
@@ -2757,7 +2988,7 @@ async fn full_access_confirmation_popup_snapshot() {
         .into_iter()
         .find(|preset| preset.id == "full-access")
         .expect("full access preset");
-    chat.open_full_access_confirmation(preset);
+    chat.open_full_access_confirmation(preset, false);
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("full_access_confirmation_popup", popup);
@@ -3078,7 +3309,7 @@ async fn approvals_popup_navigation_skips_disabled() {
         .expect("render approvals popup after disabled selection");
     let screen = terminal.backend().vt100().screen().contents();
     assert!(
-        screen.contains("Select Approval Mode"),
+        screen.contains("Update Model Permissions"),
         "popup should remain open after selecting a disabled entry"
     );
     assert!(
@@ -3098,6 +3329,7 @@ async fn approvals_popup_navigation_skips_disabled() {
             ev,
             AppEvent::CodexOp(Op::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::OnRequest),
+                personality: None,
                 ..
             })
         )),
@@ -3108,6 +3340,7 @@ async fn approvals_popup_navigation_skips_disabled() {
             ev,
             AppEvent::CodexOp(Op::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::Never),
+                personality: None,
                 ..
             })
         )),

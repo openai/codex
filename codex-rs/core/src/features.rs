@@ -95,14 +95,14 @@ pub enum Feature {
     ShellSnapshot,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
-    /// Experimental TUI v2 (viewport) implementation.
-    Tui2,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
     /// Enable collab tools.
     Collab,
+    /// Enable connectors (apps).
+    Connectors,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Enable collaboration modes (Plan, Pair Programming, Execute).
@@ -442,8 +442,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::Tui2,
-        key: "tui2",
+        id: Feature::Connectors,
+        key: "connectors",
         stage: Stage::Beta,
         default_enabled: false,
     },

@@ -99,6 +99,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -174,6 +175,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         priority,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
+        model_instructions_template: None,
         supports_reasoning_summaries: false,
         support_verbosity: false,
         default_verbosity: None,

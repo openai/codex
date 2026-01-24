@@ -2,10 +2,10 @@
 //!
 //! Core behaviors:
 //! - Each question can be answered by selecting one option and/or providing notes.
-//! - When options exist, notes are stored per selected option (notes become "other").
+//! - When options exist, notes are stored per selected option and appended as extra answers.
 //! - Typing while focused on options jumps into notes to keep freeform input fast.
 //! - Enter advances to the next question; the last question submits all answers.
-//! - Freeform-only questions submit "skipped" when empty.
+//! - Freeform-only questions submit an empty answer list when empty.
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -278,7 +278,7 @@ impl RequestUserInputOverlay {
             } else {
                 answer_state.selected
             };
-            // Notes map to "other". When options exist, notes are per selected option.
+            // Notes are appended as extra answers. When options exist, notes are per selected option.
             let notes = if options.is_some_and(|opts| !opts.is_empty()) {
                 selected_idx
                     .and_then(|selected| answer_state.option_notes.get(selected))
@@ -294,18 +294,15 @@ impl RequestUserInputOverlay {
                     .and_then(|opts| opts.get(selected_idx))
                     .map(|opt| opt.label.clone())
             });
-            let selected = selected_label.into_iter().collect::<Vec<_>>();
-            // For option questions, only send notes when present.
-            let other = if notes.is_empty() && options.is_some_and(|opts| !opts.is_empty()) {
-                None
-            } else if notes.is_empty() && selected.is_empty() {
-                Some("skipped".to_string())
-            } else {
-                Some(notes)
-            };
+            let mut answer_list = selected_label.into_iter().collect::<Vec<_>>();
+            if !notes.is_empty() {
+                answer_list.push(format!("user_note: {notes}"));
+            }
             answers.insert(
                 question.id.clone(),
-                RequestUserInputAnswer { selected, other },
+                RequestUserInputAnswer {
+                    answers: answer_list,
+                },
             );
         }
         self.app_event_tx
@@ -605,12 +602,11 @@ mod tests {
         };
         assert_eq!(id, "turn-1");
         let answer = response.answers.get("q1").expect("answer missing");
-        assert_eq!(answer.selected, vec!["Option 1".to_string()]);
-        assert_eq!(answer.other, None);
+        assert_eq!(answer.answers, vec!["Option 1".to_string()]);
     }
 
     #[test]
-    fn freeform_questions_submit_skipped_when_empty() {
+    fn freeform_questions_submit_empty_when_empty() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_without_options("q1", "Notes")]),
@@ -624,8 +620,7 @@ mod tests {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
-        assert_eq!(answer.selected, Vec::<String>::new());
-        assert_eq!(answer.other, Some("skipped".to_string()));
+        assert_eq!(answer.answers, Vec::<String>::new());
     }
 
     #[test]
@@ -654,8 +649,13 @@ mod tests {
             panic!("expected UserInputAnswer");
         };
         let answer = response.answers.get("q1").expect("answer missing");
-        assert_eq!(answer.selected, vec!["Option 2".to_string()]);
-        assert_eq!(answer.other, Some("Notes for option 2".to_string()));
+        assert_eq!(
+            answer.answers,
+            vec![
+                "Option 2".to_string(),
+                "user_note: Notes for option 2".to_string(),
+            ]
+        );
     }
 
     #[test]

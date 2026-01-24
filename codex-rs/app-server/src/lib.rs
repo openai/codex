@@ -3,6 +3,7 @@
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
+use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
@@ -11,6 +12,7 @@ use std::path::PathBuf;
 use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_core::check_execpolicy_for_warnings;
@@ -43,6 +45,48 @@ mod outgoing_message;
 /// is a balance between throughput and memory usage – 128 messages should be
 /// plenty for an interactive CLI.
 const CHANNEL_CAPACITY: usize = 128;
+
+fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> {
+    let mut disabled_folders = Vec::new();
+
+    for layer in config
+        .config_layer_stack
+        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+    {
+        if !matches!(layer.name, ConfigLayerSource::Project { .. }) {
+            continue;
+        }
+        if layer.disabled_reason.is_none() {
+            continue;
+        };
+        if let ConfigLayerSource::Project { dot_codex_folder } = &layer.name {
+            disabled_folders.push((
+                dot_codex_folder.as_path().display().to_string(),
+                layer
+                    .disabled_reason
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "Config folder disabled.".to_string()),
+            ));
+        }
+    }
+
+    if disabled_folders.is_empty() {
+        return None;
+    }
+
+    let mut message = "The following config folders are disabled:\n".to_string();
+    for (index, (folder, reason)) in disabled_folders.iter().enumerate() {
+        let display_index = index + 1;
+        message.push_str(&format!("    {display_index}. {folder}\n"));
+        message.push_str(&format!("       {reason}\n"));
+    }
+
+    Some(ConfigWarningNotification {
+        summary: message,
+        details: None,
+    })
+}
 
 pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
@@ -117,6 +161,10 @@ pub async fn run_main(
             details: Some(err.to_string()),
         };
         config_warnings.push(message);
+    }
+
+    if let Some(warning) = project_config_warning(&config) {
+        config_warnings.push(warning);
     }
 
     let feedback = CodexFeedback::new();
