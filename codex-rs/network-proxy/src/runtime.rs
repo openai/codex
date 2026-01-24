@@ -333,15 +333,27 @@ impl NetworkProxyState {
     }
 
     pub async fn set_network_mode(&self, mode: NetworkMode) -> Result<()> {
-        self.reload_if_needed().await?;
-        let mut guard = self.state.write().await;
-        let mut candidate = guard.config.clone();
-        candidate.network_proxy.mode = mode;
-        validate_policy_against_constraints(&candidate, &guard.constraints)
-            .context("network_proxy.mode constrained by managed config")?;
-        guard.config.network_proxy.mode = mode;
-        info!("updated network mode to {mode:?}");
-        Ok(())
+        loop {
+            self.reload_if_needed().await?;
+            let (candidate, constraints) = {
+                let guard = self.state.read().await;
+                let mut candidate = guard.config.clone();
+                candidate.network_proxy.mode = mode;
+                (candidate, guard.constraints.clone())
+            };
+
+            validate_policy_against_constraints(&candidate, &constraints)
+                .context("network_proxy.mode constrained by managed config")?;
+
+            let mut guard = self.state.write().await;
+            if guard.constraints != constraints {
+                drop(guard);
+                continue;
+            }
+            guard.config.network_proxy.mode = mode;
+            info!("updated network mode to {mode:?}");
+            return Ok(());
+        }
     }
 
     async fn reload_if_needed(&self) -> Result<()> {

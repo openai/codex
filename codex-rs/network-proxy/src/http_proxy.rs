@@ -216,15 +216,10 @@ async fn http_connect_accept(
 }
 
 async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
-    let Some(target) = upgraded
-        .extensions()
-        .get::<ProxyTarget>()
-        .map(|t| t.0.clone())
-    else {
+    if upgraded.extensions().get::<ProxyTarget>().is_none() {
         warn!("CONNECT missing proxy target");
         return Ok(());
-    };
-    let _host = normalize_host(&target.host.to_string());
+    }
 
     let allow_upstream_proxy = match upgraded
         .extensions()
