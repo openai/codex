@@ -986,6 +986,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn should_prompt_when_meta_matches_current_but_latest_turn_differs() -> std::io::Result<()>
+    {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+        let current = temp_dir.path().join("current");
+        let latest = temp_dir.path().join("latest");
+        std::fs::create_dir_all(&current)?;
+        std::fs::create_dir_all(&latest)?;
+
+        let rollout_path = temp_dir.path().join("rollout.jsonl");
+        let session_meta = SessionMeta {
+            cwd: current.clone(),
+            ..SessionMeta::default()
+        };
+        let lines = vec![
+            RolloutLine {
+                timestamp: "t0".to_string(),
+                item: RolloutItem::SessionMeta(SessionMetaLine {
+                    meta: session_meta,
+                    git: None,
+                }),
+            },
+            RolloutLine {
+                timestamp: "t1".to_string(),
+                item: RolloutItem::TurnContext(build_turn_context(&config, latest.clone())),
+            },
+        ];
+        let mut text = String::new();
+        for line in lines {
+            text.push_str(&serde_json::to_string(&line).expect("serialize rollout"));
+            text.push('\n');
+        }
+        std::fs::write(&rollout_path, text)?;
+
+        let session_cwd = read_session_cwd(&rollout_path).await.expect("expected cwd");
+        assert_eq!(session_cwd, latest);
+        assert!(should_prompt_for_cwd(&current, &session_cwd));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn read_session_cwd_falls_back_to_session_meta() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let _config = build_config(&temp_dir).await?;

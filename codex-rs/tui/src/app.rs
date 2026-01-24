@@ -1224,7 +1224,7 @@ impl App {
                         match self
                             .server
                             .resume_thread_from_rollout(
-                                resume_config,
+                                resume_config.clone(),
                                 path.clone(),
                                 self.auth_manager.clone(),
                             )
@@ -1232,6 +1232,11 @@ impl App {
                         {
                             Ok(resumed) => {
                                 self.shutdown_current_thread().await;
+                                self.config = resume_config;
+                                self.file_search = FileSearchManager::new(
+                                    self.config.cwd.clone(),
+                                    self.app_event_tx.clone(),
+                                );
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
                                     self.config.clone(),
