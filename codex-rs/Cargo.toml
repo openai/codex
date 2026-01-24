@@ -27,6 +27,7 @@ members = [
     "login",
     "mcp-server",
     "mcp-types",
+    "network-proxy",
     "ollama",
     "process-hardening",
     "protocol",
@@ -136,6 +137,7 @@ env-flags = "0.1.1"
 env_logger = "0.11.5"
 eventsource-stream = "0.2.3"
 futures = { version = "0.3", default-features = false }
+globset = "0.4"
 http = "1.3.1"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"

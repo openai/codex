@@ -3,6 +3,7 @@
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
+use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
@@ -11,6 +12,7 @@ use std::path::PathBuf;
 use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::TextPosition as AppTextPosition;
@@ -53,7 +55,10 @@ fn config_warning_from_error(
     summary: impl Into<String>,
     err: &std::io::Error,
 ) -> ConfigWarningNotification {
-    let (path, range) = config_error_location(err);
+    let (path, range) = match config_error_location(err) {
+        Some((path, range)) => (Some(path), Some(range)),
+        None => (None, None),
+    };
     ConfigWarningNotification {
         summary: summary.into(),
         details: Some(err.to_string()),
@@ -62,17 +67,16 @@ fn config_warning_from_error(
     }
 }
 
-fn config_error_location(err: &std::io::Error) -> (Option<String>, Option<AppTextRange>) {
+fn config_error_location(err: &std::io::Error) -> Option<(String, AppTextRange)> {
     err.get_ref()
         .and_then(|err| err.downcast_ref::<ConfigLoadError>())
         .map(|err| {
             let config_error = err.config_error();
             (
-                Some(config_error.path.to_string_lossy().to_string()),
-                Some(app_text_range(&config_error.range)),
+                config_error.path.to_string_lossy().to_string(),
+                app_text_range(&config_error.range),
             )
         })
-        .unwrap_or((None, None))
 }
 
 fn exec_policy_warning_location(err: &ExecPolicyError) -> (Option<String>, Option<AppTextRange>) {
@@ -108,6 +112,49 @@ fn app_text_range(range: &CoreTextRange) -> AppTextRange {
             column: range.end.column,
         },
     }
+}
+
+fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> {
+    let mut disabled_folders = Vec::new();
+
+    for layer in config
+        .config_layer_stack
+        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+    {
+        if !matches!(layer.name, ConfigLayerSource::Project { .. })
+            || layer.disabled_reason.is_none()
+        {
+            continue;
+        }
+        if let ConfigLayerSource::Project { dot_codex_folder } = &layer.name {
+            disabled_folders.push((
+                dot_codex_folder.as_path().display().to_string(),
+                layer
+                    .disabled_reason
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "Config folder disabled.".to_string()),
+            ));
+        }
+    }
+
+    if disabled_folders.is_empty() {
+        return None;
+    }
+
+    let mut message = "The following config folders are disabled:\n".to_string();
+    for (index, (folder, reason)) in disabled_folders.iter().enumerate() {
+        let display_index = index + 1;
+        message.push_str(&format!("    {display_index}. {folder}\n"));
+        message.push_str(&format!("       {reason}\n"));
+    }
+
+    Some(ConfigWarningNotification {
+        summary: message,
+        details: None,
+        path: None,
+        range: None,
+    })
 }
 
 pub async fn run_main(
@@ -183,6 +230,10 @@ pub async fn run_main(
             range,
         };
         config_warnings.push(message);
+    }
+
+    if let Some(warning) = project_config_warning(&config) {
+        config_warnings.push(warning);
     }
 
     let feedback = CodexFeedback::new();
