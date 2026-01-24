@@ -553,6 +553,7 @@ impl EventProcessorWithJsonOutput {
         vec![ThreadEvent::ItemStarted(ItemStartedEvent { item })]
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish_collab_tool_call(
         &mut self,
         call_id: &str,
