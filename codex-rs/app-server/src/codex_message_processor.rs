@@ -1421,7 +1421,7 @@ impl CodexMessageProcessor {
             params.developer_instructions,
             params.personality,
         );
-        typesafe_overrides.persist_rollout = Some(params.persist_rollout.unwrap_or(true));
+        typesafe_overrides.ephemeral = Some(params.ephemeral.unwrap_or_default());
 
         let config =
             match derive_config_from_params(&self.cli_overrides, params.config, typesafe_overrides)

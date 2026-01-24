@@ -670,12 +670,12 @@ impl Session {
         // - perform default shell discovery
         // - load history metadata
         let rollout_fut = async {
-            if config.persist_rollout {
+            if config.ephemeral {
+                Ok(None)
+            } else {
                 RolloutRecorder::new(&config, rollout_params)
                     .await
                     .map(Some)
-            } else {
-                Ok(None)
             }
         };
 

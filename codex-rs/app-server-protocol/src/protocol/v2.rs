@@ -1081,9 +1081,7 @@ pub struct ThreadStartParams {
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub persist_rollout: Option<bool>,
+    pub ephemeral: Option<bool>,
     /// If true, opt into emitting raw response items on the event stream.
     ///
     /// This is for internal use only (e.g. Codex Cloud).
@@ -1467,8 +1465,6 @@ pub struct Thread {
     #[ts(type = "number")]
     pub updated_at: i64,
     /// [UNSTABLE] Path to the thread on disk.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
     pub path: Option<PathBuf>,
     /// Working directory captured for the thread.
     pub cwd: PathBuf,
