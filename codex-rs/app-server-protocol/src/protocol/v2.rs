@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::protocol::common::AuthMode;
-use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::config_types::CollaborationMode;
@@ -691,45 +690,6 @@ pub enum CommandAction {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase", export_to = "v2/")]
-pub enum SubAgentSource {
-    Review,
-    Compact,
-    CollabSpawn { parent_thread_id: String },
-    Other(String),
-}
-
-impl From<CoreSubAgentSource> for SubAgentSource {
-    fn from(value: CoreSubAgentSource) -> Self {
-        match value {
-            CoreSubAgentSource::Review => SubAgentSource::Review,
-            CoreSubAgentSource::Compact => SubAgentSource::Compact,
-            CoreSubAgentSource::ThreadSpawn { parent_thread_id } => SubAgentSource::CollabSpawn {
-                parent_thread_id: parent_thread_id.to_string(),
-            },
-            CoreSubAgentSource::Other(label) => SubAgentSource::Other(label),
-        }
-    }
-}
-
-impl From<SubAgentSource> for CoreSubAgentSource {
-    fn from(value: SubAgentSource) -> Self {
-        match value {
-            SubAgentSource::Review => CoreSubAgentSource::Review,
-            SubAgentSource::Compact => CoreSubAgentSource::Compact,
-            SubAgentSource::CollabSpawn { parent_thread_id } => {
-                match ThreadId::from_string(&parent_thread_id) {
-                    Ok(parent_thread_id) => CoreSubAgentSource::ThreadSpawn { parent_thread_id },
-                    Err(_) => CoreSubAgentSource::Other(parent_thread_id),
-                }
-            }
-            SubAgentSource::Other(label) => CoreSubAgentSource::Other(label),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase", export_to = "v2/")]
 #[derive(Default)]
 pub enum SessionSource {
     Cli,
@@ -739,7 +699,7 @@ pub enum SessionSource {
     VsCode,
     Exec,
     AppServer,
-    SubAgent(SubAgentSource),
+    SubAgent(CoreSubAgentSource),
     #[serde(other)]
     Unknown,
 }
@@ -751,7 +711,7 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::VSCode => SessionSource::VsCode,
             CoreSessionSource::Exec => SessionSource::Exec,
             CoreSessionSource::Mcp => SessionSource::AppServer,
-            CoreSessionSource::SubAgent(sub) => SessionSource::SubAgent(sub.into()),
+            CoreSessionSource::SubAgent(sub) => SessionSource::SubAgent(sub),
             CoreSessionSource::Unknown => SessionSource::Unknown,
         }
     }
@@ -764,7 +724,7 @@ impl From<SessionSource> for CoreSessionSource {
             SessionSource::VsCode => CoreSessionSource::VSCode,
             SessionSource::Exec => CoreSessionSource::Exec,
             SessionSource::AppServer => CoreSessionSource::Mcp,
-            SessionSource::SubAgent(sub) => CoreSessionSource::SubAgent(sub.into()),
+            SessionSource::SubAgent(sub) => CoreSessionSource::SubAgent(sub),
             SessionSource::Unknown => CoreSessionSource::Unknown,
         }
     }
