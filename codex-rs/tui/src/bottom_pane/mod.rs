@@ -382,11 +382,7 @@ impl BottomPane {
         self.set_composer_text_with_pending_pastes(
             stash.text,
             stash.text_elements,
-            stash
-                .local_images
-                .iter()
-                .map(|img| img.path.clone())
-                .collect(),
+            stash.local_images.into_iter().map(|img| img.path).collect(),
             stash.pending_pastes,
         );
     }
