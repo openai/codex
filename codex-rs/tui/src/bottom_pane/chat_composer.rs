@@ -170,6 +170,7 @@ pub enum InputResult {
         text: String,
         text_elements: Vec<TextElement>,
     },
+    Stashed(PreparedDraft),
     Command(SlashCommand),
     CommandWithArgs(SlashCommand, String),
     None,
@@ -195,6 +196,20 @@ enum PromptSelectionAction {
         text: String,
         text_elements: Vec<TextElement>,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PrepareMode {
+    ForSubmit,
+    ForStash,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PreparedDraft {
+    pub(crate) text: String,
+    pub(crate) text_elements: Vec<TextElement>,
+    pub(crate) local_images: Vec<LocalImageAttachment>,
+    pub(crate) pending_pastes: Vec<(String, String)>,
 }
 
 pub(crate) struct ChatComposer {
@@ -611,6 +626,21 @@ impl ChatComposer {
 
         self.textarea.set_cursor(0);
         self.sync_popups();
+    }
+
+    /// Replaces the entire composer with `text`, restes cursor and sets pending pastes.
+    pub(crate) fn set_text_content_with_pending_pastes(
+        &mut self,
+        text: String,
+        text_elements: Vec<TextElement>,
+        local_image_paths: Vec<PathBuf>,
+        pending_pastes: Vec<(String, String)>,
+    ) {
+        self.set_text_content(text, text_elements, local_image_paths);
+        self.pending_pastes = pending_pastes;
+        // drops any pending pastes that no longer have placeholders in text
+        self.pending_pastes
+            .retain(|(ph, _)| self.textarea.text().contains(ph));
     }
 
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {
@@ -1604,9 +1634,7 @@ impl ChatComposer {
         self.textarea.set_cursor(new_cursor);
     }
 
-    /// Prepare text for submission/queuing. Returns None if submission should be suppressed.
-    /// On success, clears pending paste payloads because placeholders have been expanded.
-    fn prepare_submission_text(&mut self) -> Option<(String, Vec<TextElement>)> {
+    fn prepare_composer_text(&mut self, mode: PrepareMode) -> Option<PreparedDraft> {
         let mut text = self.textarea.text().to_string();
         let original_input = text.clone();
         let original_text_elements = self.textarea.text_elements();
@@ -1631,41 +1659,43 @@ impl ChatComposer {
         let expanded_input = text.clone();
 
         // If there is neither text nor attachments, suppress submission entirely.
-        text = text.trim().to_string();
-        text_elements = Self::trim_text_elements(&expanded_input, &text, text_elements);
+        if matches!(mode, PrepareMode::ForSubmit) {
+            text = text.trim().to_string();
+            text_elements = Self::trim_text_elements(&expanded_input, &text, text_elements);
 
-        if let Some((name, _rest, _rest_offset)) = parse_slash_name(&text) {
-            let treat_as_plain_text = input_starts_with_space || name.contains('/');
-            if !treat_as_plain_text {
-                let is_builtin = Self::built_in_slash_commands_for_input(
-                    self.collaboration_modes_enabled,
-                    self.personality_command_enabled,
-                )
-                .any(|(command_name, _)| command_name == name);
-                let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
-                let is_known_prompt = name
-                    .strip_prefix(&prompt_prefix)
-                    .map(|prompt_name| {
-                        self.custom_prompts
-                            .iter()
-                            .any(|prompt| prompt.name == prompt_name)
-                    })
-                    .unwrap_or(false);
-                if !is_builtin && !is_known_prompt {
-                    let message = format!(
-                        r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
-                    );
-                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(message, None),
-                    )));
-                    self.set_text_content(
-                        original_input.clone(),
-                        original_text_elements,
-                        original_local_image_paths,
-                    );
-                    self.pending_pastes.clone_from(&original_pending_pastes);
-                    self.textarea.set_cursor(original_input.len());
-                    return None;
+            if let Some((name, _rest, _rest_offset)) = parse_slash_name(&text) {
+                let treat_as_plain_text = input_starts_with_space || name.contains('/');
+                if !treat_as_plain_text {
+                    let is_builtin = Self::built_in_slash_commands_for_input(
+                        self.collaboration_modes_enabled,
+                        self.personality_command_enabled,
+                    )
+                    .any(|(command_name, _)| command_name == name);
+                    let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
+                    let is_known_prompt = name
+                        .strip_prefix(&prompt_prefix)
+                        .map(|prompt_name| {
+                            self.custom_prompts
+                                .iter()
+                                .any(|prompt| prompt.name == prompt_name)
+                        })
+                        .unwrap_or(false);
+                    if !is_builtin && !is_known_prompt {
+                        let message = format!(
+                            r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+                        );
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_info_event(message, None),
+                        )));
+                        self.set_text_content(
+                            original_input.clone(),
+                            original_text_elements,
+                            original_local_image_paths,
+                        );
+                        self.pending_pastes.clone_from(&original_pending_pastes);
+                        self.textarea.set_cursor(original_input.len());
+                        return None;
+                    }
                 }
             }
         }
@@ -1700,8 +1730,24 @@ impl ChatComposer {
         if !text.is_empty() {
             self.history.record_local_submission(&text);
         }
+        let pending_pastes = self.pending_pastes.clone();
         self.pending_pastes.clear();
-        Some((text, text_elements))
+
+        let local_images = self.local_images();
+
+        Some(PreparedDraft {
+            text,
+            text_elements,
+            local_images,
+            pending_pastes,
+        })
+    }
+
+    /// Prepare text for submission/queuing. Returns None if submission should be suppressed.
+    /// On success, clears pending paste payloads because placeholders have been expanded.
+    fn prepare_submission_text(&mut self) -> Option<(String, Vec<TextElement>)> {
+        self.prepare_composer_text(PrepareMode::ForSubmit)
+            .map(|prepared| (prepared.text, prepared.text_elements))
     }
 
     /// Common logic for handling message submission/queuing.
@@ -1798,6 +1844,19 @@ impl ChatComposer {
             self.pending_pastes = original_pending_pastes;
             (InputResult::None, true)
         }
+    }
+
+    fn handle_stash(&mut self) -> (InputResult, bool) {
+        let Some(prepared_draft) = self.prepare_composer_text(PrepareMode::ForStash) else {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_error_event("Nothing to stash".to_string()),
+            )));
+            return (InputResult::None, true);
+        };
+
+        self.set_text_content(String::new(), Vec::new(), Vec::new());
+
+        (InputResult::Stashed(prepared_draft), true)
     }
 
     /// Check if the first line is a bare slash command (no args) and dispatch it.
@@ -1913,6 +1972,11 @@ impl ChatComposer {
                 let should_queue = !self.steer_enabled;
                 self.handle_submission(should_queue)
             }
+            KeyEvent {
+                code: KeyCode::Char('s'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.handle_stash(),
             input => self.handle_input_basic(input),
         }
     }
@@ -3892,6 +3956,9 @@ mod tests {
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
             }
+            InputResult::Stashed(_) => {
+                panic!("expected command dispatch, but composer stashed literal text")
+            }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
@@ -3993,6 +4060,9 @@ mod tests {
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch after Tab completion, got literal queue")
             }
+            InputResult::Stashed(_) => {
+                panic!("expected command dispatch, but composer stashed literal text")
+            }
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
         assert!(composer.textarea.is_empty());
@@ -4031,6 +4101,9 @@ mod tests {
             }
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
+            }
+            InputResult::Stashed(_) => {
+                panic!("expected command dispatch, but composer stashed literal text")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }
