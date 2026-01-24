@@ -1966,9 +1966,23 @@ impl App {
                 return Ok(());
             }
         };
+        let config_snapshot = thread.config_snapshot().await;
         let event = Event {
             id: String::new(),
-            msg: EventMsg::SessionConfigured(self.session_configured_for_thread(thread_id)),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                model: config_snapshot.model,
+                model_provider_id: config_snapshot.model_provider_id,
+                approval_policy: config_snapshot.approval_policy,
+                sandbox_policy: config_snapshot.sandbox_policy,
+                cwd: config_snapshot.cwd,
+                reasoning_effort: config_snapshot.reasoning_effort,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: thread.rollout_path(),
+            }),
         };
         let channel =
             ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
@@ -1996,33 +2010,6 @@ impl App {
             }
         });
         Ok(())
-    }
-
-    fn session_configured_for_thread(&self, thread_id: ThreadId) -> SessionConfiguredEvent {
-        let mut session_configured =
-            self.primary_session_configured
-                .clone()
-                .unwrap_or_else(|| SessionConfiguredEvent {
-                    session_id: thread_id,
-                    forked_from_id: None,
-                    model: self.chat_widget.current_model().to_string(),
-                    model_provider_id: self.config.model_provider_id.clone(),
-                    approval_policy: *self.config.approval_policy.get(),
-                    sandbox_policy: self.config.sandbox_policy.get().clone(),
-                    cwd: self.config.cwd.clone(),
-                    reasoning_effort: None,
-                    history_log_id: 0,
-                    history_entry_count: 0,
-                    initial_messages: None,
-                    rollout_path: Some(PathBuf::new()),
-                });
-        session_configured.session_id = thread_id;
-        session_configured.forked_from_id = None;
-        session_configured.history_log_id = 0;
-        session_configured.history_entry_count = 0;
-        session_configured.initial_messages = None;
-        session_configured.rollout_path = Some(PathBuf::new());
-        session_configured
     }
 
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
