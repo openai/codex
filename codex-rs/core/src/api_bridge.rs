@@ -81,6 +81,7 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
             }
             TransportError::RetryLimit => CodexErr::RetryLimit(RetryLimitReachedError {
                 status: http::StatusCode::INTERNAL_SERVER_ERROR,
+// core/src/api_bridge.rs
                 request_id: None,
             }),
             TransportError::Timeout => CodexErr::Timeout,

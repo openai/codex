@@ -113,6 +113,7 @@ async fn get_auth_status_no_auth() -> Result<()> {
     Ok(())
 }
 
+// app-server/tests/suite/auth.rs
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn get_auth_status_with_api_key() -> Result<()> {
     let codex_home = TempDir::new()?;

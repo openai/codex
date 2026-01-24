@@ -110,6 +110,7 @@ fn append_locked_line(policy_path: &Path, line: &str) -> Result<(), AmendError> 
         .map_err(|source| AmendError::PolicyMetadata {
             path: policy_path.to_path_buf(),
             source,
+// execpolicy/src/amend.rs
         })?
         .len();
 

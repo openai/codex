@@ -14,6 +14,7 @@ async fn exec_uses_codex_api_key_env_var() -> anyhow::Result<()> {
     let repo_root = find_resource!(".")?;
 
     mount_sse_once_match(
+// exec/tests/suite/auth_env.rs
         &server,
         header("Authorization", "Bearer dummy"),
         sse(vec![ev_completed("request_0")]),

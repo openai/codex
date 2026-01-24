@@ -45,6 +45,7 @@ async fn archive_conversation_moves_rollout_into_archived_directory() -> Result<
         "expected rollout path {} to exist",
         rollout_path.display()
     );
+// app-server/tests/suite/archive_thread.rs
 
     let archive_request_id = mcp
         .send_archive_conversation_request(ArchiveConversationParams {

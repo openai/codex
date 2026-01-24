@@ -12,6 +12,7 @@ impl AppEventSender {
     pub(crate) fn new(app_event_tx: UnboundedSender<AppEvent>) -> Self {
         Self { app_event_tx }
     }
+// tui/src/app_event_sender.rs
 
     /// Send an event to the app event channel. If it fails, we swallow the
     /// error and log it.

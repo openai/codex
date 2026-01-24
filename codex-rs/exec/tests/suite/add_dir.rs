@@ -34,6 +34,7 @@ async fn accepts_add_dir_flag() -> anyhow::Result<()> {
         .assert()
         .code(0);
 
+// exec/tests/suite/add_dir.rs
     Ok(())
 }
 

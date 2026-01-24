@@ -17,6 +17,7 @@ pub enum ApprovalModeCliArg {
     /// Only asks for approval if a command fails to execute, in which case it
     /// will escalate to the user to ask for un-sandboxed execution.
     OnFailure,
+// common/src/approval_mode_cli_arg.rs
 
     /// The model decides when to ask the user for approval.
     OnRequest,

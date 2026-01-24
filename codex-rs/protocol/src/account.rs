@@ -8,6 +8,7 @@ use ts_rs::TS;
 #[ts(rename_all = "lowercase")]
 pub enum PlanType {
     #[default]
+// protocol/src/account.rs
     Free,
     Plus,
     Pro,

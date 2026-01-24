@@ -73,6 +73,7 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
         sse(vec![
             ev_apply_patch_function_call("request_1", update_patch),
             ev_completed("request_1"),
+// exec/tests/suite/apply_patch.rs
         ]),
         sse(vec![ev_completed("request_2")]),
     ];

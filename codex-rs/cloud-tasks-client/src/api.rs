@@ -83,6 +83,7 @@ pub struct ApplyOutcome {
     pub applied: bool,
     pub status: ApplyStatus,
     pub message: String,
+// cloud-tasks-client/src/api.rs
     #[serde(default)]
     pub skipped_paths: Vec<String>,
     #[serde(default)]

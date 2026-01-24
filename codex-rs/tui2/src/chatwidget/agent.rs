@@ -51,6 +51,7 @@ pub(crate) fn spawn_agent(
         };
         app_event_tx_clone.send(AppEvent::CodexEvent(ev));
 
+// tui2/src/chatwidget/agent.rs
         let thread_clone = thread.clone();
         tokio::spawn(async move {
             while let Some(op) = codex_op_rx.recv().await {

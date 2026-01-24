@@ -35,6 +35,7 @@
     // Note the `musl` parts of the Linux paths are misleading: the Bash
     // binaries are actually linked against `glibc`, but the
     // `codex-execve-wrapper` that invokes them is linked against `musl`.
+# exec-server/tests/suite/bash
     "linux-x86_64": {
       "size": 37003612,
       "hash": "blake3",

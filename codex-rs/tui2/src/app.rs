@@ -1555,6 +1555,7 @@ impl App {
                                 }
                             }
                             Err(err) => {
+// tui2/src/app.rs
                                 let path_display = path.display();
                                 self.chat_widget.add_error_message(format!(
                                     "Failed to resume session from {path_display}: {err}"

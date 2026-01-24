@@ -78,6 +78,7 @@ impl ApplyPatchRuntime {
 
 impl Sandboxable for ApplyPatchRuntime {
     fn sandbox_preference(&self) -> SandboxablePreference {
+// core/src/tools/runtimes/apply_patch.rs
         SandboxablePreference::Auto
     }
     fn escalate_on_failure(&self) -> bool {

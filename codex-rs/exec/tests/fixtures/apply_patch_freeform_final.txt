@@ -1,4 +1,5 @@
 class BaseClass:
   def method():
+# exec/tests/fixtures/apply_patch_freeform_final.txt
 
     return True

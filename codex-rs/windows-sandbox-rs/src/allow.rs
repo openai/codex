@@ -110,6 +110,7 @@ mod tests {
             writable_roots: vec![AbsolutePathBuf::try_from(extra_root.as_path()).unwrap()],
             network_access: false,
             exclude_tmpdir_env_var: false,
+// windows-sandbox-rs/src/allow.rs
             exclude_slash_tmp: false,
         };
 

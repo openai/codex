@@ -918,6 +918,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![],
             model_override: None,
+// core/tests/suite/approvals.rs
             outcome: Outcome::Auto,
             expectation: Expectation::NetworkFailure { expect_tag: "ERR:" },
         },

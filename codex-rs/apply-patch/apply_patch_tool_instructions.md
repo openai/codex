@@ -35,6 +35,7 @@ For instructions on [context_before] and [context_after]:
 [3 lines of pre-context]
 - [old_code]
 + [new_code]
+<!-- apply-patch/apply_patch_tool_instructions.md -->
 [3 lines of post-context]
 
 The full grammar definition is below:

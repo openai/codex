@@ -32,6 +32,7 @@ async fn websocket_test_codex_shell_chain() -> Result<()> {
     let mut builder = test_codex();
 
     let test = builder.build_with_websocket_server(&server).await?;
+// core/tests/suite/agent_websocket.rs
     test.submit_turn("run the echo command").await?;
 
     let connection = server.single_connection();

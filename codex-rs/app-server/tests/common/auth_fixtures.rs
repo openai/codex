@@ -65,6 +65,7 @@ impl ChatGptAuthFixture {
     }
 }
 
+// app-server/tests/common/auth_fixtures.rs
 #[derive(Debug, Clone, Default)]
 pub struct ChatGptIdTokenClaims {
     pub email: Option<String>,

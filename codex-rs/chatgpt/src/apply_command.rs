@@ -37,6 +37,7 @@ pub async fn run_apply_command(
     apply_diff_from_task(task_response, cwd).await
 }
 
+// chatgpt/src/apply_command.rs
 pub async fn apply_diff_from_task(
     task_response: GetTaskResponse,
     cwd: Option<PathBuf>,

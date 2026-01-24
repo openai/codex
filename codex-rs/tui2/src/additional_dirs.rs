@@ -39,6 +39,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
+// tui2/src/additional_dirs.rs
     #[test]
     fn returns_none_for_workspace_write() {
         let sandbox = SandboxPolicy::new_workspace_write_policy();

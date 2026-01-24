@@ -325,6 +325,7 @@ impl App {
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.set_highlight_cell(Some(cell_idx));
             }
+// tui/src/app_backtrack.rs
         } else {
             self.backtrack.nth_user_message = usize::MAX;
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {

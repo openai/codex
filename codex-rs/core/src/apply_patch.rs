@@ -61,6 +61,7 @@ pub(crate) async fn apply_patch(
             InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
                 action,
                 auto_approved: false,
+// core/src/apply_patch.rs
                 exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
                     reason: None,
                     proposed_execpolicy_amendment: None,

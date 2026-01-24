@@ -274,6 +274,7 @@ prefix_rule(
 
 #[test]
 fn only_first_token_alias_expands_to_multiple_rules() -> Result<()> {
+// execpolicy/tests/basic.rs
     let policy_src = r#"
 prefix_rule(
     pattern = [["bash", "sh"], ["-c", "-l"]],

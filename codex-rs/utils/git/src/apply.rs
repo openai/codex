@@ -421,6 +421,7 @@ pub fn parse_git_apply_output(
     });
     static BINARY_DOES_NOT_APPLY: Lazy<Regex> = Lazy::new(|| {
         regex_ci("^error:\\s+binary patch does not apply to\\s+['\\\"]?(?P<path>.+?)['\\\"]?$")
+// utils/git/src/apply.rs
     });
     static BINARY_INCORRECT_RESULT: Lazy<Regex> = Lazy::new(|| {
         regex_ci(

@@ -640,6 +640,7 @@ impl UnauthorizedRecovery {
 pub struct AuthManager {
     codex_home: PathBuf,
     inner: RwLock<CachedAuth>,
+// core/src/auth.rs
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 }

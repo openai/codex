@@ -130,6 +130,7 @@ pub(crate) enum AppEvent {
     /// Open the Windows world-writable directories warning.
     /// If `preset` is `Some`, the confirmation will apply the provided
     /// approval/sandbox configuration on Continue; if `None`, it performs no
+// tui/src/app_event.rs
     /// policy change and only acknowledges/dismisses the warning.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWorldWritableWarningConfirmation {

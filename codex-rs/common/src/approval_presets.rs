@@ -21,6 +21,7 @@ pub struct ApprovalPreset {
 /// Keep this UI-agnostic so it can be reused by both TUI and MCP server.
 pub fn builtin_approval_presets() -> Vec<ApprovalPreset> {
     vec![
+// common/src/approval_presets.rs
         ApprovalPreset {
             id: "read-only",
             label: "Read Only",
