@@ -445,7 +445,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Connectors,
         key: "connectors",
         stage: Stage::Beta,
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Steer,
