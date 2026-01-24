@@ -3648,6 +3648,8 @@ impl CodexMessageProcessor {
                 model,
                 effort,
                 summary,
+                max_output_tokens: None,
+                history_depth: None,
                 final_output_json_schema: output_schema,
                 collaboration_mode: None,
                 personality: None,
@@ -3874,6 +3876,8 @@ impl CodexMessageProcessor {
                     model: params.model,
                     effort: params.effort.map(Some),
                     summary: params.summary,
+                    max_output_tokens: None,
+                    history_depth: None,
                     collaboration_mode: params.collaboration_mode,
                     personality: params.personality,
                 })

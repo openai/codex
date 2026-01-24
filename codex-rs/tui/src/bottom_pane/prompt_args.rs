@@ -17,6 +17,7 @@ lazy_static! {
 pub enum PromptArgsError {
     MissingAssignment { token: String },
     MissingKey { token: String },
+    InvalidValue { key: String, value: String },
 }
 
 impl PromptArgsError {
@@ -27,6 +28,9 @@ impl PromptArgsError {
             ),
             PromptArgsError::MissingKey { token } => {
                 format!("Could not parse {command}: expected a name before '=' in '{token}'.")
+            }
+            PromptArgsError::InvalidValue { key, value } => {
+                format!("Could not parse {command}: expected {key}=<integer> but got '{value}'.")
             }
         }
     }
@@ -95,7 +99,12 @@ pub struct PromptArg {
 pub struct PromptExpansion {
     pub text: String,
     pub text_elements: Vec<TextElement>,
+    pub max_output_tokens: Option<u32>,
+    pub history_depth: Option<u32>,
 }
+
+const PROMPT_OVERRIDE_MAX_OUTPUT_TOKENS: &str = "max_output_tokens";
+const PROMPT_OVERRIDE_HISTORY_DEPTH: &str = "history_depth";
 
 /// Parse positional arguments using shlex semantics (supports quoted tokens).
 ///
@@ -183,6 +192,40 @@ pub fn parse_prompt_inputs(
     Ok(map)
 }
 
+fn parse_override_value(key: &str, value: &str) -> Result<u32, PromptArgsError> {
+    value
+        .parse::<u32>()
+        .map_err(|_| PromptArgsError::InvalidValue {
+            key: key.to_string(),
+            value: value.to_string(),
+        })
+}
+
+fn take_prompt_overrides(
+    inputs: &mut HashMap<String, PromptArg>,
+) -> Result<(Option<u32>, Option<u32>), PromptArgsError> {
+    let max_output_tokens = inputs
+        .remove(PROMPT_OVERRIDE_MAX_OUTPUT_TOKENS)
+        .map(|arg| parse_override_value(PROMPT_OVERRIDE_MAX_OUTPUT_TOKENS, &arg.text))
+        .transpose()?;
+    let history_depth = inputs
+        .remove(PROMPT_OVERRIDE_HISTORY_DEPTH)
+        .map(|arg| parse_override_value(PROMPT_OVERRIDE_HISTORY_DEPTH, &arg.text))
+        .transpose()?;
+    Ok((max_output_tokens, history_depth))
+}
+
+fn parse_positional_args_with_overrides(
+    rest: &str,
+    text_elements: &[TextElement],
+) -> Result<(Vec<PromptArg>, Option<u32>, Option<u32>), PromptArgsError> {
+    if rest.trim().is_empty() {
+        return Ok((Vec::new(), None, None));
+    }
+
+    split_positional_overrides(parse_positional_args(rest, text_elements))
+}
+
 /// Expands a message of the form `/prompts:name [value] [value] …` using a matching saved prompt.
 ///
 /// If the text does not start with `/prompts:`, or if no prompt named `name` exists,
@@ -221,12 +264,17 @@ pub fn expand_custom_prompt(
         })
         .collect();
     if !required.is_empty() {
-        let inputs = parse_prompt_inputs(rest, &local_elements).map_err(|error| {
+        let mut inputs = parse_prompt_inputs(rest, &local_elements).map_err(|error| {
             PromptExpansionError::Args {
                 command: format!("/{name}"),
                 error,
             }
         })?;
+        let (max_output_tokens, history_depth) =
+            take_prompt_overrides(&mut inputs).map_err(|error| PromptExpansionError::Args {
+                command: format!("/{name}"),
+                error,
+            })?;
         let missing: Vec<String> = required
             .into_iter()
             .filter(|k| !inputs.contains_key(k))
@@ -241,14 +289,24 @@ pub fn expand_custom_prompt(
         return Ok(Some(PromptExpansion {
             text,
             text_elements: elements,
+            max_output_tokens,
+            history_depth,
         }));
     }
 
     // Otherwise, treat it as numeric/positional placeholder prompt (or none).
-    let pos_args = parse_positional_args(rest, &local_elements);
+    let (pos_args, max_output_tokens, history_depth) =
+        parse_positional_args_with_overrides(rest, &local_elements).map_err(|error| {
+            PromptExpansionError::Args {
+                command: format!("/{name}"),
+                error,
+            }
+        })?;
     Ok(Some(expand_numeric_placeholders(
         &prompt.content,
         &pos_args,
+        max_output_tokens,
+        history_depth,
     )))
 }
 
@@ -311,6 +369,31 @@ pub fn extract_positional_args_for_prompt_line(
     parse_positional_args(args_str, &local_elements)
 }
 
+fn split_positional_overrides(
+    tokens: Vec<PromptArg>,
+) -> Result<(Vec<PromptArg>, Option<u32>, Option<u32>), PromptArgsError> {
+    let mut args = Vec::new();
+    let mut max_output_tokens = None;
+    let mut history_depth = None;
+    for token in tokens {
+        if let Some((key, value)) = token.text.split_once('=') {
+            match key {
+                PROMPT_OVERRIDE_MAX_OUTPUT_TOKENS => {
+                    max_output_tokens = Some(parse_override_value(key, value)?);
+                    continue;
+                }
+                PROMPT_OVERRIDE_HISTORY_DEPTH => {
+                    history_depth = Some(parse_override_value(key, value)?);
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        args.push(token);
+    }
+    Ok((args, max_output_tokens, history_depth))
+}
+
 /// If the prompt only uses numeric placeholders and the first line contains
 /// positional args for it, expand and return Some(expanded); otherwise None.
 pub fn expand_if_numeric_with_positional_args(
@@ -324,15 +407,27 @@ pub fn expand_if_numeric_with_positional_args(
     if !prompt_has_numeric_placeholders(&prompt.content) {
         return None;
     }
+
     let args = extract_positional_args_for_prompt_line(first_line, &prompt.name, text_elements);
+    let (args, max_output_tokens, history_depth) = split_positional_overrides(args).ok()?;
     if args.is_empty() {
         return None;
     }
-    Some(expand_numeric_placeholders(&prompt.content, &args))
+    Some(expand_numeric_placeholders(
+        &prompt.content,
+        &args,
+        max_output_tokens,
+        history_depth,
+    ))
 }
 
 /// Expand `$1..$9` and `$ARGUMENTS` in `content` with values from `args`.
-pub fn expand_numeric_placeholders(content: &str, args: &[PromptArg]) -> PromptExpansion {
+pub fn expand_numeric_placeholders(
+    content: &str,
+    args: &[PromptArg],
+    max_output_tokens: Option<u32>,
+    history_depth: Option<u32>,
+) -> PromptExpansion {
     let mut out = String::with_capacity(content.len());
     let mut out_elements = Vec::new();
     let mut i = 0;
@@ -373,6 +468,8 @@ pub fn expand_numeric_placeholders(content: &str, args: &[PromptArg]) -> PromptE
     PromptExpansion {
         text: out,
         text_elements: out_elements,
+        max_output_tokens,
+        history_depth,
     }
 }
 
@@ -581,6 +678,8 @@ mod tests {
             Some(PromptExpansion {
                 text: "Review Alice changes on main".to_string(),
                 text_elements: Vec::new(),
+                max_output_tokens: None,
+                history_depth: None,
             })
         );
     }
@@ -606,6 +705,8 @@ mod tests {
             Some(PromptExpansion {
                 text: "Pair Alice Smith with dev-main".to_string(),
                 text_elements: Vec::new(),
+                max_output_tokens: None,
+                history_depth: None,
             })
         );
     }
@@ -669,6 +770,8 @@ mod tests {
             Some(PromptExpansion {
                 text: "literal $$USER".to_string(),
                 text_elements: Vec::new(),
+                max_output_tokens: None,
+                history_depth: None,
             })
         );
     }

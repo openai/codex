@@ -26,8 +26,9 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 ## Tools
 
-You can exclude specific tools from the model tool list via `[tools].disallowed_tools`. For
-example, to disable MCP tool search auto mode:
+You can exclude specific tools from the model tool list via `[tools].disallowed_tools`. MCP tool
+descriptions are deferred by default and exposed via `MCPSearch`; disable it if you want full MCP
+descriptions included in the tool list:
 
 ```toml
 [tools]

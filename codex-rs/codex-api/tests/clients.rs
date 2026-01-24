@@ -312,6 +312,7 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
         }],
         tools: Vec::<Value>::new(),
         parallel_tool_calls: false,
+        max_output_tokens: None,
         output_schema: None,
     };
 

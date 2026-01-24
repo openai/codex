@@ -365,6 +365,8 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
             path: first_images[0].clone(),
         }],
         text_elements: first_elements,
+        max_output_tokens: None,
+        history_depth: None,
     });
     chat.queued_user_messages.push_back(UserMessage {
         text: second_text,
@@ -373,6 +375,8 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
             path: second_images[0].clone(),
         }],
         text_elements: second_elements,
+        max_output_tokens: None,
+        history_depth: None,
     });
     chat.refresh_queued_user_messages();
 
@@ -452,6 +456,8 @@ async fn remap_placeholders_uses_attachment_labels() {
         text,
         text_elements: elements,
         local_images: attachments,
+        max_output_tokens: None,
+        history_depth: None,
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -512,6 +518,8 @@ async fn remap_placeholders_uses_byte_ranges_when_placeholder_missing() {
         text,
         text_elements: elements,
         local_images: attachments,
+        max_output_tokens: None,
+        history_depth: None,
     };
     let mut next_label = 3usize;
     let remapped = remap_placeholders_for_message(message, &mut next_label);
@@ -632,6 +640,7 @@ async fn review_restores_context_window_indicator() {
 
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(30));
     assert!(!chat.is_review_mode);
+    assert!(!chat.bottom_pane.is_task_running());
 }
 
 /// Receiving a TokenCount event without usage clears the context indicator.

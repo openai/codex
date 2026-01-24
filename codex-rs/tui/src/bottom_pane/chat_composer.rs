@@ -167,10 +167,14 @@ pub enum InputResult {
     Submitted {
         text: String,
         text_elements: Vec<TextElement>,
+        max_output_tokens: Option<u32>,
+        history_depth: Option<u32>,
     },
     Queued {
         text: String,
         text_elements: Vec<TextElement>,
+        max_output_tokens: Option<u32>,
+        history_depth: Option<u32>,
     },
     Command(SlashCommand),
     CommandWithArgs(SlashCommand, String),
@@ -196,6 +200,8 @@ enum PromptSelectionAction {
     Submit {
         text: String,
         text_elements: Vec<TextElement>,
+        max_output_tokens: Option<u32>,
+        history_depth: Option<u32>,
     },
 }
 
@@ -966,6 +972,8 @@ impl ChatComposer {
                         InputResult::Submitted {
                             text: expanded.text,
                             text_elements: expanded.text_elements,
+                            max_output_tokens: expanded.max_output_tokens,
+                            history_depth: expanded.history_depth,
                         },
                         true,
                     );
@@ -988,6 +996,8 @@ impl ChatComposer {
                                     PromptSelectionAction::Submit {
                                         text,
                                         text_elements,
+                                        max_output_tokens,
+                                        history_depth,
                                     } => {
                                         self.prune_attached_images_for_submission(
                                             &text,
@@ -998,6 +1008,8 @@ impl ChatComposer {
                                             InputResult::Submitted {
                                                 text,
                                                 text_elements,
+                                                max_output_tokens,
+                                                history_depth,
                                             },
                                             true,
                                         );
@@ -1772,7 +1784,9 @@ impl ChatComposer {
 
     /// Prepare text for submission/queuing. Returns None if submission should be suppressed.
     /// On success, clears pending paste payloads because placeholders have been expanded.
-    fn prepare_submission_text(&mut self) -> Option<(String, Vec<TextElement>)> {
+    fn prepare_submission_text(
+        &mut self,
+    ) -> Option<(String, Vec<TextElement>, Option<u32>, Option<u32>)> {
         let mut text = self.textarea.text().to_string();
         let original_input = text.clone();
         let original_text_elements = self.textarea.text_elements();
@@ -1853,9 +1867,13 @@ impl ChatComposer {
                     return None;
                 }
             };
+        let mut max_output_tokens = None;
+        let mut history_depth = None;
         if let Some(expanded) = expanded_prompt {
             text = expanded.text;
             text_elements = expanded.text_elements;
+            max_output_tokens = expanded.max_output_tokens;
+            history_depth = expanded.history_depth;
         }
         // Custom prompt expansion can remove or rewrite image placeholders, so prune any
         // attachments that no longer have a corresponding placeholder in the expanded text.
@@ -1867,7 +1885,7 @@ impl ChatComposer {
             self.history.record_local_submission(&text);
         }
         self.pending_pastes.clear();
-        Some((text, text_elements))
+        Some((text, text_elements, max_output_tokens, history_depth))
     }
 
     /// Common logic for handling message submission/queuing.
@@ -1935,12 +1953,16 @@ impl ChatComposer {
             return (result, true);
         }
 
-        if let Some((text, text_elements)) = self.prepare_submission_text() {
+        if let Some((text, text_elements, max_output_tokens, history_depth)) =
+            self.prepare_submission_text()
+        {
             if should_queue {
                 (
                     InputResult::Queued {
                         text,
                         text_elements,
+                        max_output_tokens,
+                        history_depth,
                     },
                     true,
                 )
@@ -1950,6 +1972,8 @@ impl ChatComposer {
                     InputResult::Submitted {
                         text,
                         text_elements,
+                        max_output_tokens,
+                        history_depth,
                     },
                     true,
                 )
@@ -2830,6 +2854,8 @@ fn prompt_selection_action(
                     return PromptSelectionAction::Submit {
                         text: expanded.text,
                         text_elements: expanded.text_elements,
+                        max_output_tokens: expanded.max_output_tokens,
+                        history_depth: expanded.history_depth,
                     };
                 }
                 let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
@@ -2839,6 +2865,8 @@ fn prompt_selection_action(
                 text: prompt.content.clone(),
                 // By now we know this custom prompt has no args, so no text elements to preserve.
                 text_elements: Vec::new(),
+                max_output_tokens: None,
+                history_depth: None,
             }
         }
     }
@@ -4605,6 +4633,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 assert_eq!(text, "[Image #1] hi");
                 assert_eq!(text_elements.len(), 1);
@@ -4670,6 +4699,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 let expected = format!("{large_content} [Image #1]");
                 assert_eq!(text, expected);
@@ -4714,6 +4744,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 let trimmed = large_content.trim().to_string();
                 assert_eq!(text, format!("{trimmed} [Image #1]"));
@@ -4758,6 +4789,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 assert_eq!(text, "line1\nline2\n [Image #1]");
                 assert!(!text.contains('\r'));
@@ -4815,6 +4847,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 assert_eq!(text, format!("/unknown {large_content}"));
                 assert!(text_elements.is_empty());
@@ -4844,6 +4877,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 assert_eq!(text, "[Image #1]");
                 assert_eq!(text_elements.len(), 1);
@@ -5286,6 +5320,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 let placeholder = local_image_label_text(1);
                 assert_eq!(text, format!("Review {placeholder}"));
@@ -5343,6 +5378,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 let placeholder = local_image_label_text(1);
                 assert_eq!(text, format!("Review {placeholder}"));
@@ -5399,6 +5435,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 assert_eq!(text, "Review changes");
                 assert!(text_elements.is_empty());
@@ -5516,6 +5553,7 @@ mod tests {
             InputResult::Submitted {
                 text,
                 text_elements,
+                ..
             } => {
                 let placeholder = local_image_label_text(1);
                 assert_eq!(text, format!("Review {placeholder}\n\n{large_content}"));
@@ -5939,6 +5977,7 @@ mod tests {
             PromptSelectionAction::Submit {
                 text,
                 text_elements,
+                ..
             } => {
                 assert_eq!(text, "Header: foo\nArgs: foo bar\n");
                 assert!(text_elements.is_empty());

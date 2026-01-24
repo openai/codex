@@ -39,6 +39,9 @@ pub struct Prompt {
     /// Optionally specify the personality of the model.
     pub personality: Option<Personality>,
 
+    /// Optional cap on output tokens.
+    pub max_output_tokens: Option<u32>,
+
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
 }
@@ -253,6 +256,7 @@ mod tests {
             tool_choice: "auto",
             parallel_tool_calls: true,
             reasoning: None,
+            max_output_tokens: None,
             store: false,
             stream: true,
             include: vec![],
@@ -294,6 +298,7 @@ mod tests {
             tool_choice: "auto",
             parallel_tool_calls: true,
             reasoning: None,
+            max_output_tokens: None,
             store: false,
             stream: true,
             include: vec![],
@@ -330,6 +335,7 @@ mod tests {
             tool_choice: "auto",
             parallel_tool_calls: true,
             reasoning: None,
+            max_output_tokens: None,
             store: false,
             stream: true,
             include: vec![],

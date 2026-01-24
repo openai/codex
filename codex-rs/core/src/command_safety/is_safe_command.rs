@@ -1,7 +1,7 @@
 use crate::bash::extract_bash_command;
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::command_safety::windows_safe_commands::is_powershell_executable;
-use crate::command_safety::windows_safe_commands::is_safe_powershell_invocation;
+use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 
 /// `command` must be the _exact_ proposed list of arguments that will be sent
 /// to `execvp(3)`. That is:
@@ -20,7 +20,7 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
 
     let exe = &command[0];
     if is_powershell_executable(exe) {
-        return is_safe_powershell_invocation(command);
+        return is_safe_command_windows(command);
     }
 
     if is_safe_to_call_with_exec(command) {

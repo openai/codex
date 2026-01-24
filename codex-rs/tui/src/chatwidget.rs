@@ -551,6 +551,8 @@ pub(crate) struct UserMessage {
     text: String,
     local_images: Vec<LocalImageAttachment>,
     text_elements: Vec<TextElement>,
+    max_output_tokens: Option<u32>,
+    history_depth: Option<u32>,
 }
 
 impl From<String> for UserMessage {
@@ -560,6 +562,8 @@ impl From<String> for UserMessage {
             local_images: Vec::new(),
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
+            max_output_tokens: None,
+            history_depth: None,
         }
     }
 }
@@ -571,6 +575,8 @@ impl From<&str> for UserMessage {
             local_images: Vec::new(),
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
+            max_output_tokens: None,
+            history_depth: None,
         }
     }
 }
@@ -596,6 +602,8 @@ pub(crate) fn create_initial_user_message(
             text,
             local_images,
             text_elements,
+            max_output_tokens: None,
+            history_depth: None,
         })
     }
 }
@@ -609,12 +617,16 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         text,
         text_elements,
         local_images,
+        max_output_tokens,
+        history_depth,
     } = message;
     if local_images.is_empty() {
         return UserMessage {
             text,
             text_elements,
             local_images,
+            max_output_tokens,
+            history_depth,
         };
     }
 
@@ -669,6 +681,8 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         text: rebuilt,
         local_images: remapped_images,
         text_elements: rebuilt_elements,
+        max_output_tokens,
+        history_depth,
     }
 }
 
@@ -1286,6 +1300,8 @@ impl ChatWidget {
             text: self.bottom_pane.composer_text(),
             text_elements: self.bottom_pane.composer_text_elements(),
             local_images: self.bottom_pane.composer_local_images(),
+            max_output_tokens: None,
+            history_depth: None,
         };
 
         let mut to_merge: Vec<UserMessage> = self.queued_user_messages.drain(..).collect();
@@ -1297,6 +1313,8 @@ impl ChatWidget {
             text: String::new(),
             text_elements: Vec::new(),
             local_images: Vec::new(),
+            max_output_tokens: None,
+            history_depth: None,
         };
         let mut combined_offset = 0usize;
         let mut next_image_label = 1usize;
@@ -2445,6 +2463,8 @@ impl ChatWidget {
                 InputResult::Submitted {
                     text,
                     text_elements,
+                    max_output_tokens,
+                    history_depth,
                 } => {
                     let user_message = UserMessage {
                         text,
@@ -2452,6 +2472,8 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_images_with_placeholders(),
                         text_elements,
+                        max_output_tokens,
+                        history_depth,
                     };
                     if self.is_session_configured() {
                         // Submitted is only emitted when steer is enabled (Enter sends immediately).
@@ -2467,6 +2489,8 @@ impl ChatWidget {
                 InputResult::Queued {
                     text,
                     text_elements,
+                    max_output_tokens,
+                    history_depth,
                 } => {
                     let user_message = UserMessage {
                         text,
@@ -2474,6 +2498,8 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_images_with_placeholders(),
                         text_elements,
+                        max_output_tokens,
+                        history_depth,
                     };
                     self.queue_user_message(user_message);
                 }
@@ -2855,6 +2881,8 @@ impl ChatWidget {
             text,
             local_images,
             text_elements,
+            max_output_tokens,
+            history_depth,
         } = user_message;
         if text.is_empty() && local_images.is_empty() {
             return;
@@ -2923,6 +2951,8 @@ impl ChatWidget {
             model: effective_mode.model().to_string(),
             effort: effective_mode.reasoning_effort(),
             summary: self.config.model_reasoning_summary,
+            max_output_tokens,
+            history_depth,
             final_output_json_schema: None,
             collaboration_mode,
             personality,
@@ -3176,10 +3206,12 @@ impl ChatWidget {
 
         self.is_review_mode = false;
         self.restore_pre_review_token_info();
+        self.update_task_running_state();
         // Append a finishing banner at the end of this turn.
         self.add_to_history(history_cell::new_review_status_line(
             "<< Code review finished >>".to_string(),
         ));
+        self.maybe_send_next_queued_input();
         self.request_redraw();
     }
 
@@ -3393,6 +3425,8 @@ impl ChatWidget {
                 model: Some(switch_model.clone()),
                 effort: Some(Some(default_effort)),
                 summary: None,
+                max_output_tokens: None,
+                history_depth: None,
                 collaboration_mode: None,
                 personality: None,
             }));
@@ -3784,6 +3818,8 @@ impl ChatWidget {
                 model: Some(model_for_action.clone()),
                 effort: Some(effort_for_action),
                 summary: None,
+                max_output_tokens: None,
+                history_depth: None,
                 collaboration_mode: None,
                 personality: None,
             }));
@@ -3957,6 +3993,8 @@ impl ChatWidget {
                 model: Some(model.clone()),
                 effort: Some(effort),
                 summary: None,
+                max_output_tokens: None,
+                history_depth: None,
                 collaboration_mode: None,
                 personality: None,
             }));
@@ -4147,6 +4185,8 @@ impl ChatWidget {
                 model: None,
                 effort: None,
                 summary: None,
+                max_output_tokens: None,
+                history_depth: None,
                 collaboration_mode: None,
                 personality: None,
             }));
@@ -5217,6 +5257,8 @@ impl ChatWidget {
             text: trimmed.to_string(),
             local_images: Vec::new(),
             text_elements: Vec::new(),
+            max_output_tokens: None,
+            history_depth: None,
         });
     }
 

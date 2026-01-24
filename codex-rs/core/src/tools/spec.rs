@@ -10,7 +10,6 @@ use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolRegistryBuilder;
-use crate::truncate::approx_token_count;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
@@ -24,7 +23,6 @@ use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-const MCP_DESCRIPTION_TOKEN_BUDGET_DIVISOR: usize = 10;
 const MCP_SEARCH_TOOL_NAME: &str = "MCPSearch";
 const MCP_SEARCH_TOOL_NAME_NORMALIZED: &str = "mcpsearch";
 const MCP_DESCRIPTION_DEFERRED: &str = "Description deferred. Use MCPSearch.";
@@ -37,7 +35,6 @@ pub(crate) struct ToolsConfig {
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub experimental_supported_tools: Vec<String>,
-    pub mcp_description_token_budget: Option<usize>,
     pub mcp_search_enabled: bool,
 }
 
@@ -85,16 +82,6 @@ impl ToolsConfig {
             }
         };
 
-        let mcp_description_token_budget = model_info
-            .context_window
-            .and_then(|context_window| {
-                let adjusted = context_window
-                    .saturating_mul(model_info.effective_context_window_percent)
-                    / 100;
-                usize::try_from(adjusted).ok()
-            })
-            .map(|adjusted| adjusted / MCP_DESCRIPTION_TOKEN_BUDGET_DIVISOR);
-
         let mcp_search_enabled = !disallowed_tools.iter().any(|tool| {
             let normalized: String = tool
                 .chars()
@@ -111,7 +98,6 @@ impl ToolsConfig {
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
-            mcp_description_token_budget,
             mcp_search_enabled,
         }
     }
@@ -1092,22 +1078,11 @@ fn create_mcp_search_tool() -> ToolSpec {
     })
 }
 
-fn mcp_description_token_count(mcp_tools: &HashMap<String, mcp_types::Tool>) -> usize {
-    mcp_tools
-        .values()
-        .filter_map(|tool| tool.description.as_deref())
-        .map(approx_token_count)
-        .sum()
-}
-
 fn should_defer_mcp_descriptions(
     config: &ToolsConfig,
     mcp_tools: &HashMap<String, mcp_types::Tool>,
 ) -> bool {
-    let Some(budget) = config.mcp_description_token_budget else {
-        return false;
-    };
-    config.mcp_search_enabled && mcp_description_token_count(mcp_tools) > budget
+    config.mcp_search_enabled && !mcp_tools.is_empty()
 }
 /// TODO(dylan): deprecate once we get rid of json tool
 #[derive(Serialize, Deserialize)]
@@ -2117,7 +2092,10 @@ mod tests {
 
     #[test]
     fn test_build_specs_mcp_tools_converted() {
-        let config = test_config();
+        let mut config = test_config();
+        config
+            .disallowed_tools
+            .push(MCP_SEARCH_TOOL_NAME.to_string());
         let model_info = ModelsManager::construct_model_info_offline("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
@@ -2213,9 +2191,8 @@ mod tests {
     }
 
     #[test]
-    fn mcp_tool_descriptions_defer_when_over_budget() {
-        let mut config = test_config();
-        config.model_context_window = Some(100);
+    fn mcp_tool_descriptions_defer_when_search_enabled() {
+        let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline("o3", &config);
         let features = Features::with_defaults();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -2263,7 +2240,6 @@ mod tests {
     #[test]
     fn mcp_tool_descriptions_not_deferred_when_search_disallowed() {
         let mut config = test_config();
-        config.model_context_window = Some(100);
         config
             .disallowed_tools
             .push(MCP_SEARCH_TOOL_NAME.to_string());
@@ -2391,7 +2367,10 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_property_missing_type_defaults_to_string() {
-        let config = test_config();
+        let mut config = test_config();
+        config
+            .disallowed_tools
+            .push(MCP_SEARCH_TOOL_NAME.to_string());
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
@@ -2450,7 +2429,10 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_integer_normalized_to_number() {
-        let config = test_config();
+        let mut config = test_config();
+        config
+            .disallowed_tools
+            .push(MCP_SEARCH_TOOL_NAME.to_string());
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
@@ -2505,7 +2487,10 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_array_without_items_gets_default_string_items() {
-        let config = test_config();
+        let mut config = test_config();
+        config
+            .disallowed_tools
+            .push(MCP_SEARCH_TOOL_NAME.to_string());
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
@@ -2564,7 +2549,10 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_anyof_defaults_to_string() {
-        let config = test_config();
+        let mut config = test_config();
+        config
+            .disallowed_tools
+            .push(MCP_SEARCH_TOOL_NAME.to_string());
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
@@ -2678,7 +2666,10 @@ Examples of valid command strings:
 
     #[test]
     fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
-        let config = test_config();
+        let mut config = test_config();
+        config
+            .disallowed_tools
+            .push(MCP_SEARCH_TOOL_NAME.to_string());
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
