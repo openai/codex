@@ -1213,32 +1213,32 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
     else {
         panic!("expected SubmitUserMessageWithMode, got {event:?}");
     };
-    assert_eq!(text, PLAN_IMPLEMENTATION_EXECUTE_MESSAGE);
-    assert_eq!(collaboration_mode.mode, ModeKind::Execute);
+    assert_eq!(text, PLAN_IMPLEMENTATION_CODING_MESSAGE);
+    assert_eq!(collaboration_mode.mode, ModeKind::Coding);
 }
 
 #[tokio::test]
-async fn submit_user_message_with_mode_sets_execute_collaboration_mode() {
+async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
-    let execute_mode = collaboration_modes::execute_mode(chat.models_manager.as_ref())
-        .expect("expected execute collaboration mode");
-    chat.submit_user_message_with_mode("Implement the plan.".to_string(), execute_mode);
+    let coding_mode = collaboration_modes::coding_mode(chat.models_manager.as_ref())
+        .expect("expected coding collaboration mode");
+    chat.submit_user_message_with_mode("Implement the plan.".to_string(), coding_mode);
 
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Execute,
+                    mode: ModeKind::Coding,
                     ..
                 }),
             personality: None,
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn with execute collab mode, got {other:?}")
+            panic!("expected Op::UserTurn with coding collab mode, got {other:?}")
         }
     }
 }
@@ -2229,10 +2229,10 @@ async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert_eq!(chat.stored_collaboration_mode.mode, ModeKind::Execute);
+    assert_eq!(chat.stored_collaboration_mode.mode, ModeKind::Plan);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert_eq!(chat.stored_collaboration_mode.mode, ModeKind::Plan);
+    assert_eq!(chat.stored_collaboration_mode.mode, ModeKind::Coding);
 
     chat.on_task_started();
     let before = chat.stored_collaboration_mode.clone();
@@ -2267,14 +2267,14 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::PairProgramming,
+                    mode: ModeKind::Plan,
                     ..
                 }),
             personality: None,
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn with pair programming collab mode, got {other:?}")
+            panic!("expected Op::UserTurn with plan collab mode, got {other:?}")
         }
     }
 
@@ -2285,20 +2285,20 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::PairProgramming,
+                    mode: ModeKind::Plan,
                     ..
                 }),
             personality: None,
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn with pair programming collab mode, got {other:?}")
+            panic!("expected Op::UserTurn with plan collab mode, got {other:?}")
         }
     }
 }
 
 #[tokio::test]
-async fn collab_mode_defaults_to_pair_programming_when_enabled() {
+async fn collab_mode_defaults_to_coding_when_enabled() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
@@ -2310,26 +2310,23 @@ async fn collab_mode_defaults_to_pair_programming_when_enabled() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::PairProgramming,
+                    mode: ModeKind::Coding,
                     ..
                 }),
             personality: None,
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn with pair programming collab mode, got {other:?}")
+            panic!("expected Op::UserTurn with coding collab mode, got {other:?}")
         }
     }
 }
 
 #[tokio::test]
-async fn collab_mode_enabling_sets_pair_programming_default() {
+async fn collab_mode_enabling_sets_coding_default() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
-    assert_eq!(
-        chat.stored_collaboration_mode.mode,
-        ModeKind::PairProgramming
-    );
+    assert_eq!(chat.stored_collaboration_mode.mode, ModeKind::Coding);
 }
 
 #[tokio::test]

@@ -4,13 +4,20 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ReasoningEffort;
 
 const COLLABORATION_MODE_PLAN: &str = include_str!("../../templates/collaboration_mode/plan.md");
+const COLLABORATION_MODE_CODING: &str =
+    include_str!("../../templates/collaboration_mode/coding.md");
 const COLLABORATION_MODE_PAIR_PROGRAMMING: &str =
     include_str!("../../templates/collaboration_mode/pair_programming.md");
 const COLLABORATION_MODE_EXECUTE: &str =
     include_str!("../../templates/collaboration_mode/execute.md");
 
 pub(super) fn builtin_collaboration_mode_presets() -> Vec<CollaborationMode> {
-    vec![plan_preset(), pair_programming_preset(), execute_preset()]
+    vec![
+        plan_preset(),
+        coding_preset(),
+        pair_programming_preset(),
+        execute_preset(),
+    ]
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -25,6 +32,17 @@ fn plan_preset() -> CollaborationMode {
             model: "gpt-5.2-codex".to_string(),
             reasoning_effort: Some(ReasoningEffort::High),
             developer_instructions: Some(COLLABORATION_MODE_PLAN.to_string()),
+        },
+    }
+}
+
+fn coding_preset() -> CollaborationMode {
+    CollaborationMode {
+        mode: ModeKind::Coding,
+        settings: Settings {
+            model: "gpt-5.2-codex".to_string(),
+            reasoning_effort: Some(ReasoningEffort::Medium),
+            developer_instructions: Some(COLLABORATION_MODE_CODING.to_string()),
         },
     }
 }

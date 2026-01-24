@@ -156,6 +156,7 @@ pub enum AltScreenMode {
 #[serde(rename_all = "snake_case")]
 pub enum ModeKind {
     Plan,
+    Coding,
     PairProgramming,
     Execute,
     Custom,

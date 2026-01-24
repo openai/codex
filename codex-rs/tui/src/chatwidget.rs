@@ -122,7 +122,7 @@ const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
-const PLAN_IMPLEMENTATION_EXECUTE_MESSAGE: &str = "Implement the plan.";
+const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
@@ -932,10 +932,10 @@ impl ChatWidget {
     }
 
     fn open_plan_implementation_prompt(&mut self) {
-        let execute_mode = collaboration_modes::execute_mode(self.models_manager.as_ref());
-        let (implement_actions, implement_disabled_reason) = match execute_mode {
+        let coding_mode = collaboration_modes::coding_mode(self.models_manager.as_ref());
+        let (implement_actions, implement_disabled_reason) = match coding_mode {
             Some(collaboration_mode) => {
-                let user_text = PLAN_IMPLEMENTATION_EXECUTE_MESSAGE.to_string();
+                let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                     tx.send(AppEvent::SubmitUserMessageWithMode {
                         text: user_text.clone(),
@@ -944,13 +944,13 @@ impl ChatWidget {
                 })];
                 (actions, None)
             }
-            None => (Vec::new(), Some("Execute mode unavailable".to_string())),
+            None => (Vec::new(), Some("Coding mode unavailable".to_string())),
         };
 
         let items = vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
-                description: Some("Switch to Execute and start coding.".to_string()),
+                description: Some("Switch to Coding and start coding.".to_string()),
                 selected_description: None,
                 is_current: false,
                 actions: implement_actions,
@@ -3549,7 +3549,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_collaboration_modes_popup(&mut self) {
-        let presets = self.models_manager.list_collaboration_modes();
+        let presets = collaboration_modes::presets_for_tui(self.models_manager.as_ref());
         if presets.is_empty() {
             self.add_info_message(
                 "No collaboration modes are available right now.".to_string(),
@@ -3563,6 +3563,7 @@ impl ChatWidget {
             .map(|preset| {
                 let name = match preset.mode {
                     ModeKind::Plan => "Plan",
+                    ModeKind::Coding => "Coding",
                     ModeKind::PairProgramming => "Pair Programming",
                     ModeKind::Execute => "Execute",
                     ModeKind::Custom => "Custom",
@@ -4641,6 +4642,7 @@ impl ChatWidget {
         }
         match self.stored_collaboration_mode.mode {
             ModeKind::Plan => Some("Plan"),
+            ModeKind::Coding => Some("Coding"),
             ModeKind::PairProgramming => Some("Pair Programming"),
             ModeKind::Execute => Some("Execute"),
             ModeKind::Custom => None,
@@ -4653,6 +4655,7 @@ impl ChatWidget {
         }
         match self.stored_collaboration_mode.mode {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
+            ModeKind::Coding => Some(CollaborationModeIndicator::Coding),
             ModeKind::PairProgramming => Some(CollaborationModeIndicator::PairProgramming),
             ModeKind::Execute => Some(CollaborationModeIndicator::Execute),
             ModeKind::Custom => None,
@@ -4664,7 +4667,7 @@ impl ChatWidget {
         self.bottom_pane.set_collaboration_mode_indicator(indicator);
     }
 
-    /// Cycle to the next collaboration mode variant (Plan -> PairProgramming -> Execute -> Plan).
+    /// Cycle to the next collaboration mode variant (Plan -> Coding -> Plan).
     fn cycle_collaboration_mode(&mut self) {
         if !self.collaboration_modes_enabled() {
             return;
