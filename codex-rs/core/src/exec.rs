@@ -510,16 +510,31 @@ fn aggregate_output(
     stdout: &StreamOutput<Vec<u8>>,
     stderr: &StreamOutput<Vec<u8>>,
 ) -> StreamOutput<Vec<u8>> {
-    // Best-effort aggregate: stdout then stderr (capped).
-    let mut aggregated = Vec::with_capacity(
-        stdout
-            .text
-            .len()
-            .saturating_add(stderr.text.len())
-            .min(EXEC_OUTPUT_MAX_BYTES),
-    );
-    append_capped(&mut aggregated, &stdout.text, EXEC_OUTPUT_MAX_BYTES);
-    append_capped(&mut aggregated, &stderr.text, EXEC_OUTPUT_MAX_BYTES);
+    let total_len = stdout.text.len().saturating_add(stderr.text.len());
+    let mut aggregated = Vec::with_capacity(total_len.min(EXEC_OUTPUT_MAX_BYTES));
+
+    if total_len <= EXEC_OUTPUT_MAX_BYTES {
+        append_capped(&mut aggregated, &stdout.text, EXEC_OUTPUT_MAX_BYTES);
+        append_capped(&mut aggregated, &stderr.text, EXEC_OUTPUT_MAX_BYTES);
+        return StreamOutput {
+            text: aggregated,
+            truncated_after_lines: None,
+        };
+    }
+
+    let stdout_cap = EXEC_OUTPUT_MAX_BYTES / 3;
+    let mut stdout_take = stdout.text.len().min(stdout_cap);
+    let stderr_cap = EXEC_OUTPUT_MAX_BYTES.saturating_sub(stdout_take);
+    let stderr_take = stderr.text.len().min(stderr_cap);
+    let remaining = stderr_cap.saturating_sub(stderr_take);
+    if remaining > 0 && stdout.text.len() > stdout_take {
+        stdout_take = stdout_take.saturating_add(remaining.min(stdout.text.len() - stdout_take));
+    }
+
+    let total_take = stdout_take.saturating_add(stderr_take);
+    append_capped(&mut aggregated, &stdout.text, stdout_take);
+    append_capped(&mut aggregated, &stderr.text, total_take);
+
     StreamOutput {
         text: aggregated,
         truncated_after_lines: None,
@@ -842,7 +857,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_output_caps_to_max_bytes() {
+    fn aggregate_output_prefers_stderr_on_contention() {
         let stdout = StreamOutput {
             text: vec![b'a'; EXEC_OUTPUT_MAX_BYTES],
             truncated_after_lines: None,
@@ -851,23 +866,53 @@ mod tests {
             text: vec![b'b'; EXEC_OUTPUT_MAX_BYTES],
             truncated_after_lines: None,
         };
+
         let aggregated = aggregate_output(&stdout, &stderr);
+        let stdout_cap = EXEC_OUTPUT_MAX_BYTES / 3;
+        let stderr_cap = EXEC_OUTPUT_MAX_BYTES.saturating_sub(stdout_cap);
+
         assert_eq!(aggregated.text.len(), EXEC_OUTPUT_MAX_BYTES);
-        assert!(aggregated.text.iter().all(|&byte| byte == b'a'));
+        assert_eq!(aggregated.text[..stdout_cap], vec![b'a'; stdout_cap]);
+        assert_eq!(aggregated.text[stdout_cap..], vec![b'b'; stderr_cap]);
     }
 
     #[test]
-    fn aggregate_output_appends_stderr_after_stdout() {
+    fn aggregate_output_fills_remaining_capacity_with_stderr() {
+        let stdout_len = EXEC_OUTPUT_MAX_BYTES / 10;
         let stdout = StreamOutput {
-            text: vec![b'a'; 2],
+            text: vec![b'a'; stdout_len],
             truncated_after_lines: None,
         };
         let stderr = StreamOutput {
-            text: vec![b'b'; 3],
+            text: vec![b'b'; EXEC_OUTPUT_MAX_BYTES],
             truncated_after_lines: None,
         };
+
         let aggregated = aggregate_output(&stdout, &stderr);
-        assert_eq!(aggregated.text, vec![b'a', b'a', b'b', b'b', b'b']);
+        let stderr_cap = EXEC_OUTPUT_MAX_BYTES.saturating_sub(stdout_len);
+
+        assert_eq!(aggregated.text.len(), EXEC_OUTPUT_MAX_BYTES);
+        assert_eq!(aggregated.text[..stdout_len], vec![b'a'; stdout_len]);
+        assert_eq!(aggregated.text[stdout_len..], vec![b'b'; stderr_cap]);
+    }
+
+    #[test]
+    fn aggregate_output_rebalances_when_stderr_is_small() {
+        let stdout = StreamOutput {
+            text: vec![b'a'; EXEC_OUTPUT_MAX_BYTES],
+            truncated_after_lines: None,
+        };
+        let stderr = StreamOutput {
+            text: vec![b'b'; 1],
+            truncated_after_lines: None,
+        };
+
+        let aggregated = aggregate_output(&stdout, &stderr);
+        let stdout_len = EXEC_OUTPUT_MAX_BYTES.saturating_sub(1);
+
+        assert_eq!(aggregated.text.len(), EXEC_OUTPUT_MAX_BYTES);
+        assert_eq!(aggregated.text[..stdout_len], vec![b'a'; stdout_len]);
+        assert_eq!(aggregated.text[stdout_len..], vec![b'b'; 1]);
     }
 
     #[cfg(unix)]
