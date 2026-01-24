@@ -43,10 +43,10 @@ pub(crate) enum WindowsSandboxFallbackReason {
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
-    ExternalApprovalRequest {
-        thread_id: ThreadId,
-        event: Event,
-    },
+    /// Open the agent picker for switching active threads.
+    OpenAgentPicker,
+    /// Switch the active thread to the selected agent.
+    SelectAgentThread(ThreadId),
 
     /// Start a new session.
     NewSession,

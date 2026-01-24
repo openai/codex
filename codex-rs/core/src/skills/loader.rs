@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::config_loader::ConfigLayerStack;
+use crate::config_loader::ConfigLayerStackOrdering;
 use crate::skills::model::SkillError;
 use crate::skills::model::SkillInterface;
 use crate::skills::model::SkillLoadOutcome;
@@ -133,7 +134,9 @@ where
 fn skill_roots_from_layer_stack_inner(config_layer_stack: &ConfigLayerStack) -> Vec<SkillRoot> {
     let mut roots = Vec::new();
 
-    for layer in config_layer_stack.layers_high_to_low() {
+    for layer in
+        config_layer_stack.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, true)
+    {
         let Some(config_folder) = layer.config_folder() else {
             continue;
         };
@@ -575,11 +578,17 @@ mod tests {
     }
 
     async fn make_config_for_cwd(codex_home: &TempDir, cwd: PathBuf) -> Config {
+        let trust_root = cwd
+            .ancestors()
+            .find(|ancestor| ancestor.join(".git").exists())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| cwd.clone());
+
         fs::write(
             codex_home.path().join(CONFIG_TOML_FILE),
             toml::to_string(&ConfigToml {
                 projects: Some(HashMap::from([(
-                    cwd.to_string_lossy().to_string(),
+                    trust_root.to_string_lossy().to_string(),
                     ProjectConfig {
                         trust_level: Some(TrustLevel::Trusted),
                     },
@@ -657,6 +666,59 @@ mod tests {
                     user_folder.join("skills").join(".system")
                 ),
                 (SkillScope::Admin, system_folder.join("skills")),
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+
+        let user_folder = tmp.path().join("home/codex");
+        fs::create_dir_all(&user_folder)?;
+
+        let project_root = tmp.path().join("repo");
+        let dot_codex = project_root.join(".codex");
+        fs::create_dir_all(&dot_codex)?;
+
+        let user_file = AbsolutePathBuf::from_absolute_path(user_folder.join("config.toml"))?;
+        let project_dot_codex = AbsolutePathBuf::from_absolute_path(&dot_codex)?;
+
+        let layers = vec![
+            ConfigLayerEntry::new(
+                ConfigLayerSource::User { file: user_file },
+                TomlValue::Table(toml::map::Map::new()),
+            ),
+            ConfigLayerEntry::new_disabled(
+                ConfigLayerSource::Project {
+                    dot_codex_folder: project_dot_codex,
+                },
+                TomlValue::Table(toml::map::Map::new()),
+                "marked untrusted",
+            ),
+        ];
+        let stack = ConfigLayerStack::new(
+            layers,
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )?;
+
+        let got = skill_roots_from_layer_stack(&stack)
+            .into_iter()
+            .map(|root| (root.scope, root.path))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            got,
+            vec![
+                (SkillScope::Repo, dot_codex.join("skills")),
+                (SkillScope::User, user_folder.join("skills")),
+                (
+                    SkillScope::System,
+                    user_folder.join("skills").join(".system")
+                ),
             ]
         );
 

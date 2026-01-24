@@ -72,6 +72,7 @@ struct HeadTailSummary {
 /// Hard cap to bound worst‑case work per request.
 const MAX_SCAN_FILES: usize = 10000;
 const HEAD_RECORD_LIMIT: usize = 10;
+const USER_EVENT_SCAN_LIMIT: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadSortKey {
@@ -943,14 +944,20 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
     let reader = tokio::io::BufReader::new(file);
     let mut lines = reader.lines();
     let mut summary = HeadTailSummary::default();
+    let mut lines_scanned = 0usize;
 
-    while summary.head.len() < head_limit {
+    while lines_scanned < head_limit
+        || (summary.saw_session_meta
+            && !summary.saw_user_event
+            && lines_scanned < head_limit + USER_EVENT_SCAN_LIMIT)
+    {
         let line_opt = lines.next_line().await?;
         let Some(line) = line_opt else { break };
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
+        lines_scanned += 1;
 
         let parsed: Result<RolloutLine, _> = serde_json::from_str(trimmed);
         let Ok(rollout_line) = parsed else { continue };
@@ -963,9 +970,11 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     .created_at
                     .clone()
                     .or_else(|| Some(rollout_line.timestamp.clone()));
-                if let Ok(val) = serde_json::to_value(session_meta_line) {
+                summary.saw_session_meta = true;
+                if summary.head.len() < head_limit
+                    && let Ok(val) = serde_json::to_value(session_meta_line)
+                {
                     summary.head.push(val);
-                    summary.saw_session_meta = true;
                 }
             }
             RolloutItem::ResponseItem(item) => {
@@ -973,7 +982,9 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     .created_at
                     .clone()
                     .or_else(|| Some(rollout_line.timestamp.clone()));
-                if let Ok(val) = serde_json::to_value(item) {
+                if summary.head.len() < head_limit
+                    && let Ok(val) = serde_json::to_value(item)
+                {
                     summary.head.push(val);
                 }
             }
