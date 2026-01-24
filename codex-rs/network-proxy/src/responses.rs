@@ -1,3 +1,7 @@
+use crate::reasons::REASON_DENIED;
+use crate::reasons::REASON_METHOD_NOT_ALLOWED;
+use crate::reasons::REASON_NOT_ALLOWED;
+use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
 use rama_http::Body;
 use rama_http::Response;
 use rama_http::StatusCode;
@@ -32,19 +36,23 @@ pub fn json_response<T: Serialize>(value: &T) -> Response {
 
 pub fn blocked_header_value(reason: &str) -> &'static str {
     match reason {
-        "not_allowed" | "not_allowed_local" => "blocked-by-allowlist",
-        "denied" => "blocked-by-denylist",
-        "method_not_allowed" => "blocked-by-method-policy",
+        REASON_NOT_ALLOWED | REASON_NOT_ALLOWED_LOCAL => "blocked-by-allowlist",
+        REASON_DENIED => "blocked-by-denylist",
+        REASON_METHOD_NOT_ALLOWED => "blocked-by-method-policy",
         _ => "blocked-by-policy",
     }
 }
 
 pub fn blocked_message(reason: &str) -> &'static str {
     match reason {
-        "not_allowed" => "Codex blocked this request: domain not in allowlist.",
-        "not_allowed_local" => "Codex blocked this request: local/private addresses not allowed.",
-        "denied" => "Codex blocked this request: domain denied by policy.",
-        "method_not_allowed" => "Codex blocked this request: method not allowed in limited mode.",
+        REASON_NOT_ALLOWED => "Codex blocked this request: domain not in allowlist.",
+        REASON_NOT_ALLOWED_LOCAL => {
+            "Codex blocked this request: local/private addresses not allowed."
+        }
+        REASON_DENIED => "Codex blocked this request: domain denied by policy.",
+        REASON_METHOD_NOT_ALLOWED => {
+            "Codex blocked this request: method not allowed in limited mode."
+        }
         _ => "Codex blocked this request by network policy.",
     }
 }

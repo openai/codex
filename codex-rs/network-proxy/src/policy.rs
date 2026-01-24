@@ -2,6 +2,7 @@
 use crate::config::NetworkMode;
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::ensure;
 use globset::GlobBuilder;
 use globset::GlobSet;
 use globset::GlobSetBuilder;
@@ -9,14 +10,29 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
 use std::net::Ipv6Addr;
-use url::Host;
+use url::Host as UrlHost;
 
-/// Returns true if the host string is a loopback hostname or IP literal.
-///
-/// Expects a host (optionally with a trailing dot), not a full URL.
-pub fn is_loopback_host(host: &str) -> bool {
-    let host = host.to_ascii_lowercase();
-    if host == "localhost" || host == "localhost." {
+/// A normalized host string for policy evaluation.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Host(String);
+
+impl Host {
+    pub fn parse(input: &str) -> Result<Self> {
+        let normalized = normalize_host(input);
+        ensure!(!normalized.is_empty(), "host is empty");
+        Ok(Self(normalized))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Returns true if the host is a loopback hostname or IP literal.
+pub fn is_loopback_host(host: &Host) -> bool {
+    let host = host.as_str();
+    let host = host.split_once('%').map(|(ip, _)| ip).unwrap_or(host);
+    if host == "localhost" {
         return true;
     }
     if let Ok(ip) = host.parse::<IpAddr>() {
@@ -251,7 +267,7 @@ fn parse_domain_for_constraints(domain: &str) -> String {
     if host.contains('*') || host.contains('?') || host.contains('%') {
         return domain.to_string();
     }
-    match Host::parse(host) {
+    match UrlHost::parse(host) {
         Ok(host) => host.to_string(),
         Err(_) => String::new(),
     }
@@ -348,17 +364,17 @@ mod tests {
 
     #[test]
     fn is_loopback_host_handles_localhost_variants() {
-        assert!(is_loopback_host("localhost"));
-        assert!(is_loopback_host("localhost."));
-        assert!(is_loopback_host("LOCALHOST"));
-        assert!(!is_loopback_host("notlocalhost"));
+        assert!(is_loopback_host(&Host::parse("localhost").unwrap()));
+        assert!(is_loopback_host(&Host::parse("localhost.").unwrap()));
+        assert!(is_loopback_host(&Host::parse("LOCALHOST").unwrap()));
+        assert!(!is_loopback_host(&Host::parse("notlocalhost").unwrap()));
     }
 
     #[test]
     fn is_loopback_host_handles_ip_literals() {
-        assert!(is_loopback_host("127.0.0.1"));
-        assert!(is_loopback_host("::1"));
-        assert!(!is_loopback_host("1.2.3.4"));
+        assert!(is_loopback_host(&Host::parse("127.0.0.1").unwrap()));
+        assert!(is_loopback_host(&Host::parse("::1").unwrap()));
+        assert!(!is_loopback_host(&Host::parse("1.2.3.4").unwrap()));
     }
 
     #[test]

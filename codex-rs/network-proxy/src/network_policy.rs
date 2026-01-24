@@ -1,3 +1,4 @@
+use crate::reasons::REASON_POLICY_DENIED;
 use crate::runtime::HostBlockDecision;
 use crate::runtime::HostBlockReason;
 use crate::state::NetworkProxyState;
@@ -57,7 +58,7 @@ impl NetworkDecision {
     pub fn deny(reason: impl Into<String>) -> Self {
         let reason = reason.into();
         let reason = if reason.is_empty() {
-            "policy_denied".to_string()
+            REASON_POLICY_DENIED.to_string()
         } else {
             reason
         };
@@ -116,6 +117,8 @@ mod tests {
     use super::*;
 
     use crate::config::NetworkPolicy;
+    use crate::reasons::REASON_DENIED;
+    use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
     use crate::state::network_proxy_state_for_policy;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
@@ -185,7 +188,7 @@ mod tests {
         assert_eq!(
             decision,
             NetworkDecision::Deny {
-                reason: "denied".to_string()
+                reason: REASON_DENIED.to_string()
             }
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -223,7 +226,7 @@ mod tests {
         assert_eq!(
             decision,
             NetworkDecision::Deny {
-                reason: "not_allowed_local".to_string()
+                reason: REASON_NOT_ALLOWED_LOCAL.to_string()
             }
         );
         assert_eq!(calls.load(Ordering::SeqCst), 0);

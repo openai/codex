@@ -1,8 +1,12 @@
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
+use crate::policy::Host;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
 use crate::policy::normalize_host;
+use crate::reasons::REASON_DENIED;
+use crate::reasons::REASON_NOT_ALLOWED;
+use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
 use crate::state::NetworkProxyConstraints;
 use crate::state::build_config_state;
 use crate::state::validate_policy_against_constraints;
@@ -39,9 +43,9 @@ pub enum HostBlockReason {
 impl HostBlockReason {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Denied => "denied",
-            Self::NotAllowed => "not_allowed",
-            Self::NotAllowedLocal => "not_allowed_local",
+            Self::Denied => REASON_DENIED,
+            Self::NotAllowed => REASON_NOT_ALLOWED,
+            Self::NotAllowedLocal => REASON_NOT_ALLOWED_LOCAL,
         }
     }
 }
@@ -186,6 +190,10 @@ impl NetworkProxyState {
 
     pub async fn host_blocked(&self, host: &str, port: u16) -> Result<HostBlockDecision> {
         self.reload_if_needed().await?;
+        let host = match Host::parse(host) {
+            Ok(host) => host,
+            Err(_) => return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed)),
+        };
         let (deny_set, allow_set, allow_local_binding, allowed_domains_empty, allowed_domains) = {
             let guard = self.state.read().await;
             (
@@ -197,15 +205,17 @@ impl NetworkProxyState {
             )
         };
 
+        let host_str = host.as_str();
+
         // Decision order matters:
         //  1) explicit deny always wins
         //  2) local/private networking is opt-in (defense-in-depth)
         //  3) allowlist is enforced when configured
-        if deny_set.is_match(host) {
+        if deny_set.is_match(host_str) {
             return Ok(HostBlockDecision::Blocked(HostBlockReason::Denied));
         }
 
-        let is_allowlisted = allow_set.is_match(host);
+        let is_allowlisted = allow_set.is_match(host_str);
         if !allow_local_binding {
             // If the intent is "prevent access to local/internal networks", we must not rely solely
             // on string checks like `localhost` / `127.0.0.1`. Attackers can use DNS rebinding or
@@ -216,11 +226,13 @@ impl NetworkProxyState {
             // allowlisted; hostnames that resolve to local/private IPs are blocked even if
             // allowlisted.
             let local_literal = {
-                let host = host.trim();
-                let host = host.split_once('%').map(|(ip, _)| ip).unwrap_or(host);
-                if is_loopback_host(host) {
+                let host_no_scope = host_str
+                    .split_once('%')
+                    .map(|(ip, _)| ip)
+                    .unwrap_or(host_str);
+                if is_loopback_host(&host) {
                     true
-                } else if let Ok(ip) = host.parse::<IpAddr>() {
+                } else if let Ok(ip) = host_no_scope.parse::<IpAddr>() {
                     is_non_public_ip(ip)
                 } else {
                     false
@@ -228,10 +240,10 @@ impl NetworkProxyState {
             };
 
             if local_literal {
-                if !is_explicit_local_allowlisted(&allowed_domains, host) {
+                if !is_explicit_local_allowlisted(&allowed_domains, &host) {
                     return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
                 }
-            } else if host_resolves_to_non_public_ip(host, port).await {
+            } else if host_resolves_to_non_public_ip(host_str, port).await {
                 return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowedLocal));
             }
         }
@@ -429,8 +441,8 @@ fn log_domain_list_changes(list_name: &str, previous: &[String], next: &[String]
     }
 }
 
-fn is_explicit_local_allowlisted(allowed_domains: &[String], host: &str) -> bool {
-    let normalized_host = normalize_host(host);
+fn is_explicit_local_allowlisted(allowed_domains: &[String], host: &Host) -> bool {
+    let normalized_host = host.as_str();
     allowed_domains.iter().any(|pattern| {
         let pattern = pattern.trim();
         if pattern == "*" || pattern.starts_with("*.") || pattern.starts_with("**.") {

@@ -5,6 +5,9 @@ use crate::network_policy::NetworkPolicyRequest;
 use crate::network_policy::NetworkProtocol;
 use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
+use crate::reasons::REASON_METHOD_NOT_ALLOWED;
+use crate::reasons::REASON_NOT_ALLOWED;
+use crate::reasons::REASON_PROXY_DISABLED;
 use crate::responses::blocked_header_value;
 use crate::responses::json_response;
 use crate::runtime::unix_socket_permissions_supported;
@@ -188,7 +191,7 @@ async fn http_connect_accept(
         let _ = app_state
             .record_blocked(BlockedRequest::new(
                 host.clone(),
-                "method_not_allowed".to_string(),
+                REASON_METHOD_NOT_ALLOWED.to_string(),
                 client.clone(),
                 Some("CONNECT".to_string()),
                 Some(NetworkMode::Limited),
@@ -197,7 +200,7 @@ async fn http_connect_accept(
             .await;
         let client = client.as_deref().unwrap_or_default();
         warn!("CONNECT blocked by method policy (client={client}, host={host}, mode=limited)");
-        return Err(blocked_text("method_not_allowed"));
+        return Err(blocked_text(REASON_METHOD_NOT_ALLOWED));
     }
 
     req.extensions_mut().insert(ProxyTarget(authority));
@@ -358,7 +361,7 @@ async fn http_plain_proxy(
             warn!(
                 "unix socket blocked by method policy (client={client}, method={method}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
             );
-            return Ok(json_blocked("unix-socket", "method_not_allowed"));
+            return Ok(json_blocked("unix-socket", REASON_METHOD_NOT_ALLOWED));
         }
 
         if !unix_socket_permissions_supported() {
@@ -387,7 +390,7 @@ async fn http_plain_proxy(
             Ok(false) => {
                 let client = client.as_deref().unwrap_or_default();
                 warn!("unix socket blocked (client={client}, path={socket_path})");
-                Ok(json_blocked("unix-socket", "not_allowed"))
+                Ok(json_blocked("unix-socket", REASON_NOT_ALLOWED))
             }
             Err(err) => {
                 warn!("unix socket check failed: {err}");
@@ -464,7 +467,7 @@ async fn http_plain_proxy(
         let _ = app_state
             .record_blocked(BlockedRequest::new(
                 host.clone(),
-                "method_not_allowed".to_string(),
+                REASON_METHOD_NOT_ALLOWED.to_string(),
                 client.clone(),
                 Some(req.method().as_str().to_string()),
                 Some(NetworkMode::Limited),
@@ -476,7 +479,7 @@ async fn http_plain_proxy(
         warn!(
             "request blocked by method policy (client={client}, host={host}, method={method}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
         );
-        return Ok(json_blocked(&host, "method_not_allowed"));
+        return Ok(json_blocked(&host, REASON_METHOD_NOT_ALLOWED));
     }
 
     let client = client.as_deref().unwrap_or_default();
@@ -569,7 +572,7 @@ async fn proxy_disabled_response(
     let _ = app_state
         .record_blocked(BlockedRequest::new(
             host,
-            "proxy_disabled".to_string(),
+            REASON_PROXY_DISABLED.to_string(),
             client,
             method,
             None,
