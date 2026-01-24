@@ -8,6 +8,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use tokio_util::sync::CancellationToken;
 
 use crate::AuthManager;
+use crate::CodexAuth;
 use crate::SandboxState;
 use crate::config::Config;
 use crate::features::Feature;
@@ -25,6 +26,9 @@ pub async fn list_accessible_connectors_from_mcp_tools(
 
     let auth_manager = auth_manager_from_config(config);
     let auth = auth_manager.auth().await;
+    if auth.as_ref().is_some_and(CodexAuth::is_api_key) {
+        return Ok(Vec::new());
+    }
     let mcp_servers = with_codex_apps_mcp(HashMap::new(), true, auth.as_ref(), config);
     if mcp_servers.is_empty() {
         return Ok(Vec::new());
