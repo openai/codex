@@ -210,12 +210,46 @@ impl CollaborationMode {
             settings: updated_settings,
         }
     }
+
+    /// Applies a mask to this collaboration mode, returning a new collaboration mode
+    /// with the mask values applied. Fields in the mask that are `Some` will override
+    /// the corresponding fields, while `None` values will preserve the original values.
+    ///
+    /// The `name` field in the mask is ignored as it's metadata for the mask itself.
+    pub fn apply_mask(&self, mask: &CollaborationModeMask) -> Self {
+        let settings = self.settings_ref();
+        CollaborationMode {
+            mode: mask.mode.unwrap_or(self.mode),
+            settings: Settings {
+                model: mask
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| settings.model.clone()),
+                reasoning_effort: mask.reasoning_effort.or(settings.reasoning_effort),
+                developer_instructions: mask
+                    .developer_instructions
+                    .clone()
+                    .or_else(|| settings.developer_instructions.clone()),
+            },
+        }
+    }
 }
 
 /// Settings for a collaboration mode.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
 pub struct Settings {
     pub model: String,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub developer_instructions: Option<String>,
+}
+
+/// A mask for collaboration mode settings, allowing partial updates.
+/// All fields except `name` are optional, enabling selective updates.
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
+pub struct CollaborationModeMask {
+    pub name: String,
+    pub mode: Option<ModeKind>,
+    pub model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub developer_instructions: Option<String>,
 }
