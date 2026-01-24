@@ -2267,14 +2267,14 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Plan,
+                    mode: ModeKind::Coding,
                     ..
                 }),
             personality: None,
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn with plan collab mode, got {other:?}")
+            panic!("expected Op::UserTurn with coding collab mode, got {other:?}")
         }
     }
 
@@ -2285,14 +2285,14 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Plan,
+                    mode: ModeKind::Coding,
                     ..
                 }),
             personality: None,
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn with plan collab mode, got {other:?}")
+            panic!("expected Op::UserTurn with coding collab mode, got {other:?}")
         }
     }
 }
