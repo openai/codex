@@ -377,6 +377,20 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Restores composer text, images and pending pastes from a PreparedDraft
+    pub(crate) fn restore_stash(&mut self, stash: PreparedDraft) {
+        self.set_composer_text_with_pending_pastes(
+            stash.text,
+            stash.text_elements,
+            stash
+                .local_images
+                .iter()
+                .map(|img| img.path.clone())
+                .collect(),
+            stash.pending_pastes,
+        );
+    }
+
     #[allow(dead_code)]
     pub(crate) fn set_composer_input_enabled(
         &mut self,
@@ -1121,6 +1135,58 @@ mod tests {
         let area = Rect::new(0, 0, width, height);
         assert_snapshot!(
             "status_and_queued_messages_snapshot",
+            render_snapshot(&pane, area)
+        );
+    }
+
+    #[test]
+    fn status_and_stash_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.set_stashed(true);
+
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        assert_snapshot!("status_and_stash_snapshot", render_snapshot(&pane, area));
+    }
+
+    #[test]
+    fn status_and_queued_messages_and_stash_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.set_queued_user_messages(vec!["Queued follow-up question".to_string()]);
+        pane.set_stashed(true);
+
+        let width = 48;
+        let height = pane.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        assert_snapshot!(
+            "status_and_queued_messages_and_stash_snapshot",
             render_snapshot(&pane, area)
         );
     }

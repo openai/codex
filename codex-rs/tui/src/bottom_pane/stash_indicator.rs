@@ -3,6 +3,7 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use crate::render::renderable::Renderable;
+use crate::wrapping::{RtOptions, word_wrap_lines};
 
 pub(crate) struct StashIndicator {
     pub stash_exists: bool,
@@ -20,7 +21,16 @@ impl StashIndicator {
             return Box::new(());
         }
 
-        Paragraph::new(vec![Line::from(" ⬇ Stashed changes ".dim().italic())]).into()
+        let wrapped = word_wrap_lines(
+            vec!["Stashed (restores after current message is sent)"]
+                .into_iter()
+                .map(|line| line.dim().italic()),
+            RtOptions::new(width as usize)
+                .initial_indent(Line::from("  ↳ ".dim()))
+                .subsequent_indent(Line::from("    ")),
+        );
+
+        Paragraph::new(wrapped).into()
     }
 }
 

@@ -2383,6 +2383,17 @@ impl ChatWidget {
                     self.request_redraw();
                 }
             }
+            KeyEvent {
+                code: KeyCode::Char('s'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } if self.bottom_pane.no_modal_or_popup_active() && self.stash.is_some() => {
+                if let Some(stash) = self.stash.take() {
+                    self.bottom_pane.restore_stash(stash);
+                    self.refresh_stash_indicator();
+                    return;
+                }
+            }
             _ => match self.bottom_pane.handle_key_event(key_event) {
                 InputResult::Submitted {
                     text,
@@ -2407,16 +2418,7 @@ impl ChatWidget {
                     }
 
                     if let Some(stash) = self.stash.take() {
-                        self.bottom_pane.set_composer_text_with_pending_pastes(
-                            stash.text,
-                            stash.text_elements,
-                            stash
-                                .local_images
-                                .iter()
-                                .map(|img| img.path.clone())
-                                .collect(),
-                            stash.pending_pastes,
-                        );
+                        self.bottom_pane.restore_stash(stash);
                         self.refresh_stash_indicator();
                     }
                 }
