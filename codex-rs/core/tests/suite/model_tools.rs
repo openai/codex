@@ -68,7 +68,7 @@ async fn model_selects_expected_tools() {
             "update_plan".to_string(),
             "request_user_input".to_string(),
             "web_search".to_string(),
-            "view_image".to_string()
+            "view_image".to_string(),
             "glob_files".to_string(),
             "think".to_string(),
             "write_file".to_string(),
@@ -118,7 +118,7 @@ async fn model_selects_expected_tools() {
             "request_user_input".to_string(),
             "apply_patch".to_string(),
             "web_search".to_string(),
-            "view_image".to_string()
+            "view_image".to_string(),
             "glob_files".to_string(),
             "think".to_string(),
             "write_file".to_string(),
@@ -142,7 +142,7 @@ async fn model_selects_expected_tools() {
             "update_plan".to_string(),
             "request_user_input".to_string(),
             "web_search".to_string(),
-            "view_image".to_string()
+            "view_image".to_string(),
             "glob_files".to_string(),
             "think".to_string(),
             "write_file".to_string(),
@@ -167,7 +167,7 @@ async fn model_selects_expected_tools() {
             "request_user_input".to_string(),
             "apply_patch".to_string(),
             "web_search".to_string(),
-            "view_image".to_string()
+            "view_image".to_string(),
             "glob_files".to_string(),
             "think".to_string(),
             "write_file".to_string(),
@@ -192,7 +192,7 @@ async fn model_selects_expected_tools() {
             "request_user_input".to_string(),
             "apply_patch".to_string(),
             "web_search".to_string(),
-            "view_image".to_string()
+            "view_image".to_string(),
             "glob_files".to_string(),
             "think".to_string(),
             "write_file".to_string(),

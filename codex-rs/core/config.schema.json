@@ -1,6 +1,5 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "additionalProperties": false,
   "definitions": {
     "AbsolutePathBuf": {
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
@@ -147,10 +146,16 @@
             "child_agents_md": {
               "type": "boolean"
             },
+            "code_search": {
+              "type": "boolean"
+            },
             "collab": {
               "type": "boolean"
             },
             "collaboration_modes": {
+              "type": "boolean"
+            },
+            "compact_v2": {
               "type": "boolean"
             },
             "connectors": {
@@ -163,6 +168,9 @@
               "type": "boolean"
             },
             "enable_request_compression": {
+              "type": "boolean"
+            },
+            "enhanced_list_dir": {
               "type": "boolean"
             },
             "exec_policy": {
@@ -180,6 +188,15 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "lsp": {
+              "type": "boolean"
+            },
+            "mcp_resource_tools": {
+              "type": "boolean"
+            },
+            "micro_compact": {
+              "type": "boolean"
+            },
             "powershell_utf8": {
               "type": "boolean"
             },
@@ -192,19 +209,31 @@
             "responses_websockets": {
               "type": "boolean"
             },
+            "rich_grep": {
+              "type": "boolean"
+            },
             "shell_snapshot": {
               "type": "boolean"
             },
             "shell_tool": {
               "type": "boolean"
             },
+            "smart_edit": {
+              "type": "boolean"
+            },
             "steer": {
+              "type": "boolean"
+            },
+            "subagent": {
               "type": "boolean"
             },
             "undo": {
               "type": "boolean"
             },
             "unified_exec": {
+              "type": "boolean"
+            },
+            "web_fetch": {
               "type": "boolean"
             },
             "web_search": {
@@ -358,9 +387,12 @@
       "type": "string"
     },
     "ModelProviderInfo": {
-      "additionalProperties": false,
       "description": "Serializable representation of a provider definition.",
       "properties": {
+        "adapter": {
+          "description": "Optional: LLM adapter implementation to use. Adapter handle request transformation and API communication. Built-in options: \"genai\", \"anthropic\"",
+          "type": "string"
+        },
         "base_url": {
           "description": "Base URL for the provider's OpenAI-compatible API.",
           "type": "string"
@@ -391,6 +423,21 @@
           "description": "Additional HTTP headers to include in requests to this provider where the (key, value) pairs are the header name and value.",
           "type": "object"
         },
+        "interceptors": {
+          "description": "Optional: Request interceptors to apply. Interceptors modify requests before sending (e.g., header injection). Built-in: \"session_id_header\" (injects session_id into \"extra\" header)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "model_id": {
+          "description": "Explicit model ID for metadata resolution.\n\nWhen set, this ID is used to look up the model info from `~/.codex/model_info.toml` or code-defined info.\n\nUse this when the API model name (`model_name`) differs from the logical model ID. For example, Volcengine Ark endpoints use `ep-xxx` as model_name but belong to the `deepseek-r1` model.\n\nExample config: ```toml [model_providers.volcengine_ark.ext] model_name = \"ep-20250109-xxxxx\"  # Sent to API model_id = \"deepseek-r1\"          # Used for metadata lookup ```",
+          "type": "string"
+        },
+        "model_name": {
+          "description": "Optional: Model name for this provider configuration\n\nWhen set, this model name will be used in API requests for this provider. This allows multiple ModelProviderInfo entries to share the same provider and base_url but use different models.",
+          "type": "string"
+        },
         "name": {
           "description": "Friendly display name.",
           "type": "string"
@@ -404,6 +451,12 @@
         },
         "request_max_retries": {
           "description": "Maximum number of times to retry a failed HTTP request to this provider.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "request_timeout_ms": {
+          "description": "HTTP request total timeout in milliseconds (per-provider override).\n\nOverrides the global `http_request_timeout_ms` setting for this provider. Useful for slow gateways that need longer timeouts.\n\nIf not set, uses global config or defaults to 600000ms (10 minutes).",
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
@@ -424,6 +477,18 @@
           "format": "uint64",
           "minimum": 0.0,
           "type": "integer"
+        },
+        "streaming": {
+          "default": true,
+          "description": "Whether to use streaming responses (SSE), defaults to true.",
+          "type": "boolean"
+        },
+        "supported_reasoning_efforts": {
+          "description": "Supported reasoning effort options for UI display. If not set, defaults to [Low, Medium, High].",
+          "items": {
+            "$ref": "#/definitions/ReasoningEffortPreset"
+          },
+          "type": "array"
         },
         "wire_api": {
           "allOf": [
@@ -784,6 +849,28 @@
       ],
       "type": "string"
     },
+    "ReasoningEffortPreset": {
+      "description": "A reasoning effort option that can be surfaced for a model.",
+      "properties": {
+        "description": {
+          "description": "Short human description shown next to the effort in UIs.",
+          "type": "string"
+        },
+        "effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Effort level that the model supports."
+        }
+      },
+      "required": [
+        "description",
+        "effort"
+      ],
+      "type": "object"
+    },
     "ReasoningSummary": {
       "description": "A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process. See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries",
       "oneOf": [
@@ -1133,10 +1220,16 @@
         "child_agents_md": {
           "type": "boolean"
         },
+        "code_search": {
+          "type": "boolean"
+        },
         "collab": {
           "type": "boolean"
         },
         "collaboration_modes": {
+          "type": "boolean"
+        },
+        "compact_v2": {
           "type": "boolean"
         },
         "connectors": {
@@ -1149,6 +1242,9 @@
           "type": "boolean"
         },
         "enable_request_compression": {
+          "type": "boolean"
+        },
+        "enhanced_list_dir": {
           "type": "boolean"
         },
         "exec_policy": {
@@ -1166,6 +1262,15 @@
         "include_apply_patch_tool": {
           "type": "boolean"
         },
+        "lsp": {
+          "type": "boolean"
+        },
+        "mcp_resource_tools": {
+          "type": "boolean"
+        },
+        "micro_compact": {
+          "type": "boolean"
+        },
         "powershell_utf8": {
           "type": "boolean"
         },
@@ -1178,19 +1283,31 @@
         "responses_websockets": {
           "type": "boolean"
         },
+        "rich_grep": {
+          "type": "boolean"
+        },
         "shell_snapshot": {
           "type": "boolean"
         },
         "shell_tool": {
           "type": "boolean"
         },
+        "smart_edit": {
+          "type": "boolean"
+        },
         "steer": {
+          "type": "boolean"
+        },
+        "subagent": {
           "type": "boolean"
         },
         "undo": {
           "type": "boolean"
         },
         "unified_exec": {
+          "type": "boolean"
+        },
+        "web_fetch": {
           "type": "boolean"
         },
         "web_search": {

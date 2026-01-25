@@ -252,6 +252,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "Hello".to_string(),
                 }],
+                end_turn: None,
             },
             // Regular assistant message - should be kept
             ResponseItem::Message {
@@ -260,6 +261,7 @@ mod tests {
                 content: vec![ContentItem::OutputText {
                     text: "Hi there".to_string(),
                 }],
+                end_turn: None,
             },
             // Ghost snapshot - should be filtered
             ResponseItem::GhostSnapshot {
@@ -272,6 +274,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: format!("{}\nPrevious summary content", SUMMARY_PREFIX_V2),
                 }],
+                end_turn: None,
             },
             // Another user message - should be kept
             ResponseItem::Message {
@@ -280,6 +283,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "Follow-up question".to_string(),
                 }],
+                end_turn: None,
             },
         ];
 
@@ -293,7 +297,7 @@ mod tests {
         let summary = "User discussed Rust ownership. Key topics covered.";
         let msg = create_summary_message(summary, false);
 
-        if let ResponseItem::Message { id, role, content } = msg {
+        if let ResponseItem::Message { id, role, content, .. } = msg {
             assert_eq!(id, Some("compact_summary".to_string()));
             assert_eq!(role, "user");
             assert_eq!(content.len(), 1);
@@ -340,6 +344,7 @@ mod tests {
             content: vec![ContentItem::InputText {
                 text: "Regular message".to_string(),
             }],
+            end_turn: None,
         };
         assert!(!CompactBoundary::is_boundary_marker(&regular));
     }

@@ -2243,6 +2243,7 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
+                ultrathink_enabled: false,
             })
             .await
             .unwrap();

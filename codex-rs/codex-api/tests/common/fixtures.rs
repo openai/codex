@@ -21,6 +21,7 @@ pub fn text_prompt(content: &str) -> Prompt {
             content: vec![ContentItem::InputText {
                 text: content.to_string(),
             }],
+            end_turn: None,
         }],
         tools: vec![],
         parallel_tool_calls: false,
@@ -40,6 +41,7 @@ pub fn tool_prompt(content: &str, tools: Vec<Value>) -> Prompt {
             content: vec![ContentItem::InputText {
                 text: content.to_string(),
             }],
+            end_turn: None,
         }],
         tools,
         parallel_tool_calls: true,
@@ -63,6 +65,7 @@ pub fn image_prompt(content: &str, image_data_url: &str) -> Prompt {
                     text: content.to_string(),
                 },
             ],
+            end_turn: None,
         }],
         tools: vec![],
         parallel_tool_calls: false,
@@ -81,6 +84,7 @@ pub fn continuation_prompt(content: &str, previous_response_id: String) -> Promp
             content: vec![ContentItem::InputText {
                 text: content.to_string(),
             }],
+            end_turn: None,
         }],
         tools: vec![],
         parallel_tool_calls: false,
@@ -241,6 +245,7 @@ pub fn multi_turn_prompt(
         content: vec![ContentItem::InputText {
             text: user_message.to_string(),
         }],
+        end_turn: None,
     });
 
     Prompt {
@@ -276,6 +281,7 @@ pub fn tool_output_prompt(
                 content: vec![ContentItem::InputText {
                     text: original_question.to_string(),
                 }],
+                end_turn: None,
             },
             // Assistant's function call
             ResponseItem::FunctionCall {
@@ -309,6 +315,7 @@ pub fn assistant_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
+        end_turn: None,
     }
 }
 
@@ -320,6 +327,7 @@ pub fn user_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
+        end_turn: None,
     }
 }
 

@@ -12,5 +12,6 @@ expression: popup
                               reasoning.
   4. gpt-5.1-codex-mini       Optimized for codex. Cheaper, faster, but less
                               capable.
+  5. ollama-chat/ollama-chat  http://localhost:11434/v1
 
   Press enter to select reasoning effort, or esc to dismiss.

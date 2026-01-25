@@ -152,7 +152,7 @@ mod tests {
         let item = CompactBoundary::create(CompactTrigger::Manual, 100_000);
 
         match &item {
-            ResponseItem::Message { id, content, role } => {
+            ResponseItem::Message { id, content, role, .. } => {
                 assert_eq!(role, "user");
                 assert!(
                     id.as_ref()
@@ -180,6 +180,7 @@ mod tests {
             content: vec![ContentItem::InputText {
                 text: "any text".to_string(),
             }],
+            end_turn: None,
         };
         assert!(CompactBoundary::is_boundary_marker(&item));
     }
@@ -192,6 +193,7 @@ mod tests {
             content: vec![ContentItem::InputText {
                 text: "[Conversation compacted at 2024-01-01T00:00:00Z (auto), pre-compact tokens: 100000]".to_string(),
             }],
+            end_turn: None,
         };
         assert!(CompactBoundary::is_boundary_marker(&item));
     }
@@ -204,6 +206,7 @@ mod tests {
             content: vec![ContentItem::InputText {
                 text: "Hello, how are you?".to_string(),
             }],
+            end_turn: None,
         };
         assert!(!CompactBoundary::is_boundary_marker(&item));
     }
@@ -217,6 +220,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "first".to_string(),
                 }],
+                end_turn: None,
             },
             CompactBoundary::create(CompactTrigger::Auto, 50_000),
             ResponseItem::Message {
@@ -225,6 +229,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "second".to_string(),
                 }],
+                end_turn: None,
             },
             CompactBoundary::create(CompactTrigger::Auto, 100_000),
             ResponseItem::Message {
@@ -233,6 +238,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "third".to_string(),
                 }],
+                end_turn: None,
             },
         ];
 
@@ -249,6 +255,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "old message".to_string(),
                 }],
+                end_turn: None,
             },
             CompactBoundary::create(CompactTrigger::Auto, 100_000),
             ResponseItem::Message {
@@ -257,6 +264,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "new message".to_string(),
                 }],
+                end_turn: None,
             },
         ];
 
@@ -273,6 +281,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "first".to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -280,6 +289,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "second".to_string(),
                 }],
+                end_turn: None,
             },
         ];
 
@@ -297,6 +307,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "message".to_string(),
                 }],
+                end_turn: None,
             },
             CompactBoundary::create(CompactTrigger::Manual, 100_000),
         ];

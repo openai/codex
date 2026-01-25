@@ -173,6 +173,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -203,6 +204,7 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {

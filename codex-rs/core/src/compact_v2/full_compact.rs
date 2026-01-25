@@ -571,6 +571,7 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: "Hello world".to_string(),
             }],
+            end_turn: None,
         };
         let text = extract_text_from_item(&item);
         assert_eq!(text, Some("Hello world".to_string()));
@@ -591,6 +592,7 @@ mod tests {
             content: vec![ContentItem::InputText {
                 text: "System prompt".to_string(),
             }],
+            end_turn: None,
         }];
 
         let boundary = ResponseItem::Message {
@@ -599,6 +601,7 @@ mod tests {
             content: vec![ContentItem::InputText {
                 text: "Conversation compacted".to_string(),
             }],
+            end_turn: None,
         };
 
         let restored = RestoredContext {
@@ -613,6 +616,7 @@ mod tests {
             content: vec![ContentItem::InputText {
                 text: "User question".to_string(),
             }],
+            end_turn: None,
         }];
         let config = CompactConfig::default();
 

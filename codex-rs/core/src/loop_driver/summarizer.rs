@@ -322,6 +322,7 @@ mod tests {
             content: vec![ContentItem::InputText {
                 text: text.to_string(),
             }],
+            end_turn: None,
         }
     }
 
@@ -332,6 +333,7 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: text.to_string(),
             }],
+            end_turn: None,
         }
     }
 
@@ -359,6 +361,7 @@ mod tests {
             id: None,
             role: "user".to_string(),
             content: vec![],
+            end_turn: None,
         };
         assert!(format_single_message(&empty_msg).is_empty());
     }

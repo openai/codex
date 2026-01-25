@@ -236,7 +236,7 @@ async fn responses_client_uses_responses_path_for_responses_wire() -> Result<()>
 
     let body = serde_json::json!({ "echo": true });
     let _stream = client
-        .stream(body, HeaderMap::new(), Compression::None, None)
+        .stream(body, HeaderMap::new(), Compression::None, None, None)
         .await?;
 
     let requests = state.take_stream_requests();
@@ -252,7 +252,7 @@ async fn responses_client_uses_chat_path_for_chat_wire() -> Result<()> {
 
     let body = serde_json::json!({ "echo": true });
     let _stream = client
-        .stream(body, HeaderMap::new(), Compression::None, None)
+        .stream(body, HeaderMap::new(), Compression::None, None, None)
         .await?;
 
     let requests = state.take_stream_requests();
@@ -269,7 +269,7 @@ async fn streaming_client_adds_auth_headers() -> Result<()> {
 
     let body = serde_json::json!({ "model": "gpt-test" });
     let _stream = client
-        .stream(body, HeaderMap::new(), Compression::None, None)
+        .stream(body, HeaderMap::new(), Compression::None, None, None)
         .await?;
 
     let requests = state.take_stream_requests();

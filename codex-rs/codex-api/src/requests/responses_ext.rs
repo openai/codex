@@ -359,6 +359,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "Hello".to_string(),
                 }],
+                end_turn: None,
             },
             ResponseItem::Reasoning {
                 id: "reasoning-1".to_string(),
@@ -375,6 +376,7 @@ mod tests {
                 content: vec![ContentItem::OutputText {
                     text: "Hi!".to_string(),
                 }],
+                end_turn: None,
             },
         ];
 

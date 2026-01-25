@@ -740,6 +740,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "Hello".to_string(),
                 }],
+                end_turn: None,
             }],
             tools: vec![],
             parallel_tool_calls: false,

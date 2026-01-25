@@ -34,8 +34,8 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::features::FEATURES;
 use codex_core::features::Feature;
+use codex_core::features::all_features;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -1648,8 +1648,7 @@ fn create_config_toml(
     let feature_entries = features
         .into_iter()
         .map(|(feature, enabled)| {
-            let key = FEATURES
-                .iter()
+            let key = all_features()
                 .find(|spec| spec.id == feature)
                 .map(|spec| spec.key)
                 .unwrap_or_else(|| panic!("missing feature key for {feature:?}"));

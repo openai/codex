@@ -626,6 +626,7 @@ mod tests {
         let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            web_search_mode: None,
             web_search_config: None,
         });
 
@@ -679,6 +680,7 @@ mod tests {
         let mut tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
+            web_search_mode: None,
             web_search_config: None,
         });
 

@@ -673,6 +673,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "Hello".to_string(),
                 }],
+                end_turn: None,
             }],
             tools: vec![],
             parallel_tool_calls: false,
@@ -698,6 +699,7 @@ mod tests {
                     content: vec![ContentItem::InputText {
                         text: "Run a command".to_string(),
                     }],
+                    end_turn: None,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -705,6 +707,7 @@ mod tests {
                     content: vec![ContentItem::OutputText {
                         text: "I'll run that for you.".to_string(),
                     }],
+                    end_turn: None,
                 },
                 ResponseItem::FunctionCall {
                     id: None,

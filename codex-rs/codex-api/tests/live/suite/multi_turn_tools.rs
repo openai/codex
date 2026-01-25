@@ -156,6 +156,7 @@ pub async fn run(adapter: &dyn ProviderAdapter, config: &AdapterConfig) -> Resul
         content: vec![ContentItem::InputText {
             text: user_question.to_string(),
         }],
+        end_turn: None,
     };
 
     // Build prompt for turn 2 with tool results

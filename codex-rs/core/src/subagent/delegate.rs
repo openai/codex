@@ -497,6 +497,7 @@ mod tests {
             id: None,
             role: "assistant".to_string(),
             content: vec![],
+            end_turn: None,
         };
         assert!(!is_response_item_tool_call(&message));
     }
@@ -541,6 +542,7 @@ mod tests {
             id: None,
             role: "assistant".to_string(),
             content: vec![],
+            end_turn: None,
         };
         assert_eq!(extract_complete_task_output_from_response(&message), None);
     }

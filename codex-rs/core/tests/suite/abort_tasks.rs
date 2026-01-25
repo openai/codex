@@ -206,6 +206,7 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();
@@ -224,6 +225,7 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            ultrathink_enabled: false,
         })
         .await
         .unwrap();

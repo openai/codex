@@ -369,7 +369,7 @@ mod tests {
                 CommandItem::UserPrompt(_) | CommandItem::PluginCommand(_) => None,
             })
             .collect();
-        assert_eq!(cmds, vec!["model", "mention", "mcp"]);
+        assert_eq!(cmds, vec!["mcp", "mention", "model"]);
     }
 
     #[test]

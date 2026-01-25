@@ -138,6 +138,7 @@ mod tests {
             content: vec![ContentItem::InputText {
                 text: "<environment_context>\n<cwd>/test</cwd>\n</environment_context>".to_string(),
             }],
+            end_turn: None,
         }
     }
 
@@ -149,6 +150,7 @@ mod tests {
                 text: "# AGENTS.md instructions for /test\n\n<INSTRUCTIONS>test</INSTRUCTIONS>"
                     .to_string(),
             }],
+            end_turn: None,
         }
     }
 
@@ -159,6 +161,7 @@ mod tests {
             content: vec![ContentItem::InputText {
                 text: text.to_string(),
             }],
+            end_turn: None,
         }
     }
 

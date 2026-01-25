@@ -185,7 +185,7 @@ mod tests {
         let msg = create_summary_message(summary, false);
 
         match msg {
-            ResponseItem::Message { id, role, content } => {
+            ResponseItem::Message { id, role, content, .. } => {
                 assert_eq!(id, Some("compact_summary".to_string()));
                 assert_eq!(role, "user");
                 assert_eq!(content.len(), 1);

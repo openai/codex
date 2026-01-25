@@ -260,6 +260,7 @@ mod tests {
             content: vec![ContentItem::InputText {
                 text: text.to_string(),
             }],
+            end_turn: None,
         }
     }
 
@@ -270,6 +271,7 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: text.to_string(),
             }],
+            end_turn: None,
         }
     }
 
@@ -304,6 +306,7 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: "Error".to_string(),
             }],
+            end_turn: None,
         };
         assert!(is_synthetic_error_message(&synthetic));
 
