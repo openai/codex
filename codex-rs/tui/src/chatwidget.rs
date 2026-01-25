@@ -739,6 +739,7 @@ impl ChatWidget {
             None,
         );
         self.refresh_model_display();
+        self.sync_personality_command_enabled();
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -2024,6 +2025,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
+        widget.sync_personality_command_enabled();
         widget.update_collaboration_mode_indicator();
 
         widget
@@ -2148,6 +2150,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
+        widget.sync_personality_command_enabled();
 
         widget
     }
@@ -2273,6 +2276,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
+        widget.sync_personality_command_enabled();
         widget.update_collaboration_mode_indicator();
 
         widget
@@ -4697,10 +4701,7 @@ impl ChatWidget {
             mask.model = Some(model.to_string());
         }
         self.refresh_model_display();
-    }
-
-    pub(crate) fn set_personality(&mut self, personality: Personality) {
-        self.config.model_personality = Some(personality);
+        self.sync_personality_command_enabled();
     }
 
     pub(crate) fn current_model(&self) -> &str {
@@ -4711,6 +4712,11 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.as_deref())
             .unwrap_or_else(|| self.current_collaboration_mode.model())
+    }
+
+    fn sync_personality_command_enabled(&mut self) {
+        self.bottom_pane
+            .set_personality_command_enabled(self.current_model_supports_personality());
     }
 
     fn current_model_supports_personality(&self) -> bool {

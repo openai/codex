@@ -2763,7 +2763,7 @@ mod tests {
             };
             Arc::new(new_session_info(
                 app.chat_widget.config_ref(),
-                app.chat_widget.current_model().model(),
+                app.chat_widget.current_model(),
                 event,
                 is_first,
             )) as Arc<dyn HistoryCell>

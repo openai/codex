@@ -844,9 +844,8 @@ async fn make_chatwidget_manual(
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
-        current_model: CurrentModel::new(resolved_model.clone(), false),
     };
-    widget.update_current_model_state(resolved_model);
+    widget.set_model(&resolved_model);
     (widget, rx, op_rx)
 }
 
