@@ -261,6 +261,12 @@ jobs:
             /var/cache/apt
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
+      - if: ${{ matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Install Zig (aarch64 musl)
+        uses: ziglang/setup-zig@v1
+        with:
+          version: 0.13.0
+
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
         env:

@@ -32,6 +32,60 @@ case "${TARGET}" in
     ;;
 esac
 
+# For aarch64 musl, plain clang --target may pick up glibc headers (leading to
+# missing __isoc23_* symbols) and BoringSSL treats large stack frames as
+# errors. Use Zig for a musl sysroot and append warning overrides last.
+if [[ "${TARGET}" == "aarch64-unknown-linux-musl" ]]; then
+  if ! command -v zig >/dev/null; then
+    echo "zig is required for ${TARGET} (install via ziglang/setup-zig)" >&2
+    exit 1
+  fi
+
+  tools_dir="${RUNNER_TEMP:-/tmp}/codex-musl-tools-${TARGET}"
+  mkdir -p "${tools_dir}"
+
+  zigcc="${tools_dir}/zigcc"
+  zigcxx="${tools_dir}/zigcxx"
+
+  cat >"${zigcc}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec zig cc "\$@" -target ${TARGET} -Wno-frame-larger-than -Wno-error=frame-larger-than
+EOF
+
+  cat >"${zigcxx}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec zig c++ "\$@" -target ${TARGET} -Wno-frame-larger-than -Wno-error=frame-larger-than
+EOF
+
+  chmod +x "${zigcc}" "${zigcxx}"
+
+  target_cc_var="CC_${TARGET}"
+  target_cc_var="${target_cc_var//-/_}"
+
+  triple="${TARGET//-/_}"
+  triple="${triple^^}"
+  cargo_linker_var="CARGO_TARGET_${triple}_LINKER"
+
+  echo "CC=${zigcc}" >> "$GITHUB_ENV"
+  echo "TARGET_CC=${zigcc}" >> "$GITHUB_ENV"
+  echo "${target_cc_var}=${zigcc}" >> "$GITHUB_ENV"
+  echo "${cargo_linker_var}=${zigcc}" >> "$GITHUB_ENV"
+
+  echo "CXX=${zigcxx}" >> "$GITHUB_ENV"
+  echo "CMAKE_C_COMPILER=${zigcc}" >> "$GITHUB_ENV"
+  echo "CMAKE_CXX_COMPILER=${zigcxx}" >> "$GITHUB_ENV"
+  echo "CMAKE_ASM_COMPILER=${zigcc}" >> "$GITHUB_ENV"
+
+  # Keep flags minimal; the wrappers provide target + warning overrides last.
+  echo "CFLAGS=-pthread" >> "$GITHUB_ENV"
+  echo "CXXFLAGS=-pthread -stdlib=libc++" >> "$GITHUB_ENV"
+
+  echo "CMAKE_ARGS=-DCMAKE_HAVE_THREADS_LIBRARY=1 -DCMAKE_USE_PTHREADS_INIT=1 -DCMAKE_THREAD_LIBS_INIT=-pthread -DTHREADS_PREFER_PTHREAD_FLAG=ON" >> "$GITHUB_ENV"
+  exit 0
+fi
+
 if command -v clang++ >/dev/null; then
   cxx="$(command -v clang++)"
   echo "CXXFLAGS=--target=${TARGET} -stdlib=libc++ -pthread" >> "$GITHUB_ENV"

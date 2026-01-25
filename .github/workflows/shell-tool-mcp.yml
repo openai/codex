@@ -97,6 +97,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - if: ${{ matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Install Zig (aarch64 musl)
+        uses: ziglang/setup-zig@v1
+        with:
+          version: 0.13.0
+
       - if: ${{ matrix.install_musl }}
         name: Install musl build dependencies
         env:
