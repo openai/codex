@@ -29,6 +29,7 @@ use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::ContextCompactedEvent;
 use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -392,6 +393,51 @@ async fn submission_shows_status_indicator_before_turn_started() {
     assert!(
         !chat.bottom_pane.status_indicator_visible(),
         "expected status indicator hidden after turn completes"
+    );
+}
+
+#[tokio::test]
+async fn auto_compact_keeps_status_indicator_before_turn_started() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let _ = next_submit_op(&mut op_rx);
+
+    assert!(
+        chat.bottom_pane.status_indicator_visible(),
+        "expected status indicator to show while waiting for TurnStarted"
+    );
+    assert!(
+        !chat.bottom_pane.is_task_running(),
+        "expected pending submission not to mark task running"
+    );
+    assert_eq!(chat.current_status_header, "Working");
+
+    chat.handle_codex_event(Event {
+        id: "compact-1".into(),
+        msg: EventMsg::ContextCompacted(ContextCompactedEvent {}),
+    });
+    chat.handle_codex_event(Event {
+        id: "compact-2".into(),
+        msg: EventMsg::Warning(WarningEvent {
+            message: "auto compact warning".to_string(),
+        }),
+    });
+
+    assert!(
+        chat.bottom_pane.status_indicator_visible(),
+        "expected status indicator to remain visible after auto compact"
+    );
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("expected status widget");
+    assert!(
+        !status.interrupt_hint_visible(),
+        "expected interrupt hint to stay hidden before TurnStarted"
     );
 }
 
