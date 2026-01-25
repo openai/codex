@@ -592,7 +592,6 @@ fn build_agent_spawn_config(
     config.model_reasoning_summary = turn.client.get_reasoning_summary();
     config.developer_instructions = turn.developer_instructions.clone();
     config.compact_prompt = turn.compact_prompt.clone();
-    config.user_instructions = turn.user_instructions.clone();
     config.shell_environment_policy = turn.shell_environment_policy.clone();
     config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     config.cwd = turn.cwd.clone();
@@ -1135,7 +1134,6 @@ mod tests {
         };
         turn.developer_instructions = Some("dev".to_string());
         turn.compact_prompt = Some("compact".to_string());
-        turn.user_instructions = Some("user".to_string());
         turn.shell_environment_policy = ShellEnvironmentPolicy {
             use_profile: true,
             ..ShellEnvironmentPolicy::default()
@@ -1155,7 +1153,6 @@ mod tests {
         expected.model_reasoning_summary = turn.client.get_reasoning_summary();
         expected.developer_instructions = turn.developer_instructions.clone();
         expected.compact_prompt = turn.compact_prompt.clone();
-        expected.user_instructions = turn.user_instructions.clone();
         expected.shell_environment_policy = turn.shell_environment_policy.clone();
         expected.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
         expected.cwd = turn.cwd.clone();
@@ -1168,5 +1165,32 @@ mod tests {
             .set(turn.sandbox_policy)
             .expect("sandbox policy set");
         assert_eq!(config, expected);
+    }
+
+    #[tokio::test]
+    async fn build_agent_spawn_config_preserves_base_user_instructions() {
+        let (session, mut turn) = make_session_and_context().await;
+        let session_source = turn.client.get_session_source();
+        let mut base_config = (*turn.client.config()).clone();
+        base_config.user_instructions = Some("base-user".to_string());
+        turn.user_instructions = Some("resolved-user".to_string());
+        turn.client = ModelClient::new(
+            Arc::new(base_config.clone()),
+            Some(session.services.auth_manager.clone()),
+            turn.client.get_model_info(),
+            turn.client.get_otel_manager(),
+            turn.client.get_provider(),
+            turn.client.get_reasoning_effort(),
+            turn.client.get_reasoning_summary(),
+            session.conversation_id,
+            session_source,
+        );
+        let base_instructions = BaseInstructions {
+            text: "base".to_string(),
+        };
+
+        let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
+
+        assert_eq!(config.user_instructions, base_config.user_instructions);
     }
 }
