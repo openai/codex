@@ -8,6 +8,15 @@
 | Git (optional, recommended) | 2.23+ for built-in PR helpers                                   |
 | RAM                         | 4-GB minimum (8-GB recommended)                                 |
 
+### Install via curl
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/openai/codex/main/installer/install.sh | bash
+```
+
+The curl installer writes under `CODEX_HOME` (default: `~/.codex`). See
+`installer/README.md` for the detailed layout and mechanics.
+
 ### DotSlash
 
 The GitHub Release also contains a [DotSlash](https://dotslash-cli.com/) file for the Codex CLI named `codex`. Using a DotSlash file makes it possible to make a lightweight commit to source control to ensure all contributors use the same version of an executable, regardless of what platform they use for development.
