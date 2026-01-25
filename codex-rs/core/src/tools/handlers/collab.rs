@@ -78,6 +78,9 @@ impl ToolHandler for CollabHandler {
 mod spawn {
     use super::*;
     use crate::agent::AgentRole;
+    use crate::agent::MAX_THREAD_SPAWN_DEPTH;
+    use crate::agent::exceeds_thread_spawn_depth_limit;
+    use crate::agent::next_thread_spawn_depth;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
     use std::sync::Arc;
@@ -107,6 +110,13 @@ mod spawn {
                 "Empty message can't be sent to an agent".to_string(),
             ));
         }
+        let session_source = turn.client.get_session_source();
+        let child_depth = next_thread_spawn_depth(&session_source);
+        if exceeds_thread_spawn_depth_limit(child_depth) {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "agent depth limit reached: max depth is {MAX_THREAD_SPAWN_DEPTH}"
+            )));
+        }
         session
             .send_event(
                 &turn,
@@ -132,6 +142,7 @@ mod spawn {
                 prompt.clone(),
                 Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                     parent_thread_id: session.conversation_id,
+                    depth: child_depth,
                 })),
             )
             .await
