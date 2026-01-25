@@ -448,6 +448,11 @@ pub(crate) struct ChatWidget {
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
     /// can update the status header without accidentally clearing the spinner for an active turn.
     agent_turn_running: bool,
+    /// Tracks a user turn submission that has not yet produced a TurnStarted event.
+    ///
+    /// This keeps the bottom pane in a "running" visual state between submit and backend
+    /// acknowledgment (for example, after interrupt + immediate resubmission).
+    pending_turn_start: bool,
     /// Tracks per-server MCP startup state while startup is in progress.
     ///
     /// The map is `Some(_)` from the first `McpStartupUpdate` until `McpStartupComplete`, and the
@@ -670,8 +675,9 @@ impl ChatWidget {
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
     /// both the agent turn lifecycle and MCP startup lifecycle.
     fn update_task_running_state(&mut self) {
-        self.bottom_pane
-            .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+        self.bottom_pane.set_task_running(
+            self.agent_turn_running || self.pending_turn_start || self.mcp_startup_status.is_some(),
+        );
     }
 
     fn restore_reasoning_status_header(&mut self) {
@@ -859,6 +865,7 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
+        self.pending_turn_start = false;
         self.agent_turn_running = true;
         self.saw_plan_update_this_turn = false;
         self.bottom_pane.clear_quit_shortcut_hint();
@@ -1106,6 +1113,7 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
+        self.pending_turn_start = false;
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
@@ -1990,6 +1998,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
+            pending_turn_start: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -2114,6 +2123,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
+            pending_turn_start: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -2239,6 +2249,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
+            pending_turn_start: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -2386,7 +2397,6 @@ impl ChatWidget {
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
-                        self.set_status_header(String::from("Working"));
                         self.submit_user_message(user_message);
                     } else {
                         self.queue_user_message(user_message);
@@ -2843,9 +2853,15 @@ impl ChatWidget {
             personality: None,
         };
 
-        self.codex_op_tx.send(op).unwrap_or_else(|e| {
-            tracing::error!("failed to send message: {e}");
-        });
+        self.pending_turn_start = true;
+        self.update_task_running_state();
+        self.bottom_pane.set_interrupt_hint_visible(true);
+        self.set_status_header(String::from("Working"));
+        if let Err(err) = self.codex_op_tx.send(op) {
+            tracing::error!("failed to send message: {err}");
+            self.pending_turn_start = false;
+            self.update_task_running_state();
+        }
 
         // Persist the text to cross-session message history.
         if !text.is_empty() {
