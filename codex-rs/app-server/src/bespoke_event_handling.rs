@@ -242,6 +242,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                     // and emit the corresponding EventMsg, we repurpose the call_id as the item_id.
                     item_id: item_id.clone(),
                     reason,
+                    command: Some(command_string.clone()),
+                    cwd: Some(cwd.clone()),
+                    command_actions: Some(command_actions.clone()),
                     proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                 };
                 let rx = outgoing
@@ -1004,7 +1007,15 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
 
             if let Some(request_id) = pending {
-                let rollout_path = conversation.rollout_path();
+                let Some(rollout_path) = conversation.rollout_path() else {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: "thread has no persisted rollout".to_string(),
+                        data: None,
+                    };
+                    outgoing.send_error(request_id, error).await;
+                    return;
+                };
                 let response = match read_summary_from_rollout(
                     rollout_path.as_path(),
                     fallback_model_provider.as_str(),

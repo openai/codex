@@ -9,6 +9,7 @@ use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -23,11 +24,14 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMode {
-    CollaborationMode::Custom(Settings {
-        model: "gpt-5.1".to_string(),
-        reasoning_effort: None,
-        developer_instructions: instructions.map(str::to_string),
-    })
+    CollaborationMode {
+        mode: ModeKind::Custom,
+        settings: Settings {
+            model: "gpt-5.1".to_string(),
+            reasoning_effort: None,
+            developer_instructions: instructions.map(str::to_string),
+        },
+    }
 }
 
 fn collab_xml(text: &str) -> String {
@@ -118,13 +122,14 @@ async fn override_turn_context_records_permissions_update() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
     test.codex.submit(Op::Shutdown).await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
-    let rollout_path = test.codex.rollout_path();
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
     let rollout_text = read_rollout_text(&rollout_path).await?;
     let developer_texts = rollout_developer_texts(&rollout_text);
     let approval_texts: Vec<&String> = developer_texts
@@ -160,13 +165,14 @@ async fn override_turn_context_records_environment_update() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
     test.codex.submit(Op::Shutdown).await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
-    let rollout_path = test.codex.rollout_path();
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
     let rollout_text = read_rollout_text(&rollout_path).await?;
     let env_texts = rollout_environment_texts(&rollout_text);
     let new_cwd_text = new_cwd.path().display().to_string();
@@ -196,13 +202,14 @@ async fn override_turn_context_records_collaboration_update() -> Result<()> {
             effort: None,
             summary: None,
             collaboration_mode: Some(collaboration_mode),
+            personality: None,
         })
         .await?;
 
     test.codex.submit(Op::Shutdown).await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
-    let rollout_path = test.codex.rollout_path();
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
     let rollout_text = read_rollout_text(&rollout_path).await?;
     let developer_texts = rollout_developer_texts(&rollout_text);
     let collab_text = collab_xml(collab_text);

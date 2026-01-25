@@ -5,7 +5,9 @@ use crate::protocol::common::AuthMode;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode as CoreSandboxMode;
 use codex_protocol::config_types::Verbosity;
@@ -29,6 +31,7 @@ use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
 use codex_protocol::protocol::SkillInterface as CoreSkillInterface;
 use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
 use codex_protocol::protocol::SkillScope as CoreSkillScope;
+use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
@@ -392,6 +395,8 @@ pub struct ConfigLayer {
     pub name: ConfigLayerSource,
     pub version: String,
     pub config: JsonValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -697,6 +702,7 @@ pub enum SessionSource {
     VsCode,
     Exec,
     AppServer,
+    SubAgent(CoreSubAgentSource),
     #[serde(other)]
     Unknown,
 }
@@ -708,7 +714,7 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::VSCode => SessionSource::VsCode,
             CoreSessionSource::Exec => SessionSource::Exec,
             CoreSessionSource::Mcp => SessionSource::AppServer,
-            CoreSessionSource::SubAgent(_) => SessionSource::Unknown,
+            CoreSessionSource::SubAgent(sub) => SessionSource::SubAgent(sub),
             CoreSessionSource::Unknown => SessionSource::Unknown,
         }
     }
@@ -721,6 +727,7 @@ impl From<SessionSource> for CoreSessionSource {
             SessionSource::VsCode => CoreSessionSource::VSCode,
             SessionSource::Exec => CoreSessionSource::Exec,
             SessionSource::AppServer => CoreSessionSource::Mcp,
+            SessionSource::SubAgent(sub) => CoreSessionSource::SubAgent(sub),
             SessionSource::Unknown => CoreSessionSource::Unknown,
         }
     }
@@ -931,7 +938,7 @@ pub struct CollaborationModeListParams {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CollaborationModeListResponse {
-    pub data: Vec<CollaborationMode>,
+    pub data: Vec<CollaborationModeMask>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -960,6 +967,39 @@ pub struct McpServerStatus {
 #[ts(export_to = "v2/")]
 pub struct ListMcpServerStatusResponse {
     pub data: Vec<McpServerStatus>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    /// If None, there are no more items to return.
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AppsListParams {
+    /// Opaque pagination cursor returned by a previous call.
+    pub cursor: Option<String>,
+    /// Optional page size; defaults to a reasonable server-side value.
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AppInfo {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub logo_url: Option<String>,
+    pub install_url: Option<String>,
+    #[serde(default)]
+    pub is_accessible: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AppsListResponse {
+    pub data: Vec<AppInfo>,
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// If None, there are no more items to return.
     pub next_cursor: Option<String>,
@@ -1046,6 +1086,8 @@ pub struct ThreadStartParams {
     pub config: Option<HashMap<String, JsonValue>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
+    pub personality: Option<Personality>,
+    pub ephemeral: Option<bool>,
     /// If true, opt into emitting raw response items on the event stream.
     ///
     /// This is for internal use only (e.g. Codex Cloud).
@@ -1100,6 +1142,7 @@ pub struct ThreadResumeParams {
     pub config: Option<HashMap<String, serde_json::Value>>,
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
+    pub personality: Option<Personality>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1218,6 +1261,9 @@ pub struct ThreadListParams {
     /// Optional provider filter; when set, only sessions recorded under these
     /// providers are returned. When present but empty, includes all providers.
     pub model_providers: Option<Vec<String>>,
+    /// Optional archived filter; when set to true, only archived threads are returned.
+    /// If false or null, only non-archived threads are returned.
+    pub archived: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
@@ -1257,6 +1303,23 @@ pub struct ThreadLoadedListResponse {
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// if None, there are no more items to return.
     pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadReadParams {
+    pub thread_id: String,
+    /// When true, include turns and their items from rollout history.
+    #[serde(default)]
+    pub include_turns: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadReadResponse {
+    pub thread: Thread,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1421,7 +1484,7 @@ pub struct Thread {
     #[ts(type = "number")]
     pub updated_at: i64,
     /// [UNSTABLE] Path to the thread on disk.
-    pub path: PathBuf,
+    pub path: Option<PathBuf>,
     /// Working directory captured for the thread.
     pub cwd: PathBuf,
     /// Version of the CLI that created the thread.
@@ -1430,7 +1493,8 @@ pub struct Thread {
     pub source: SessionSource,
     /// Optional Git metadata captured when the thread was created.
     pub git_info: Option<GitInfo>,
-    /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork` responses.
+    /// Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
+    /// (when `includeTurns` is true) responses.
     /// For all other responses and notifications returning a Thread,
     /// the turns field will be an empty list.
     pub turns: Vec<Turn>,
@@ -1567,6 +1631,8 @@ pub struct TurnStartParams {
     pub effort: Option<ReasoningEffort>,
     /// Override the reasoning summary for this turn and subsequent turns.
     pub summary: Option<ReasoningSummary>,
+    /// Override the personality for this turn and subsequent turns.
+    pub personality: Option<Personality>,
     /// Optional JSON Schema used to constrain the final assistant message for this turn.
     pub output_schema: Option<JsonValue>,
 
@@ -2286,6 +2352,18 @@ pub struct CommandExecutionRequestApprovalParams {
     pub item_id: String,
     /// Optional explanatory reason (e.g. request for network access).
     pub reason: Option<String>,
+    /// The command to be executed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command: Option<String>,
+    /// The command's working directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cwd: Option<PathBuf>,
+    /// Best-effort parsed command actions for friendly display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command_actions: Option<Vec<CommandAction>>,
     /// Optional proposed execpolicy amendment to allow similar commands without prompting.
     pub proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
 }
@@ -2453,6 +2531,24 @@ pub struct DeprecationNoticeNotification {
     pub details: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TextPosition {
+    /// 1-based line number.
+    pub line: usize,
+    /// 1-based column number (in Unicode scalar values).
+    pub column: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TextRange {
+    pub start: TextPosition,
+    pub end: TextPosition,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -2461,6 +2557,14 @@ pub struct ConfigWarningNotification {
     pub summary: String,
     /// Optional extra guidance or error details.
     pub details: Option<String>,
+    /// Optional path to the config file that triggered the warning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub path: Option<String>,
+    /// Optional range for the error location inside the config file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub range: Option<TextRange>,
 }
 
 #[cfg(test)]

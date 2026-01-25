@@ -154,7 +154,7 @@ async fn summarize_context_three_requests_and_instructions() {
         session_configured,
         ..
     } = thread_manager.start_thread(config).await.unwrap();
-    let rollout_path = session_configured.rollout_path;
+    let rollout_path = session_configured.rollout_path.expect("rollout path");
 
     // 1) Normal user input – should hit server once.
     codex
@@ -1221,6 +1221,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             content: vec![codex_protocol::models::ContentItem::OutputText {
                 text: remote_summary.to_string(),
             }],
+            end_turn: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -1236,7 +1237,11 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     });
     let initial = builder.build(&server).await.unwrap();
     let home = initial.home.clone();
-    let rollout_path = initial.session_configured.rollout_path.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
 
     // A single over-limit completion should not auto-compact until the next user message.
     mount_sse_once(
@@ -1291,6 +1296,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await
         .unwrap();
@@ -1427,7 +1433,7 @@ async fn auto_compact_persists_rollout_entries() {
     codex.submit(Op::Shutdown).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
-    let rollout_path = session_configured.rollout_path;
+    let rollout_path = session_configured.rollout_path.expect("rollout path");
     let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
         panic!(
             "failed to read rollout file {}: {e}",
@@ -2071,6 +2077,7 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
             content: vec![codex_protocol::models::ContentItem::OutputText {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
+            end_turn: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
@@ -2190,6 +2197,7 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
             content: vec![codex_protocol::models::ContentItem::OutputText {
                 text: "REMOTE_COMPACT_SUMMARY".to_string(),
             }],
+            end_turn: None,
         },
         codex_protocol::models::ResponseItem::Compaction {
             encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),

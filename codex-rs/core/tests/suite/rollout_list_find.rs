@@ -10,6 +10,7 @@ use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 use codex_core::protocol::SessionSource;
 use codex_protocol::ThreadId;
+use codex_protocol::models::BaseInstructions;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -99,7 +100,12 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
     let thread_name = "named thread";
     let recorder = RolloutRecorder::new(
         &config,
-        RolloutRecorderParams::new(thread_id, None, SessionSource::Exec),
+        RolloutRecorderParams::new(
+            thread_id,
+            None,
+            SessionSource::Exec,
+            BaseInstructions::default(),
+        ),
     )
     .await?;
     recorder.flush().await?;
