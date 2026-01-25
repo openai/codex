@@ -58,5 +58,9 @@ fi
 
 echo "CXXFLAGS=-pthread" >> "$GITHUB_ENV"
 echo "CXX=${cxx}" >> "$GITHUB_ENV"
+echo "TARGET_CXX=${cxx}" >> "$GITHUB_ENV"
+target_cxx_var="CXX_${TARGET}"
+target_cxx_var="${target_cxx_var//-/_}"
+echo "${target_cxx_var}=${cxx}" >> "$GITHUB_ENV"
 echo "CMAKE_CXX_COMPILER=${cxx}" >> "$GITHUB_ENV"
 echo "CMAKE_ARGS=-DCMAKE_HAVE_THREADS_LIBRARY=1 -DCMAKE_USE_PTHREADS_INIT=1 -DCMAKE_THREAD_LIBS_INIT=-pthread -DTHREADS_PREFER_PTHREAD_FLAG=ON" >> "$GITHUB_ENV"
