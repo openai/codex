@@ -26,7 +26,11 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
     let initial = builder.build(&server).await?;
     let codex = Arc::clone(&initial.codex);
     let home = initial.home.clone();
-    let rollout_path = initial.session_configured.rollout_path.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
 
     let initial_sse = sse(vec![
         ev_response_created("resp-initial"),
@@ -85,7 +89,11 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
     let initial = builder.build(&server).await?;
     let codex = Arc::clone(&initial.codex);
     let home = initial.home.clone();
-    let rollout_path = initial.session_configured.rollout_path.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
 
     let initial_sse = sse(vec![
         ev_response_created("resp-initial"),
@@ -143,7 +151,11 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
     let initial = builder.build(&server).await?;
     let codex = Arc::clone(&initial.codex);
     let home = initial.home.clone();
-    let rollout_path = initial.session_configured.rollout_path.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
 
     let initial_sse = sse(vec![
         ev_response_created("resp-initial"),

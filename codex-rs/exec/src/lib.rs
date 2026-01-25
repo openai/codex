@@ -229,6 +229,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         include_apply_patch_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
+        ephemeral: None,
         additional_writable_roots: add_dir,
     };
 

@@ -23,7 +23,7 @@ use crate::history_cell::HistoryCell;
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
-use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ReasoningEffort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,8 +103,8 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
-    /// Update the current collaboration mode in the running app and widget.
-    UpdateCollaborationMode(CollaborationMode),
+    /// Update the active collaboration mask in the running app and widget.
+    UpdateCollaborationMode(CollaborationModeMask),
 
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
@@ -240,10 +240,10 @@ pub(crate) enum AppEvent {
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
 
-    /// Submit a user message with an explicit collaboration mode.
+    /// Submit a user message with an explicit collaboration mask.
     SubmitUserMessageWithMode {
         text: String,
-        collaboration_mode: CollaborationMode,
+        collaboration_mode: CollaborationModeMask,
     },
 
     /// Open the approval popup.
