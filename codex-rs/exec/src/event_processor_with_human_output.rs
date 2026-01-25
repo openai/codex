@@ -557,6 +557,30 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     view.path.display()
                 );
             }
+            EventMsg::ReadFileToolCall(read) => {
+                let line_count = read.lines.len();
+                ts_msg!(
+                    self,
+                    "{} {} ({line_count} lines)",
+                    "read file".style(self.magenta),
+                    read.path.display()
+                );
+            }
+            EventMsg::WriteFileToolCall(write) => {
+                let status = if write.overwrote {
+                    "overwrote"
+                } else {
+                    "created"
+                };
+                ts_msg!(
+                    self,
+                    "{} {} ({} lines, {} bytes, {status})",
+                    "wrote file".style(self.magenta),
+                    write.path.display(),
+                    write.lines_written,
+                    write.bytes_written
+                );
+            }
             EventMsg::TurnAborted(abort_reason) => match abort_reason.reason {
                 TurnAbortReason::Interrupted => {
                     ts_msg!(self, "task interrupted");

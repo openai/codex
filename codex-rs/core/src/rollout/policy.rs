@@ -84,7 +84,9 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ListSkillsResponse(_)
         | EventMsg::PlanUpdate(_)
         | EventMsg::ShutdownComplete
+        | EventMsg::ReadFileToolCall(_)
         | EventMsg::ViewImageToolCall(_)
+        | EventMsg::WriteFileToolCall(_)
         | EventMsg::DeprecationNotice(_)
         | EventMsg::ItemStarted(_)
         | EventMsg::ItemCompleted(_)

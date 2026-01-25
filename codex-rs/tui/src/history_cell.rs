@@ -42,6 +42,7 @@ use codex_core::config::types::McpServerTransportConfig;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
+use codex_core::protocol::ReadFileLine;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
@@ -72,6 +73,8 @@ use std::time::Instant;
 use tracing::error;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+const READ_FILE_PREVIEW_MAX_LINES: usize = 20;
 
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
@@ -391,6 +394,68 @@ impl PlainHistoryCell {
 impl HistoryCell for PlainHistoryCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.lines.clone()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ReadFileToolCallCell {
+    path: PathBuf,
+    cwd: PathBuf,
+    lines: Vec<ReadFileLine>,
+}
+
+impl ReadFileToolCallCell {
+    pub(crate) fn new(path: PathBuf, cwd: &Path, lines: Vec<ReadFileLine>) -> Self {
+        Self {
+            path,
+            cwd: cwd.to_path_buf(),
+            lines,
+        }
+    }
+}
+
+impl HistoryCell for ReadFileToolCallCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let display_path = display_path_for(&self.path, &self.cwd);
+        let total_lines = self.lines.len();
+
+        let mut out: Vec<Line<'static>> = vec![Line::from(vec![
+            "• ".dim(),
+            "Read File".bold(),
+            " ".into(),
+            format!("({total_lines} lines)").dim(),
+        ])];
+        out.push(Line::from(vec!["  └ ".dim(), display_path.dim()]));
+
+        if total_lines == 0 {
+            return out;
+        }
+
+        let preview_count = total_lines.min(READ_FILE_PREVIEW_MAX_LINES);
+        let content_width = (width as usize).saturating_sub(4).max(1);
+        let mut body: Vec<Line<'static>> = Vec::new();
+
+        for line in &self.lines[..preview_count] {
+            let number = line.number;
+            let prefix = format!("L{number}: ");
+            let prefix_width = UnicodeWidthStr::width(prefix.as_str());
+            let content_line: Line<'static> = vec![prefix.dim(), line.text.clone().into()].into();
+            let wrapped = word_wrap_line(
+                &content_line,
+                RtOptions::new(content_width)
+                    .word_splitter(textwrap::WordSplitter::NoHyphenation)
+                    .subsequent_indent(Line::from(" ".repeat(prefix_width))),
+            );
+            push_owned_lines(&wrapped, &mut body);
+        }
+
+        if total_lines > preview_count {
+            let omitted = total_lines - preview_count;
+            body.push(Line::from(format!("… +{omitted} lines").dim()));
+        }
+
+        out.extend(prefix_lines(body, "    ".into(), "    ".into()));
+        out
     }
 }
 
@@ -1739,6 +1804,41 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
         vec!["• ".dim(), "Viewed Image".bold()].into(),
         vec!["  └ ".dim(), display_path.dim()].into(),
     ];
+
+    PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_read_file_tool_call(
+    path: PathBuf,
+    cwd: &Path,
+    lines: Vec<ReadFileLine>,
+) -> ReadFileToolCallCell {
+    ReadFileToolCallCell::new(path, cwd, lines)
+}
+
+pub(crate) fn new_write_file_tool_call(
+    path: PathBuf,
+    cwd: &Path,
+    bytes_written: usize,
+    lines_written: usize,
+    overwrote: bool,
+) -> PlainHistoryCell {
+    let display_path = display_path_for(&path, cwd);
+    let status = if overwrote { "overwrote" } else { "created" };
+
+    let header: Line<'static> = vec![
+        "• ".dim(),
+        "Wrote File".bold(),
+        " · ".dim(),
+        format!("{lines_written} lines").dim(),
+        " · ".dim(),
+        format!("{bytes_written} bytes").dim(),
+        " · ".dim(),
+        status.dim(),
+    ]
+    .into();
+
+    let lines: Vec<Line<'static>> = vec![header, vec!["  └ ".dim(), display_path.dim()].into()];
 
     PlainHistoryCell { lines }
 }

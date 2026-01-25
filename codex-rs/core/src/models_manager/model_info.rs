@@ -120,6 +120,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             base_instructions: BASE_INSTRUCTIONS_WITH_APPLY_PATCH.to_string(),
             shell_type: ConfigShellToolType::Local,
             supports_reasoning_summaries: true,
+            experimental_supported_tools: file_tools(),
             context_window: Some(200_000),
         )
     } else if slug.starts_with("gpt-4.1") {
@@ -153,12 +154,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model_info!(
             slug,
             base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
-            experimental_supported_tools: vec![
-                "grep_files".to_string(),
-                "list_dir".to_string(),
-                "read_file".to_string(),
-                "test_sync_tool".to_string(),
-            ],
+            experimental_supported_tools: test_tools(),
             supports_parallel_tool_calls: true,
             supports_reasoning_summaries: true,
             shell_type: ConfigShellToolType::ShellCommand,
@@ -174,6 +170,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             supports_parallel_tool_calls: true,
             supports_reasoning_summaries: true,
             support_verbosity: false,
+            experimental_supported_tools: file_tools(),
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
         )
@@ -200,6 +197,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             supports_parallel_tool_calls: true,
             supports_reasoning_summaries: true,
             support_verbosity: false,
+            experimental_supported_tools: file_tools(),
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
             supported_reasoning_levels: supported_reasoning_level_low_medium_high_xhigh(),
@@ -223,6 +221,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             supports_parallel_tool_calls: false,
             supports_reasoning_summaries: true,
             support_verbosity: false,
+            experimental_supported_tools: file_tools(),
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
             supported_reasoning_levels: supported_reasoning_level_low_medium_high_xhigh(),
@@ -240,6 +239,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             supports_parallel_tool_calls: false,
             supports_reasoning_summaries: true,
             support_verbosity: false,
+            experimental_supported_tools: file_tools(),
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
             supported_reasoning_levels: supported_reasoning_level_low_medium_high(),
@@ -256,6 +256,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             supports_parallel_tool_calls: false,
             supports_reasoning_summaries: true,
             support_verbosity: false,
+            experimental_supported_tools: file_tools(),
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
         )
@@ -273,6 +274,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
+            experimental_supported_tools: file_tools(),
             context_window: Some(CONTEXT_WINDOW_272K),
             supported_reasoning_levels: supported_reasoning_level_low_medium_high_xhigh_non_codex(),
         )
@@ -288,6 +290,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
+            experimental_supported_tools: file_tools(),
             context_window: Some(CONTEXT_WINDOW_272K),
             supported_reasoning_levels: supported_reasoning_level_low_medium_high_non_codex(),
         )
@@ -299,6 +302,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             supports_reasoning_summaries: true,
             support_verbosity: true,
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
+            experimental_supported_tools: file_tools(),
             context_window: Some(CONTEXT_WINDOW_272K),
         )
     } else {
@@ -310,6 +314,20 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             default_reasoning_level: None
         )
     }
+}
+
+fn file_tools() -> Vec<String> {
+    vec!["read_file".to_string(), "write_file".to_string()]
+}
+
+fn test_tools() -> Vec<String> {
+    let mut tools = file_tools();
+    tools.extend(
+        ["grep_files", "list_dir", "test_sync_tool"]
+            .into_iter()
+            .map(str::to_string),
+    );
+    tools
 }
 
 fn supported_reasoning_level_low_medium_high() -> Vec<ReasoningEffortPreset> {

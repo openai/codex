@@ -859,6 +859,42 @@ fn create_read_file_tool() -> ToolSpec {
     })
 }
 
+fn create_write_file_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "file_path".to_string(),
+            JsonSchema::String {
+                description: Some("Absolute path to the file to write.".to_string()),
+            },
+        ),
+        (
+            "content".to_string(),
+            JsonSchema::String {
+                description: Some("Full content to write to the file.".to_string()),
+            },
+        ),
+        (
+            "overwrite".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "Whether to overwrite an existing file; defaults to true.".to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "write_file".to_string(),
+        description: "Writes content to a local file, creating or overwriting it.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["file_path".to_string(), "content".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_list_dir_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -1231,6 +1267,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::TestSyncHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
+    use crate::tools::handlers::WriteFileHandler;
     use std::sync::Arc;
 
     let mut builder = ToolRegistryBuilder::new();
@@ -1317,6 +1354,15 @@ pub(crate) fn build_specs(
         let read_file_handler = Arc::new(ReadFileHandler);
         builder.push_spec_with_parallel_support(create_read_file_tool(), true);
         builder.register_handler("read_file", read_file_handler);
+    }
+
+    if config
+        .experimental_supported_tools
+        .contains(&"write_file".to_string())
+    {
+        let write_file_handler = Arc::new(WriteFileHandler);
+        builder.push_spec_with_parallel_support(create_write_file_tool(), false);
+        builder.register_handler("write_file", write_file_handler);
     }
 
     if config
@@ -1525,6 +1571,8 @@ mod tests {
             PLAN_TOOL.clone(),
             create_request_user_input_tool(),
             create_apply_patch_freeform_tool(),
+            create_read_file_tool(),
+            create_write_file_tool(),
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
             },
@@ -1672,6 +1720,8 @@ mod tests {
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
+                "read_file",
+                "write_file",
                 "web_search",
                 "view_image",
             ],
@@ -1694,6 +1744,8 @@ mod tests {
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
+                "read_file",
+                "write_file",
                 "web_search",
                 "view_image",
             ],
@@ -1718,6 +1770,8 @@ mod tests {
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
+                "read_file",
+                "write_file",
                 "web_search",
                 "view_image",
             ],
@@ -1742,6 +1796,8 @@ mod tests {
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
+                "read_file",
+                "write_file",
                 "web_search",
                 "view_image",
             ],
@@ -1763,6 +1819,8 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "read_file",
+                "write_file",
                 "web_search",
                 "view_image",
             ],
@@ -1785,6 +1843,8 @@ mod tests {
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
+                "read_file",
+                "write_file",
                 "web_search",
                 "view_image",
             ],
@@ -1806,6 +1866,8 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "read_file",
+                "write_file",
                 "web_search",
                 "view_image",
             ],
@@ -1828,6 +1890,8 @@ mod tests {
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
+                "read_file",
+                "write_file",
                 "web_search",
                 "view_image",
             ],
@@ -1874,6 +1938,8 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "read_file",
+                "write_file",
                 "web_search",
                 "view_image",
             ],

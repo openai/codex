@@ -6,6 +6,7 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitStatus;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -14,6 +15,7 @@ use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::CodexErr;
@@ -51,7 +53,7 @@ const AGGREGATE_BUFFER_INITIAL_CAPACITY: usize = 8 * 1024; // 8 KiB
 ///
 /// This mirrors unified exec's output cap so a single runaway command cannot
 /// OOM the process by dumping huge amounts of data to stdout/stderr.
-const EXEC_OUTPUT_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
+const EXEC_OUTPUT_MAX_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
 
 /// Limit the number of ExecCommandOutputDelta events emitted per exec call.
 /// Aggregation still collects full output; only the live event stream is capped.
@@ -609,15 +611,20 @@ async fn consume_truncated_output(
         ))
     })?;
 
+    let stdout_shared = new_shared_output();
+    let stderr_shared = new_shared_output();
+
     let stdout_handle = tokio::spawn(read_capped(
         BufReader::new(stdout_reader),
         stdout_stream.clone(),
         false,
+        stdout_shared.clone(),
     ));
     let stderr_handle = tokio::spawn(read_capped(
         BufReader::new(stderr_reader),
         stdout_stream.clone(),
         true,
+        stderr_shared.clone(),
     ));
 
     let (exit_status, timed_out) = tokio::select! {
@@ -653,6 +660,7 @@ async fn consume_truncated_output(
     async fn await_with_timeout(
         handle: &mut JoinHandle<std::io::Result<StreamOutput<Vec<u8>>>>,
         timeout: Duration,
+        shared: &Arc<Mutex<StreamOutput<Vec<u8>>>>,
     ) -> std::io::Result<StreamOutput<Vec<u8>>> {
         match tokio::time::timeout(timeout, &mut *handle).await {
             Ok(join_res) => match join_res {
@@ -662,10 +670,8 @@ async fn consume_truncated_output(
             Err(_elapsed) => {
                 // Timeout: abort the task to avoid hanging on open pipes.
                 handle.abort();
-                Ok(StreamOutput {
-                    text: Vec::new(),
-                    truncated_after_lines: None,
-                })
+                let guard = shared.lock().await;
+                Ok(guard.clone())
             }
         }
     }
@@ -676,11 +682,13 @@ async fn consume_truncated_output(
     let stdout = await_with_timeout(
         &mut stdout_handle,
         Duration::from_millis(IO_DRAIN_TIMEOUT_MS),
+        &stdout_shared,
     )
     .await?;
     let stderr = await_with_timeout(
         &mut stderr_handle,
         Duration::from_millis(IO_DRAIN_TIMEOUT_MS),
+        &stderr_shared,
     )
     .await?;
     // Best-effort aggregate: stdout then stderr (capped).
@@ -711,6 +719,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
     mut reader: R,
     stream: Option<StdoutStream>,
     is_stderr: bool,
+    shared: Arc<Mutex<StreamOutput<Vec<u8>>>>,
 ) -> io::Result<StreamOutput<Vec<u8>>> {
     let mut buf = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY.min(EXEC_OUTPUT_MAX_BYTES));
     let mut tmp = [0u8; READ_CHUNK_SIZE];
@@ -745,6 +754,10 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
         }
 
         append_capped(&mut buf, &tmp[..n], EXEC_OUTPUT_MAX_BYTES);
+        {
+            let mut guard = shared.lock().await;
+            append_capped(&mut guard.text, &tmp[..n], EXEC_OUTPUT_MAX_BYTES);
+        }
         // Continue reading to EOF to avoid back-pressure
     }
 
@@ -752,6 +765,13 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
         text: buf,
         truncated_after_lines: None,
     })
+}
+
+fn new_shared_output() -> Arc<Mutex<StreamOutput<Vec<u8>>>> {
+    Arc::new(Mutex::new(StreamOutput {
+        text: Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY.min(EXEC_OUTPUT_MAX_BYTES)),
+        truncated_after_lines: None,
+    }))
 }
 
 #[cfg(unix)]
@@ -842,7 +862,9 @@ mod tests {
             writer.write_all(&bytes).await.expect("write");
         });
 
-        let out = read_capped(reader, None, false).await.expect("read");
+        let out = read_capped(reader, None, false, new_shared_output())
+            .await
+            .expect("read");
         assert_eq!(out.text.len(), EXEC_OUTPUT_MAX_BYTES);
     }
 

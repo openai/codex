@@ -2,10 +2,12 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
+use crate::protocol::EventMsg;
+use crate::protocol::ReadFileLine;
+use crate::protocol::ReadFileToolCallEvent;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -15,7 +17,6 @@ use crate::tools::registry::ToolKind;
 
 pub struct ReadFileHandler;
 
-const MAX_LINE_LENGTH: usize = 500;
 const TAB_WIDTH: usize = 4;
 
 // TODO(jif) add support for block comments
@@ -98,7 +99,13 @@ impl ToolHandler for ReadFileHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation {
+            session,
+            turn,
+            payload,
+            call_id,
+            ..
+        } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -145,8 +152,20 @@ impl ToolHandler for ReadFileHandler {
                 indentation::read_block(&path, offset, limit, indentation).await?
             }
         };
+
+        let content = format_lines_for_model(&collected);
+        session
+            .send_event(
+                turn.as_ref(),
+                EventMsg::ReadFileToolCall(ReadFileToolCallEvent {
+                    call_id,
+                    path,
+                    lines: collected,
+                }),
+            )
+            .await;
         Ok(ToolOutput::Function {
-            content: collected.join("\n"),
+            content,
             content_items: None,
             success: Some(true),
         })
@@ -155,6 +174,7 @@ impl ToolHandler for ReadFileHandler {
 
 mod slice {
     use crate::function_tool::FunctionCallError;
+    use crate::protocol::ReadFileLine;
     use crate::tools::handlers::read_file::format_line;
     use std::path::Path;
     use tokio::fs::File;
@@ -165,7 +185,7 @@ mod slice {
         path: &Path,
         offset: usize,
         limit: usize,
-    ) -> Result<Vec<String>, FunctionCallError> {
+    ) -> Result<Vec<ReadFileLine>, FunctionCallError> {
         let file = File::open(path).await.map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to read file: {err}"))
         })?;
@@ -203,7 +223,10 @@ mod slice {
             }
 
             let formatted = format_line(&buffer);
-            collected.push(format!("L{seen}: {formatted}"));
+            collected.push(ReadFileLine {
+                number: seen,
+                text: formatted,
+            });
 
             if collected.len() == limit {
                 break;
@@ -222,6 +245,7 @@ mod slice {
 
 mod indentation {
     use crate::function_tool::FunctionCallError;
+    use crate::protocol::ReadFileLine;
     use crate::tools::handlers::read_file::IndentationArgs;
     use crate::tools::handlers::read_file::LineRecord;
     use crate::tools::handlers::read_file::TAB_WIDTH;
@@ -238,7 +262,7 @@ mod indentation {
         offset: usize,
         limit: usize,
         options: IndentationArgs,
-    ) -> Result<Vec<String>, FunctionCallError> {
+    ) -> Result<Vec<ReadFileLine>, FunctionCallError> {
         let anchor_line = options.anchor_line.unwrap_or(offset);
         if anchor_line == 0 {
             return Err(FunctionCallError::RespondToModel(
@@ -275,10 +299,10 @@ mod indentation {
         let final_limit = limit.min(guard_limit).min(collected.len());
 
         if final_limit == 1 {
-            return Ok(vec![format!(
-                "L{}: {}",
-                collected[anchor_index].number, collected[anchor_index].display
-            )]);
+            return Ok(vec![ReadFileLine {
+                number: collected[anchor_index].number,
+                text: collected[anchor_index].display.clone(),
+            }]);
         }
 
         // Cursors
@@ -361,7 +385,10 @@ mod indentation {
 
         Ok(out
             .into_iter()
-            .map(|record| format!("L{}: {}", record.number, record.display))
+            .map(|record| ReadFileLine {
+                number: record.number,
+                text: record.display.clone(),
+            })
             .collect())
     }
 
@@ -430,12 +457,19 @@ mod indentation {
 }
 
 fn format_line(bytes: &[u8]) -> String {
-    let decoded = String::from_utf8_lossy(bytes);
-    if decoded.len() > MAX_LINE_LENGTH {
-        take_bytes_at_char_boundary(&decoded, MAX_LINE_LENGTH).to_string()
-    } else {
-        decoded.into_owned()
-    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn format_lines_for_model(lines: &[ReadFileLine]) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            let number = line.number;
+            let text = &line.text;
+            format!("L{number}: {text}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn trim_empty_lines(out: &mut VecDeque<&LineRecord>) {
@@ -504,7 +538,19 @@ gamma
         )?;
 
         let lines = read(temp.path(), 2, 2).await?;
-        assert_eq!(lines, vec!["L2: beta".to_string(), "L3: gamma".to_string()]);
+        assert_eq!(
+            lines,
+            vec![
+                ReadFileLine {
+                    number: 2,
+                    text: "beta".to_string()
+                },
+                ReadFileLine {
+                    number: 3,
+                    text: "gamma".to_string()
+                },
+            ]
+        );
         Ok(())
     }
 
@@ -531,8 +577,19 @@ gamma
         temp.as_file_mut().write_all(b"\xff\xfe\nplain\n")?;
 
         let lines = read(temp.path(), 1, 2).await?;
-        let expected_first = format!("L1: {}{}", '\u{FFFD}', '\u{FFFD}');
-        assert_eq!(lines, vec![expected_first, "L2: plain".to_string()]);
+        assert_eq!(
+            lines,
+            vec![
+                ReadFileLine {
+                    number: 1,
+                    text: format!("{}{}", '\u{FFFD}', '\u{FFFD}')
+                },
+                ReadFileLine {
+                    number: 2,
+                    text: "plain".to_string()
+                },
+            ]
+        );
         Ok(())
     }
 
@@ -543,7 +600,19 @@ gamma
         write!(temp, "one\r\ntwo\r\n")?;
 
         let lines = read(temp.path(), 1, 2).await?;
-        assert_eq!(lines, vec!["L1: one".to_string(), "L2: two".to_string()]);
+        assert_eq!(
+            lines,
+            vec![
+                ReadFileLine {
+                    number: 1,
+                    text: "one".to_string()
+                },
+                ReadFileLine {
+                    number: 2,
+                    text: "two".to_string()
+                },
+            ]
+        );
         Ok(())
     }
 
@@ -562,21 +631,63 @@ third
         let lines = read(temp.path(), 1, 2).await?;
         assert_eq!(
             lines,
-            vec!["L1: first".to_string(), "L2: second".to_string()]
+            vec![
+                ReadFileLine {
+                    number: 1,
+                    text: "first".to_string()
+                },
+                ReadFileLine {
+                    number: 2,
+                    text: "second".to_string()
+                },
+            ]
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn truncates_lines_longer_than_max_length() -> anyhow::Result<()> {
+    async fn reads_large_lines_without_truncation() -> anyhow::Result<()> {
         let mut temp = NamedTempFile::new()?;
         use std::io::Write as _;
-        let long_line = "x".repeat(MAX_LINE_LENGTH + 50);
+        let long_line = "x".repeat(12_000);
         writeln!(temp, "{long_line}")?;
 
         let lines = read(temp.path(), 1, 1).await?;
-        let expected = "x".repeat(MAX_LINE_LENGTH);
-        assert_eq!(lines, vec![format!("L1: {expected}")]);
+        assert_eq!(
+            lines,
+            vec![ReadFileLine {
+                number: 1,
+                text: long_line,
+            }]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reads_large_file_without_truncation() -> anyhow::Result<()> {
+        let mut temp = NamedTempFile::new()?;
+        use std::io::Write as _;
+        let line = "x".repeat(50);
+        for _ in 0..300 {
+            writeln!(temp, "{line}")?;
+        }
+
+        let lines = read(temp.path(), 1, 300).await?;
+        assert_eq!(lines.len(), 300);
+        assert_eq!(
+            lines.first(),
+            Some(&ReadFileLine {
+                number: 1,
+                text: line.clone(),
+            })
+        );
+        assert_eq!(
+            lines.last(),
+            Some(&ReadFileLine {
+                number: 300,
+                text: line,
+            })
+        );
         Ok(())
     }
 
@@ -607,9 +718,18 @@ third
         assert_eq!(
             lines,
             vec![
-                "L2:     if cond {".to_string(),
-                "L3:         inner();".to_string(),
-                "L4:     }".to_string()
+                ReadFileLine {
+                    number: 2,
+                    text: "    if cond {".to_string()
+                },
+                ReadFileLine {
+                    number: 3,
+                    text: "        inner();".to_string()
+                },
+                ReadFileLine {
+                    number: 4,
+                    text: "    }".to_string()
+                },
             ]
         );
         Ok(())
@@ -641,11 +761,26 @@ third
         assert_eq!(
             lines,
             vec![
-                "L2:     fn outer() {".to_string(),
-                "L3:         if cond {".to_string(),
-                "L4:             inner();".to_string(),
-                "L5:         }".to_string(),
-                "L6:     }".to_string(),
+                ReadFileLine {
+                    number: 2,
+                    text: "    fn outer() {".to_string()
+                },
+                ReadFileLine {
+                    number: 3,
+                    text: "        if cond {".to_string()
+                },
+                ReadFileLine {
+                    number: 4,
+                    text: "            inner();".to_string()
+                },
+                ReadFileLine {
+                    number: 5,
+                    text: "        }".to_string()
+                },
+                ReadFileLine {
+                    number: 6,
+                    text: "    }".to_string()
+                },
             ]
         );
 
@@ -654,13 +789,34 @@ third
         assert_eq!(
             expanded,
             vec![
-                "L1: mod root {".to_string(),
-                "L2:     fn outer() {".to_string(),
-                "L3:         if cond {".to_string(),
-                "L4:             inner();".to_string(),
-                "L5:         }".to_string(),
-                "L6:     }".to_string(),
-                "L7: }".to_string(),
+                ReadFileLine {
+                    number: 1,
+                    text: "mod root {".to_string()
+                },
+                ReadFileLine {
+                    number: 2,
+                    text: "    fn outer() {".to_string()
+                },
+                ReadFileLine {
+                    number: 3,
+                    text: "        if cond {".to_string()
+                },
+                ReadFileLine {
+                    number: 4,
+                    text: "            inner();".to_string()
+                },
+                ReadFileLine {
+                    number: 5,
+                    text: "        }".to_string()
+                },
+                ReadFileLine {
+                    number: 6,
+                    text: "    }".to_string()
+                },
+                ReadFileLine {
+                    number: 7,
+                    text: "}".to_string()
+                },
             ]
         );
         Ok(())
@@ -694,9 +850,18 @@ third
         assert_eq!(
             lines,
             vec![
-                "L2:     if first {".to_string(),
-                "L3:         do_first();".to_string(),
-                "L4:     }".to_string(),
+                ReadFileLine {
+                    number: 2,
+                    text: "    if first {".to_string()
+                },
+                ReadFileLine {
+                    number: 3,
+                    text: "        do_first();".to_string()
+                },
+                ReadFileLine {
+                    number: 4,
+                    text: "    }".to_string()
+                },
             ]
         );
 
@@ -705,12 +870,30 @@ third
         assert_eq!(
             with_siblings,
             vec![
-                "L2:     if first {".to_string(),
-                "L3:         do_first();".to_string(),
-                "L4:     }".to_string(),
-                "L5:     if second {".to_string(),
-                "L6:         do_second();".to_string(),
-                "L7:     }".to_string(),
+                ReadFileLine {
+                    number: 2,
+                    text: "    if first {".to_string()
+                },
+                ReadFileLine {
+                    number: 3,
+                    text: "        do_first();".to_string()
+                },
+                ReadFileLine {
+                    number: 4,
+                    text: "    }".to_string()
+                },
+                ReadFileLine {
+                    number: 5,
+                    text: "    if second {".to_string()
+                },
+                ReadFileLine {
+                    number: 6,
+                    text: "        do_second();".to_string()
+                },
+                ReadFileLine {
+                    number: 7,
+                    text: "    }".to_string()
+                },
             ]
         );
         Ok(())
@@ -748,13 +931,34 @@ class Bar:
         assert_eq!(
             lines,
             vec![
-                "L2:     def __init__(self, size):".to_string(),
-                "L3:         self.size = size".to_string(),
-                "L4:     def double(self, value):".to_string(),
-                "L5:         if value is None:".to_string(),
-                "L6:             return 0".to_string(),
-                "L7:         result = value * self.size".to_string(),
-                "L8:         return result".to_string(),
+                ReadFileLine {
+                    number: 2,
+                    text: "    def __init__(self, size):".to_string()
+                },
+                ReadFileLine {
+                    number: 3,
+                    text: "        self.size = size".to_string()
+                },
+                ReadFileLine {
+                    number: 4,
+                    text: "    def double(self, value):".to_string()
+                },
+                ReadFileLine {
+                    number: 5,
+                    text: "        if value is None:".to_string()
+                },
+                ReadFileLine {
+                    number: 6,
+                    text: "            return 0".to_string()
+                },
+                ReadFileLine {
+                    number: 7,
+                    text: "        result = value * self.size".to_string()
+                },
+                ReadFileLine {
+                    number: 8,
+                    text: "        return result".to_string()
+                },
             ]
         );
         Ok(())
@@ -804,15 +1008,42 @@ export function other() {{
         assert_eq!(
             lines,
             vec![
-                "L10:         init() {".to_string(),
-                "L11:             console.log(\"init\");".to_string(),
-                "L12:         },".to_string(),
-                "L13:         run() {".to_string(),
-                "L14:             if (Math.random() > 0.5) {".to_string(),
-                "L15:                 return \"heads\";".to_string(),
-                "L16:             }".to_string(),
-                "L17:             return \"tails\";".to_string(),
-                "L18:         },".to_string(),
+                ReadFileLine {
+                    number: 10,
+                    text: "        init() {".to_string()
+                },
+                ReadFileLine {
+                    number: 11,
+                    text: "            console.log(\"init\");".to_string()
+                },
+                ReadFileLine {
+                    number: 12,
+                    text: "        },".to_string()
+                },
+                ReadFileLine {
+                    number: 13,
+                    text: "        run() {".to_string()
+                },
+                ReadFileLine {
+                    number: 14,
+                    text: "            if (Math.random() > 0.5) {".to_string()
+                },
+                ReadFileLine {
+                    number: 15,
+                    text: "                return \"heads\";".to_string()
+                },
+                ReadFileLine {
+                    number: 16,
+                    text: "            }".to_string()
+                },
+                ReadFileLine {
+                    number: 17,
+                    text: "            return \"tails\";".to_string()
+                },
+                ReadFileLine {
+                    number: 18,
+                    text: "        },".to_string()
+                },
             ]
         );
         Ok(())
@@ -876,14 +1107,38 @@ private:
         assert_eq!(
             lines,
             vec![
-                "L15:         switch (mode_) {".to_string(),
-                "L16:             case Mode::Fast:".to_string(),
-                "L17:                 return fast();".to_string(),
-                "L18:             case Mode::Slow:".to_string(),
-                "L19:                 return slow();".to_string(),
-                "L20:             default:".to_string(),
-                "L21:                 return fallback();".to_string(),
-                "L22:         }".to_string(),
+                ReadFileLine {
+                    number: 15,
+                    text: "        switch (mode_) {".to_string()
+                },
+                ReadFileLine {
+                    number: 16,
+                    text: "            case Mode::Fast:".to_string()
+                },
+                ReadFileLine {
+                    number: 17,
+                    text: "                return fast();".to_string()
+                },
+                ReadFileLine {
+                    number: 18,
+                    text: "            case Mode::Slow:".to_string()
+                },
+                ReadFileLine {
+                    number: 19,
+                    text: "                return slow();".to_string()
+                },
+                ReadFileLine {
+                    number: 20,
+                    text: "            default:".to_string()
+                },
+                ReadFileLine {
+                    number: 21,
+                    text: "                return fallback();".to_string()
+                },
+                ReadFileLine {
+                    number: 22,
+                    text: "        }".to_string()
+                },
             ]
         );
         Ok(())
@@ -904,17 +1159,50 @@ private:
         assert_eq!(
             lines,
             vec![
-                "L13:     // Run the code".to_string(),
-                "L14:     int run() const {".to_string(),
-                "L15:         switch (mode_) {".to_string(),
-                "L16:             case Mode::Fast:".to_string(),
-                "L17:                 return fast();".to_string(),
-                "L18:             case Mode::Slow:".to_string(),
-                "L19:                 return slow();".to_string(),
-                "L20:             default:".to_string(),
-                "L21:                 return fallback();".to_string(),
-                "L22:         }".to_string(),
-                "L23:     }".to_string(),
+                ReadFileLine {
+                    number: 13,
+                    text: "    // Run the code".to_string()
+                },
+                ReadFileLine {
+                    number: 14,
+                    text: "    int run() const {".to_string()
+                },
+                ReadFileLine {
+                    number: 15,
+                    text: "        switch (mode_) {".to_string()
+                },
+                ReadFileLine {
+                    number: 16,
+                    text: "            case Mode::Fast:".to_string()
+                },
+                ReadFileLine {
+                    number: 17,
+                    text: "                return fast();".to_string()
+                },
+                ReadFileLine {
+                    number: 18,
+                    text: "            case Mode::Slow:".to_string()
+                },
+                ReadFileLine {
+                    number: 19,
+                    text: "                return slow();".to_string()
+                },
+                ReadFileLine {
+                    number: 20,
+                    text: "            default:".to_string()
+                },
+                ReadFileLine {
+                    number: 21,
+                    text: "                return fallback();".to_string()
+                },
+                ReadFileLine {
+                    number: 22,
+                    text: "        }".to_string()
+                },
+                ReadFileLine {
+                    number: 23,
+                    text: "    }".to_string()
+                },
             ]
         );
         Ok(())
@@ -936,16 +1224,46 @@ private:
         assert_eq!(
             lines,
             vec![
-                "L14:     int run() const {".to_string(),
-                "L15:         switch (mode_) {".to_string(),
-                "L16:             case Mode::Fast:".to_string(),
-                "L17:                 return fast();".to_string(),
-                "L18:             case Mode::Slow:".to_string(),
-                "L19:                 return slow();".to_string(),
-                "L20:             default:".to_string(),
-                "L21:                 return fallback();".to_string(),
-                "L22:         }".to_string(),
-                "L23:     }".to_string(),
+                ReadFileLine {
+                    number: 14,
+                    text: "    int run() const {".to_string()
+                },
+                ReadFileLine {
+                    number: 15,
+                    text: "        switch (mode_) {".to_string()
+                },
+                ReadFileLine {
+                    number: 16,
+                    text: "            case Mode::Fast:".to_string()
+                },
+                ReadFileLine {
+                    number: 17,
+                    text: "                return fast();".to_string()
+                },
+                ReadFileLine {
+                    number: 18,
+                    text: "            case Mode::Slow:".to_string()
+                },
+                ReadFileLine {
+                    number: 19,
+                    text: "                return slow();".to_string()
+                },
+                ReadFileLine {
+                    number: 20,
+                    text: "            default:".to_string()
+                },
+                ReadFileLine {
+                    number: 21,
+                    text: "                return fallback();".to_string()
+                },
+                ReadFileLine {
+                    number: 22,
+                    text: "        }".to_string()
+                },
+                ReadFileLine {
+                    number: 23,
+                    text: "    }".to_string()
+                },
             ]
         );
         Ok(())
@@ -967,23 +1285,74 @@ private:
         assert_eq!(
             lines,
             vec![
-                "L7:     void setup() {".to_string(),
-                "L8:         if (enabled_) {".to_string(),
-                "L9:             init();".to_string(),
-                "L10:         }".to_string(),
-                "L11:     }".to_string(),
-                "L12: ".to_string(),
-                "L13:     // Run the code".to_string(),
-                "L14:     int run() const {".to_string(),
-                "L15:         switch (mode_) {".to_string(),
-                "L16:             case Mode::Fast:".to_string(),
-                "L17:                 return fast();".to_string(),
-                "L18:             case Mode::Slow:".to_string(),
-                "L19:                 return slow();".to_string(),
-                "L20:             default:".to_string(),
-                "L21:                 return fallback();".to_string(),
-                "L22:         }".to_string(),
-                "L23:     }".to_string(),
+                ReadFileLine {
+                    number: 7,
+                    text: "    void setup() {".to_string()
+                },
+                ReadFileLine {
+                    number: 8,
+                    text: "        if (enabled_) {".to_string()
+                },
+                ReadFileLine {
+                    number: 9,
+                    text: "            init();".to_string()
+                },
+                ReadFileLine {
+                    number: 10,
+                    text: "        }".to_string()
+                },
+                ReadFileLine {
+                    number: 11,
+                    text: "    }".to_string()
+                },
+                ReadFileLine {
+                    number: 12,
+                    text: "".to_string()
+                },
+                ReadFileLine {
+                    number: 13,
+                    text: "    // Run the code".to_string()
+                },
+                ReadFileLine {
+                    number: 14,
+                    text: "    int run() const {".to_string()
+                },
+                ReadFileLine {
+                    number: 15,
+                    text: "        switch (mode_) {".to_string()
+                },
+                ReadFileLine {
+                    number: 16,
+                    text: "            case Mode::Fast:".to_string()
+                },
+                ReadFileLine {
+                    number: 17,
+                    text: "                return fast();".to_string()
+                },
+                ReadFileLine {
+                    number: 18,
+                    text: "            case Mode::Slow:".to_string()
+                },
+                ReadFileLine {
+                    number: 19,
+                    text: "                return slow();".to_string()
+                },
+                ReadFileLine {
+                    number: 20,
+                    text: "            default:".to_string()
+                },
+                ReadFileLine {
+                    number: 21,
+                    text: "                return fallback();".to_string()
+                },
+                ReadFileLine {
+                    number: 22,
+                    text: "        }".to_string()
+                },
+                ReadFileLine {
+                    number: 23,
+                    text: "    }".to_string()
+                },
             ]
         );
         Ok(())

@@ -347,7 +347,9 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::TurnAborted(_)
                     | EventMsg::UserMessage(_)
                     | EventMsg::ShutdownComplete
+                    | EventMsg::ReadFileToolCall(_)
                     | EventMsg::ViewImageToolCall(_)
+                    | EventMsg::WriteFileToolCall(_)
                     | EventMsg::RawResponseItem(_)
                     | EventMsg::EnteredReviewMode(_)
                     | EventMsg::ItemStarted(_)

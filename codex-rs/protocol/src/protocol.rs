@@ -745,6 +745,10 @@ pub enum EventMsg {
 
     /// Notification that the agent attached a local image via the view_image tool.
     ViewImageToolCall(ViewImageToolCallEvent),
+    /// Notification that the agent read a file via the read_file tool.
+    ReadFileToolCall(ReadFileToolCallEvent),
+    /// Notification that the agent wrote a file via the write_file tool.
+    WriteFileToolCall(WriteFileToolCallEvent),
 
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
@@ -1843,6 +1847,38 @@ pub struct ViewImageToolCallEvent {
     pub call_id: String,
     /// Local filesystem path provided to the tool.
     pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ReadFileLine {
+    /// 1-indexed line number in the source file.
+    pub number: usize,
+    /// Text for the line, without the trailing newline.
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ReadFileToolCallEvent {
+    /// Identifier for the originating tool call.
+    pub call_id: String,
+    /// Local filesystem path provided to the tool.
+    pub path: PathBuf,
+    /// Lines returned from the read operation.
+    pub lines: Vec<ReadFileLine>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct WriteFileToolCallEvent {
+    /// Identifier for the originating tool call.
+    pub call_id: String,
+    /// Local filesystem path provided to the tool.
+    pub path: PathBuf,
+    /// Number of bytes written to the file.
+    pub bytes_written: usize,
+    /// Number of lines written to the file.
+    pub lines_written: usize,
+    /// Whether the file existed and was overwritten.
+    pub overwrote: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]

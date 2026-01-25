@@ -70,6 +70,7 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
+use codex_core::protocol::ReadFileToolCallEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -87,6 +88,7 @@ use codex_core::protocol::ViewImageToolCallEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::protocol::WriteFileToolCallEvent;
 use codex_core::skills::model::SkillMetadata;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
@@ -1395,6 +1397,30 @@ impl ChatWidget {
             event.changes,
             &self.config.cwd,
         ));
+    }
+
+    fn on_read_file_tool_call(&mut self, event: ReadFileToolCallEvent) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(history_cell::new_read_file_tool_call(
+            event.path,
+            &self.config.cwd,
+            event.lines,
+        ));
+        self.had_work_activity = true;
+        self.request_redraw();
+    }
+
+    fn on_write_file_tool_call(&mut self, event: WriteFileToolCallEvent) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(history_cell::new_write_file_tool_call(
+            event.path,
+            &self.config.cwd,
+            event.bytes_written,
+            event.lines_written,
+            event.overwrote,
+        ));
+        self.had_work_activity = true;
+        self.request_redraw();
     }
 
     fn on_view_image_tool_call(&mut self, event: ViewImageToolCallEvent) {
@@ -2965,6 +2991,8 @@ impl ChatWidget {
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
             EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),
+            EventMsg::ReadFileToolCall(ev) => self.on_read_file_tool_call(ev),
+            EventMsg::WriteFileToolCall(ev) => self.on_write_file_tool_call(ev),
             EventMsg::ViewImageToolCall(ev) => self.on_view_image_tool_call(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),

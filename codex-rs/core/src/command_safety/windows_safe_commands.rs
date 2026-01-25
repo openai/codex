@@ -127,27 +127,18 @@ fn is_powershell_executable(exe: &str) -> bool {
 fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseOutcome {
     let encoded_script = encode_powershell_base64(script);
     let encoded_parser_script = encoded_parser_script();
-    match Command::new(executable)
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-EncodedCommand",
-            encoded_parser_script,
-        ])
-        .env("CODEX_POWERSHELL_PAYLOAD", &encoded_script)
-        .output()
-    {
-        Ok(output) if output.status.success() => {
-            if let Ok(result) =
-                serde_json::from_slice::<PowershellParserOutput>(output.stdout.as_slice())
-            {
-                result.into_outcome()
-            } else {
-                PowershellParseOutcome::Failed
-            }
-        }
-        _ => PowershellParseOutcome::Failed,
+    match try_run_powershell_parser(executable, encoded_parser_script, &encoded_script) {
+        PowershellParserAttempt::Outcome(outcome) => return outcome,
+        PowershellParserAttempt::SpawnFailed => {}
+    }
+
+    if is_windows_powershell_executable(executable) {
+        return PowershellParseOutcome::Failed;
+    }
+
+    match try_run_powershell_parser("powershell.exe", encoded_parser_script, &encoded_script) {
+        PowershellParserAttempt::Outcome(outcome) => outcome,
+        PowershellParserAttempt::SpawnFailed => PowershellParseOutcome::Failed,
     }
 }
 
@@ -163,6 +154,36 @@ fn encoded_parser_script() -> &'static str {
     static ENCODED: LazyLock<String> =
         LazyLock::new(|| encode_powershell_base64(POWERSHELL_PARSER_SCRIPT));
     &ENCODED
+}
+
+fn try_run_powershell_parser(
+    executable: &str,
+    encoded_parser_script: &str,
+    encoded_payload: &str,
+) -> PowershellParserAttempt {
+    let output = match Command::new(executable)
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            encoded_parser_script,
+        ])
+        .env("CODEX_POWERSHELL_PAYLOAD", encoded_payload)
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return PowershellParserAttempt::SpawnFailed,
+    };
+
+    if !output.status.success() {
+        return PowershellParserAttempt::Outcome(PowershellParseOutcome::Failed);
+    }
+
+    match serde_json::from_slice::<PowershellParserOutput>(output.stdout.as_slice()) {
+        Ok(result) => PowershellParserAttempt::Outcome(result.into_outcome()),
+        Err(_) => PowershellParserAttempt::Outcome(PowershellParseOutcome::Failed),
+    }
 }
 
 #[derive(Deserialize)]
@@ -195,6 +216,21 @@ enum PowershellParseOutcome {
     Commands(Vec<Vec<String>>),
     Unsupported,
     Failed,
+}
+
+enum PowershellParserAttempt {
+    Outcome(PowershellParseOutcome),
+    SpawnFailed,
+}
+
+fn is_windows_powershell_executable(executable: &str) -> bool {
+    let executable_name = Path::new(executable)
+        .file_name()
+        .and_then(|osstr| osstr.to_str())
+        .unwrap_or(executable)
+        .to_ascii_lowercase();
+
+    matches!(executable_name.as_str(), "powershell" | "powershell.exe")
 }
 
 fn join_arguments_as_script(args: &[String]) -> String {
