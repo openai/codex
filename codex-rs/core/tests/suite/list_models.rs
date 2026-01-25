@@ -94,7 +94,7 @@ fn gpt_52_codex() -> ModelPreset {
                 "Extra high reasoning depth for complex problems",
             ),
         ],
-        supports_personality: true,
+        supports_personality: false,
         is_default: true,
         upgrade: None,
         show_in_picker: true,

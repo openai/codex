@@ -2420,9 +2420,9 @@ async fn collab_mode_enabling_keeps_custom_until_selected() {
 
 #[tokio::test]
 async fn user_turn_includes_personality_from_config() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_model("gpt-5.2-codex");
+    chat.set_model("bengalfox");
     chat.set_personality(Personality::Friendly);
 
     chat.bottom_pane
@@ -2983,7 +2983,7 @@ async fn model_selection_popup_snapshot() {
 
 #[tokio::test]
 async fn personality_selection_popup_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.open_personality_popup();
 
