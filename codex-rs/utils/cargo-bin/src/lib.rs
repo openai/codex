@@ -313,7 +313,7 @@ fn cargo_workspace_root() -> Result<PathBuf, CargoBinError> {
         return Ok(root);
     }
 
-    Ok(std::env::current_dir().map_err(|source| CargoBinError::CurrentDir { source })?)
+    std::env::current_dir().map_err(|source| CargoBinError::CurrentDir { source })
 }
 
 fn cargo_bin_via_workspace_build(name: &str) -> Result<PathBuf, CargoBinError> {
