@@ -1565,7 +1565,7 @@ pub struct Turn {
     /// Only populated when the Turn's status is failed.
     pub error: Option<TurnError>,
     /// Collaboration mode kind captured at the start of the turn, when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     #[ts(optional)]
     pub collaboration_mode_kind: Option<ModeKind>,
 }
