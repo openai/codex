@@ -45,11 +45,61 @@ if command -v zig >/dev/null; then
 
   cat >"${cc}" <<EOF
 #!/usr/bin/env bash
-exec "${zig_bin}" cc -target "${zig_target}" "\$@"
+set -euo pipefail
+
+args=()
+skip_next=0
+for arg in "\$@"; do
+  if [[ "\${skip_next}" -eq 1 ]]; then
+    skip_next=0
+    continue
+  fi
+  case "\${arg}" in
+    --target)
+      skip_next=1
+      continue
+      ;;
+    --target=*|-target=*|-target)
+      # Drop any explicit --target/-target flags. Zig expects -target and
+      # rejects Rust triples like *-unknown-linux-musl.
+      if [[ "\${arg}" == "-target" ]]; then
+        skip_next=1
+      fi
+      continue
+      ;;
+  esac
+  args+=("\${arg}")
+done
+
+exec "${zig_bin}" cc -target "${zig_target}" "\${args[@]}"
 EOF
   cat >"${cxx}" <<EOF
 #!/usr/bin/env bash
-exec "${zig_bin}" c++ -target "${zig_target}" "\$@"
+set -euo pipefail
+
+args=()
+skip_next=0
+for arg in "\$@"; do
+  if [[ "\${skip_next}" -eq 1 ]]; then
+    skip_next=0
+    continue
+  fi
+  case "\${arg}" in
+    --target)
+      skip_next=1
+      continue
+      ;;
+    --target=*|-target=*|-target)
+      if [[ "\${arg}" == "-target" ]]; then
+        skip_next=1
+      fi
+      continue
+      ;;
+  esac
+  args+=("\${arg}")
+done
+
+exec "${zig_bin}" c++ -target "${zig_target}" "\${args[@]}"
 EOF
   chmod +x "${cc}" "${cxx}"
 
