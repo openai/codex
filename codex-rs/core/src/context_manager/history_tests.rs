@@ -1,7 +1,15 @@
 use super::*;
+use crate::client::ModelClient;
+use crate::config::types::ShellEnvironmentPolicy;
+use crate::features::Features;
+use crate::models_manager::manager::ModelsManager;
+use crate::tools::spec::ToolsConfig;
+use crate::tools::spec::ToolsConfigParams;
 use crate::truncate;
 use crate::truncate::TruncationPolicy;
 use codex_git::GhostCommit;
+use codex_otel::OtelManager;
+use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -10,8 +18,14 @@ use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::SessionSource;
+use codex_utils_readiness::ReadinessFlag;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
@@ -78,6 +92,58 @@ fn reasoning_with_encrypted_content(len: usize) -> ResponseItem {
         }],
         content: None,
         encrypted_content: Some("a".repeat(len)),
+    }
+}
+
+fn test_turn_context() -> TurnContext {
+    let config = Arc::new(crate::config::test_config());
+    let model = "gpt-5.2".to_string();
+    let model_info = ModelsManager::construct_model_info_offline(&model, config.as_ref());
+    let conversation_id = ThreadId::default();
+    let otel_manager = OtelManager::new(
+        conversation_id,
+        model_info.slug.as_str(),
+        model_info.slug.as_str(),
+        None,
+        None,
+        None,
+        false,
+        "test".to_string(),
+        SessionSource::Cli,
+    );
+    let client = ModelClient::new(
+        Arc::clone(&config),
+        None,
+        model_info.clone(),
+        otel_manager,
+        config.model_provider.clone(),
+        None,
+        Default::default(),
+        conversation_id,
+        SessionSource::Cli,
+    );
+    let features = Features::with_defaults();
+    TurnContext {
+        sub_id: "test".to_string(),
+        client,
+        cwd: PathBuf::from("/"),
+        developer_instructions: None,
+        compact_prompt: None,
+        user_instructions: None,
+        personality: None,
+        approval_policy: AskForApproval::Never,
+        sandbox_policy: SandboxPolicy::DangerFullAccess,
+        shell_environment_policy: ShellEnvironmentPolicy::default(),
+        tools_config: ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: None,
+        }),
+        ghost_snapshot: Default::default(),
+        final_output_json_schema: None,
+        codex_linux_sandbox_exe: None,
+        tool_call_gate: Arc::new(ReadinessFlag::new()),
+        truncation_policy: TruncationPolicy::Tokens(10_000),
     }
 }
 
@@ -170,6 +236,30 @@ fn get_history_for_prompt_drops_ghost_commits() {
     let history = create_history_with_items(items);
     let filtered = history.for_prompt();
     assert_eq!(filtered, vec![]);
+}
+
+#[test]
+fn estimate_token_count_does_not_pin_context_left_to_zero_after_compaction() {
+    let turn_context = test_turn_context();
+    let history = create_history_with_items(vec![
+        user_input_text_msg("REMOTE_COMPACTED_SUMMARY"),
+        ResponseItem::Compaction {
+            encrypted_content: "a".repeat(2_000_000),
+        },
+    ]);
+
+    let estimated = history
+        .estimate_token_count(&turn_context)
+        .expect("expected token estimate");
+    let context_window = turn_context
+        .client
+        .get_model_context_window()
+        .expect("expected context window");
+
+    assert!(
+        estimated < context_window,
+        "expected estimated tokens ({estimated}) to be less than context window ({context_window})"
+    );
 }
 
 #[test]

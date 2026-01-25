@@ -98,12 +98,23 @@ impl ContextManager {
                 ResponseItem::Reasoning {
                     encrypted_content: Some(content),
                     ..
-                }
-                | ResponseItem::Compaction {
-                    encrypted_content: content,
                 } => {
                     let reasoning_bytes = estimate_reasoning_length(content.len());
                     i64::try_from(approx_tokens_from_byte_count(reasoning_bytes))
+                        .unwrap_or(i64::MAX)
+                }
+                ResponseItem::Compaction { encrypted_content } => {
+                    // `compaction_summary.encrypted_content` is an opaque server artifact and does
+                    // not represent user-controllable prompt text. Counting its full encoded
+                    // length grossly overestimates prompt size and can incorrectly pin the UI to
+                    // `0% context left` immediately after a successful `/compact`.
+                    //
+                    // Keep a small bounded estimate for the payload to avoid making auto-compaction
+                    // decisions wildly optimistic while still reflecting that the compacted summary
+                    // item exists in the transcript.
+                    let compaction_bytes = estimate_reasoning_length(encrypted_content.len())
+                        .min(MAX_COMPACTION_ENCRYPTED_BYTES_ESTIMATE);
+                    i64::try_from(approx_tokens_from_byte_count(compaction_bytes))
                         .unwrap_or(i64::MAX)
                 }
                 item => {
@@ -331,6 +342,8 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
         .unwrap_or(0)
         .saturating_sub(650)
 }
+
+const MAX_COMPACTION_ENCRYPTED_BYTES_ESTIMATE: usize = 8 * 1024;
 
 pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
     let ResponseItem::Message { role, content, .. } = item else {
