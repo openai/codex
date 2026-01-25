@@ -120,7 +120,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
 
     // Also verify that a user message with the header and a formatted finding
     // was recorded back in the parent session's rollout.
-    let path = codex.rollout_path();
+    let path = codex.rollout_path().expect("rollout path");
     let text = std::fs::read_to_string(&path).expect("read rollout file");
 
     let mut saw_header = false;
@@ -627,7 +627,7 @@ async fn review_input_isolated_from_parent_history() {
     assert_eq!(instructions, REVIEW_PROMPT);
 
     // Also verify that a user interruption note was recorded in the rollout.
-    let path = codex.rollout_path();
+    let path = codex.rollout_path().expect("rollout path");
     let text = std::fs::read_to_string(&path).expect("read rollout file");
     let mut saw_interruption_message = false;
     for line in text.lines() {

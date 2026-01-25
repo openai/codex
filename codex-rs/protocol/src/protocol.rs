@@ -1518,6 +1518,7 @@ pub enum SessionSource {
 pub enum SubAgentSource {
     Review,
     Compact,
+    ThreadSpawn { parent_thread_id: ThreadId },
     Other(String),
 }
 
@@ -1539,6 +1540,9 @@ impl fmt::Display for SubAgentSource {
         match self {
             SubAgentSource::Review => f.write_str("review"),
             SubAgentSource::Compact => f.write_str("compact"),
+            SubAgentSource::ThreadSpawn { parent_thread_id } => {
+                write!(f, "thread_spawn_{parent_thread_id}")
+            }
             SubAgentSource::Other(other) => f.write_str(other),
         }
     }
@@ -2139,7 +2143,9 @@ pub struct SessionConfiguredEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_messages: Option<Vec<EventMsg>>,
 
-    pub rollout_path: PathBuf,
+    /// Path in which the rollout is stored. Can be `None` for ephemeral threads
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollout_path: Option<PathBuf>,
 }
 
 /// User's decision in response to an ExecApprovalRequest.
@@ -2491,7 +2497,7 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
-                rollout_path: rollout_file.path().to_path_buf(),
+                rollout_path: Some(rollout_file.path().to_path_buf()),
             }),
         };
 
