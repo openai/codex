@@ -33,6 +33,8 @@ use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
 use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
+use codex_app_server_protocol::ExecRunParams;
+use codex_app_server_protocol::ExecRunResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::ForkConversationParams;
@@ -209,6 +211,7 @@ type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
 pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ThreadId, PendingInterruptQueue>>>;
 
 pub(crate) type PendingRollbacks = Arc<Mutex<HashMap<ThreadId, RequestId>>>;
+pub(crate) type AutoAttachExclusions = Arc<Mutex<HashSet<ThreadId>>>;
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
@@ -256,6 +259,7 @@ pub(crate) struct CodexMessageProcessor {
     // Queue of pending rollback requests per conversation. We reply when ThreadRollback arrives.
     pending_rollbacks: PendingRollbacks,
     turn_summary_store: TurnSummaryStore,
+    auto_attach_exclusions: AutoAttachExclusions,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     feedback: CodexFeedback,
 }
@@ -312,6 +316,7 @@ impl CodexMessageProcessor {
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
             pending_rollbacks: Arc::new(Mutex::new(HashMap::new())),
             turn_summary_store: Arc::new(Mutex::new(HashMap::new())),
+            auto_attach_exclusions: Arc::new(Mutex::new(HashSet::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             feedback,
         }
@@ -565,6 +570,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params.into()).await;
+            }
+            ClientRequest::ExecRun { request_id, params } => {
+                self.exec_run(request_id, params).await;
             }
             ClientRequest::ConfigRead { .. }
             | ClientRequest::ConfigValueWrite { .. }
@@ -1311,6 +1319,207 @@ impl CodexMessageProcessor {
         });
     }
 
+    fn turn_status_from_agent_status(agent_status: &AgentStatus) -> TurnStatus {
+        match agent_status {
+            AgentStatus::Completed(_) => TurnStatus::Completed,
+            AgentStatus::Errored(_) | AgentStatus::Shutdown | AgentStatus::NotFound => {
+                TurnStatus::Failed
+            }
+            AgentStatus::PendingInit | AgentStatus::Running => TurnStatus::InProgress,
+        }
+    }
+
+    async fn run_exec_turn_to_completion(
+        thread: Arc<CodexThread>,
+        thread_id: ThreadId,
+        turn_id: String,
+    ) -> Result<ExecRunResponse, JSONRPCErrorError> {
+        let mut last_agent_message = None;
+        let mut error = None;
+
+        let agent_status = loop {
+            let event = thread.next_event().await.map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to read exec/run events: {err}"),
+                data: None,
+            })?;
+
+            if event.id != turn_id {
+                continue;
+            }
+
+            match event.msg {
+                EventMsg::TurnStarted(_) => continue,
+                EventMsg::TurnComplete(ev) => {
+                    last_agent_message = ev.last_agent_message.clone();
+                    break AgentStatus::Completed(ev.last_agent_message);
+                }
+                EventMsg::TurnAborted(ev) => {
+                    let message = format!("{:?}", ev.reason);
+                    error = Some(TurnError {
+                        message: message.clone(),
+                        codex_error_info: None,
+                        additional_details: None,
+                    });
+                    break AgentStatus::Errored(message);
+                }
+                EventMsg::Error(ev) => {
+                    let message = ev.message;
+                    error = Some(TurnError {
+                        message: message.clone(),
+                        codex_error_info: ev.codex_error_info.map(Into::into),
+                        additional_details: None,
+                    });
+                    break AgentStatus::Errored(message);
+                }
+                _ => {}
+            }
+        };
+
+        Ok(ExecRunResponse {
+            thread_id: thread_id.to_string(),
+            turn_id,
+            status: Self::turn_status_from_agent_status(&agent_status),
+            last_agent_message,
+            error,
+        })
+    }
+
+    async fn exec_run(&self, request_id: RequestId, params: ExecRunParams) {
+        if params.input.is_empty() {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "input must not be empty".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        if let Some(policy) = params.sandbox_policy.as_ref() {
+            let requested_policy = policy.clone().to_core();
+            if let Err(err) = self.config.sandbox_policy.can_set(&requested_policy) {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid sandbox policy: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        }
+
+        let mut typesafe_overrides = self.build_thread_config_overrides(
+            params.model,
+            params.model_provider,
+            params.cwd,
+            params.approval_policy,
+            None,
+            params.base_instructions,
+            params.developer_instructions,
+            params.personality,
+        );
+        typesafe_overrides.ephemeral = Some(params.ephemeral.unwrap_or(true));
+
+        let config =
+            match derive_config_from_params(&self.cli_overrides, params.config, typesafe_overrides)
+                .await
+            {
+                Ok(config) => config,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("error deriving config: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+        let new_thread = match self.thread_manager.start_thread(config).await {
+            Ok(new_thread) => new_thread,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("error creating thread: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let NewThread {
+            thread_id, thread, ..
+        } = new_thread;
+
+        let auto_attach_exclusions = self.auto_attach_exclusions.clone();
+        let thread_id_for_turn = thread_id.clone();
+        let thread_id_for_remove = thread_id.clone();
+        auto_attach_exclusions.lock().await.insert(thread_id);
+
+        let response_result: Result<ExecRunResponse, JSONRPCErrorError> = async {
+            let has_turn_overrides = params.effort.is_some()
+                || params.summary.is_some()
+                || params.collaboration_mode.is_some()
+                || params.sandbox_policy.is_some();
+            if has_turn_overrides {
+                let _ = thread
+                    .submit(Op::OverrideTurnContext {
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: params.sandbox_policy.map(|policy| policy.to_core()),
+                        model: None,
+                        effort: params.effort.map(Some),
+                        summary: params.summary.clone(),
+                        collaboration_mode: params.collaboration_mode.clone(),
+                        personality: None,
+                    })
+                    .await;
+            }
+
+            let mapped_items = params
+                .input
+                .into_iter()
+                .map(V2UserInput::into_core)
+                .collect();
+
+            let turn_id = thread
+                .submit(Op::UserInput {
+                    items: mapped_items,
+                    final_output_json_schema: params.output_schema,
+                })
+                .await
+                .map_err(|err| JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to start exec/run turn: {err}"),
+                    data: None,
+                })?;
+
+            Self::run_exec_turn_to_completion(thread.clone(), thread_id_for_turn, turn_id).await
+        }
+        .await;
+
+        let auto_attach_exclusions_for_cleanup = auto_attach_exclusions.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            auto_attach_exclusions_for_cleanup
+                .lock()
+                .await
+                .remove(&thread_id_for_remove);
+        });
+
+        match response_result {
+            Ok(response) => {
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+            }
+        }
+    }
+
     async fn process_new_conversation(
         &mut self,
         request_id: RequestId,
@@ -1879,6 +2088,15 @@ impl CodexMessageProcessor {
 
     /// Best-effort: attach a listener for thread_id if missing.
     pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {
+        if self
+            .auto_attach_exclusions
+            .lock()
+            .await
+            .contains(&thread_id)
+        {
+            return;
+        }
+
         if self
             .listener_thread_ids_by_subscription
             .values()

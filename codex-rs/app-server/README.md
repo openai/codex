@@ -43,6 +43,7 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 - Initialize once: Immediately after launching the codex app-server process, send an `initialize` request with your client metadata, then emit an `initialized` notification. Any other request before this handshake gets rejected.
 - Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history.
 - Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy, etc. This immediately returns the new turn object and triggers a `turn/started` notification.
+- Or run once: Call `exec/run` to execute a single turn to completion and receive the final status/message in the response without subscribing to the event stream.
 - Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
 - Finish the turn: When the model is done (or the turn is interrupted via making the `turn/interrupt` call), the server sends `turn/completed` with the final turn state and token usage.
 
@@ -85,6 +86,7 @@ Example (from OpenAI's official VSCode extension):
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
+- `exec/run` — run a single turn to completion and return the final status/message inline without streaming notifications.
 - `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
 - `model/list` — list available models (with reasoning effort options).
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination).
@@ -367,6 +369,34 @@ containing an `exitedReviewMode` item with the final review text:
 ```
 
 The `review` string is plain text that already bundles the overall explanation plus a bullet list for each structured finding (matching `ThreadItem::ExitedReviewMode` in the generated schema). Use this notification to render the reviewer output in your client.
+
+### Example: Exec run to completion
+
+Run a single turn to completion without subscribing to streamed turn/item events:
+
+```json
+{ "method": "exec/run", "id": 31, "params": {
+    "input": [{
+        "type": "text",
+        "text": "Generate a concise thread title",
+        "textElements": []
+    }],
+    "approvalPolicy": "never",                    // optional
+    "sandboxPolicy": { "type": "readOnly" }       // optional
+} }
+{ "id": 31, "result": {
+    "threadId": "thread-123",
+    "turnId": "turn-456",
+    "status": "completed",
+    "lastAgentMessage": "Fix title generation for app-server",
+    "error": null
+} }
+```
+
+Notes:
+
+- `exec/run` is best for one-off utilities (for example, generating a title) where you just need the final result.
+- Use `turn/start` when you want streaming events, intermediate items, or a long-lived thread.
 
 ### Example: One-off command execution
 

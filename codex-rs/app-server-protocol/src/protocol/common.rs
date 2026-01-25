@@ -214,6 +214,12 @@ client_request_definitions! {
         response: v2::CommandExecResponse,
     },
 
+    /// Run a single turn to completion without managing a thread lifecycle.
+    ExecRun => "exec/run" {
+        params: v2::ExecRunParams,
+        response: v2::ExecRunResponse,
+    },
+
     ConfigRead => "config/read" {
         params: v2::ConfigReadParams,
         response: v2::ConfigReadResponse,

@@ -22,6 +22,7 @@ use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
+use codex_app_server_protocol::ExecRunParams;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::ForkConversationParams;
 use codex_app_server_protocol::GetAccountParams;
@@ -464,6 +465,12 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("turn/start", params).await
+    }
+
+    /// Send an `exec/run` JSON-RPC request (v2).
+    pub async fn send_exec_run_request(&mut self, params: ExecRunParams) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("exec/run", params).await
     }
 
     /// Send a `turn/interrupt` JSON-RPC request (v2).
