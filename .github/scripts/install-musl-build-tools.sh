@@ -32,35 +32,28 @@ case "${TARGET}" in
     ;;
 esac
 
-if command -v "${arch}-linux-musl-gcc" >/dev/null; then
-  cc="$(command -v "${arch}-linux-musl-gcc")"
-  echo "CFLAGS=-pthread" >> "$GITHUB_ENV"
-elif command -v musl-gcc >/dev/null; then
-  cc="$(command -v musl-gcc)"
-  echo "CFLAGS=-pthread" >> "$GITHUB_ENV"
-elif command -v clang >/dev/null; then
-  cc="$(command -v clang)"
+if command -v clang++ >/dev/null; then
+  cxx="$(command -v clang++)"
+  echo "CXXFLAGS=--target=${TARGET} -stdlib=libc++ -pthread" >> "$GITHUB_ENV"
   echo "CFLAGS=--target=${TARGET} -pthread" >> "$GITHUB_ENV"
-else
-  echo "musl gcc not found after install; arch=${arch}" >&2
-  exit 1
-fi
-
-echo "CC=${cc}" >> "$GITHUB_ENV"
-echo "TARGET_CC=${cc}" >> "$GITHUB_ENV"
-target_cc_var="CC_${TARGET}"
-target_cc_var="${target_cc_var//-/_}"
-echo "${target_cc_var}=${cc}" >> "$GITHUB_ENV"
-
-if command -v "${arch}-linux-musl-g++" >/dev/null; then
+  if command -v clang >/dev/null; then
+    cc="$(command -v clang)"
+    echo "CC=${cc}" >> "$GITHUB_ENV"
+    echo "TARGET_CC=${cc}" >> "$GITHUB_ENV"
+    target_cc_var="CC_${TARGET}"
+    target_cc_var="${target_cc_var//-/_}"
+    echo "${target_cc_var}=${cc}" >> "$GITHUB_ENV"
+  fi
+elif command -v "${arch}-linux-musl-g++" >/dev/null; then
   cxx="$(command -v "${arch}-linux-musl-g++")"
 elif command -v musl-g++ >/dev/null; then
   cxx="$(command -v musl-g++)"
-elif command -v clang++ >/dev/null; then
-  cxx="$(command -v clang++)"
-  echo "CXXFLAGS=--target=${TARGET} -stdlib=libc++ -pthread" >> "$GITHUB_ENV"
+elif command -v musl-gcc >/dev/null; then
+  cxx="$(command -v musl-gcc)"
+  echo "CFLAGS=-pthread" >> "$GITHUB_ENV"
 else
-  cxx="${cc}"
+  echo "musl g++ not found after install; arch=${arch}" >&2
+  exit 1
 fi
 
 echo "CXX=${cxx}" >> "$GITHUB_ENV"
