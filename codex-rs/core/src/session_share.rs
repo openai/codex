@@ -247,9 +247,16 @@ fn build_rollout_download_path(codex_home: &Path, session_id: ThreadId) -> anyho
 
 impl HttpObjectStore {
     fn object_url(&self, key: &str) -> anyhow::Result<Url> {
-        self.base_url
+        let mut base = self.base_url.clone();
+        let query = base.query().map(str::to_string);
+        base.set_query(None);
+        let mut joined = base
             .join(key)
-            .with_context(|| format!("failed to build object URL for key {key}"))
+            .with_context(|| format!("failed to build object URL for key {key}"))?;
+        if let Some(query) = query {
+            joined.set_query(Some(&query));
+        }
+        Ok(joined)
     }
 
     async fn object_exists(&self, key: &str) -> anyhow::Result<bool> {
