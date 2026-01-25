@@ -45,7 +45,7 @@ async fn list_collaboration_modes_returns_presets() -> Result<()> {
     let CollaborationModeListResponse { data: items } =
         to_response::<CollaborationModeListResponse>(response)?;
 
-    let expected = vec![
+    let expected = [
         plan_preset(),
         code_preset(),
         pair_programming_preset(),
