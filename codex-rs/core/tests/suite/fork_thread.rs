@@ -80,7 +80,7 @@ async fn fork_thread_twice_drops_to_first_message() {
     }
 
     // Request history from the base conversation to obtain rollout path.
-    let base_path = codex.rollout_path();
+    let base_path = codex.rollout_path().expect("rollout path");
 
     // GetHistory flushes before returning the path; no wait needed.
 
@@ -135,7 +135,7 @@ async fn fork_thread_twice_drops_to_first_message() {
         .await
         .expect("fork 1");
 
-    let fork1_path = codex_fork1.rollout_path();
+    let fork1_path = codex_fork1.rollout_path().expect("rollout path");
 
     // GetHistory on fork1 flushed; the file is ready.
     let fork1_items = read_items(&fork1_path);
@@ -154,7 +154,7 @@ async fn fork_thread_twice_drops_to_first_message() {
         .await
         .expect("fork 2");
 
-    let fork2_path = codex_fork2.rollout_path();
+    let fork2_path = codex_fork2.rollout_path().expect("rollout path");
     // GetHistory on fork2 flushed; the file is ready.
     let fork1_items = read_items(&fork1_path);
     let fork1_user_inputs = find_user_input_positions(&fork1_items);

@@ -265,11 +265,11 @@ jobs:
         name: Install musl build tools
         env:
           DEBIAN_FRONTEND: noninteractive
+          TARGET: ${{ matrix.target }}
+          APT_UPDATE_ARGS: -o Acquire::Retries=3
+          APT_INSTALL_ARGS: --no-install-recommends
         shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get -y update -o Acquire::Retries=3
-          sudo apt-get -y install --no-install-recommends musl-tools pkg-config
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
 
       - name: Install cargo-chef
         if: ${{ matrix.profile == 'release' }}

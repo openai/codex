@@ -12,6 +12,7 @@ use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -412,11 +413,14 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
 
     let TestCodex { codex, .. } = test_codex().build(&server).await?;
 
-    let collaboration_mode = CollaborationMode::Custom(Settings {
-        model: "gpt-5.1".to_string(),
-        reasoning_effort: Some(ReasoningEffort::High),
-        developer_instructions: None,
-    });
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Custom,
+        settings: Settings {
+            model: "gpt-5.1".to_string(),
+            reasoning_effort: Some(ReasoningEffort::High),
+            developer_instructions: None,
+        },
+    };
 
     codex
         .submit(Op::OverrideTurnContext {

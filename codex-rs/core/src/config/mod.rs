@@ -261,6 +261,9 @@ pub struct Config {
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
 
+    /// When true, session is not persisted on disk. Default to `false`
+    pub ephemeral: bool,
+
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: UriBasedFileOpener,
@@ -410,9 +413,21 @@ impl ConfigBuilder {
         // relative paths to absolute paths based on the parent folder of the
         // respective config file, so we should be safe to deserialize without
         // AbsolutePathBufGuard here.
-        let config_toml: ConfigToml = merged_toml
-            .try_into()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let config_toml: ConfigToml = match merged_toml.try_into() {
+            Ok(config_toml) => config_toml,
+            Err(err) => {
+                if let Some(config_error) =
+                    crate::config_loader::first_layer_config_error(&config_layer_stack).await
+                {
+                    return Err(crate::config_loader::io_error_from_config_error(
+                        std::io::ErrorKind::InvalidData,
+                        config_error,
+                        Some(err),
+                    ));
+                }
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err));
+            }
+        };
         Config::load_config_with_layer_stack(
             config_toml,
             harness_overrides,
@@ -1146,6 +1161,7 @@ pub struct ConfigOverrides {
     pub include_apply_patch_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub ephemeral: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
 }
@@ -1234,6 +1250,7 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_override,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            ephemeral,
             additional_writable_roots,
         } = overrides;
 
@@ -1518,6 +1535,7 @@ impl Config {
             codex_home,
             config_layer_stack,
             history,
+            ephemeral: ephemeral.unwrap_or_default(),
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
 
@@ -3679,6 +3697,7 @@ model_verbosity = "high"
                 codex_home: fixture.codex_home(),
                 config_layer_stack: Default::default(),
                 history: History::default(),
+                ephemeral: false,
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
@@ -3760,6 +3779,7 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
+            ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
@@ -3856,6 +3876,7 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
+            ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
@@ -3938,6 +3959,7 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
+            ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,

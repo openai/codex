@@ -23,6 +23,7 @@ use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
@@ -887,11 +888,14 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
         .build(&server)
         .await?;
 
-    let collaboration_mode = CollaborationMode::Custom(Settings {
-        model: "gpt-5.1".to_string(),
-        reasoning_effort: Some(ReasoningEffort::High),
-        developer_instructions: None,
-    });
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Custom,
+        settings: Settings {
+            model: "gpt-5.1".to_string(),
+            reasoning_effort: Some(ReasoningEffort::High),
+            developer_instructions: None,
+        },
+    };
 
     codex
         .submit(Op::UserTurn {
