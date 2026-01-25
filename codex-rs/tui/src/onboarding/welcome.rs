@@ -11,6 +11,7 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use std::cell::Cell;
 
 use crate::ascii_animation::AsciiAnimation;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
@@ -26,6 +27,7 @@ pub(crate) struct WelcomeWidget {
     pub is_logged_in: bool,
     animation: AsciiAnimation,
     animations_enabled: bool,
+    layout_area: Cell<Option<Rect>>,
 }
 
 impl KeyboardHandler for WelcomeWidget {
@@ -53,7 +55,12 @@ impl WelcomeWidget {
             is_logged_in,
             animation: AsciiAnimation::new(request_frame),
             animations_enabled,
+            layout_area: Cell::new(None),
         }
+    }
+
+    pub(crate) fn update_layout_area(&self, area: Rect) {
+        self.layout_area.set(Some(area));
     }
 }
 
@@ -64,12 +71,14 @@ impl WidgetRef for &WelcomeWidget {
             self.animation.schedule_next_frame();
         }
 
+        let layout_area = self.layout_area.get().unwrap_or(area);
         // Skip the animation entirely when the viewport is too small so we don't clip frames.
-        let show_animation =
-            area.height >= MIN_ANIMATION_HEIGHT && area.width >= MIN_ANIMATION_WIDTH;
+        let show_animation = self.animations_enabled
+            && layout_area.height >= MIN_ANIMATION_HEIGHT
+            && layout_area.width >= MIN_ANIMATION_WIDTH;
 
         let mut lines: Vec<Line> = Vec::new();
-        if show_animation && self.animations_enabled {
+        if show_animation {
             let frame = self.animation.current_frame();
             lines.extend(frame.lines().map(Into::into));
             lines.push("".into());
@@ -146,6 +155,7 @@ mod tests {
             is_logged_in: false,
             animation: AsciiAnimation::with_variants(FrameRequester::test_dummy(), &VARIANTS, 0),
             animations_enabled: true,
+            layout_area: Cell::new(None),
         };
 
         let before = widget.animation.current_frame();
