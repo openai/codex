@@ -101,13 +101,27 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
     };
 
     let env_map: HashMap<String, String> = std::env::vars().collect();
-    let spawned = spawn_pty_process(&python, &[], Path::new("."), &env_map, &None).await?;
-    let writer = spawned.session.writer_sender();
-    let newline = if cfg!(windows) { "\r\n" } else { "\n" };
-    writer
-        .send(format!("print('hello from pty'){newline}").into_bytes())
-        .await?;
-    writer.send(format!("exit(){newline}").into_bytes()).await?;
+    let (args, send_input) = if cfg!(windows) {
+        (
+            vec![
+                "-u".to_string(),
+                "-c".to_string(),
+                "print('hello from pty')".to_string(),
+            ],
+            false,
+        )
+    } else {
+        (Vec::new(), true)
+    };
+    let spawned = spawn_pty_process(&python, &args, Path::new("."), &env_map, &None).await?;
+    if send_input {
+        let writer = spawned.session.writer_sender();
+        let newline = if cfg!(windows) { "\r\n" } else { "\n" };
+        writer
+            .send(format!("print('hello from pty'){newline}").into_bytes())
+            .await?;
+        writer.send(format!("exit(){newline}").into_bytes()).await?;
+    }
 
     let timeout_ms = if cfg!(windows) { 10_000 } else { 5_000 };
     let (output, code) =
