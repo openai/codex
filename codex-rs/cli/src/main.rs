@@ -17,6 +17,7 @@ use codex_cli::login::run_login_with_device_code;
 use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_common::CliConfigOverrides;
+use codex_common::oss::ensure_oss_provider_ready;
 use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
@@ -37,10 +38,20 @@ mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
 
+use codex_core::AuthManager;
+use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::find_codex_home;
+use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::config::resolve_oss_provider;
+use codex_core::config_loader::ConfigLoadError;
+use codex_core::config_loader::format_config_error_with_source;
 use codex_core::features::is_known_feature_key;
+use codex_core::models_manager::manager::RefreshStrategy;
+use codex_core::protocol::SessionSource;
 use codex_core::terminal::TerminalName;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 /// Codex CLI
 ///
@@ -63,6 +74,10 @@ struct MultitoolCli {
 
     #[clap(flatten)]
     pub feature_toggles: FeatureToggles,
+
+    /// List available models and their supported reasoning efforts, then exit.
+    #[arg(long = "list-models", default_value_t = false)]
+    list_models: bool,
 
     #[clap(flatten)]
     interactive: TuiCli,
@@ -473,6 +488,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
+        list_models,
         mut interactive,
         subcommand,
     } = MultitoolCli::parse();
@@ -480,6 +496,17 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
+
+    if list_models {
+        if subcommand.is_some() {
+            anyhow::bail!("--list-models cannot be used with a subcommand");
+        }
+        if interactive.prompt.is_some() || !interactive.images.is_empty() {
+            anyhow::bail!("--list-models does not accept a prompt or images");
+        }
+        list_models_command(root_config_overrides, &interactive).await?;
+        return Ok(());
+    }
 
     match subcommand {
         None => {
@@ -718,6 +745,139 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
     Ok(())
 }
 
+async fn list_models_command(
+    root_config_overrides: CliConfigOverrides,
+    interactive: &TuiCli,
+) -> anyhow::Result<()> {
+    let cli_kv_overrides = root_config_overrides
+        .parse_overrides()
+        .map_err(anyhow::Error::msg)?;
+    let resolved_cwd = interactive.cwd.clone();
+    let config_cwd = match resolved_cwd.as_deref() {
+        Some(path) => AbsolutePathBuf::from_absolute_path(path.canonicalize()?)?,
+        None => AbsolutePathBuf::current_dir()?,
+    };
+
+    #[allow(clippy::print_stderr)]
+    let config_toml = {
+        let codex_home = match find_codex_home() {
+            Ok(codex_home) => codex_home,
+            Err(err) => {
+                eprintln!("Error finding codex home: {err}");
+                std::process::exit(1);
+            }
+        };
+
+        match load_config_as_toml_with_cli_overrides(
+            &codex_home,
+            &config_cwd,
+            cli_kv_overrides.clone(),
+        )
+        .await
+        {
+            Ok(config_toml) => config_toml,
+            Err(err) => {
+                let config_error = err
+                    .get_ref()
+                    .and_then(|err| err.downcast_ref::<ConfigLoadError>())
+                    .map(ConfigLoadError::config_error);
+                if let Some(config_error) = config_error {
+                    eprintln!(
+                        "Error loading config.toml:\n{}",
+                        format_config_error_with_source(config_error)
+                    );
+                } else {
+                    eprintln!("Error loading config.toml: {err}");
+                }
+                std::process::exit(1);
+            }
+        }
+    };
+
+    let model_provider = if interactive.oss {
+        let resolved = resolve_oss_provider(
+            interactive.oss_provider.as_deref(),
+            &config_toml,
+            interactive.config_profile.clone(),
+        );
+        if let Some(provider) = resolved {
+            Some(provider)
+        } else {
+            anyhow::bail!(
+                "No default OSS provider configured. Use --local-provider or set oss_provider in config.toml."
+            );
+        }
+    } else {
+        None
+    };
+
+    let overrides = ConfigOverrides {
+        config_profile: interactive.config_profile.clone(),
+        cwd: resolved_cwd,
+        model_provider: model_provider.clone(),
+        ..Default::default()
+    };
+
+    let config =
+        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+
+    if interactive.oss {
+        let provider_id = model_provider
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("OSS provider not set but oss flag was used"))?;
+        ensure_oss_provider_ready(provider_id, &config)
+            .await
+            .map_err(|err| anyhow::anyhow!("OSS setup failed: {err}"))?;
+    }
+
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        true,
+        config.cli_auth_credentials_store_mode,
+    );
+    let thread_manager =
+        ThreadManager::new(config.codex_home.clone(), auth_manager, SessionSource::Cli);
+    let models = thread_manager
+        .list_models(&config, RefreshStrategy::OnlineIfUncached)
+        .await;
+
+    let mut rows = Vec::new();
+    let mut model_width = "MODEL".len();
+    let mut default_width = "DEFAULT_EFFORT".len();
+    for preset in models.into_iter().filter(|preset| preset.show_in_picker) {
+        let model = preset.model;
+        let default_effort = preset.default_reasoning_effort.to_string();
+        let supported = if preset.supported_reasoning_efforts.is_empty() {
+            "none".to_string()
+        } else {
+            preset
+                .supported_reasoning_efforts
+                .iter()
+                .map(|effort| effort.effort.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        model_width = model_width.max(model.len());
+        default_width = default_width.max(default_effort.len());
+        rows.push((model, default_effort, supported));
+    }
+
+    if rows.is_empty() {
+        println!("No models available.");
+        return Ok(());
+    }
+
+    println!(
+        "{:model_width$}  {:default_width$}  SUPPORTED_EFFORTS",
+        "MODEL", "DEFAULT_EFFORT",
+    );
+    for (model, default_effort, supported) in rows {
+        println!("{model:<model_width$}  {default_effort:<default_width$}  {supported}");
+    }
+
+    Ok(())
+}
+
 /// Prepend root-level overrides so they have lower precedence than
 /// CLI-specific ones specified after the subcommand (if any).
 fn prepend_config_flags(
@@ -889,6 +1049,7 @@ mod tests {
             config_overrides: root_overrides,
             subcommand,
             feature_toggles: _,
+            ..
         } = cli;
 
         let Subcommand::Resume(ResumeCommand {
@@ -918,6 +1079,7 @@ mod tests {
             config_overrides: root_overrides,
             subcommand,
             feature_toggles: _,
+            ..
         } = cli;
 
         let Subcommand::Fork(ForkCommand {

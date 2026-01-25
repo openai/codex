@@ -1240,6 +1240,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-stdio-to-uds",
  "codex-tui",
+ "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-windows-sandbox",
  "libc",

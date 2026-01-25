@@ -35,6 +35,9 @@ cargo build
 # Launch the TUI with a sample prompt.
 cargo run --bin codex -- "explain this codebase to me"
 
+# List available models and supported reasoning efforts.
+cargo run --bin codex -- --list-models
+
 # After making changes, use the root justfile helpers (they default to codex-rs):
 just fmt
 just fix -p <crate-you-touched>
