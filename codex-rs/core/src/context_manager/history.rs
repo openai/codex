@@ -121,7 +121,7 @@ impl ContextManager {
                         .get_model_context_window()
                         .map(|window| window.saturating_div(COMPACTION_ENCRYPTED_TOKENS_FRACTION))
                         .unwrap_or(MAX_COMPACTION_ENCRYPTED_TOKENS_ESTIMATE)
-                        .min(MAX_COMPACTION_ENCRYPTED_TOKENS_ESTIMATE);
+                        .clamp(0, MAX_COMPACTION_ENCRYPTED_TOKENS_ESTIMATE);
                     compaction_tokens.min(cap_tokens)
                 }
                 item => {
