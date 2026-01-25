@@ -8,6 +8,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-assert_cmd = { workspace = true }
+path-absolutize = { workspace = true }
 runfiles = { workspace = true }
 thiserror = { workspace = true }

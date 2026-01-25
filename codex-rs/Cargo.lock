@@ -2451,7 +2451,7 @@ dependencies = [
 name = "codex-utils-cargo-bin"
 version = "0.0.0"
 dependencies = [
- "assert_cmd",
+ "path-absolutize",
  "runfiles",
  "thiserror 2.0.18",
 ]
