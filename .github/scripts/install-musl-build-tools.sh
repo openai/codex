@@ -37,7 +37,7 @@ esac
 # errors. Use Zig for a musl sysroot and append warning overrides last.
 if [[ "${TARGET}" == "aarch64-unknown-linux-musl" ]]; then
   if ! command -v zig >/dev/null; then
-    echo "zig is required for ${TARGET} (install via ziglang/setup-zig)" >&2
+    echo "zig is required for ${TARGET} (install via mlugg/setup-zig@v2)" >&2
     exit 1
   fi
 
