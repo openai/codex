@@ -5,6 +5,7 @@ use crate::protocol::common::AuthMode;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
@@ -30,6 +31,7 @@ use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
 use codex_protocol::protocol::SkillInterface as CoreSkillInterface;
 use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
 use codex_protocol::protocol::SkillScope as CoreSkillScope;
+use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
@@ -709,6 +711,7 @@ pub enum SessionSource {
     VsCode,
     Exec,
     AppServer,
+    SubAgent(CoreSubAgentSource),
     #[serde(other)]
     Unknown,
 }
@@ -720,7 +723,7 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::VSCode => SessionSource::VsCode,
             CoreSessionSource::Exec => SessionSource::Exec,
             CoreSessionSource::Mcp => SessionSource::AppServer,
-            CoreSessionSource::SubAgent(_) => SessionSource::Unknown,
+            CoreSessionSource::SubAgent(sub) => SessionSource::SubAgent(sub),
             CoreSessionSource::Unknown => SessionSource::Unknown,
         }
     }
@@ -733,6 +736,7 @@ impl From<SessionSource> for CoreSessionSource {
             SessionSource::VsCode => CoreSessionSource::VSCode,
             SessionSource::Exec => CoreSessionSource::Exec,
             SessionSource::AppServer => CoreSessionSource::Mcp,
+            SessionSource::SubAgent(sub) => CoreSessionSource::SubAgent(sub),
             SessionSource::Unknown => CoreSessionSource::Unknown,
         }
     }
@@ -943,7 +947,7 @@ pub struct CollaborationModeListParams {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct CollaborationModeListResponse {
-    pub data: Vec<CollaborationMode>,
+    pub data: Vec<CollaborationModeMask>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1092,6 +1096,7 @@ pub struct ThreadStartParams {
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
+    pub ephemeral: Option<bool>,
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     /// If true, opt into emitting raw response items on the event stream.
     ///
@@ -1476,7 +1481,7 @@ pub struct Thread {
     #[ts(type = "number")]
     pub updated_at: i64,
     /// [UNSTABLE] Path to the thread on disk.
-    pub path: PathBuf,
+    pub path: Option<PathBuf>,
     /// Working directory captured for the thread.
     pub cwd: PathBuf,
     /// Version of the CLI that created the thread.

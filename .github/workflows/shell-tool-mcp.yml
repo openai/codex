@@ -98,6 +98,12 @@ jobs:
           targets: ${{ matrix.target }}
 
       - if: ${{ matrix.install_musl }}
+        name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - if: ${{ matrix.install_musl }}
         name: Install musl build dependencies
         env:
           TARGET: ${{ matrix.target }}
