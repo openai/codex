@@ -133,8 +133,16 @@ if [[ -n "${sysroot}" && "${sysroot}" != "/" ]]; then
   echo "${boring_sysroot_var}=${sysroot}" >> "$GITHUB_ENV"
 fi
 
-echo "CFLAGS=-pthread" >> "$GITHUB_ENV"
-echo "CXXFLAGS=-pthread" >> "$GITHUB_ENV"
+cflags="-pthread"
+cxxflags="-pthread"
+if [[ "${TARGET}" == "aarch64-unknown-linux-musl" ]]; then
+  # BoringSSL enables -Wframe-larger-than=25344 under clang and treats warnings as errors.
+  cflags="${cflags} -Wno-error=frame-larger-than"
+  cxxflags="${cxxflags} -Wno-error=frame-larger-than"
+fi
+
+echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
+echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 echo "CC=${cc}" >> "$GITHUB_ENV"
 echo "TARGET_CC=${cc}" >> "$GITHUB_ENV"
 target_cc_var="CC_${TARGET}"
