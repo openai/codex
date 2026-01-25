@@ -915,6 +915,26 @@ mod tests {
         assert_eq!(aggregated.text[stdout_len..], vec![b'b'; 1]);
     }
 
+    #[test]
+    fn aggregate_output_keeps_stdout_then_stderr_when_under_cap() {
+        let stdout = StreamOutput {
+            text: vec![b'a'; 4],
+            truncated_after_lines: None,
+        };
+        let stderr = StreamOutput {
+            text: vec![b'b'; 3],
+            truncated_after_lines: None,
+        };
+
+        let aggregated = aggregate_output(&stdout, &stderr);
+        let mut expected = Vec::new();
+        expected.extend_from_slice(&stdout.text);
+        expected.extend_from_slice(&stderr.text);
+
+        assert_eq!(aggregated.text, expected);
+        assert_eq!(aggregated.truncated_after_lines, None);
+    }
+
     #[cfg(unix)]
     #[test]
     fn sandbox_detection_flags_sigsys_exit_code() {
