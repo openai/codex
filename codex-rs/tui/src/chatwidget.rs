@@ -231,41 +231,6 @@ impl UnifiedExecWaitState {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CurrentModel {
-    model: String,
-    supports_personality: bool,
-}
-
-impl CurrentModel {
-    fn new(model: String, supports_personality: bool) -> Self {
-        Self {
-            model,
-            supports_personality,
-        }
-    }
-
-    pub(crate) fn model(&self) -> &str {
-        self.model.as_str()
-    }
-
-    pub(crate) fn supports_personality(&self) -> bool {
-        self.supports_personality
-    }
-}
-
-impl std::fmt::Display for CurrentModel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.model)
-    }
-}
-
-impl PartialEq<&str> for CurrentModel {
-    fn eq(&self, other: &&str) -> bool {
-        self.model == *other
-    }
-}
-
 #[derive(Clone, Debug)]
 struct UnifiedExecWaitStreak {
     process_id: String,
@@ -549,7 +514,6 @@ pub(crate) struct ChatWidget {
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
-    current_model: CurrentModel,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -1101,7 +1065,7 @@ impl ChatWidget {
 
             if high_usage
                 && !self.rate_limit_switch_prompt_hidden()
-                && self.current_model().model() != NUDGE_MODEL_SLUG
+                && self.current_model() != NUDGE_MODEL_SLUG
                 && !matches!(
                     self.rate_limit_switch_prompt,
                     RateLimitSwitchPromptState::Shown
@@ -2051,7 +2015,6 @@ impl ChatWidget {
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
-            current_model: CurrentModel::new(model_for_header.clone(), false),
         };
 
         widget.prefetch_rate_limits();
@@ -2062,7 +2025,6 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::CollaborationModes),
         );
         widget.update_collaboration_mode_indicator();
-        widget.update_current_model_state(model_for_header);
 
         widget
     }
@@ -2262,7 +2224,7 @@ impl ChatWidget {
             auth_manager,
             models_manager,
             otel_manager,
-            session_header: SessionHeader::new(header_model.clone()),
+            session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
@@ -2302,7 +2264,6 @@ impl ChatWidget {
             feedback,
             current_rollout_path: None,
             external_editor_state: ExternalEditorState::Closed,
-            current_model: CurrentModel::new(header_model.clone(), false),
         };
 
         widget.prefetch_rate_limits();
@@ -2313,7 +2274,6 @@ impl ChatWidget {
             widget.config.features.enabled(Feature::CollaborationModes),
         );
         widget.update_collaboration_mode_indicator();
-        widget.update_current_model_state(header_model);
 
         widget
     }
@@ -3445,11 +3405,10 @@ impl ChatWidget {
         let current_model = self.current_model();
         let current_personality = self.config.model_personality;
         let personalities = [Personality::Friendly, Personality::Pragmatic];
-        let supports_personality = current_model.supports_personality();
+        let supports_personality = self.current_model_supports_personality();
         let disabled_message = (!supports_personality).then(|| {
             format!(
-                "Current model ({}) doesn't support personalities. Try /model to switch to a newer model.",
-                current_model.model()
+                "Current model ({current_model}) doesn't support personalities. Try /model to switch to a newer model."
             )
         });
 
@@ -3546,7 +3505,7 @@ impl ChatWidget {
             .filter(|preset| preset.show_in_picker)
             .collect();
 
-        let current_model = self.current_model().model();
+        let current_model = self.current_model();
         let current_label = presets
             .iter()
             .find(|preset| preset.model.as_str() == current_model)
@@ -3647,7 +3606,7 @@ impl ChatWidget {
         for preset in presets.into_iter() {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
-            let is_current = preset.model.as_str() == self.current_model().model();
+            let is_current = preset.model.as_str() == self.current_model();
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -3820,7 +3779,7 @@ impl ChatWidget {
             .or(Some(default_effort));
 
         let model_slug = preset.model.to_string();
-        let is_current_model = self.current_model().model() == preset.model.as_str();
+        let is_current_model = self.current_model() == preset.model.as_str();
         let highlight_choice = if is_current_model {
             self.effective_reasoning_effort()
         } else {
@@ -4754,14 +4713,8 @@ impl ChatWidget {
             .unwrap_or_else(|| self.current_collaboration_mode.model())
     }
 
-    fn update_current_model_state(&mut self, model: String) {
-        let supports_personality = self.model_supports_personality_from_presets(&model);
-        self.current_model = CurrentModel::new(model, supports_personality);
-        self.bottom_pane
-            .set_personality_command_enabled(supports_personality);
-    }
-
-    fn model_supports_personality_from_presets(&self, model: &str) -> bool {
+    fn current_model_supports_personality(&self) -> bool {
+        let model = self.current_model();
         self.models_manager
             .try_list_models(&self.config)
             .ok()
@@ -4772,10 +4725,6 @@ impl ChatWidget {
                     .map(|preset| preset.supports_personality)
             })
             .unwrap_or(false)
-    }
-
-    fn current_model_supports_personality(&self) -> bool {
-        self.current_model.supports_personality()
     }
 
     #[allow(dead_code)] // Used in tests
@@ -4853,7 +4802,7 @@ impl ChatWidget {
     }
 
     fn model_display_name(&self) -> &str {
-        let model = self.current_model().model();
+        let model = self.current_model();
         if model.is_empty() {
             DEFAULT_MODEL_DISPLAY_NAME
         } else {
