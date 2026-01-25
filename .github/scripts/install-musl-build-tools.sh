@@ -34,18 +34,14 @@ esac
 
 if command -v "${arch}-linux-musl-gcc" >/dev/null; then
   cc="$(command -v "${arch}-linux-musl-gcc")"
-  echo "CFLAGS=-pthread" >> "$GITHUB_ENV"
 elif command -v musl-gcc >/dev/null; then
   cc="$(command -v musl-gcc)"
-  echo "CFLAGS=-pthread" >> "$GITHUB_ENV"
-elif command -v clang >/dev/null; then
-  cc="$(command -v clang)"
-  echo "CFLAGS=--target=${TARGET} -pthread" >> "$GITHUB_ENV"
 else
   echo "musl gcc not found after install; arch=${arch}" >&2
   exit 1
 fi
 
+echo "CFLAGS=-pthread" >> "$GITHUB_ENV"
 echo "CC=${cc}" >> "$GITHUB_ENV"
 echo "TARGET_CC=${cc}" >> "$GITHUB_ENV"
 target_cc_var="CC_${TARGET}"
@@ -56,13 +52,11 @@ if command -v "${arch}-linux-musl-g++" >/dev/null; then
   cxx="$(command -v "${arch}-linux-musl-g++")"
 elif command -v musl-g++ >/dev/null; then
   cxx="$(command -v musl-g++)"
-elif command -v clang++ >/dev/null; then
-  cxx="$(command -v clang++)"
-  echo "CXXFLAGS=--target=${TARGET} -stdlib=libc++ -pthread" >> "$GITHUB_ENV"
 else
   cxx="${cc}"
 fi
 
+echo "CXXFLAGS=-pthread" >> "$GITHUB_ENV"
 echo "CXX=${cxx}" >> "$GITHUB_ENV"
 echo "CMAKE_CXX_COMPILER=${cxx}" >> "$GITHUB_ENV"
 echo "CMAKE_ARGS=-DCMAKE_HAVE_THREADS_LIBRARY=1 -DCMAKE_USE_PTHREADS_INIT=1 -DCMAKE_THREAD_LIBS_INIT=-pthread -DTHREADS_PREFER_PTHREAD_FLAG=ON" >> "$GITHUB_ENV"
