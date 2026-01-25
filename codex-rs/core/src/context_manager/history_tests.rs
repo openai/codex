@@ -96,7 +96,9 @@ fn reasoning_with_encrypted_content(len: usize) -> ResponseItem {
 }
 
 fn test_turn_context() -> TurnContext {
-    let config = Arc::new(crate::config::test_config());
+    let mut config = crate::config::test_config();
+    config.model_context_window = Some(200_000);
+    let config = Arc::new(config);
     let model = "gpt-5.2".to_string();
     let model_info = ModelsManager::construct_model_info_offline(&model, config.as_ref());
     let conversation_id = ThreadId::default();

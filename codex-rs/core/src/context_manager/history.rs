@@ -112,10 +112,17 @@ impl ContextManager {
                     // Keep a small bounded estimate for the payload to avoid making auto-compaction
                     // decisions wildly optimistic while still reflecting that the compacted summary
                     // item exists in the transcript.
-                    let compaction_bytes = estimate_reasoning_length(encrypted_content.len())
-                        .min(MAX_COMPACTION_ENCRYPTED_BYTES_ESTIMATE);
-                    i64::try_from(approx_tokens_from_byte_count(compaction_bytes))
-                        .unwrap_or(i64::MAX)
+                    let compaction_tokens = i64::try_from(approx_tokens_from_byte_count(
+                        estimate_reasoning_length(encrypted_content.len()),
+                    ))
+                    .unwrap_or(i64::MAX);
+                    let cap_tokens = turn_context
+                        .client
+                        .get_model_context_window()
+                        .map(|window| window.saturating_div(COMPACTION_ENCRYPTED_TOKENS_FRACTION))
+                        .unwrap_or(MAX_COMPACTION_ENCRYPTED_TOKENS_ESTIMATE)
+                        .min(MAX_COMPACTION_ENCRYPTED_TOKENS_ESTIMATE);
+                    compaction_tokens.min(cap_tokens)
                 }
                 item => {
                     let serialized = serde_json::to_string(item).unwrap_or_default();
@@ -343,7 +350,8 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
         .saturating_sub(650)
 }
 
-const MAX_COMPACTION_ENCRYPTED_BYTES_ESTIMATE: usize = 8 * 1024;
+const COMPACTION_ENCRYPTED_TOKENS_FRACTION: i64 = 10;
+const MAX_COMPACTION_ENCRYPTED_TOKENS_ESTIMATE: i64 = 25_000;
 
 pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
     let ResponseItem::Message { role, content, .. } = item else {
