@@ -573,6 +573,7 @@ async fn run_ratatui_app(
     };
 
     let use_fork = cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some();
+    let mut remote_fork_downloaded = false;
     let session_selection = if use_fork {
         if let Some(id_str) = cli.fork_session_id.as_deref() {
             let is_uuid = Uuid::parse_str(id_str).is_ok();
@@ -593,7 +594,10 @@ async fn run_ratatui_app(
                     match download_rollout_if_available(storage_url, session_id, &config.codex_home)
                         .await
                     {
-                        Ok(Some(path)) => resume_picker::SessionSelection::Fork(path),
+                        Ok(Some(path)) => {
+                            remote_fork_downloaded = true;
+                            resume_picker::SessionSelection::Fork(path)
+                        }
                         Ok(None) => return missing_session_exit(id_str, "fork"),
                         Err(err) => {
                             return fatal_exit(format!(
@@ -702,8 +706,16 @@ async fn run_ratatui_app(
     };
     let fallback_cwd = match action_and_path_if_resume_or_fork {
         Some((action, path)) => {
-            resolve_cwd_for_resume_or_fork(&mut tui, &current_cwd, path, action, allow_prompt)
-                .await?
+            let prefer_current_cwd = remote_fork_downloaded && action == CwdPromptAction::Fork;
+            resolve_cwd_for_resume_or_fork(
+                &mut tui,
+                &current_cwd,
+                path,
+                action,
+                allow_prompt,
+                prefer_current_cwd,
+            )
+            .await?
         }
         None => None,
     };
@@ -816,7 +828,11 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
     path: &Path,
     action: CwdPromptAction,
     allow_prompt: bool,
+    prefer_current_cwd: bool,
 ) -> color_eyre::Result<Option<PathBuf>> {
+    if prefer_current_cwd {
+        return Ok(Some(current_cwd.to_path_buf()));
+    }
     let Some(history_cwd) = read_session_cwd(path).await else {
         return Ok(None);
     };

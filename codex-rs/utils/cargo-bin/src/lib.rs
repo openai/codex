@@ -1,3 +1,5 @@
+use std::env;
+use std::ffi;
 use std::ffi::OsString;
 use std::io;
 use std::path::Path;
@@ -43,27 +45,13 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
             return resolve_bin_from_env(key, value);
         }
     }
-    match assert_cmd::Command::cargo_bin(name) {
-        Ok(cmd) => {
-            let mut path = PathBuf::from(cmd.get_program());
-            if !path.is_absolute() {
-                path = std::env::current_dir()
-                    .map_err(|source| CargoBinError::CurrentDir { source })?
-                    .join(path);
-            }
-            if path.exists() {
-                Ok(path)
-            } else {
-                Err(CargoBinError::ResolvedPathDoesNotExist {
-                    key: "assert_cmd::Command::cargo_bin".to_owned(),
-                    path,
-                })
-            }
-        }
+
+    match resolve_bin_from_target_dir(name) {
+        Ok(path) => Ok(path),
         Err(err) => Err(CargoBinError::NotFound {
             name: name.to_owned(),
             env_keys,
-            fallback: format!("assert_cmd fallback failed: {err}"),
+            fallback: format!("target dir fallback failed: {err}"),
         }),
     }
 }
@@ -104,6 +92,35 @@ fn resolve_bin_from_env(key: &str, value: OsString) -> Result<PathBuf, CargoBinE
         key: key.to_owned(),
         path: raw,
     })
+}
+
+fn resolve_bin_from_target_dir(name: &str) -> Result<PathBuf, CargoBinError> {
+    let target_dir = cargo_target_dir()?;
+    let filename = format!("{name}{}", env::consts::EXE_SUFFIX);
+    let candidate = target_dir.join(filename);
+    let abs = absolutize_from_buck_or_cwd(candidate.clone())?;
+    if abs.exists() {
+        Ok(abs)
+    } else {
+        Err(CargoBinError::ResolvedPathDoesNotExist {
+            key: "target_dir".to_owned(),
+            path: candidate,
+        })
+    }
+}
+
+fn cargo_target_dir() -> Result<PathBuf, CargoBinError> {
+    let current_exe = env::current_exe().map_err(|source| CargoBinError::CurrentExe { source })?;
+    let mut path = current_exe.parent().map(PathBuf::from).ok_or_else(|| {
+        CargoBinError::ResolvedPathDoesNotExist {
+            key: "current_exe".to_owned(),
+            path: current_exe.clone(),
+        }
+    })?;
+    if path.ends_with(ffi::OsStr::new("deps")) {
+        path.pop();
+    }
+    Ok(path)
 }
 
 /// Macro that derives the path to a test resource at runtime, the value of
