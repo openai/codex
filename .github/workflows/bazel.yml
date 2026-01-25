@@ -19,13 +19,13 @@ jobs:
   test:
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # macOS
-          - os: macos-15-xlarge
-            target: aarch64-apple-darwin
-          - os: macos-15-xlarge
-            target: x86_64-apple-darwin
+          matrix:
+            include:
+              # macOS
+              - os: macos-15
+                target: aarch64-apple-darwin
+              - os: macos-13
+                target: x86_64-apple-darwin
 
           # Linux
           - os: ubuntu-24.04-arm
