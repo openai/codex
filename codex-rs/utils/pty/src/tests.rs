@@ -102,6 +102,9 @@ async fn pty_python_repl_emits_output_and_exits() -> anyhow::Result<()> {
 
     let env_map: HashMap<String, String> = std::env::vars().collect();
     let (args, send_input) = if cfg!(windows) {
+        // Fix: Keep the PTY output + clean-exit intent but avoid REPL input on Windows by
+        // running `python -u -c "print('hello from pty')"`, while other platforms keep the
+        // original REPL path.
         (
             vec![
                 "-u".to_string(),
