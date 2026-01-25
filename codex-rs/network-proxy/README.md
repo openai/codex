@@ -33,7 +33,7 @@ allow_upstream_proxy = false
 # If you want to expose these listeners beyond localhost, you must opt in explicitly.
 dangerously_allow_non_loopback_proxy = false
 dangerously_allow_non_loopback_admin = false
-mode = "limited" # or "full"
+mode = "full" # default when unset; use "limited" for read-only mode
 
 [network_proxy.policy]
 # Hosts must match the allowlist (unless denied).
