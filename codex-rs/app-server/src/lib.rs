@@ -15,7 +15,12 @@ use crate::outgoing_message::OutgoingMessageSender;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
+use codex_app_server_protocol::TextPosition as AppTextPosition;
+use codex_app_server_protocol::TextRange as AppTextRange;
+use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
+use codex_core::config_loader::ConfigLoadError;
+use codex_core::config_loader::TextRange as CoreTextRange;
 use codex_feedback::CodexFeedback;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
@@ -46,6 +51,69 @@ mod outgoing_message;
 /// plenty for an interactive CLI.
 const CHANNEL_CAPACITY: usize = 128;
 
+fn config_warning_from_error(
+    summary: impl Into<String>,
+    err: &std::io::Error,
+) -> ConfigWarningNotification {
+    let (path, range) = match config_error_location(err) {
+        Some((path, range)) => (Some(path), Some(range)),
+        None => (None, None),
+    };
+    ConfigWarningNotification {
+        summary: summary.into(),
+        details: Some(err.to_string()),
+        path,
+        range,
+    }
+}
+
+fn config_error_location(err: &std::io::Error) -> Option<(String, AppTextRange)> {
+    err.get_ref()
+        .and_then(|err| err.downcast_ref::<ConfigLoadError>())
+        .map(|err| {
+            let config_error = err.config_error();
+            (
+                config_error.path.to_string_lossy().to_string(),
+                app_text_range(&config_error.range),
+            )
+        })
+}
+
+fn exec_policy_warning_location(err: &ExecPolicyError) -> (Option<String>, Option<AppTextRange>) {
+    match err {
+        ExecPolicyError::ParsePolicy { path, source } => {
+            if let Some(location) = source.location() {
+                let range = AppTextRange {
+                    start: AppTextPosition {
+                        line: location.range.start.line,
+                        column: location.range.start.column,
+                    },
+                    end: AppTextPosition {
+                        line: location.range.end.line,
+                        column: location.range.end.column,
+                    },
+                };
+                return (Some(location.path), Some(range));
+            }
+            (Some(path.clone()), None)
+        }
+        _ => (None, None),
+    }
+}
+
+fn app_text_range(range: &CoreTextRange) -> AppTextRange {
+    AppTextRange {
+        start: AppTextPosition {
+            line: range.start.line,
+            column: range.start.column,
+        },
+        end: AppTextPosition {
+            line: range.end.line,
+            column: range.end.column,
+        },
+    }
+}
+
 fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> {
     let mut disabled_folders = Vec::new();
 
@@ -53,12 +121,11 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
         .config_layer_stack
         .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
     {
-        if !matches!(layer.name, ConfigLayerSource::Project { .. }) {
+        if !matches!(layer.name, ConfigLayerSource::Project { .. })
+            || layer.disabled_reason.is_none()
+        {
             continue;
         }
-        if layer.disabled_reason.is_none() {
-            continue;
-        };
         if let ConfigLayerSource::Project { dot_codex_folder } = &layer.name {
             disabled_folders.push((
                 dot_codex_folder.as_path().display().to_string(),
@@ -85,6 +152,8 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
     Some(ConfigWarningNotification {
         summary: message,
         details: None,
+        path: None,
+        range: None,
     })
 }
 
@@ -139,10 +208,7 @@ pub async fn run_main(
     {
         Ok(config) => config,
         Err(err) => {
-            let message = ConfigWarningNotification {
-                summary: "Invalid configuration; using defaults.".to_string(),
-                details: Some(err.to_string()),
-            };
+            let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
             config_warnings.push(message);
             Config::load_default_with_cli_overrides(cli_kv_overrides.clone()).map_err(|e| {
                 std::io::Error::new(
@@ -156,9 +222,12 @@ pub async fn run_main(
     if let Ok(Some(err)) =
         check_execpolicy_for_warnings(&config.features, &config.config_layer_stack).await
     {
+        let (path, range) = exec_policy_warning_location(&err);
         let message = ConfigWarningNotification {
             summary: "Error parsing rules; custom rules not applied.".to_string(),
             details: Some(err.to_string()),
+            path,
+            range,
         };
         config_warnings.push(message);
     }

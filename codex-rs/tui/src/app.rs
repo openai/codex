@@ -2012,14 +2012,14 @@ impl App {
                     history_log_id: 0,
                     history_entry_count: 0,
                     initial_messages: None,
-                    rollout_path: PathBuf::new(),
+                    rollout_path: Some(PathBuf::new()),
                 });
         session_configured.session_id = thread_id;
         session_configured.forked_from_id = None;
         session_configured.history_log_id = 0;
         session_configured.history_entry_count = 0;
         session_configured.initial_messages = None;
-        session_configured.rollout_path = PathBuf::new();
+        session_configured.rollout_path = Some(PathBuf::new());
         session_configured
     }
 
@@ -2574,7 +2574,7 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
-                rollout_path: PathBuf::new(),
+                rollout_path: Some(PathBuf::new()),
             };
             Arc::new(new_session_info(
                 app.chat_widget.config_ref(),
@@ -2626,7 +2626,7 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
-                rollout_path: PathBuf::new(),
+                rollout_path: Some(PathBuf::new()),
             }),
         });
 
@@ -2671,7 +2671,7 @@ mod tests {
             history_log_id: 0,
             history_entry_count: 0,
             initial_messages: None,
-            rollout_path: PathBuf::new(),
+            rollout_path: Some(PathBuf::new()),
         };
 
         app.chat_widget.handle_codex_event(Event {

@@ -89,6 +89,7 @@ use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::codex_thread::ThreadConfigSnapshot;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
@@ -192,6 +193,7 @@ pub struct Codex {
     pub(crate) rx_event: Receiver<Event>,
     // Last known status of the agent.
     pub(crate) agent_status: watch::Receiver<AgentStatus>,
+    pub(crate) session: Arc<Session>,
 }
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
@@ -345,12 +347,13 @@ impl Codex {
         let thread_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(session, config, rx_sub));
+        tokio::spawn(submission_loop(Arc::clone(&session), config, rx_sub));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event,
             agent_status: agent_status_rx,
+            session,
         };
 
         #[allow(deprecated)]
@@ -393,6 +396,11 @@ impl Codex {
 
     pub(crate) async fn agent_status(&self) -> AgentStatus {
         self.agent_status.borrow().clone()
+    }
+
+    pub(crate) async fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
+        let state = self.session.state.lock().await;
+        state.session_configuration.thread_config_snapshot()
     }
 }
 
@@ -495,6 +503,19 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
+    fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
+        ThreadConfigSnapshot {
+            model: self.collaboration_mode.model().to_string(),
+            model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
+            approval_policy: self.approval_policy.value(),
+            sandbox_policy: self.sandbox_policy.get().clone(),
+            cwd: self.cwd.clone(),
+            reasoning_effort: self.collaboration_mode.reasoning_effort(),
+            personality: self.personality,
+            session_source: self.session_source.clone(),
+        }
+    }
+
     pub(crate) fn apply(&self, updates: &SessionSettingsUpdate) -> ConstraintResult<Self> {
         let mut next_configuration = self.clone();
         if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
@@ -652,7 +673,15 @@ impl Session {
         // - initialize RolloutRecorder with new or resumed session info
         // - perform default shell discovery
         // - load history metadata
-        let rollout_fut = RolloutRecorder::new(&config, rollout_params);
+        let rollout_fut = async {
+            if config.ephemeral {
+                Ok(None)
+            } else {
+                RolloutRecorder::new(&config, rollout_params)
+                    .await
+                    .map(Some)
+            }
+        };
 
         let history_meta_fut = crate::message_history::history_metadata(&config);
         let auth_manager_clone = Arc::clone(&auth_manager);
@@ -679,7 +708,9 @@ impl Session {
             error!("failed to initialize rollout recorder: {e:#}");
             anyhow::Error::from(e)
         })?;
-        let rollout_path = rollout_recorder.rollout_path.clone();
+        let rollout_path = rollout_recorder
+            .as_ref()
+            .map(|rec| rec.rollout_path.clone());
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
@@ -768,7 +799,7 @@ impl Session {
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(config.notify.clone()),
-            rollout: Mutex::new(Some(rollout_recorder)),
+            rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,

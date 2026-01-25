@@ -2039,15 +2039,6 @@ impl ChatComposer {
         {
             self.handle_paste(pasted);
         }
-        // Backspace at the start of an image placeholder should delete that placeholder (rather
-        // than deleting content before it). Do this without scanning the full text by consulting
-        // the textarea's element list.
-        if matches!(input.code, KeyCode::Backspace)
-            && self.try_remove_image_element_at_cursor_start()
-        {
-            return (InputResult::None, true);
-        }
-
         // For non-char inputs (or after flushing), handle normally.
         // Track element removals so we can drop any corresponding placeholders without scanning
         // the full text. (Placeholders are atomic elements; when deleted, the element disappears.)
@@ -2084,29 +2075,6 @@ impl ChatComposer {
         }
 
         (InputResult::None, true)
-    }
-
-    fn try_remove_image_element_at_cursor_start(&mut self) -> bool {
-        if self.attached_images.is_empty() {
-            return false;
-        }
-
-        let p = self.textarea.cursor();
-        let Some(payload) = self.textarea.element_payload_starting_at(p) else {
-            return false;
-        };
-        let Some(idx) = self
-            .attached_images
-            .iter()
-            .position(|img| img.placeholder == payload)
-        else {
-            return false;
-        };
-
-        self.textarea.replace_range(p..p + payload.len(), "");
-        self.attached_images.remove(idx);
-        self.relabel_attached_images_and_update_placeholders();
-        true
     }
 
     fn reconcile_deleted_elements(&mut self, elements_before: Vec<String>) {
@@ -4662,8 +4630,7 @@ mod tests {
         assert!(!composer.textarea.text().contains(&placeholder));
         assert!(composer.attached_images.is_empty());
 
-        // Re-add and test backspace in middle: should break the placeholder string
-        // and drop the image mapping (same as text placeholder behavior).
+        // Re-add and ensure backspace at element start does not delete the placeholder.
         composer.attach_image(path);
         let placeholder2 = composer.attached_images[0].placeholder.clone();
         // Move cursor to roughly middle of placeholder
@@ -4671,8 +4638,8 @@ mod tests {
             let mid_pos = start_pos + (placeholder2.len() / 2);
             composer.textarea.set_cursor(mid_pos);
             composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-            assert!(!composer.textarea.text().contains(&placeholder2));
-            assert!(composer.attached_images.is_empty());
+            assert!(composer.textarea.text().contains(&placeholder2));
+            assert_eq!(composer.attached_images.len(), 1);
         } else {
             panic!("Placeholder not found in textarea");
         }
@@ -4852,7 +4819,7 @@ mod tests {
         assert_eq!(composer.textarea.text(), "[Image #1][Image #2]");
         assert_eq!(composer.attached_images.len(), 2);
 
-        // Delete the first element using normal textarea editing (Delete at cursor start).
+        // Delete the first element using normal textarea editing (forward Delete at cursor start).
         composer.textarea.set_cursor(0);
         composer.handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
 

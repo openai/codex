@@ -35,6 +35,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 mcp-types = { workspace = true }
 tempfile = { workspace = true }
+time = { workspace = true }
 toml = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",

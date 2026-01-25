@@ -1013,7 +1013,7 @@ async fn compact_conversation(conversation: &Arc<CodexThread>) {
 }
 
 async fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBuf {
-    conversation.rollout_path()
+    conversation.rollout_path().expect("rollout path")
 }
 
 async fn resume_conversation(
