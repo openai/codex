@@ -4,6 +4,7 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
+use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
@@ -171,7 +172,7 @@ impl ConfigService {
             origins: layers.origins(),
             layers: params.include_layers.then(|| {
                 layers
-                    .layers_high_to_low()
+                    .get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, true)
                     .iter()
                     .map(|layer| layer.as_layer())
                     .collect()

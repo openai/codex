@@ -14,7 +14,7 @@ use crate::models_manager::model_presets::builtin_model_presets;
 use codex_api::ModelsClient;
 use codex_api::ReqwestTransport;
 use codex_app_server_protocol::AuthMode;
-use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
@@ -30,9 +30,6 @@ use tracing::error;
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
-const OPENAI_DEFAULT_API_MODEL: &str = "gpt-5.2-codex";
-const OPENAI_DEFAULT_CHATGPT_MODEL: &str = "gpt-5.2-codex";
-const CODEX_AUTO_BALANCED_MODEL: &str = "codex-auto-balanced";
 
 /// Strategy for refreshing available models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,7 +91,7 @@ impl ModelsManager {
     /// List collaboration mode presets.
     ///
     /// Returns a static set of presets seeded with the configured model.
-    pub fn list_collaboration_modes(&self) -> Vec<CollaborationMode> {
+    pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
         builtin_collaboration_mode_presets()
     }
 
@@ -110,7 +107,7 @@ impl ModelsManager {
     /// Get the model identifier to use, refreshing according to the specified strategy.
     ///
     /// If `model` is provided, returns it directly. Otherwise selects the default based on
-    /// auth mode and available models (prefers `codex-auto-balanced` for ChatGPT auth).
+    /// auth mode and available models.
     pub async fn get_default_model(
         &self,
         model: &Option<String>,
@@ -126,20 +123,14 @@ impl ModelsManager {
         {
             error!("failed to refresh available models: {err}");
         }
-        // if codex-auto-balanced exists & signed in with chatgpt mode, return it, otherwise return the default model
-        let auth_mode = self.auth_manager.get_auth_mode();
         let remote_models = self.get_remote_models(config).await;
-        if auth_mode == Some(AuthMode::ChatGPT) {
-            let has_auto_balanced = self
-                .build_available_models(remote_models)
-                .iter()
-                .any(|model| model.model == CODEX_AUTO_BALANCED_MODEL && model.show_in_picker);
-            if has_auto_balanced {
-                return CODEX_AUTO_BALANCED_MODEL.to_string();
-            }
-            return OPENAI_DEFAULT_CHATGPT_MODEL.to_string();
-        }
-        OPENAI_DEFAULT_API_MODEL.to_string()
+        let available = self.build_available_models(remote_models);
+        available
+            .iter()
+            .find(|model| model.is_default)
+            .or_else(|| available.first())
+            .map(|model| model.model.clone())
+            .unwrap_or_default()
     }
 
     // todo(aibrahim): look if we can tighten it to pub(crate)
@@ -336,7 +327,16 @@ impl ModelsManager {
     #[cfg(any(test, feature = "test-support"))]
     /// Get model identifier without consulting remote state or cache.
     pub fn get_model_offline(model: Option<&str>) -> String {
-        model.unwrap_or(OPENAI_DEFAULT_CHATGPT_MODEL).to_string()
+        if let Some(model) = model {
+            return model.to_string();
+        }
+        let presets = builtin_model_presets(None);
+        presets
+            .iter()
+            .find(|preset| preset.show_in_picker)
+            .or_else(|| presets.first())
+            .map(|preset| preset.model.clone())
+            .unwrap_or_default()
     }
 
     #[cfg(any(test, feature = "test-support"))]
