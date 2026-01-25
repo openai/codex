@@ -434,11 +434,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Collab,
         key: "collab",
-        stage: Stage::Experimental {
-            name: "Multi-agents",
-            menu_description: "Allow Codex to spawn and collaborate with other agents on request (formerly named `collab`).",
-            announcement: "NEW! Codex can now spawn other agents and work with them to solve your problems. Enable in /experimental!",
-        },
+        stage: Stage::Beta,
         default_enabled: false,
     },
     FeatureSpec {
