@@ -616,13 +616,17 @@ mod tests {
     use super::*;
     use crate::CodexAuth;
     use crate::ThreadManager;
+    use crate::agent::MAX_THREAD_SPAWN_DEPTH;
     use crate::built_in_model_providers;
+    use crate::client::ModelClient;
     use crate::codex::make_session_and_context;
     use crate::config::types::ShellEnvironmentPolicy;
     use crate::function_tool::FunctionCallError;
     use crate::protocol::AskForApproval;
     use crate::protocol::Op;
     use crate::protocol::SandboxPolicy;
+    use crate::protocol::SessionSource;
+    use crate::protocol::SubAgentSource;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
@@ -739,6 +743,45 @@ mod tests {
         assert_eq!(
             err,
             FunctionCallError::RespondToModel("collab manager unavailable".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_when_depth_limit_exceeded() {
+        let (mut session, mut turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+
+        let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: session.conversation_id,
+            depth: MAX_THREAD_SPAWN_DEPTH,
+        });
+        turn.client = ModelClient::new(
+            turn.client.config(),
+            Some(session.services.auth_manager.clone()),
+            turn.client.get_model_info(),
+            turn.client.get_otel_manager(),
+            turn.client.get_provider(),
+            turn.client.get_reasoning_effort(),
+            turn.client.get_reasoning_summary(),
+            session.conversation_id,
+            session_source,
+        );
+
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({"message": "hello"})),
+        );
+        let Err(err) = CollabHandler.handle(invocation).await else {
+            panic!("spawn should fail when depth limit exceeded");
+        };
+        assert_eq!(
+            err,
+            FunctionCallError::RespondToModel(format!(
+                "agent depth limit reached: max depth is {MAX_THREAD_SPAWN_DEPTH}"
+            ))
         );
     }
 
