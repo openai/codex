@@ -263,9 +263,8 @@ jobs:
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install Zig
-        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
+        uses: mlugg/setup-zig@v2
         with:
-          tool: zig
           version: 0.14.0
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
