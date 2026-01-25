@@ -32,22 +32,47 @@ case "${TARGET}" in
     ;;
 esac
 
-if command -v "${arch}-linux-musl-gcc" >/dev/null; then
-  cc="$(command -v "${arch}-linux-musl-gcc")"
-elif command -v musl-gcc >/dev/null; then
-  cc="$(command -v musl-gcc)"
-else
-  echo "musl gcc not found after install; arch=${arch}" >&2
-  exit 1
-fi
+zig_target="${TARGET/-unknown-linux-musl/-linux-musl}"
+runner_temp="${RUNNER_TEMP:-/tmp}"
+tool_root="${runner_temp}/codex-musl-tools-${TARGET}"
+mkdir -p "${tool_root}"
 
-sysroot="$("$cc" -print-sysroot 2>/dev/null || "$cc" --print-sysroot 2>/dev/null || true)"
-if [[ -z "${sysroot}" || "${sysroot}" == "/" ]]; then
-  libc_path="$("$cc" -print-file-name=libc.a 2>/dev/null || true)"
-  if [[ -n "${libc_path}" && "${libc_path}" != "libc.a" && -f "${libc_path}" ]]; then
-    sysroot="$(cd "$(dirname "${libc_path}")/.." && pwd)"
+sysroot=""
+if command -v zig >/dev/null; then
+  zig_bin="$(command -v zig)"
+  cc="${tool_root}/zigcc"
+  cxx="${tool_root}/zigcxx"
+
+  cat >"${cc}" <<EOF
+#!/usr/bin/env bash
+exec "${zig_bin}" cc -target "${zig_target}" "\$@"
+EOF
+  cat >"${cxx}" <<EOF
+#!/usr/bin/env bash
+exec "${zig_bin}" c++ -target "${zig_target}" "\$@"
+EOF
+  chmod +x "${cc}" "${cxx}"
+
+  sysroot="$("${zig_bin}" cc -target "${zig_target}" -print-sysroot 2>/dev/null || true)"
+else
+  if command -v "${arch}-linux-musl-gcc" >/dev/null; then
+    cc="$(command -v "${arch}-linux-musl-gcc")"
+  elif command -v musl-gcc >/dev/null; then
+    cc="$(command -v musl-gcc)"
+  else
+    echo "musl gcc not found after install; arch=${arch}" >&2
+    exit 1
+  fi
+
+  if command -v "${arch}-linux-musl-g++" >/dev/null; then
+    cxx="$(command -v "${arch}-linux-musl-g++")"
+  elif command -v musl-g++ >/dev/null; then
+    cxx="$(command -v musl-g++)"
+  else
+    cxx="${cc}"
   fi
 fi
+
 if [[ -n "${sysroot}" && "${sysroot}" != "/" ]]; then
   echo "BORING_BSSL_SYSROOT=${sysroot}" >> "$GITHUB_ENV"
   boring_sysroot_var="BORING_BSSL_SYSROOT_${TARGET}"
@@ -56,38 +81,22 @@ if [[ -n "${sysroot}" && "${sysroot}" != "/" ]]; then
 fi
 
 echo "CFLAGS=-pthread" >> "$GITHUB_ENV"
+echo "CXXFLAGS=-pthread" >> "$GITHUB_ENV"
 echo "CC=${cc}" >> "$GITHUB_ENV"
 echo "TARGET_CC=${cc}" >> "$GITHUB_ENV"
 target_cc_var="CC_${TARGET}"
 target_cc_var="${target_cc_var//-/_}"
 echo "${target_cc_var}=${cc}" >> "$GITHUB_ENV"
-
-if command -v "${arch}-linux-musl-g++" >/dev/null; then
-  cxx="$(command -v "${arch}-linux-musl-g++")"
-  cxxflags="-pthread"
-elif command -v musl-g++ >/dev/null; then
-  cxx="$(command -v musl-g++)"
-  cxxflags="-pthread"
-elif command -v clang++ >/dev/null; then
-  cxx="$(command -v clang++)"
-  cxxflags="--target=${TARGET} -stdlib=libc++ -pthread"
-  if [[ -n "${sysroot}" && "${sysroot}" != "/" ]]; then
-    cxxflags="${cxxflags} --sysroot=${sysroot}"
-  fi
-  echo "BORING_BSSL_RUST_CPPLIB=c++" >> "$GITHUB_ENV"
-  boring_cpp_var="BORING_BSSL_RUST_CPPLIB_${TARGET}"
-  boring_cpp_var="${boring_cpp_var//-/_}"
-  echo "${boring_cpp_var}=c++" >> "$GITHUB_ENV"
-else
-  cxx="${cc}"
-  cxxflags="-pthread"
-fi
-
-echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 echo "CXX=${cxx}" >> "$GITHUB_ENV"
 echo "TARGET_CXX=${cxx}" >> "$GITHUB_ENV"
 target_cxx_var="CXX_${TARGET}"
 target_cxx_var="${target_cxx_var//-/_}"
 echo "${target_cxx_var}=${cxx}" >> "$GITHUB_ENV"
+
+cargo_linker_var="CARGO_TARGET_${TARGET^^}_LINKER"
+cargo_linker_var="${cargo_linker_var//-/_}"
+echo "${cargo_linker_var}=${cc}" >> "$GITHUB_ENV"
+
+echo "CMAKE_C_COMPILER=${cc}" >> "$GITHUB_ENV"
 echo "CMAKE_CXX_COMPILER=${cxx}" >> "$GITHUB_ENV"
 echo "CMAKE_ARGS=-DCMAKE_HAVE_THREADS_LIBRARY=1 -DCMAKE_USE_PTHREADS_INIT=1 -DCMAKE_THREAD_LIBS_INIT=-pthread -DTHREADS_PREFER_PTHREAD_FLAG=ON" >> "$GITHUB_ENV"
