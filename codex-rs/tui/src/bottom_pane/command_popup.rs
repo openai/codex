@@ -10,6 +10,7 @@ use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
+use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
@@ -116,9 +117,11 @@ impl CommandPopup {
         measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width)
     }
 
-    /// Compute exact/prefix matches over built-in commands and user prompts,
-    /// paired with optional highlight indices. Preserves the original
-    /// presentation order for built-ins and prompts.
+    /// Compute exact/prefix/fuzzy matches over built-in commands and user prompts,
+    /// paired with optional highlight indices. Results are ordered:
+    /// 1. Exact matches first
+    /// 2. Prefix matches second
+    /// 3. Fuzzy matches third (sorted by score, lower is better)
     fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>)> {
         let filter = self.command_filter.trim();
         let mut out: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
@@ -138,6 +141,8 @@ impl CommandPopup {
         let filter_chars = filter.chars().count();
         let mut exact: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         let mut prefix: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
+        // Fuzzy matches include the score for sorting (lower is better).
+        let mut fuzzy: Vec<(CommandItem, Option<Vec<usize>>, i32)> = Vec::new();
         let prompt_prefix_len = PROMPTS_CMD_PREFIX.chars().count() + 1;
         let indices_for = |offset| Some((offset..offset + filter_chars).collect());
 
@@ -159,6 +164,17 @@ impl CommandPopup {
                 if display_prefix || name_prefix {
                     let offset = if display_prefix { 0 } else { name_offset };
                     prefix.push((item, indices_for(offset)));
+                    return;
+                }
+                // Try fuzzy match on display or name.
+                if let Some((indices, score)) = fuzzy_match(display, filter) {
+                    fuzzy.push((item, Some(indices), score));
+                } else if let Some(name) = name
+                    && let Some((indices, score)) = fuzzy_match(name, filter)
+                {
+                    // Adjust indices for the prompt prefix.
+                    let adjusted: Vec<usize> = indices.iter().map(|i| i + name_offset).collect();
+                    fuzzy.push((item, Some(adjusted), score));
                 }
             };
 
@@ -178,8 +194,13 @@ impl CommandPopup {
             );
         }
 
+        // Sort fuzzy matches by score (lower is better).
+        fuzzy.sort_by_key(|(_, _, score)| *score);
+
         out.extend(exact);
         out.extend(prefix);
+        // Strip the score from fuzzy matches before adding them.
+        out.extend(fuzzy.into_iter().map(|(item, indices, _)| (item, indices)));
         out
     }
 
@@ -327,7 +348,10 @@ mod tests {
                 CommandItem::UserPrompt(_) => None,
             })
             .collect();
-        assert_eq!(cmds, vec!["model", "mention", "mcp"]);
+        // Prefix matches come first, then fuzzy matches.
+        // The first three should be the prefix matches in presentation order.
+        assert!(cmds.len() >= 3, "expected at least 3 matches for '/m'");
+        assert_eq!(&cmds[..3], &["model", "mention", "mcp"]);
     }
 
     #[test]
@@ -423,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn prefix_filter_limits_matches_for_ac() {
+    fn fuzzy_filter_matches_subsequence_for_ac() {
         let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
         popup.on_composer_text_change("/ac".to_string());
 
@@ -436,8 +460,8 @@ mod tests {
             })
             .collect();
         assert!(
-            !cmds.contains(&"compact"),
-            "expected prefix search for '/ac' to exclude 'compact', got {cmds:?}"
+            cmds.contains(&"compact") && cmds.contains(&"feedback"),
+            "expected fuzzy search for '/ac' to include compact and feedback, got {cmds:?}"
         );
     }
 
