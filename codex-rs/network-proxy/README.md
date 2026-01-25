@@ -35,6 +35,15 @@ dangerously_allow_non_loopback_proxy = false
 dangerously_allow_non_loopback_admin = false
 mode = "full" # default when unset; use "limited" for read-only mode
 
+[network.mitm]
+# When enabled, HTTPS CONNECT can be terminated so limited-mode method policy still applies.
+# CA cert/key paths are relative to CODEX_HOME by default.
+enabled = false
+ca_cert_path = "proxy/ca.pem"
+ca_key_path = "proxy/ca.key"
+# Maximum size of request/response bodies MITM will buffer for inspection.
+max_body_bytes = 1048576
+
 # Hosts must match the allowlist (unless denied).
 # If `allowed_domains` is empty, the proxy blocks requests until an allowlist is configured.
 allowed_domains = ["*.openai.com", "localhost", "127.0.0.1", "::1"]
