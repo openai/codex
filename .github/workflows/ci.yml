@@ -62,11 +62,17 @@ jobs:
             --rule "no-debugger:error" \
             --max-warnings=-1
 
+      - name: Lint OpenAPI definition
+        run: pnpm run lint:openapi
+
       - name: Type-check
         run: pnpm run typecheck
 
       - name: Build
         run: pnpm run build
+
+      - name: Export Postman collection
+        run: pnpm run export:postman
 
       - name: Ensure staging a release works.
         working-directory: codex-cli
