@@ -42,6 +42,12 @@ else
 fi
 
 sysroot="$("$cc" -print-sysroot 2>/dev/null || "$cc" --print-sysroot 2>/dev/null || true)"
+if [[ -z "${sysroot}" || "${sysroot}" == "/" ]]; then
+  libc_path="$("$cc" -print-file-name=libc.a 2>/dev/null || true)"
+  if [[ -n "${libc_path}" && "${libc_path}" != "libc.a" && -f "${libc_path}" ]]; then
+    sysroot="$(cd "$(dirname "${libc_path}")/.." && pwd)"
+  fi
+fi
 if [[ -n "${sysroot}" && "${sysroot}" != "/" ]]; then
   echo "BORING_BSSL_SYSROOT=${sysroot}" >> "$GITHUB_ENV"
   boring_sysroot_var="BORING_BSSL_SYSROOT_${TARGET}"
