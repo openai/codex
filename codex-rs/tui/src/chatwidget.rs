@@ -1927,9 +1927,18 @@ impl ChatWidget {
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
 
-        let model_for_header = model.unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let model_override = model.as_deref();
+        let model_for_header = model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let active_collaboration_mask =
+            Self::initial_collaboration_mask(&config, models_manager.as_ref(), model_override);
+        let header_model = active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.model.clone())
+            .unwrap_or_else(|| model_for_header.clone());
         let fallback_custom = Settings {
-            model: model_for_header.clone(),
+            model: header_model.clone(),
             reasoning_effort: None,
             developer_instructions: None,
         };
@@ -1961,11 +1970,11 @@ impl ChatWidget {
             skills_all: Vec::new(),
             skills_initial_state: None,
             current_collaboration_mode,
-            active_collaboration_mask: None,
+            active_collaboration_mask,
             auth_manager,
             models_manager,
             otel_manager,
-            session_header: SessionHeader::new(model_for_header),
+            session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
@@ -2042,9 +2051,18 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
-        let model_for_header = model.unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let model_override = model.as_deref();
+        let model_for_header = model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let active_collaboration_mask =
+            Self::initial_collaboration_mask(&config, models_manager.as_ref(), model_override);
+        let header_model = active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.model.clone())
+            .unwrap_or_else(|| model_for_header.clone());
         let fallback_custom = Settings {
-            model: model_for_header.clone(),
+            model: header_model.clone(),
             reasoning_effort: None,
             developer_instructions: None,
         };
@@ -2076,11 +2094,11 @@ impl ChatWidget {
             skills_all: Vec::new(),
             skills_initial_state: None,
             current_collaboration_mode,
-            active_collaboration_mask: None,
+            active_collaboration_mask,
             auth_manager,
             models_manager,
             otel_manager,
-            session_header: SessionHeader::new(model_for_header),
+            session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
@@ -2156,7 +2174,16 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
-        let header_model = model.unwrap_or_else(|| session_configured.model.clone());
+        let model_override = model.as_deref();
+        let header_model = model
+            .clone()
+            .unwrap_or_else(|| session_configured.model.clone());
+        let active_collaboration_mask =
+            Self::initial_collaboration_mask(&config, models_manager.as_ref(), model_override);
+        let header_model = active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.model.clone())
+            .unwrap_or(header_model);
 
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
@@ -2192,7 +2219,7 @@ impl ChatWidget {
             skills_all: Vec::new(),
             skills_initial_state: None,
             current_collaboration_mode,
-            active_collaboration_mask: None,
+            active_collaboration_mask,
             auth_manager,
             models_manager,
             otel_manager,
@@ -4625,6 +4652,22 @@ impl ChatWidget {
 
     fn collaboration_modes_enabled(&self) -> bool {
         self.config.features.enabled(Feature::CollaborationModes)
+    }
+
+    fn initial_collaboration_mask(
+        config: &Config,
+        models_manager: &ModelsManager,
+        model_override: Option<&str>,
+    ) -> Option<CollaborationModeMask> {
+        if !config.features.enabled(Feature::CollaborationModes) {
+            return None;
+        }
+        let kind = config.experimental_mode?;
+        let mut mask = collaboration_modes::mask_for_kind(models_manager, kind)?;
+        if let Some(model_override) = model_override {
+            mask.model = Some(model_override.to_string());
+        }
+        Some(mask)
     }
 
     fn active_mode_kind(&self) -> ModeKind {
