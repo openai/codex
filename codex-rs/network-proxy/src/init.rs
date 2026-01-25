@@ -6,13 +6,11 @@ use tracing::info;
 
 pub fn run_init() -> Result<()> {
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
-    let root = codex_home.join("network_proxy");
-    let mitm_dir = root.join("mitm");
+    let proxy_dir = codex_home.join("proxy");
 
-    fs::create_dir_all(&root).with_context(|| format!("failed to create {}", root.display()))?;
-    fs::create_dir_all(&mitm_dir)
-        .with_context(|| format!("failed to create {}", mitm_dir.display()))?;
+    fs::create_dir_all(&proxy_dir)
+        .with_context(|| format!("failed to create {}", proxy_dir.display()))?;
 
-    info!("ensured {}", mitm_dir.display());
+    info!("ensured {}", proxy_dir.display());
     Ok(())
 }

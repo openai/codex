@@ -131,11 +131,11 @@ fn default_socks_url() -> String {
 }
 
 fn default_ca_cert_path() -> PathBuf {
-    PathBuf::from("network_proxy/mitm/ca.pem")
+    PathBuf::from("proxy/ca.pem")
 }
 
 fn default_ca_key_path() -> PathBuf {
-    PathBuf::from("network_proxy/mitm/ca.key")
+    PathBuf::from("proxy/ca.key")
 }
 
 fn default_mitm_max_body_bytes() -> usize {
