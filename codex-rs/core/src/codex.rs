@@ -319,6 +319,7 @@ impl Codex {
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source,
@@ -497,6 +498,8 @@ pub(crate) struct SessionConfiguration {
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
     cwd: PathBuf,
+    /// Directory containing all Codex state for this session.
+    codex_home: PathBuf,
     /// Optional user-facing name for the thread, updated during the session.
     thread_name: Option<String>,
 
@@ -508,7 +511,7 @@ pub(crate) struct SessionConfiguration {
 
 impl SessionConfiguration {
     pub(crate) fn codex_home(&self) -> &PathBuf {
-        &self.original_config_do_not_use.codex_home
+        &self.codex_home
     }
 
     fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
@@ -1361,8 +1364,7 @@ impl Session {
             .lock()
             .await
             .session_configuration
-            .original_config_do_not_use
-            .codex_home
+            .codex_home()
             .clone();
 
         if !features.enabled(Feature::ExecPolicy) {
@@ -4032,6 +4034,7 @@ mod tests {
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
@@ -4112,6 +4115,7 @@ mod tests {
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
@@ -4376,6 +4380,7 @@ mod tests {
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
@@ -4485,6 +4490,7 @@ mod tests {
             approval_policy: config.approval_policy.clone(),
             sandbox_policy: config.sandbox_policy.clone(),
             cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
