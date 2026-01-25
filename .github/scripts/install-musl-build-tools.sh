@@ -32,6 +32,16 @@ case "${TARGET}" in
     ;;
 esac
 
+# Use the musl toolchain as the Rust linker to avoid Zig injecting its own CRT.
+if command -v "${arch}-linux-musl-gcc" >/dev/null; then
+  musl_linker="$(command -v "${arch}-linux-musl-gcc")"
+elif command -v musl-gcc >/dev/null; then
+  musl_linker="$(command -v musl-gcc)"
+else
+  echo "musl gcc not found after install; arch=${arch}" >&2
+  exit 1
+fi
+
 zig_target="${TARGET/-unknown-linux-musl/-linux-musl}"
 runner_temp="${RUNNER_TEMP:-/tmp}"
 tool_root="${runner_temp}/codex-musl-tools-${TARGET}"
@@ -105,14 +115,7 @@ EOF
 
   sysroot="$("${zig_bin}" cc -target "${zig_target}" -print-sysroot 2>/dev/null || true)"
 else
-  if command -v "${arch}-linux-musl-gcc" >/dev/null; then
-    cc="$(command -v "${arch}-linux-musl-gcc")"
-  elif command -v musl-gcc >/dev/null; then
-    cc="$(command -v musl-gcc)"
-  else
-    echo "musl gcc not found after install; arch=${arch}" >&2
-    exit 1
-  fi
+  cc="${musl_linker}"
 
   if command -v "${arch}-linux-musl-g++" >/dev/null; then
     cxx="$(command -v "${arch}-linux-musl-g++")"
@@ -145,7 +148,7 @@ echo "${target_cxx_var}=${cxx}" >> "$GITHUB_ENV"
 
 cargo_linker_var="CARGO_TARGET_${TARGET^^}_LINKER"
 cargo_linker_var="${cargo_linker_var//-/_}"
-echo "${cargo_linker_var}=${cc}" >> "$GITHUB_ENV"
+echo "${cargo_linker_var}=${musl_linker}" >> "$GITHUB_ENV"
 
 echo "CMAKE_C_COMPILER=${cc}" >> "$GITHUB_ENV"
 echo "CMAKE_CXX_COMPILER=${cxx}" >> "$GITHUB_ENV"
