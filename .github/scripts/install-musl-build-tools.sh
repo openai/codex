@@ -41,6 +41,14 @@ else
   exit 1
 fi
 
+sysroot="$("$cc" -print-sysroot 2>/dev/null || "$cc" --print-sysroot 2>/dev/null || true)"
+if [[ -n "${sysroot}" && "${sysroot}" != "/" ]]; then
+  echo "BORING_BSSL_SYSROOT=${sysroot}" >> "$GITHUB_ENV"
+  boring_sysroot_var="BORING_BSSL_SYSROOT_${TARGET}"
+  boring_sysroot_var="${boring_sysroot_var//-/_}"
+  echo "${boring_sysroot_var}=${sysroot}" >> "$GITHUB_ENV"
+fi
+
 echo "CFLAGS=-pthread" >> "$GITHUB_ENV"
 echo "CC=${cc}" >> "$GITHUB_ENV"
 echo "TARGET_CC=${cc}" >> "$GITHUB_ENV"
@@ -50,13 +58,26 @@ echo "${target_cc_var}=${cc}" >> "$GITHUB_ENV"
 
 if command -v "${arch}-linux-musl-g++" >/dev/null; then
   cxx="$(command -v "${arch}-linux-musl-g++")"
+  cxxflags="-pthread"
 elif command -v musl-g++ >/dev/null; then
   cxx="$(command -v musl-g++)"
+  cxxflags="-pthread"
+elif command -v clang++ >/dev/null; then
+  cxx="$(command -v clang++)"
+  cxxflags="--target=${TARGET} -stdlib=libc++ -pthread"
+  if [[ -n "${sysroot}" && "${sysroot}" != "/" ]]; then
+    cxxflags="${cxxflags} --sysroot=${sysroot}"
+  fi
+  echo "BORING_BSSL_RUST_CPPLIB=c++" >> "$GITHUB_ENV"
+  boring_cpp_var="BORING_BSSL_RUST_CPPLIB_${TARGET}"
+  boring_cpp_var="${boring_cpp_var//-/_}"
+  echo "${boring_cpp_var}=c++" >> "$GITHUB_ENV"
 else
   cxx="${cc}"
+  cxxflags="-pthread"
 fi
 
-echo "CXXFLAGS=-pthread" >> "$GITHUB_ENV"
+echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 echo "CXX=${cxx}" >> "$GITHUB_ENV"
 echo "TARGET_CXX=${cxx}" >> "$GITHUB_ENV"
 target_cxx_var="CXX_${TARGET}"
