@@ -98,6 +98,7 @@ pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;
 pub use rollout::SESSIONS_SUBDIR;
 pub use rollout::SessionMeta;
+pub use rollout::find_archived_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use rollout::find_conversation_path_by_id_str;
 pub use rollout::find_thread_path_by_id_str;
