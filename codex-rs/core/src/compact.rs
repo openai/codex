@@ -32,7 +32,6 @@ use tracing::error;
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
-const COMPACT_KEEP_LATEST_USER_MESSAGES: usize = 2;
 
 pub(crate) fn should_use_remote_compact_task(
     session: &Session,
@@ -284,11 +283,7 @@ fn build_compacted_history_with_limit(
     let mut selected_messages: Vec<String> = Vec::new();
     if max_tokens > 0 {
         let mut remaining = max_tokens;
-        for message in user_messages
-            .iter()
-            .rev()
-            .take(COMPACT_KEEP_LATEST_USER_MESSAGES)
-        {
+        for message in user_messages.iter().rev() {
             if remaining == 0 {
                 break;
             }

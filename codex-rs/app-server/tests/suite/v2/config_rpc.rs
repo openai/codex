@@ -94,7 +94,6 @@ model = "gpt-user"
 [tools]
 web_search = true
 view_image = false
-ask_user_question = true
 "#,
     )?;
     let codex_home_path = codex_home.path().canonicalize()?;
@@ -126,7 +125,6 @@ ask_user_question = true
         ToolsV2 {
             web_search: Some(true),
             view_image: Some(false),
-            ask_user_question: Some(true),
         }
     );
     assert_eq!(
@@ -140,12 +138,6 @@ ask_user_question = true
         ConfigLayerSource::User {
             file: user_file.clone(),
         }
-    );
-    assert_eq!(
-        origins.get("tools.ask_user_question").expect("origin").name,
-        ConfigLayerSource::User {
-            file: user_file.clone(),
-        },
     );
 
     let layers = layers.expect("layers present");

@@ -51,12 +51,6 @@ pub(crate) enum AppEvent {
     /// Start a new session.
     NewSession,
 
-    /// Switch the active account (and optionally create it).
-    SwitchAccount {
-        name: String,
-        create_if_missing: bool,
-    },
-
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
@@ -90,9 +84,6 @@ pub(crate) enum AppEvent {
         query: String,
         matches: Vec<FileMatch>,
     },
-
-    /// Refresh discovered subagents (repo + CODEX_HOME).
-    RefreshSubagents,
 
     /// Result of refreshing rate limits
     RateLimitSnapshotFetched(RateLimitSnapshot),
@@ -261,38 +252,6 @@ pub(crate) enum AppEvent {
     /// Open the upload consent popup for feedback after selecting a category.
     OpenFeedbackConsent {
         category: FeedbackCategory,
-    },
-
-    /// AskUserQuestion: option picked (single- or multi-select).
-    AskUserQuestionPick {
-        call_id: String,
-        question_id: String,
-        value: String,
-    },
-
-    /// AskUserQuestion: request freeform input for an "Other…" choice.
-    AskUserQuestionOther {
-        call_id: String,
-        question_id: String,
-        prompt: String,
-    },
-
-    /// AskUserQuestion: text submitted (text questions or "Other…").
-    AskUserQuestionText {
-        call_id: String,
-        question_id: String,
-        text: String,
-    },
-
-    /// AskUserQuestion: finish a multi-select question.
-    AskUserQuestionDone {
-        call_id: String,
-        question_id: String,
-    },
-
-    /// AskUserQuestion: cancel the entire flow.
-    AskUserQuestionCancel {
-        call_id: String,
     },
 
     /// Launch the external editor after a normal draw has completed.

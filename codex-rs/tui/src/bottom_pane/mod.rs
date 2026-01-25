@@ -53,6 +53,7 @@ mod chat_composer_history;
 mod command_popup;
 pub mod custom_prompt_view;
 mod experimental_features_view;
+mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod prompt_args;
@@ -107,12 +108,10 @@ pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
-use crate::subagent_candidates::SubAgentCandidate;
-pub(crate) use ask_user_question::AskUserQuestionTextView;
-pub(crate) use ask_user_question::CancelableSelectionView;
 pub(crate) use experimental_features_view::BetaFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
+pub(crate) use list_selection_view::SelectionItem;
 
 /// Pane displayed in the lower half of the chat UI.
 ///
@@ -199,14 +198,8 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub fn set_subagents(&mut self, subagents: Vec<SubAgentCandidate>) {
-        self.composer.set_subagents(subagents);
-        self.request_redraw();
-    }
-
     pub fn set_steer_enabled(&mut self, enabled: bool) {
         self.composer.set_steer_enabled(enabled);
-        self.request_redraw();
     }
 
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {

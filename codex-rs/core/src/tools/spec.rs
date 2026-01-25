@@ -45,8 +45,6 @@ impl ToolsConfig {
             web_search_mode,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
-        let include_view_image_tool = features.enabled(Feature::ViewImageTool);
-        let include_ask_user_question_tool = features.enabled(Feature::AskUserQuestionTool);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
 
@@ -79,8 +77,6 @@ impl ToolsConfig {
             shell_type,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
-            include_view_image_tool,
-            include_ask_user_question_tool,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
@@ -277,124 +273,6 @@ fn create_write_stdin_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["session_id".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    })
-}
-
-fn create_ask_user_question_tool() -> ToolSpec {
-    let mut option_properties = BTreeMap::new();
-    option_properties.insert(
-        "label".to_string(),
-        JsonSchema::String {
-            description: Some("Human-readable label.".to_string()),
-        },
-    );
-    option_properties.insert(
-        "value".to_string(),
-        JsonSchema::String {
-            description: Some("Stable machine-readable value.".to_string()),
-        },
-    );
-    option_properties.insert(
-        "description".to_string(),
-        JsonSchema::String {
-            description: Some("Optional extra explanation shown to the user.".to_string()),
-        },
-    );
-    option_properties.insert(
-        "recommended".to_string(),
-        JsonSchema::Boolean {
-            description: Some("Whether this option is recommended.".to_string()),
-        },
-    );
-
-    let mut question_properties = BTreeMap::new();
-    question_properties.insert(
-        "id".to_string(),
-        JsonSchema::String {
-            description: Some("Stable identifier for this question.".to_string()),
-        },
-    );
-    question_properties.insert(
-        "prompt".to_string(),
-        JsonSchema::String {
-            description: Some("Question text to show the user.".to_string()),
-        },
-    );
-    question_properties.insert(
-        "type".to_string(),
-        JsonSchema::String {
-            description: Some("Question type: text | single_select | multi_select.".to_string()),
-        },
-    );
-    question_properties.insert(
-        "description".to_string(),
-        JsonSchema::String {
-            description: Some("Optional extra explanation shown to the user.".to_string()),
-        },
-    );
-    question_properties.insert(
-        "placeholder".to_string(),
-        JsonSchema::String {
-            description: Some("Optional placeholder text for text questions.".to_string()),
-        },
-    );
-    question_properties.insert(
-        "options".to_string(),
-        JsonSchema::Array {
-            items: Box::new(JsonSchema::Object {
-                properties: option_properties,
-                required: Some(vec!["label".to_string(), "value".to_string()]),
-                additional_properties: Some(false.into()),
-            }),
-            description: Some("Options for select questions.".to_string()),
-        },
-    );
-    question_properties.insert(
-        "allow_other".to_string(),
-        JsonSchema::Boolean {
-            description: Some("Whether to allow an 'Other' freeform answer.".to_string()),
-        },
-    );
-    question_properties.insert(
-        "required".to_string(),
-        JsonSchema::Boolean {
-            description: Some("Whether this question must be answered.".to_string()),
-        },
-    );
-
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "title".to_string(),
-        JsonSchema::String {
-            description: Some("Optional title for the question flow.".to_string()),
-        },
-    );
-    properties.insert(
-        "questions".to_string(),
-        JsonSchema::Array {
-            items: Box::new(JsonSchema::Object {
-                properties: question_properties,
-                required: Some(vec![
-                    "id".to_string(),
-                    "prompt".to_string(),
-                    "type".to_string(),
-                ]),
-                additional_properties: Some(false.into()),
-            }),
-            description: Some("List of questions to ask the user.".to_string()),
-        },
-    );
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "ask_user_question".to_string(),
-        description: "Ask the user one or more questions via the UI and return structured answers."
-            .to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["questions".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1340,7 +1218,6 @@ pub(crate) fn build_specs(
     mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
-    use crate::tools::handlers::AskUserQuestionHandler;
     use crate::tools::handlers::CollabHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
@@ -1360,7 +1237,6 @@ pub(crate) fn build_specs(
 
     let shell_handler = Arc::new(ShellHandler);
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
-    let ask_user_question_handler = Arc::new(AskUserQuestionHandler);
     let plan_handler = Arc::new(PlanHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
@@ -1476,10 +1352,8 @@ pub(crate) fn build_specs(
         Some(WebSearchMode::Disabled) | None => {}
     }
 
-    if config.include_view_image_tool {
-        builder.push_spec_with_parallel_support(create_view_image_tool(), true);
-        builder.register_handler("view_image", view_image_handler);
-    }
+    builder.push_spec_with_parallel_support(create_view_image_tool(), true);
+    builder.register_handler("view_image", view_image_handler);
 
     if config.collab_tools {
         let collab_handler = Arc::new(CollabHandler);
@@ -1511,36 +1385,6 @@ pub(crate) fn build_specs(
     }
 
     builder
-}
-
-fn create_run_subagent_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "name".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Subagent name (file stem under .codex/agents or CODEX_HOME/agents).".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "prompt".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Prompt to send to the subagent as the only user message.".to_string(),
-            ),
-        },
-    );
-    ToolSpec::Function(ResponsesApiTool {
-        name: "run_subagent".to_string(),
-        description: "Run a named subagent with an explicit prompt. The subagent runs in an isolated session (no prior conversation history).".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["name".to_string(), "prompt".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-    })
 }
 
 #[cfg(test)]

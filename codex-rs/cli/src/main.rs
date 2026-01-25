@@ -724,6 +724,18 @@ async fn run_interactive_tui(
     mut interactive: TuiCli,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> std::io::Result<AppExitInfo> {
+    if let Ok(codex_home) = codex_core::config::find_codex_home() {
+        let rules_dir = codex_home.join("rules");
+        if rules_dir.exists()
+            && let Err(source) = std::fs::read_dir(&rules_dir)
+        {
+            return Ok(AppExitInfo::fatal(format!(
+                "Failed to initialize codex: failed to read rules files from {}: {source}",
+                rules_dir.display()
+            )));
+        }
+    }
+
     if let Some(prompt) = interactive.prompt.take() {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
         interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));

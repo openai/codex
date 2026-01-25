@@ -24,7 +24,6 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
-use crate::subagent_candidates::discover_subagent_candidates;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -770,40 +769,6 @@ impl App {
                 }
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::SwitchAccount {
-                name,
-                create_if_missing,
-            } => {
-                match codex_core::accounts::switch_account(
-                    &self.config.codex_home,
-                    &name,
-                    create_if_missing,
-                ) {
-                    Ok(()) => {
-                        self.auth_manager.reload();
-                        self.chat_widget.on_active_account_changed();
-                        if create_if_missing {
-                            self.chat_widget.add_info_message(
-                                format!(
-                                    "Created and switched to account `{name}`. Authenticate with `/login` (ChatGPT) or set an API key."
-                                ),
-                                None,
-                            );
-                        } else {
-                            self.chat_widget.add_info_message(
-                                format!("Switched active account to `{name}`."),
-                                None,
-                            );
-                        }
-                    }
-                    Err(err) => {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to switch active account to `{name}`: {err}"
-                        ));
-                    }
-                }
-                tui.frame_requester().schedule_frame();
-            }
             AppEvent::OpenResumePicker => {
                 match crate::resume_picker::run_resume_picker(
                     tui,
@@ -1075,11 +1040,6 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
-            AppEvent::RefreshSubagents => {
-                let cwd = self.chat_widget.config_ref().cwd.clone();
-                let subagents = discover_subagent_candidates(&cwd, &self.config.codex_home).await;
-                self.chat_widget.set_subagents(subagents);
-            }
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
             }
@@ -1128,40 +1088,6 @@ impl App {
             }
             AppEvent::OpenFeedbackConsent { category } => {
                 self.chat_widget.open_feedback_consent(category);
-            }
-            AppEvent::AskUserQuestionPick {
-                call_id,
-                question_id,
-                value,
-            } => {
-                self.chat_widget
-                    .on_ask_user_question_pick(call_id, question_id, value);
-            }
-            AppEvent::AskUserQuestionOther {
-                call_id,
-                question_id,
-                prompt,
-            } => {
-                self.chat_widget
-                    .on_ask_user_question_other(call_id, question_id, prompt);
-            }
-            AppEvent::AskUserQuestionText {
-                call_id,
-                question_id,
-                text,
-            } => {
-                self.chat_widget
-                    .on_ask_user_question_text(call_id, question_id, text);
-            }
-            AppEvent::AskUserQuestionDone {
-                call_id,
-                question_id,
-            } => {
-                self.chat_widget
-                    .on_ask_user_question_done(call_id, question_id);
-            }
-            AppEvent::AskUserQuestionCancel { call_id } => {
-                self.chat_widget.on_ask_user_question_cancel(call_id);
             }
             AppEvent::LaunchExternalEditor => {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {

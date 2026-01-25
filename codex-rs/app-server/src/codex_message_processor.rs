@@ -15,8 +15,6 @@ use codex_app_server_protocol::AccountSummary as ApiAccountSummary;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddConversationListenerParams;
 use codex_app_server_protocol::AddConversationSubscriptionResponse;
-use codex_app_server_protocol::AgentsListParams;
-use codex_app_server_protocol::AgentsListResponse;
 use codex_app_server_protocol::ArchiveConversationParams;
 use codex_app_server_protocol::ArchiveConversationResponse;
 use codex_app_server_protocol::AskForApproval;
@@ -101,8 +99,6 @@ use codex_app_server_protocol::SwitchAccountResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
-use codex_app_server_protocol::ThreadCompactParams;
-use codex_app_server_protocol::ThreadCompactResponse;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadItem;
@@ -141,6 +137,12 @@ use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::ThreadManager;
 use codex_core::ThreadSortKey as CoreThreadSortKey;
+use codex_core::accounts::AccountKind;
+use codex_core::accounts::list_accounts as list_accounts_core;
+use codex_core::accounts::load_accounts as load_accounts_core;
+use codex_core::accounts::resolve_active_account as resolve_active_account_core;
+use codex_core::accounts::switch_account as switch_account_core;
+use codex_core::accounts::update_account_meta;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::config::Config;
@@ -319,27 +321,13 @@ impl CodexMessageProcessor {
     }
 
     async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
-        self.load_latest_config_for_cwd(None).await
-    }
-
-    async fn load_latest_config_for_cwd(
-        &self,
-        cwd: Option<PathBuf>,
-    ) -> Result<Config, JSONRPCErrorError> {
-        let harness_overrides = ConfigOverrides {
-            cwd,
-            ..Default::default()
-        };
-        Config::load_with_cli_overrides_and_harness_overrides(
-            self.cli_overrides.clone(),
-            harness_overrides,
-        )
-        .await
-        .map_err(|err| JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: format!("failed to reload config: {err}"),
-            data: None,
-        })
+        Config::load_with_cli_overrides(self.cli_overrides.clone())
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to reload config: {err}"),
+                data: None,
+            })
     }
 
     fn review_request_from_target(
@@ -418,9 +406,6 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(request_id, params).await;
-            }
-            ClientRequest::ThreadCompact { request_id, params } => {
-                self.thread_compact(request_id, params).await;
             }
             ClientRequest::ThreadRollback { request_id, params } => {
                 self.thread_rollback(request_id, params).await;
@@ -626,8 +611,6 @@ impl CodexMessageProcessor {
         &mut self,
         params: &LoginApiKeyParams,
     ) -> std::result::Result<(), JSONRPCErrorError> {
-        self.require_active_account_if_needed()?;
-
         if matches!(
             self.config.forced_login_method,
             Some(ForcedLoginMethod::Chatgpt)
@@ -654,18 +637,6 @@ impl CodexMessageProcessor {
         ) {
             Ok(()) => {
                 self.auth_manager.reload();
-
-                if let Ok(Some(account)) = resolve_active_account_core(&self.config.codex_home)
-                    && let Err(err) = update_account_meta(
-                        &self.config.codex_home,
-                        &account,
-                        AccountKind::ApiKey,
-                        None,
-                    )
-                {
-                    tracing::warn!("failed to update account metadata: {err}");
-                }
-
                 Ok(())
             }
             Err(err) => Err(JSONRPCErrorError {
@@ -733,8 +704,6 @@ impl CodexMessageProcessor {
     ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
         let config = self.config.as_ref();
 
-        self.require_active_account_if_needed()?;
-
         if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -760,7 +729,6 @@ impl CodexMessageProcessor {
             Ok(opts) => match run_login_server(opts) {
                 Ok(server) => {
                     let login_id = Uuid::new_v4();
-                    let auth_url = server.auth_url.clone();
                     let shutdown_handle = server.cancel_handle();
 
                     // Replace active login if present.
@@ -779,6 +747,7 @@ impl CodexMessageProcessor {
                     let outgoing_clone = self.outgoing.clone();
                     let active_login = self.active_login.clone();
                     let auth_manager = self.auth_manager.clone();
+                    let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
                         let (success, error_msg) = match tokio::time::timeout(
                             LOGIN_CHATGPT_TIMEOUT,
@@ -868,8 +837,8 @@ impl CodexMessageProcessor {
                     let outgoing_clone = self.outgoing.clone();
                     let active_login = self.active_login.clone();
                     let auth_manager = self.auth_manager.clone();
-                    let codex_home = self.config.codex_home.clone();
                     let auth_url = server.auth_url.clone();
+                    let codex_home = self.config.codex_home.clone();
                     tokio::spawn(async move {
                         let (success, error_msg) = match tokio::time::timeout(
                             LOGIN_CHATGPT_TIMEOUT,
@@ -898,21 +867,6 @@ impl CodexMessageProcessor {
 
                         if success {
                             auth_manager.reload();
-
-                            if let (Ok(Some(account)), Some(auth)) = (
-                                resolve_active_account_core(&codex_home),
-                                auth_manager.auth_cached(),
-                            ) {
-                                let email = auth.get_account_email();
-                                if let Err(err) = update_account_meta(
-                                    &codex_home,
-                                    &account,
-                                    AccountKind::Chatgpt,
-                                    email,
-                                ) {
-                                    tracing::warn!("failed to update account metadata: {err}");
-                                }
-                            }
 
                             // Notify clients with the actual current auth mode.
                             let current_auth_method = auth_manager.auth_cached().map(|a| a.mode);
@@ -1013,8 +967,6 @@ impl CodexMessageProcessor {
     }
 
     async fn logout_common(&mut self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
-        self.require_active_account_if_needed()?;
-
         // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
@@ -1080,17 +1032,6 @@ impl CodexMessageProcessor {
         resolve_active_account_core(&self.config.codex_home)
             .ok()
             .flatten()
-    }
-
-    fn require_active_account_if_needed(&self) -> std::result::Result<(), JSONRPCErrorError> {
-        match resolve_active_account_core(&self.config.codex_home) {
-            Ok(_) => Ok(()),
-            Err(err) => Err(JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: err.to_string(),
-                data: None,
-            }),
-        }
     }
 
     async fn list_accounts_v2(&self, request_id: RequestId) {
@@ -1296,11 +1237,6 @@ impl CodexMessageProcessor {
     }
 
     async fn get_account(&self, request_id: RequestId, params: GetAccountParams) {
-        if let Err(err) = self.require_active_account_if_needed() {
-            self.outgoing.send_error(request_id, err).await;
-            return;
-        }
-
         let do_refresh = params.refresh_token;
 
         self.refresh_token_if_requested(do_refresh).await;
@@ -2255,26 +2191,6 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn thread_compact(&mut self, request_id: RequestId, params: ThreadCompactParams) {
-        let (_, thread) = match self.load_thread(&params.thread_id).await {
-            Ok(v) => v,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        if let Err(err) = thread.submit(Op::Compact).await {
-            self.send_internal_error(request_id, format!("failed to submit compact: {err}"))
-                .await;
-            return;
-        }
-
-        self.outgoing
-            .send_response(request_id, ThreadCompactResponse {})
-            .await;
-    }
-
     async fn thread_fork(&mut self, request_id: RequestId, params: ThreadForkParams) {
         let ThreadForkParams {
             thread_id,
@@ -2915,34 +2831,7 @@ impl CodexMessageProcessor {
         params: ListMcpServerStatusParams,
     ) {
         let outgoing = Arc::clone(&self.outgoing);
-        let cwd_override = match params.cwd.as_deref() {
-            Some(cwd) => {
-                let raw = PathBuf::from(cwd);
-                if raw.is_relative() {
-                    match std::env::current_dir() {
-                        Ok(current) => Some(current.join(raw)),
-                        Err(err) => {
-                            self.outgoing
-                                .send_error(
-                                    request_id,
-                                    JSONRPCErrorError {
-                                        code: INTERNAL_ERROR_CODE,
-                                        message: format!("failed to resolve cwd: {err}"),
-                                        data: None,
-                                    },
-                                )
-                                .await;
-                            return;
-                        }
-                    }
-                } else {
-                    Some(raw)
-                }
-            }
-            None => None,
-        };
-
-        let config = match self.load_latest_config_for_cwd(cwd_override).await {
+        let config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4230,10 +4119,12 @@ impl CodexMessageProcessor {
                             conversation_id.to_string().into(),
                         );
 
-                        let _ = outgoing_for_task.try_send_notification(OutgoingNotification {
-                            method: format!("codex/event/{event_formatted}"),
-                            params: Some(params.into()),
-                        });
+                        outgoing_for_task
+                            .send_notification(OutgoingNotification {
+                                method: format!("codex/event/{event_formatted}"),
+                                params: Some(params.into()),
+                            })
+                            .await;
 
                         apply_bespoke_event_handling(
                             event.clone(),

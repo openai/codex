@@ -33,7 +33,6 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListConversationsParams;
-use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::NewConversationParams;

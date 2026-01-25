@@ -728,10 +728,6 @@ pub enum EventMsg {
 
     McpToolCallEnd(McpToolCallEndEvent),
 
-    SubAgentRunBegin(SubAgentRunBeginEvent),
-
-    SubAgentRunEnd(SubAgentRunEndEvent),
-
     WebSearchBegin(WebSearchBeginEvent),
 
     WebSearchEnd(WebSearchEndEvent),
@@ -755,8 +751,6 @@ pub enum EventMsg {
     RequestUserInput(RequestUserInputEvent),
 
     ElicitationRequest(ElicitationRequestEvent),
-
-    AskUserQuestionRequest(AskUserQuestionRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 
@@ -906,16 +900,6 @@ pub enum AgentStatus {
     NotFound,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AskUserQuestionRequestEvent {
-    pub call_id: String,
-    /// Turn ID that this question belongs to.
-    /// Uses `#[serde(default)]` for backwards compatibility.
-    #[serde(default)]
-    pub turn_id: String,
-    pub request: AskUserQuestionRequest,
-}
-
 /// Codex errors that we expose to clients.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -923,9 +907,6 @@ pub struct AskUserQuestionRequestEvent {
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
-    RateLimited {
-        http_status_code: Option<u16>,
-    },
     HttpConnectionFailed {
         http_status_code: Option<u16>,
     },
@@ -1048,7 +1029,6 @@ impl HasLegacyEvent for ReasoningRawContentDeltaEvent {
 impl HasLegacyEvent for EventMsg {
     fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
         match self {
-            EventMsg::ItemStarted(event) => event.as_legacy_events(show_raw_agent_reasoning),
             EventMsg::ItemCompleted(event) => event.as_legacy_events(show_raw_agent_reasoning),
             EventMsg::AgentMessageContentDelta(event) => {
                 event.as_legacy_events(show_raw_agent_reasoning)
@@ -1297,7 +1277,7 @@ impl fmt::Display for FinalOutput {
             format_with_separators(token_usage.output_tokens),
             if token_usage.reasoning_output_tokens > 0 {
                 format!(
-                    "(reasoning {})",
+                    " (reasoning {})",
                     format_with_separators(token_usage.reasoning_output_tokens)
                 )
             } else {
@@ -1899,22 +1879,6 @@ pub struct BackgroundEventEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct SubAgentRunBeginEvent {
-    pub call_id: String,
-    pub name: String,
-    pub description: String,
-    pub color: Option<String>,
-    pub prompt: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct SubAgentRunEndEvent {
-    pub call_id: String,
-    pub duration_ms: i64,
-    pub success: bool,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct DeprecationNoticeEvent {
     /// Concise summary of what is deprecated.
     pub summary: String,
@@ -2407,25 +2371,6 @@ mod tests {
         };
 
         assert!(event.as_legacy_events(false).is_empty());
-    }
-
-    #[test]
-    fn event_msg_item_started_propagates_legacy_web_search_begin_event() {
-        let msg = EventMsg::ItemStarted(ItemStartedEvent {
-            thread_id: ThreadId::new(),
-            turn_id: "turn-1".into(),
-            item: TurnItem::WebSearch(WebSearchItem {
-                id: "search-1".into(),
-                query: "find docs".into(),
-            }),
-        });
-
-        let legacy_events = msg.as_legacy_events(false);
-        assert_eq!(legacy_events.len(), 1);
-        match &legacy_events[0] {
-            EventMsg::WebSearchBegin(event) => assert_eq!(event.call_id, "search-1"),
-            _ => panic!("expected WebSearchBegin event"),
-        }
     }
 
     #[test]

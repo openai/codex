@@ -38,7 +38,6 @@ pub struct ConfigProfile {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub tools_web_search: Option<bool>,
     pub tools_view_image: Option<bool>,
-    pub tools_ask_user_question: Option<bool>,
     pub web_search: Option<WebSearchMode>,
     pub analytics: Option<crate::config::types::AnalyticsConfigToml>,
     /// Optional feature toggles scoped to this profile.

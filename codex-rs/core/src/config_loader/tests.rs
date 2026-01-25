@@ -45,10 +45,8 @@ async fn make_config_for_test(
 }
 
 #[tokio::test]
-#[serial]
 async fn merges_managed_config_layer_on_top() {
     let tmp = tempdir().expect("tempdir");
-    let _cwd = set_test_cwd(tmp.path());
     let managed_path = tmp.path().join("managed_config.toml");
 
     std::fs::write(
@@ -103,10 +101,8 @@ extra = true
 }
 
 #[tokio::test]
-#[serial]
 async fn returns_empty_when_all_layers_missing() {
     let tmp = tempdir().expect("tempdir");
-    let _cwd = set_test_cwd(tmp.path());
     let managed_path = tmp.path().join("managed_config.toml");
 
     let overrides = LoaderOverrides {
@@ -175,12 +171,10 @@ async fn returns_empty_when_all_layers_missing() {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
-#[serial]
 async fn managed_preferences_take_highest_precedence() {
     use base64::Engine;
 
     let tmp = tempdir().expect("tempdir");
-    let _cwd = set_test_cwd(tmp.path());
     let managed_path = tmp.path().join("managed_config.toml");
 
     std::fs::write(
@@ -377,10 +371,25 @@ allowed_approval_policies = ["never", "on-request"]
     Ok(())
 }
 
-#[tokio::test(flavor = "current_thread")]
-#[serial]
-async fn loads_repo_local_config_from_cwd_only() -> anyhow::Result<()> {
+#[tokio::test]
+async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
     let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::create_dir_all(project_root.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+
+    tokio::fs::write(
+        project_root.join(".codex").join(CONFIG_TOML_FILE),
+        "foo = \"root\"\n",
+    )
+    .await?;
+    tokio::fs::write(
+        nested.join(".codex").join(CONFIG_TOML_FILE),
+        "foo = \"child\"\n",
+    )
+    .await?;
 
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
@@ -663,61 +672,35 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
     .await?;
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
-    let state = load_config_layers_state(
+    let layers = load_config_layers_state(
         &codex_home,
         Some(cwd),
         &[] as &[(String, TomlValue)],
-        overrides,
+        LoaderOverrides::default(),
     )
-    .await
-    .expect("load config layers");
+    .await?;
 
-    let user_layer = state
-        .get_user_layer()
-        .expect("expected a user layer entry even when cwd-local config exists");
+    let project_layers: Vec<_> = layers
+        .layers_high_to_low()
+        .into_iter()
+        .filter_map(|layer| match &layer.name {
+            super::ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(project_layers.len(), 2);
+    assert_eq!(project_layers[0].as_path(), nested.join(".codex").as_path());
     assert_eq!(
-        user_layer.config,
-        TomlValue::Table(toml::map::Map::new()),
-        "Codex-Mine policy: user config is not read when cwd-local config exists"
-    );
-
-    let binding = state.effective_config();
-    let table = binding.as_table().expect("top-level table expected");
-    assert_eq!(
-        table.get("value"),
-        Some(&TomlValue::String("cwd".to_string()))
+        project_layers[1].as_path(),
+        project_root.join(".codex").as_path()
     );
 
-    std::fs::remove_file(nested.join(".codex").join(CONFIG_TOML_FILE))?;
-    let overrides = LoaderOverrides {
-        managed_config_path: Some(tmp.path().join("managed_config.toml")),
-        #[cfg(target_os = "macos")]
-        managed_preferences_base64: None,
-        macos_managed_config_requirements_base64: None,
-    };
-    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
-    let state_no_cwd_local = load_config_layers_state(
-        &codex_home,
-        Some(cwd),
-        &[] as &[(String, TomlValue)],
-        overrides,
-    )
-    .await
-    .expect("load config layers");
-    let user_layer = state_no_cwd_local
-        .get_user_layer()
-        .expect("expected user layer");
-    let user_table = user_layer.config.as_table().expect("user layer table");
-    assert_eq!(
-        user_table.get("value"),
-        Some(&TomlValue::String("user".to_string()))
-    );
-    let binding = state_no_cwd_local.effective_config();
-    let table = binding.as_table().expect("top-level table expected");
-    assert_eq!(
-        table.get("value"),
-        Some(&TomlValue::String("user".to_string()))
-    );
+    let merged = layers.effective_config();
+    let foo = merged
+        .get("foo")
+        .and_then(TomlValue::as_str)
+        .expect("foo entry");
+    assert_eq!(foo, "child");
 
     Ok(())
 }

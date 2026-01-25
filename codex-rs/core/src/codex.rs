@@ -20,7 +20,6 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
 use crate::features::Features;
-use crate::hooks::HookRunner;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -33,7 +32,6 @@ use crate::user_notification::UserNotifier;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
-use codex_protocol::ConversationId;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::config_types::Settings;
@@ -412,12 +410,10 @@ pub(crate) struct Session {
 pub(crate) struct TurnContext {
     pub(crate) sub_id: String,
     pub(crate) client: ModelClient,
-    pub(crate) codex_home: PathBuf,
     /// The session's current working directory. All relative paths provided by
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
     pub(crate) cwd: PathBuf,
-    pub(crate) agents_sources: Vec<crate::config::AgentsSource>,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
@@ -527,10 +523,6 @@ pub(crate) struct SessionSettingsUpdate {
 }
 
 impl Session {
-    pub(crate) fn conversation_id(&self) -> ConversationId {
-        self.conversation_id
-    }
-
     /// Don't expand the number of mutated arguments on config. We are in the process of getting rid of it.
     pub(crate) fn build_per_turn_config(session_configuration: &SessionConfiguration) -> Config {
         // todo(aibrahim): store this state somewhere else so we don't need to mut config
@@ -581,9 +573,7 @@ impl Session {
         TurnContext {
             sub_id,
             client,
-            codex_home: per_turn_config.codex_home.clone(),
             cwd: session_configuration.cwd.clone(),
-            agents_sources: per_turn_config.agents_sources.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
@@ -760,7 +750,6 @@ impl Session {
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(config.notify.clone()),
-            hook_runner: HookRunner::try_new(config.hooks.clone())?,
             rollout: Mutex::new(Some(rollout_recorder)),
             user_shell: Arc::new(default_shell),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -1211,8 +1200,6 @@ impl Session {
 
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
-        self.services.hook_runner.on_event(self, turn_context, &msg);
-
         let legacy_source = msg.clone();
         let event = Event {
             id: turn_context.sub_id.clone(),
@@ -1222,10 +1209,6 @@ impl Session {
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
         for legacy in legacy_source.as_legacy_events(show_raw_agent_reasoning) {
-            self.services
-                .hook_runner
-                .on_event(self, turn_context, &legacy);
-
             let legacy_event = Event {
                 id: turn_context.sub_id.clone(),
                 msg: legacy,
@@ -1480,32 +1463,6 @@ impl Session {
             }
             None => {
                 warn!("No pending approval found for sub_id: {sub_id}");
-            }
-        }
-    }
-
-    pub async fn resolve_ask_user_question(
-        &self,
-        call_id: &str,
-        response: AskUserQuestionResponse,
-    ) {
-        let entry = {
-            let mut active = self.active_turn.lock().await;
-            match active.as_mut() {
-                Some(at) => {
-                    let mut ts = at.turn_state.lock().await;
-                    ts.remove_pending_ask_user_question(call_id)
-                }
-                None => None,
-            }
-        };
-
-        match entry {
-            Some(tx) => {
-                tx.send(response).ok();
-            }
-            None => {
-                warn!("ask_user_question response ignored; no pending request for {call_id}");
             }
         }
     }
@@ -2186,9 +2143,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             } => {
                 handlers::resolve_elicitation(&sess, server_name, request_id, decision).await;
             }
-            Op::ResolveAskUserQuestion { call_id, response } => {
-                handlers::resolve_ask_user_question(&sess, call_id, response).await;
-            }
             Op::Shutdown => {
                 if handlers::shutdown(&sess, sub.id.clone()).await {
                     break;
@@ -2219,7 +2173,6 @@ mod handlers {
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
-    use codex_protocol::ask_user_question::AskUserQuestionResponse;
     use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
@@ -2428,15 +2381,6 @@ mod handlers {
                 "failed to resolve elicitation request in session"
             );
         }
-    }
-
-    pub async fn resolve_ask_user_question(
-        sess: &Arc<Session>,
-        call_id: String,
-        response: AskUserQuestionResponse,
-    ) {
-        sess.resolve_ask_user_question(call_id.as_str(), response)
-            .await;
     }
 
     /// Propagate a user's exec approval decision to the session.
@@ -2808,7 +2752,6 @@ async fn spawn_review_thread(
     let review_turn_context = TurnContext {
         sub_id: sub_id.to_string(),
         client,
-        codex_home: per_turn_config.codex_home.clone(),
         tools_config,
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         developer_instructions: None,
@@ -2819,7 +2762,6 @@ async fn spawn_review_thread(
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
-        agents_sources: per_turn_config.agents_sources.clone(),
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
@@ -3133,13 +3075,6 @@ async fn run_sampling_request(
                     sess.update_rate_limits(&turn_context, rate_limits).await;
                 }
                 return Err(CodexErr::UsageLimitReached(e));
-            }
-            Err(CodexErr::RateLimited(e)) => {
-                let rate_limits = e.rate_limits.clone();
-                if let Some(rate_limits) = rate_limits {
-                    sess.update_rate_limits(&turn_context, rate_limits).await;
-                }
-                return Err(CodexErr::RateLimited(e));
             }
             Err(err) => err,
         };
@@ -3522,7 +3457,6 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
-    use tokio::time::Instant;
 
     struct InstructionsTestCase {
         slug: &'static str,
@@ -3844,75 +3778,6 @@ mod tests {
 
         let history = sess.clone_history().await;
         assert_eq!(initial_context, history.raw_items());
-    }
-
-    #[tokio::test]
-    async fn hooks_fire_for_legacy_web_search_events() {
-        let (mut session, mut turn_context) = make_session_and_context().await;
-
-        let out_dir = tempfile::tempdir().expect("create temp dir");
-        let out_path = out_dir.path().join("hook_web_search.jsonl");
-        let out_path_str = out_path.to_string_lossy().to_string();
-        let command = if cfg!(windows) {
-            vec![
-                "powershell".to_string(),
-                "-NoProfile".to_string(),
-                "-Command".to_string(),
-                format!(
-                    "$input | Out-File -FilePath '{}' -Append -Encoding utf8",
-                    out_path_str.replace('\'', "''")
-                ),
-            ]
-        } else {
-            vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                format!("cat >> \"{out_path_str}\""),
-            ]
-        };
-
-        session.services.hook_runner = HookRunner::try_new(vec![crate::config::HookConfig {
-            id: Some("test-web-search".to_string()),
-            when: vec!["web_search.end".to_string()],
-            matcher: None,
-            command,
-            timeout_ms: Some(2_000),
-            blocking: false,
-            include_output: false,
-            include_patch_contents: false,
-            include_mcp_arguments: false,
-            include_tool_arguments: false,
-        }])
-        .expect("build hook runner");
-
-        turn_context.sub_id = "turn-id-1".to_string();
-
-        session
-            .send_event(
-                &turn_context,
-                EventMsg::ItemCompleted(ItemCompletedEvent {
-                    thread_id: session.conversation_id(),
-                    turn_id: turn_context.sub_id.clone(),
-                    item: TurnItem::WebSearch(codex_protocol::items::WebSearchItem {
-                        id: "ws-1".to_string(),
-                        query: "test query".to_string(),
-                    }),
-                }),
-            )
-            .await;
-
-        let started = Instant::now();
-        loop {
-            let contents = std::fs::read_to_string(&out_path).unwrap_or_default();
-            if contents.contains("\"type\":\"web_search.end\"") {
-                break;
-            }
-            assert!(
-                started.elapsed() < StdDuration::from_secs(5),
-                "timed out waiting for hook output to be written"
-            );
-            sleep(Duration::from_millis(20)).await;
-        }
     }
 
     #[tokio::test]
@@ -4302,7 +4167,6 @@ mod tests {
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(None),
-            hook_runner: HookRunner::try_new(config.hooks.clone()).expect("build hook runner"),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -4408,7 +4272,6 @@ mod tests {
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(None),
-            hook_runner: HookRunner::try_new(config.hooks.clone()).expect("build hook runner"),
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -4727,7 +4590,6 @@ mod tests {
                 Arc::clone(&session),
                 Arc::clone(&turn_context),
                 tracker,
-                tokio_util::sync::CancellationToken::new(),
                 call,
             )
             .await
@@ -4911,7 +4773,6 @@ mod tests {
                 session: Arc::clone(&session),
                 turn: Arc::clone(&turn_context),
                 tracker: Arc::clone(&turn_diff_tracker),
-                cancellation_token: tokio_util::sync::CancellationToken::new(),
                 call_id,
                 tool_name: tool_name.to_string(),
                 payload: ToolPayload::Function {
@@ -4949,7 +4810,6 @@ mod tests {
                 session: Arc::clone(&session),
                 turn: Arc::clone(&turn_context),
                 tracker: Arc::clone(&turn_diff_tracker),
-                cancellation_token: tokio_util::sync::CancellationToken::new(),
                 call_id: "test-call-2".to_string(),
                 tool_name: tool_name.to_string(),
                 payload: ToolPayload::Function {
@@ -5005,7 +4865,6 @@ mod tests {
                 session: Arc::clone(&session),
                 turn: Arc::clone(&turn_context),
                 tracker: Arc::clone(&tracker),
-                cancellation_token: tokio_util::sync::CancellationToken::new(),
                 call_id: "exec-call".to_string(),
                 tool_name: "exec_command".to_string(),
                 payload: ToolPayload::Function {

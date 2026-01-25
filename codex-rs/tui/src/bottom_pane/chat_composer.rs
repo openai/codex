@@ -88,8 +88,6 @@ use ratatui::widgets::Block;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
-use super::at_popup::AtPopup;
-use super::at_popup::AtPopupSelectionKind;
 use super::chat_composer_history::ChatComposerHistory;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
@@ -139,7 +137,6 @@ use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
-use crate::subagent_candidates::SubAgentCandidate;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
@@ -184,6 +181,11 @@ struct AttachedImage {
     path: PathBuf,
 }
 
+enum PromptSelectionMode {
+    Completion,
+    Submit,
+}
+
 enum PromptSelectionAction {
     Insert {
         text: String,
@@ -205,8 +207,8 @@ pub(crate) struct ChatComposer {
     quit_shortcut_key: KeyBinding,
     esc_backtrack_hint: bool,
     use_shift_enter_hint: bool,
-    dismissed_at_popup_token: Option<String>,
-    current_at_query: Option<String>,
+    dismissed_file_popup_token: Option<String>,
+    current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
     large_paste_counters: HashMap<usize, usize>,
     has_focus: bool,
@@ -228,8 +230,6 @@ pub(crate) struct ChatComposer {
     context_window_used_tokens: Option<i64>,
     skills: Option<Vec<SkillMetadata>>,
     dismissed_skill_popup_token: Option<String>,
-    subagents: Option<Vec<SubAgentCandidate>>,
-    subagents_refresh_in_flight: bool,
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
     collaboration_modes_enabled: bool,
@@ -246,8 +246,8 @@ struct FooterFlash {
 enum ActivePopup {
     None,
     Command(CommandPopup),
+    File(FileSearchPopup),
     Skill(SkillPopup),
-    At(AtPopup),
 }
 
 const FOOTER_SPACING_HEIGHT: u16 = 0;
@@ -272,8 +272,8 @@ impl ChatComposer {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             esc_backtrack_hint: false,
             use_shift_enter_hint,
-            dismissed_at_popup_token: None,
-            current_at_query: None,
+            dismissed_file_popup_token: None,
+            current_file_query: None,
             pending_pastes: Vec::new(),
             large_paste_counters: HashMap::new(),
             has_focus: has_input_focus,
@@ -292,8 +292,6 @@ impl ChatComposer {
             context_window_used_tokens: None,
             skills: None,
             dismissed_skill_popup_token: None,
-            subagents: None,
-            subagents_refresh_in_flight: false,
             steer_enabled: false,
             collaboration_modes_enabled: false,
             collaboration_mode_indicator: None,
@@ -305,14 +303,6 @@ impl ChatComposer {
 
     pub fn set_skill_mentions(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.skills = skills;
-    }
-
-    pub(crate) fn set_subagents(&mut self, subagents: Vec<SubAgentCandidate>) {
-        self.subagents_refresh_in_flight = false;
-        self.subagents = Some(subagents.clone());
-        if let ActivePopup::At(popup) = &mut self.active_popup {
-            popup.set_agents(subagents);
-        }
     }
 
     /// Enables or disables "Steer" behavior for submission keys.
@@ -347,7 +337,7 @@ impl ChatComposer {
             ActivePopup::Command(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
-            ActivePopup::At(popup) => Constraint::Max(popup.calculate_required_height(area.width)),
+            ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
             ActivePopup::Skill(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
@@ -732,8 +722,8 @@ impl ChatComposer {
             return;
         }
 
-        if let ActivePopup::At(popup) = &mut self.active_popup {
-            popup.set_file_matches(&query, matches);
+        if let ActivePopup::File(popup) = &mut self.active_popup {
+            popup.set_matches(&query, matches);
         }
     }
 
@@ -792,8 +782,8 @@ impl ChatComposer {
 
         let result = match &mut self.active_popup {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
+            ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
             ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
-            ActivePopup::At(_) => self.handle_key_event_with_at_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
 
@@ -898,6 +888,7 @@ impl ChatComposer {
                                         self.textarea.set_text_clearing_elements(&text);
                                         cursor_target = Some(target);
                                     }
+                                    PromptSelectionAction::Submit { .. } => {}
                                 }
                             }
                         }
@@ -985,43 +976,6 @@ impl ChatComposer {
                                         return (InputResult::None, true);
                                     }
                                 }
-
-                                if has_numeric {
-                                    if let Some(expanded) =
-                                        expand_if_numeric_with_positional_args(prompt, first_line)
-                                    {
-                                        self.textarea.set_text("");
-                                        return (InputResult::Submitted(expanded), true);
-                                    }
-                                    let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
-                                    self.textarea.set_text(&text);
-                                    self.textarea.set_cursor(text.len());
-                                    return (InputResult::None, true);
-                                }
-
-                                let command = format!("/{PROMPTS_CMD_PREFIX}:{}", prompt.name);
-                                let expanded_prompt =
-                                    match expand_custom_prompt(&command, &self.custom_prompts) {
-                                        Ok(expanded) => expanded,
-                                        Err(err) => {
-                                            self.app_event_tx.send(AppEvent::InsertHistoryCell(
-                                                Box::new(history_cell::new_error_event(
-                                                    err.user_message(),
-                                                )),
-                                            ));
-                                            return (InputResult::None, true);
-                                        }
-                                    };
-                                let Some(expanded) = expanded_prompt else {
-                                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                                        history_cell::new_error_event(format!(
-                                            "Could not expand selected prompt {command}."
-                                        )),
-                                    )));
-                                    return (InputResult::None, true);
-                                };
-                                self.textarea.set_text("");
-                                return (InputResult::Submitted(expanded), true);
                             }
                             return (InputResult::None, true);
                         }
@@ -1131,7 +1085,8 @@ impl ChatComposer {
         (InputResult::None, true)
     }
 
-    fn handle_key_event_with_at_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+    /// Handle key events when file search popup is visible.
+    fn handle_key_event_with_file_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
@@ -1144,8 +1099,7 @@ impl ChatComposer {
         } else {
             self.footer_mode = reset_mode_after_activity(self.footer_mode);
         }
-
-        let ActivePopup::At(popup) = &mut self.active_popup else {
+        let ActivePopup::File(popup) = &mut self.active_popup else {
             unreachable!();
         };
 
@@ -1176,8 +1130,9 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
+                // Hide popup without modifying text, remember token to avoid immediate reopen.
                 if let Some(tok) = Self::current_at_token(&self.textarea) {
-                    self.dismissed_at_popup_token = Some(tok);
+                    self.dismissed_file_popup_token = Some(tok);
                 }
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
@@ -1190,67 +1145,60 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                let Some(sel) = popup.selected() else {
+                let Some(sel) = popup.selected_match() else {
                     self.active_popup = ActivePopup::None;
                     return (InputResult::None, true);
                 };
 
-                if sel.disabled {
-                    return (InputResult::None, true);
-                }
+                let sel_path = sel.to_string();
+                // If selected path looks like an image (png/jpeg), attach as image instead of inserting text.
+                let is_image = Self::is_image_path(&sel_path);
+                if is_image {
+                    // Determine dimensions; if that fails fall back to normal path insertion.
+                    let path_buf = PathBuf::from(&sel_path);
+                    match image::image_dimensions(&path_buf) {
+                        Ok((width, height)) => {
+                            tracing::debug!("selected image dimensions={}x{}", width, height);
+                            // Remove the current @token (mirror logic from insert_selected_path without inserting text)
+                            // using the flat text and byte-offset cursor API.
+                            let cursor_offset = self.textarea.cursor();
+                            let text = self.textarea.text();
+                            // Clamp to a valid char boundary to avoid panics when slicing.
+                            let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+                            let before_cursor = &text[..safe_cursor];
+                            let after_cursor = &text[safe_cursor..];
 
-                match sel.kind {
-                    AtPopupSelectionKind::Subagent => {
-                        self.insert_selected_subagent(&sel.value);
-                    }
-                    AtPopupSelectionKind::File => {
-                        let sel_path = sel.value;
-                        let is_image = Self::is_image_path(&sel_path);
-                        if is_image {
-                            let path_buf = PathBuf::from(&sel_path);
-                            match image::image_dimensions(&path_buf) {
-                                Ok((width, height)) => {
-                                    tracing::debug!(
-                                        "selected image dimensions={}x{}",
-                                        width,
-                                        height
-                                    );
-                                    let cursor_offset = self.textarea.cursor();
-                                    let text = self.textarea.text();
-                                    let safe_cursor =
-                                        Self::clamp_to_char_boundary(text, cursor_offset);
-                                    let before_cursor = &text[..safe_cursor];
-                                    let after_cursor = &text[safe_cursor..];
+                            // Determine token boundaries in the full text.
+                            let start_idx = before_cursor
+                                .char_indices()
+                                .rfind(|(_, c)| c.is_whitespace())
+                                .map(|(idx, c)| idx + c.len_utf8())
+                                .unwrap_or(0);
+                            let end_rel_idx = after_cursor
+                                .char_indices()
+                                .find(|(_, c)| c.is_whitespace())
+                                .map(|(idx, _)| idx)
+                                .unwrap_or(after_cursor.len());
+                            let end_idx = safe_cursor + end_rel_idx;
 
-                                    let start_idx = before_cursor
-                                        .char_indices()
-                                        .rfind(|(_, c)| c.is_whitespace())
-                                        .map(|(idx, c)| idx + c.len_utf8())
-                                        .unwrap_or(0);
-                                    let end_rel_idx = after_cursor
-                                        .char_indices()
-                                        .find(|(_, c)| c.is_whitespace())
-                                        .map(|(idx, _)| idx)
-                                        .unwrap_or(after_cursor.len());
-                                    let end_idx = safe_cursor + end_rel_idx;
+                            self.textarea.replace_range(start_idx..end_idx, "");
+                            self.textarea.set_cursor(start_idx);
 
-                                    self.textarea.replace_range(start_idx..end_idx, "");
-                                    self.textarea.set_cursor(start_idx);
-
-                                    self.attach_image(path_buf);
-                                    self.textarea.insert_str(" ");
-                                }
-                                Err(err) => {
-                                    tracing::trace!("image dimensions lookup failed: {err}");
-                                    self.insert_selected_path(&sel_path);
-                                }
-                            }
-                        } else {
+                            self.attach_image(path_buf);
+                            // Add a trailing space to keep typing fluid.
+                            self.textarea.insert_str(" ");
+                        }
+                        Err(err) => {
+                            tracing::trace!("image dimensions lookup failed: {err}");
+                            // Fallback to plain path insertion if metadata read fails.
                             self.insert_selected_path(&sel_path);
                         }
                     }
+                } else {
+                    // Non-image: inserting file path.
+                    self.insert_selected_path(&sel_path);
                 }
-
+                // No selection: treat Enter as closing the popup/session.
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
             }
@@ -1642,41 +1590,6 @@ impl ChatComposer {
 
         // Skill insertion rebuilds plain text, so drop existing elements.
         self.textarea.set_text_clearing_elements(&new_text);
-        let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
-        self.textarea.set_cursor(new_cursor);
-    }
-
-    fn insert_selected_subagent(&mut self, agent_name: &str) {
-        let cursor_offset = self.textarea.cursor();
-        let text = self.textarea.text();
-        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
-
-        let before_cursor = &text[..safe_cursor];
-        let after_cursor = &text[safe_cursor..];
-
-        let start_idx = before_cursor
-            .char_indices()
-            .rfind(|(_, c)| c.is_whitespace())
-            .map(|(idx, c)| idx + c.len_utf8())
-            .unwrap_or(0);
-
-        let end_rel_idx = after_cursor
-            .char_indices()
-            .find(|(_, c)| c.is_whitespace())
-            .map(|(idx, _)| idx)
-            .unwrap_or(after_cursor.len());
-        let end_idx = safe_cursor + end_rel_idx;
-
-        let inserted = format!("@{agent_name}");
-
-        let mut new_text =
-            String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
-        new_text.push_str(&text[..start_idx]);
-        new_text.push_str(&inserted);
-        new_text.push(' ');
-        new_text.push_str(&text[end_idx..]);
-
-        self.textarea.set_text(&new_text);
         let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
         self.textarea.set_cursor(new_cursor);
     }
@@ -2291,7 +2204,7 @@ impl ChatComposer {
     }
 
     fn sync_popups(&mut self) {
-        let at_token = Self::current_at_token(&self.textarea);
+        let file_token = Self::current_at_token(&self.textarea);
         let browsing_history = self
             .history
             .should_handle_navigation(self.textarea.text(), self.textarea.cursor());
@@ -2303,11 +2216,11 @@ impl ChatComposer {
         }
         let skill_token = self.current_skill_token();
 
-        let allow_command_popup = at_token.is_none() && skill_token.is_none();
+        let allow_command_popup = file_token.is_none() && skill_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
         if matches!(self.active_popup, ActivePopup::Command(_)) {
-            self.dismissed_at_popup_token = None;
+            self.dismissed_file_popup_token = None;
             self.dismissed_skill_popup_token = None;
             return;
         }
@@ -2318,15 +2231,15 @@ impl ChatComposer {
         }
         self.dismissed_skill_popup_token = None;
 
-        if let Some(token) = at_token {
-            self.sync_at_popup(token);
+        if let Some(token) = file_token {
+            self.sync_file_search_popup(token);
             return;
         }
 
-        self.dismissed_at_popup_token = None;
+        self.dismissed_file_popup_token = None;
         if matches!(
             self.active_popup,
-            ActivePopup::At(_) | ActivePopup::Skill(_)
+            ActivePopup::File(_) | ActivePopup::Skill(_)
         ) {
             self.active_popup = ActivePopup::None;
         }
@@ -2404,7 +2317,7 @@ impl ChatComposer {
                 .is_some_and(|(name, rest)| self.looks_like_slash_prefix(name, rest));
 
         // If the cursor is currently positioned within an `@token`, prefer the
-        // `@` completion popup over the slash popup so users can insert a file path
+        // file-search popup over the slash popup so users can insert a file path
         // as an argument to the command (e.g., "/review @docs/...").
         if Self::current_at_token(&self.textarea).is_some() {
             if matches!(self.active_popup, ActivePopup::Command(_)) {
@@ -2453,55 +2366,40 @@ impl ChatComposer {
         }
     }
 
-    fn sync_at_popup(&mut self, query: String) {
-        if self.dismissed_at_popup_token.as_ref() == Some(&query) {
+    /// Synchronize `self.file_search_popup` with the current text in the textarea.
+    /// Note this is only called when self.active_popup is NOT Command.
+    fn sync_file_search_popup(&mut self, query: String) {
+        // If user dismissed popup for this exact query, don't reopen until text changes.
+        if self.dismissed_file_popup_token.as_ref() == Some(&query) {
             return;
         }
 
-        let should_refresh_subagents = query
-            .trim()
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
-        if should_refresh_subagents && self.subagents.is_none() && !self.subagents_refresh_in_flight
-        {
-            self.subagents_refresh_in_flight = true;
-            self.app_event_tx.send(AppEvent::RefreshSubagents);
-        }
-        let agents = self.subagents.clone().unwrap_or_default();
-
-        let should_search_files = !query.is_empty();
-        if should_search_files {
+        if !query.is_empty() {
             self.app_event_tx
                 .send(AppEvent::StartFileSearch(query.clone()));
         }
 
         match &mut self.active_popup {
-            ActivePopup::At(popup) => {
-                popup.set_query(&query);
-                popup.set_agents(agents);
-                popup.set_waiting_agents(
-                    should_refresh_subagents
-                        && self.subagents.is_none()
-                        && self.subagents_refresh_in_flight,
-                );
-                popup.set_waiting_file(should_search_files);
+            ActivePopup::File(popup) => {
+                if query.is_empty() {
+                    popup.set_empty_prompt();
+                } else {
+                    popup.set_query(&query);
+                }
             }
             _ => {
-                let mut popup = AtPopup::new();
-                popup.set_query(&query);
-                popup.set_agents(agents);
-                popup.set_waiting_agents(
-                    should_refresh_subagents
-                        && self.subagents.is_none()
-                        && self.subagents_refresh_in_flight,
-                );
-                popup.set_waiting_file(should_search_files);
-                self.active_popup = ActivePopup::At(popup);
+                let mut popup = FileSearchPopup::new();
+                if query.is_empty() {
+                    popup.set_empty_prompt();
+                } else {
+                    popup.set_query(&query);
+                }
+                self.active_popup = ActivePopup::File(popup);
             }
         }
 
-        self.current_at_query = Some(query);
-        self.dismissed_at_popup_token = None;
+        self.current_file_query = Some(query);
+        self.dismissed_file_popup_token = None;
     }
 
     fn sync_skill_popup(&mut self, query: String) {
@@ -2593,8 +2491,8 @@ impl Renderable for ChatComposer {
             + match &self.active_popup {
                 ActivePopup::None => footer_total_height,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
+                ActivePopup::File(c) => c.calculate_required_height(),
                 ActivePopup::Skill(c) => c.calculate_required_height(width),
-                ActivePopup::At(c) => c.calculate_required_height(width),
             }
     }
 
@@ -2604,10 +2502,10 @@ impl Renderable for ChatComposer {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
-            ActivePopup::Skill(popup) => {
+            ActivePopup::File(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
-            ActivePopup::At(popup) => {
+            ActivePopup::Skill(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
@@ -2734,16 +2632,6 @@ fn prompt_selection_action(
             }
         }
     }
-    if has_numeric {
-        let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
-        return PromptSelectionAction::Insert { text, cursor: None };
-    }
-    if expand_if_numeric_with_positional_args(prompt, first_line).is_some() {
-        let text = format!("/{PROMPTS_CMD_PREFIX}:{} ", prompt.name);
-        return PromptSelectionAction::Insert { text, cursor: None };
-    }
-    let text = format!("/{PROMPTS_CMD_PREFIX}:{}", prompt.name);
-    PromptSelectionAction::Insert { text, cursor: None }
 }
 
 #[cfg(test)]
@@ -2752,7 +2640,6 @@ mod tests {
     use image::ImageBuffer;
     use image::Rgba;
     use pretty_assertions::assert_eq;
-    use std::fs;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -2766,22 +2653,6 @@ mod tests {
     use crate::bottom_pane::prompt_args::extract_positional_args_for_prompt_line;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
-
-    fn prompt_from_tempfile(name: &str, content: &str) -> (CustomPrompt, tempfile::TempDir) {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join(format!("{name}.md"));
-        fs::write(&path, content).unwrap();
-        (
-            CustomPrompt {
-                name: name.to_string(),
-                path,
-                content: content.to_string(),
-                description: None,
-                argument_hint: None,
-            },
-            dir,
-        )
-    }
 
     #[test]
     fn footer_hint_row_is_separated_from_composer() {
@@ -5029,8 +4900,13 @@ mod tests {
         composer.set_steer_enabled(true);
 
         // Inject prompts as if received via event.
-        let (prompt, _dir) = prompt_from_tempfile("my-prompt", prompt_text);
-        composer.set_custom_prompts(vec![prompt]);
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
 
         type_chars_humanlike(
             &mut composer,
@@ -5063,8 +4939,13 @@ mod tests {
         );
         composer.set_steer_enabled(true);
 
-        let (prompt, _dir) = prompt_from_tempfile("my-prompt", "Review $USER changes on $BRANCH");
-        composer.set_custom_prompts(vec![prompt]);
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $USER changes on $BRANCH".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
 
         composer
             .textarea
@@ -5094,8 +4975,13 @@ mod tests {
         );
         composer.set_steer_enabled(true);
 
-        let (prompt, _dir) = prompt_from_tempfile("my-prompt", "Pair $USER with $BRANCH");
-        composer.set_custom_prompts(vec![prompt]);
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Pair $USER with $BRANCH".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
 
         composer
             .textarea
@@ -5292,9 +5178,13 @@ mod tests {
         composer.set_steer_enabled(true);
 
         // Create a custom prompt with positional args (no named args like $USER)
-        let (prompt, _dir) =
-            prompt_from_tempfile("code-review", "Please review the following code:\n\n$1");
-        composer.set_custom_prompts(vec![prompt]);
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "code-review".to_string(),
+            path: "/tmp/code-review.md".to_string().into(),
+            content: "Please review the following code:\n\n$1".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
 
         // Type the slash command
         let command_text = "/prompts:code-review ";
@@ -5480,8 +5370,13 @@ mod tests {
             false,
         );
 
-        let (prompt, _dir) = prompt_from_tempfile("my-prompt", "Review $USER changes");
-        composer.set_custom_prompts(vec![prompt]);
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $USER changes".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
 
         composer
             .textarea
@@ -5525,8 +5420,13 @@ mod tests {
             false,
         );
 
-        let (prompt, _dir) = prompt_from_tempfile("my-prompt", "Review $USER changes on $BRANCH");
-        composer.set_custom_prompts(vec![prompt]);
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $USER changes on $BRANCH".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
 
         // Provide only one of the required args
         composer
@@ -5576,8 +5476,13 @@ mod tests {
         );
         composer.set_steer_enabled(true);
 
-        let (prompt, _dir) = prompt_from_tempfile("my-prompt", prompt_text);
-        composer.set_custom_prompts(vec![prompt]);
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
 
         // Type the slash command with two args and hit Enter to submit.
         type_chars_humanlike(
@@ -5807,8 +5712,13 @@ mod tests {
         );
         composer.set_steer_enabled(true);
 
-        let (prompt, _dir) = prompt_from_tempfile("elegant", "Echo: $ARGUMENTS");
-        composer.set_custom_prompts(vec![prompt]);
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "elegant".to_string(),
+            path: "/tmp/elegant.md".to_string().into(),
+            content: "Echo: $ARGUMENTS".to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
 
         // Type positional args; should submit with numeric expansion, no errors.
         composer
@@ -5838,8 +5748,13 @@ mod tests {
             false,
         );
 
-        let (prompt, _dir) = prompt_from_tempfile("p", prompt_text);
-        composer.set_custom_prompts(vec![prompt]);
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "p".to_string(),
+            path: "/tmp/p.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
 
         type_chars_humanlike(
             &mut composer,
@@ -5870,8 +5785,13 @@ mod tests {
         );
         composer.set_steer_enabled(true);
 
-        let (prompt, _dir) = prompt_from_tempfile("price", prompt_text);
-        composer.set_custom_prompts(vec![prompt]);
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "price".to_string(),
+            path: "/tmp/price.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
 
         type_chars_humanlike(
             &mut composer,
@@ -5904,8 +5824,13 @@ mod tests {
         );
         composer.set_steer_enabled(true);
 
-        let (prompt, _dir) = prompt_from_tempfile("repeat", prompt_text);
-        composer.set_custom_prompts(vec![prompt]);
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "repeat".to_string(),
+            path: "/tmp/repeat.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
 
         type_chars_humanlike(
             &mut composer,

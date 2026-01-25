@@ -12,8 +12,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
@@ -106,7 +104,6 @@ async fn start_review_conversation(
         session.clone_session(),
         ctx.clone(),
         cancellation_token,
-        SessionSource::SubAgent(SubAgentSource::Review),
         None,
     )
     .await)

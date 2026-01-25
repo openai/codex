@@ -13,8 +13,12 @@ use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
 use codex_app_server_protocol::ApplyPatchApprovalParams;
 use codex_app_server_protocol::ApplyPatchApprovalResponse;
+use codex_app_server_protocol::AskUserQuestion;
+use codex_app_server_protocol::AskUserQuestionOption;
 use codex_app_server_protocol::AskUserQuestionParams;
+use codex_app_server_protocol::AskUserQuestionRequest;
 use codex_app_server_protocol::AskUserQuestionResponse as V2AskUserQuestionResponse;
+use codex_app_server_protocol::AskUserQuestionType;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
 use codex_app_server_protocol::CollabAgentState as V2CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
@@ -56,10 +60,6 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
-use codex_app_server_protocol::ToolRequestUserInputOption;
-use codex_app_server_protocol::ToolRequestUserInputParams;
-use codex_app_server_protocol::ToolRequestUserInputQuestion;
-use codex_app_server_protocol::ToolRequestUserInputResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnDiffUpdatedNotification;
@@ -87,7 +87,6 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
-use codex_protocol::ask_user_question::AskUserQuestionResponse as CoreAskUserQuestionResponse;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
@@ -275,32 +274,59 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let questions = request
                     .questions
                     .into_iter()
-                    .map(|question| ToolRequestUserInputQuestion {
-                        id: question.id,
-                        header: question.header,
-                        question: question.question,
-                        options: question.options.map(|options| {
-                            options
-                                .into_iter()
-                                .map(|option| ToolRequestUserInputOption {
-                                    label: option.label,
-                                    description: option.description,
-                                })
-                                .collect()
-                        }),
+                    .map(|question| {
+                        let (question_type, options) = match question.options {
+                            Some(options) => (
+                                AskUserQuestionType::MultiSelect,
+                                Some(
+                                    options
+                                        .into_iter()
+                                        .map(|option| {
+                                            let value = option.label;
+                                            AskUserQuestionOption {
+                                                label: value.clone(),
+                                                value,
+                                                description: Some(option.description),
+                                                recommended: None,
+                                            }
+                                        })
+                                        .collect(),
+                                ),
+                            ),
+                            None => (AskUserQuestionType::Text, None),
+                        };
+
+                        AskUserQuestion {
+                            id: question.id,
+                            prompt: question.question,
+                            question_type,
+                            description: Some(question.header),
+                            placeholder: None,
+                            options,
+                            allow_other: None,
+                            required: None,
+                        }
                     })
                     .collect();
-                let params = ToolRequestUserInputParams {
+                let params = AskUserQuestionParams {
                     thread_id: conversation_id.to_string(),
                     turn_id: request.turn_id,
-                    item_id: request.call_id,
-                    questions,
+                    call_id: request.call_id,
+                    request: AskUserQuestionRequest {
+                        title: None,
+                        questions,
+                    },
                 };
                 let rx = outgoing
-                    .send_request(ServerRequestPayload::ToolRequestUserInput(params))
+                    .send_request(ServerRequestPayload::AskUserQuestion(params))
                     .await;
                 tokio::spawn(async move {
-                    on_request_user_input_response(event_turn_id, rx, conversation).await;
+                    on_request_user_input_response_via_ask_user_question(
+                        event_turn_id,
+                        rx,
+                        conversation,
+                    )
+                    .await;
                 });
             } else {
                 error!(
@@ -1410,7 +1436,7 @@ async fn on_exec_approval_response(
     }
 }
 
-async fn on_request_user_input_response(
+async fn on_request_user_input_response_via_ask_user_question(
     event_turn_id: String,
     receiver: oneshot::Receiver<JsonValue>,
     conversation: Arc<CodexThread>,
@@ -1437,25 +1463,46 @@ async fn on_request_user_input_response(
     };
 
     let response =
-        serde_json::from_value::<ToolRequestUserInputResponse>(value).unwrap_or_else(|err| {
-            error!("failed to deserialize ToolRequestUserInputResponse: {err}");
-            ToolRequestUserInputResponse {
+        serde_json::from_value::<V2AskUserQuestionResponse>(value).unwrap_or_else(|err| {
+            error!("failed to deserialize AskUserQuestionResponse: {err}");
+            V2AskUserQuestionResponse {
+                cancelled: true,
                 answers: HashMap::new(),
             }
         });
-    let response = CoreRequestUserInputResponse {
-        answers: response
+
+    let response = if response.cancelled {
+        CoreRequestUserInputResponse {
+            answers: HashMap::new(),
+        }
+    } else {
+        let answers = response
             .answers
             .into_iter()
-            .map(|(id, answer)| {
-                (
-                    id,
-                    CoreRequestUserInputAnswer {
-                        answers: answer.answers,
-                    },
-                )
+            .map(|(id, value)| {
+                let answers = match value {
+                    JsonValue::String(s) => vec![s],
+                    JsonValue::Array(values) => values
+                        .into_iter()
+                        .filter_map(|v| match v {
+                            JsonValue::String(s) => Some(s),
+                            other => {
+                                error!(
+                                    "AskUserQuestionResponse contains non-string array element for {id}: {other:?}"
+                                );
+                                None
+                            }
+                        })
+                        .collect(),
+                    other => {
+                        error!("AskUserQuestionResponse contains unexpected answer type for {id}: {other:?}");
+                        Vec::new()
+                    }
+                };
+                (id, CoreRequestUserInputAnswer { answers })
             })
-            .collect(),
+            .collect();
+        CoreRequestUserInputResponse { answers }
     };
 
     if let Err(err) = conversation

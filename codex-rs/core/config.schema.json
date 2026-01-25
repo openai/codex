@@ -204,12 +204,6 @@
             "unified_exec": {
               "type": "boolean"
             },
-            "view_image_tool": {
-              "type": "boolean"
-            },
-            "warnings": {
-              "type": "boolean"
-            },
             "web_search": {
               "type": "boolean"
             },
@@ -257,9 +251,6 @@
         },
         "sandbox_mode": {
           "$ref": "#/definitions/SandboxMode"
-        },
-        "tools_ask_user_question": {
-          "type": "boolean"
         },
         "tools_view_image": {
           "type": "boolean"
@@ -934,11 +925,6 @@
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
-        "ask_user_question": {
-          "description": "Enable the `ask_user_question` tool that lets the agent ask structured questions.",
-          "default": null,
-          "type": "boolean"
-        },
         "view_image": {
           "default": null,
           "description": "Enable the `view_image` tool that lets the agent attach local images.",

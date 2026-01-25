@@ -3,7 +3,6 @@ mod analytics;
 mod collaboration_mode_list;
 mod config_rpc;
 mod initialize;
-mod mcp_server_status;
 mod model_list;
 mod output_schema;
 mod rate_limits;

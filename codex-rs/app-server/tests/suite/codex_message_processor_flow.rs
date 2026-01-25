@@ -3,7 +3,6 @@ use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_shell_command_sse_response;
-use app_test_support::create_shell_command_sse_response_raw;
 use app_test_support::format_with_current_shell;
 use app_test_support::to_response;
 use codex_app_server_protocol::AddConversationListenerParams;
@@ -59,7 +58,7 @@ async fn test_codex_jsonrpc_conversation_flow() -> Result<()> {
     // Two turns are expected: initial session configure + one user message.
     let responses = vec![
         create_shell_command_sse_response(
-            vec!["echo".to_string(), "hi".to_string()],
+            vec!["ls".to_string()],
             Some(&working_directory),
             Some(5000),
             "call1234",
@@ -176,15 +175,23 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
 
     // Mock server will request a python shell call for the first and second turn, then finish.
     let responses = vec![
-        create_shell_command_sse_response_raw(
-            "echo 42 > out.txt".to_string(),
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
             Some(&working_directory),
             Some(5000),
             "call1",
         )?,
         create_final_assistant_message_sse_response("done 1")?,
-        create_shell_command_sse_response_raw(
-            "echo 42 > out.txt".to_string(),
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
             Some(&working_directory),
             Some(5000),
             "call2",
@@ -261,11 +268,11 @@ async fn test_send_user_turn_changes_approval_policy_behavior() -> Result<()> {
         ExecCommandApprovalParams {
             conversation_id,
             call_id: "call1".to_string(),
-            command: format_with_current_shell("echo 42 > out.txt"),
+            command: format_with_current_shell("python3 -c 'print(42)'"),
             cwd: working_directory.clone(),
             reason: None,
             parsed_cmd: vec![ParsedCommand::Unknown {
-                cmd: "echo 42 > out.txt".to_string()
+                cmd: "python3 -c 'print(42)'".to_string()
             }],
         },
         params

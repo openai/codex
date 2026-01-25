@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::protocol::common::AskUserQuestionRequest;
 use crate::protocol::common::AuthMode;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment as CoreExecPolicyAmendment;
@@ -81,11 +82,6 @@ macro_rules! v2_enum_from_core {
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
-    RateLimited {
-        #[serde(rename = "httpStatusCode")]
-        #[ts(rename = "httpStatusCode")]
-        http_status_code: Option<u16>,
-    },
     HttpConnectionFailed {
         #[serde(rename = "httpStatusCode")]
         #[ts(rename = "httpStatusCode")]
@@ -122,9 +118,6 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
         match value {
             CoreCodexErrorInfo::ContextWindowExceeded => CodexErrorInfo::ContextWindowExceeded,
             CoreCodexErrorInfo::UsageLimitExceeded => CodexErrorInfo::UsageLimitExceeded,
-            CoreCodexErrorInfo::RateLimited { http_status_code } => {
-                CodexErrorInfo::RateLimited { http_status_code }
-            }
             CoreCodexErrorInfo::HttpConnectionFailed { http_status_code } => {
                 CodexErrorInfo::HttpConnectionFailed { http_status_code }
             }
@@ -328,7 +321,6 @@ pub struct ToolsV2 {
     #[serde(alias = "web_search_request")]
     pub web_search: Option<bool>,
     pub view_image: Option<bool>,
-    pub ask_user_question: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -800,57 +792,6 @@ pub enum Account {
     Chatgpt { email: String, plan_type: PlanType },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum AccountKind {
-    Chatgpt,
-    ApiKey,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct AccountSummary {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub kind: Option<AccountKind>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub email: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ListAccountsResponse {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub active_account: Option<String>,
-    pub accounts: Vec<AccountSummary>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SwitchAccountParams {
-    pub name: String,
-    #[serde(default)]
-    pub create_if_missing: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SwitchAccountResponse {
-    pub active_account: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub migrated_legacy: Option<bool>,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type")]
 #[ts(tag = "type")]
@@ -914,6 +855,61 @@ pub struct CancelLoginAccountResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct LogoutAccountResponse {}
+
+/// CODEX-MINE - A short summary of a configured account.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum AccountKind {
+    Chatgpt,
+    ApiKey,
+}
+
+/// CODEX-MINE - A short account summary for account switching UIs.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSummary {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kind: Option<AccountKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub email: Option<String>,
+}
+
+/// CODEX-MINE - List available accounts (multi-account support).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ListAccountsResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub active_account: Option<String>,
+    pub accounts: Vec<AccountSummary>,
+}
+
+/// CODEX-MINE - Switch the active account (multi-account support).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SwitchAccountParams {
+    pub name: String,
+    pub create_if_missing: bool,
+}
+
+/// CODEX-MINE - Switch account response (multi-account support).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SwitchAccountResponse {
+    pub active_account: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub migrated_legacy: Option<bool>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1002,12 +998,6 @@ pub struct ListMcpServerStatusParams {
     pub cursor: Option<String>,
     /// Optional page size; defaults to a server-defined value.
     pub limit: Option<u32>,
-    /// Optional working directory used to resolve configuration layers (e.g. `./.codex/config.toml`).
-    ///
-    /// When omitted, the app-server process's current working directory is used.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub cwd: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1261,18 +1251,6 @@ pub struct ThreadRollbackResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ThreadCompactParams {
-    pub thread_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadCompactResponse {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
 pub struct ThreadListParams {
     /// Opaque pagination cursor returned by a previous call.
     pub cursor: Option<String>,
@@ -1364,26 +1342,6 @@ pub struct SkillsListResponse {
     pub data: Vec<SkillsListEntry>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct AgentsListParams {
-    /// When empty, defaults to the current session working directory.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub cwds: Vec<PathBuf>,
-
-    /// When true, bypass any server-side caches and re-scan agents from disk.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub force_reload: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct AgentsListResponse {
-    pub data: Vec<AgentsListEntry>,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -1435,36 +1393,6 @@ pub struct SkillInterface {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SkillErrorInfo {
-    pub path: PathBuf,
-    pub message: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-#[ts(export_to = "v2/")]
-pub enum AgentScope {
-    User,
-    Repo,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct AgentMetadata {
-    pub name: String,
-    pub description: String,
-    #[ts(optional)]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
-    pub path: PathBuf,
-    pub scope: AgentScope,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct AgentErrorInfo {
     pub path: PathBuf,
     pub message: String,
 }
@@ -1539,6 +1467,7 @@ impl From<CoreSkillErrorInfo> for SkillErrorInfo {
         }
     }
 }
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -2455,6 +2384,24 @@ pub struct FileChangeRequestApprovalParams {
 #[ts(export_to = "v2/")]
 pub struct FileChangeRequestApprovalResponse {
     pub decision: FileChangeApprovalDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AskUserQuestionParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub call_id: String,
+    pub request: AskUserQuestionRequest,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub struct AskUserQuestionResponse {
+    pub cancelled: bool,
+    #[serde(default)]
+    pub answers: HashMap<String, JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

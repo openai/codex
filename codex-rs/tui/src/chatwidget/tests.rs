@@ -823,7 +823,6 @@ async fn make_chatwidget_manual(
         agent_turn_running: false,
         mcp_startup_status: None,
         interrupts: InterruptManager::new(),
-        ask_user_question: None,
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         current_status_header: String::from("Working"),

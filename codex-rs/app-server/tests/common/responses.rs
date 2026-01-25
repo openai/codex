@@ -22,24 +22,6 @@ pub fn create_shell_command_sse_response(
     ]))
 }
 
-pub fn create_shell_command_sse_response_raw(
-    command: String,
-    workdir: Option<&Path>,
-    timeout_ms: Option<u64>,
-    call_id: &str,
-) -> anyhow::Result<String> {
-    let tool_call_arguments = serde_json::to_string(&json!({
-        "command": command,
-        "workdir": workdir.map(|w| w.to_string_lossy()),
-        "timeout_ms": timeout_ms
-    }))?;
-    Ok(responses::sse(vec![
-        responses::ev_response_created("resp-1"),
-        responses::ev_function_call(call_id, "shell_command", &tool_call_arguments),
-        responses::ev_completed("resp-1"),
-    ]))
-}
-
 pub fn create_final_assistant_message_sse_response(message: &str) -> anyhow::Result<String> {
     Ok(responses::sse(vec![
         responses::ev_response_created("resp-1"),

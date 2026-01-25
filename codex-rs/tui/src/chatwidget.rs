@@ -47,7 +47,6 @@ use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::AskUserQuestionRequestEvent;
 use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::CreditsSnapshot;
 use codex_core::protocol::DeprecationNoticeEvent;
@@ -75,8 +74,6 @@ use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
 use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::SubAgentRunBeginEvent;
-use codex_core::protocol::SubAgentRunEndEvent;
 use codex_core::protocol::TerminalInteractionEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TokenUsageInfo;
@@ -117,7 +114,6 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
-use serde_json::Value as JsonValue;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
@@ -131,11 +127,9 @@ use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
-use crate::bottom_pane::AskUserQuestionTextView;
 use crate::bottom_pane::BetaFeatureItem;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
-use crate::bottom_pane::CancelableSelectionView;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::CollaborationModeIndicator;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
@@ -162,7 +156,6 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
-use crate::history_cell::SubAgentRunCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
@@ -174,7 +167,6 @@ use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
-use crate::subagent_candidates::SubAgentCandidate;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod interrupts;
@@ -458,7 +450,6 @@ pub(crate) struct ChatWidget {
     mcp_startup_status: Option<HashMap<String, McpStartupStatus>>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
-    ask_user_question: Option<AskUserQuestionFlow>,
     // Accumulates the current reasoning block text to extract a header
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
@@ -514,26 +505,6 @@ pub(crate) struct ChatWidget {
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
-}
-
-struct AskUserQuestionFlow {
-    call_id: String,
-    request: codex_protocol::ask_user_question::AskUserQuestionRequest,
-    index: usize,
-    answers: HashMap<String, JsonValue>,
-}
-
-impl AskUserQuestionFlow {
-    fn title(&self) -> String {
-        self.request
-            .title
-            .clone()
-            .unwrap_or_else(|| "Additional questions".to_string())
-    }
-
-    fn current_question(&self) -> Option<&AskUserQuestion> {
-        self.request.questions.get(self.index)
-    }
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -1034,16 +1005,6 @@ impl ChatWidget {
             self.rate_limit_snapshot = None;
         }
     }
-
-    pub(crate) fn on_active_account_changed(&mut self) {
-        self.stop_rate_limit_poller();
-        self.rate_limit_snapshot = None;
-        self.plan_type = None;
-        self.rate_limit_warnings = RateLimitWarningState::default();
-        self.rate_limit_switch_prompt = RateLimitSwitchPromptState::default();
-        self.prefetch_rate_limits();
-        self.request_redraw();
-    }
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
     ///
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
@@ -1443,24 +1404,6 @@ impl ChatWidget {
     fn on_mcp_tool_call_end(&mut self, ev: McpToolCallEndEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_mcp_end(ev), |s| s.handle_mcp_end_now(ev2));
-    }
-
-    fn on_subagent_run_begin(&mut self, ev: SubAgentRunBeginEvent) {
-        self.flush_answer_stream_with_separator();
-        let ev2 = ev.clone();
-        self.defer_or_handle(
-            |q| q.push_subagent_begin(ev),
-            |s| s.handle_subagent_run_begin_now(ev2),
-        );
-    }
-
-    fn on_subagent_run_end(&mut self, ev: SubAgentRunEndEvent) {
-        self.flush_answer_stream_with_separator();
-        let ev2 = ev.clone();
-        self.defer_or_handle(
-            |q| q.push_subagent_end(ev),
-            |s| s.handle_subagent_run_end_now(ev2),
-        );
     }
 
     fn on_web_search_begin(&mut self, _ev: WebSearchBeginEvent) {
@@ -1881,42 +1824,6 @@ impl ChatWidget {
         self.had_work_activity = true;
     }
 
-    pub(crate) fn handle_subagent_run_begin_now(&mut self, ev: SubAgentRunBeginEvent) {
-        self.flush_answer_stream_with_separator();
-        self.flush_active_cell();
-        self.active_cell = Some(Box::new(history_cell::new_active_subagent_run(
-            ev.call_id,
-            ev.name,
-            ev.description,
-            ev.color,
-            ev.prompt,
-            self.config.animations,
-        )));
-        self.request_redraw();
-    }
-
-    pub(crate) fn handle_subagent_run_end_now(&mut self, ev: SubAgentRunEndEvent) {
-        self.flush_answer_stream_with_separator();
-
-        let SubAgentRunEndEvent {
-            call_id,
-            duration_ms,
-            success,
-        } = ev;
-
-        if let Some(cell) = self
-            .active_cell
-            .as_mut()
-            .and_then(|cell| cell.as_any_mut().downcast_mut::<SubAgentRunCell>())
-            && cell.call_id() == call_id
-        {
-            cell.complete(duration_ms, success);
-        }
-
-        self.flush_active_cell();
-        self.request_redraw();
-    }
-
     pub(crate) fn new(common: ChatWidgetInit, thread_manager: Arc<ThreadManager>) -> Self {
         let ChatWidgetInit {
             config,
@@ -2001,7 +1908,6 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
-            ask_user_question: None,
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
@@ -2121,7 +2027,6 @@ impl ChatWidget {
             agent_turn_running: false,
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
-            ask_user_question: None,
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
@@ -2482,9 +2387,6 @@ impl ChatWidget {
             SlashCommand::Status => {
                 self.add_status_output();
             }
-            SlashCommand::Account => {
-                self.open_account_picker();
-            }
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
@@ -2569,43 +2471,6 @@ impl ChatWidget {
                         },
                         user_facing_hint: None,
                     },
-                });
-            }
-            SlashCommand::Account => {
-                if trimmed.is_empty() {
-                    self.open_account_picker();
-                    return;
-                }
-
-                let mut parts = trimmed.split_whitespace();
-                let first = parts.next().unwrap_or_default();
-                let second = parts.next();
-                if parts.next().is_some() {
-                    self.add_error_message(
-                        "Usage: /account [<name>] | /account create <name>".to_string(),
-                    );
-                    return;
-                }
-
-                let (create_if_missing, name) = if first == "create" {
-                    let Some(name) = second else {
-                        self.add_error_message("Usage: /account create <name>".to_string());
-                        return;
-                    };
-                    (true, name)
-                } else {
-                    if second.is_some() {
-                        self.add_error_message(
-                            "Usage: /account [<name>] | /account create <name>".to_string(),
-                        );
-                        return;
-                    }
-                    (false, first)
-                };
-
-                self.app_event_tx.send(AppEvent::SwitchAccount {
-                    name: name.to_string(),
-                    create_if_missing,
                 });
             }
             _ => self.dispatch_command(cmd),
@@ -2913,8 +2778,6 @@ impl ChatWidget {
             }
             EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
             EventMsg::ContextCompacted(_) => self.on_agent_message("Context compacted".to_owned()),
-            EventMsg::SubAgentRunBegin(ev) => self.on_subagent_run_begin(ev),
-            EventMsg::SubAgentRunEnd(ev) => self.on_subagent_run_end(ev),
             EventMsg::CollabAgentSpawnBegin(_) => {}
             EventMsg::CollabAgentSpawnEnd(ev) => self.on_collab_event(collab::spawn_end(ev)),
             EventMsg::CollabAgentInteractionBegin(_) => {}
@@ -3050,8 +2913,6 @@ impl ChatWidget {
                 exec.mark_failed();
             } else if let Some(tool) = cell.as_any_mut().downcast_mut::<McpToolCallCell>() {
                 tool.mark_failed();
-            } else if let Some(sub) = cell.as_any_mut().downcast_mut::<SubAgentRunCell>() {
-                sub.mark_failed();
             }
             self.add_boxed_history(cell);
         }
@@ -3118,87 +2979,6 @@ impl ChatWidget {
             .map(|process| process.command_display.clone())
             .collect();
         self.add_to_history(history_cell::new_unified_exec_processes_output(processes));
-    }
-
-    fn open_account_picker(&mut self) {
-        let snapshot = match codex_core::accounts::list_accounts(&self.config.codex_home) {
-            Ok(snapshot) => snapshot,
-            Err(err) => {
-                self.add_error_message(format!("Failed to list accounts: {err}"));
-                return;
-            }
-        };
-
-        let active = snapshot.active_account.as_deref();
-        let mut items: Vec<crate::bottom_pane::SelectionItem> = Vec::new();
-        for account in snapshot.accounts {
-            let name = account.name.clone();
-            let description = match (account.meta.kind, account.meta.email.as_deref()) {
-                (Some(codex_core::accounts::AccountKind::Chatgpt), Some(email)) => {
-                    Some(format!("chatgpt ({email})"))
-                }
-                (Some(codex_core::accounts::AccountKind::Chatgpt), None) => {
-                    Some("chatgpt".to_string())
-                }
-                (Some(codex_core::accounts::AccountKind::ApiKey), _) => Some("apiKey".to_string()),
-                (None, _) => None,
-            };
-            let is_current = active == Some(name.as_str());
-            items.push(crate::bottom_pane::SelectionItem {
-                name: name.clone(),
-                display_shortcut: None,
-                description,
-                selected_description: None,
-                is_current,
-                is_default: false,
-                actions: vec![Box::new(move |tx| {
-                    tx.send(crate::app_event::AppEvent::SwitchAccount {
-                        name: name.clone(),
-                        create_if_missing: false,
-                    });
-                })],
-                dismiss_on_select: true,
-                search_value: None,
-                disabled_reason: None,
-            });
-        }
-
-        if items.is_empty() {
-            items.push(crate::bottom_pane::SelectionItem {
-                name: "(no accounts)".to_string(),
-                display_shortcut: None,
-                description: Some("Create one with: /account create <name>".to_string()),
-                selected_description: None,
-                is_current: false,
-                is_default: false,
-                actions: vec![],
-                dismiss_on_select: true,
-                search_value: None,
-                disabled_reason: Some("No accounts configured".to_string()),
-            });
-        }
-
-        let params = crate::bottom_pane::SelectionViewParams {
-            title: Some("Accounts".to_string()),
-            subtitle: Some("Switch the active account".to_string()),
-            footer_note: None,
-            footer_hint: Some(
-                vec![
-                    "Create: ".dim(),
-                    "/account create <name>".cyan(),
-                    "  Logout: ".dim(),
-                    "/logout".cyan(),
-                ]
-                .into(),
-            ),
-            items,
-            is_searchable: true,
-            search_placeholder: Some("Search accounts...".to_string()),
-            header: Box::new(()),
-            initial_selected_idx: None,
-        };
-        self.bottom_pane.show_selection_view(params);
-        self.request_redraw();
     }
 
     fn stop_rate_limit_poller(&mut self) {
@@ -4763,10 +4543,6 @@ impl ChatWidget {
     /// Forward file-search results to the bottom pane.
     pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.bottom_pane.on_file_search_result(query, matches);
-    }
-
-    pub(crate) fn set_subagents(&mut self, subagents: Vec<SubAgentCandidate>) {
-        self.bottom_pane.set_subagents(subagents);
     }
 
     /// Handles a Ctrl+C press at the chat-widget layer.

@@ -101,7 +101,6 @@ impl ToolHandler for ShellHandler {
             call_id,
             tool_name,
             payload,
-            ..
         } = invocation;
 
         match payload {
@@ -171,7 +170,6 @@ impl ToolHandler for ShellCommandHandler {
             call_id,
             tool_name,
             payload,
-            ..
         } = invocation;
 
         let ToolPayload::Function { arguments } = payload else {

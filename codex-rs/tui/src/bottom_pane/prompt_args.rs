@@ -7,8 +7,6 @@ use regex_lite::Regex;
 use shlex::Shlex;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::fs;
-use std::path::PathBuf;
 
 lazy_static! {
     static ref PROMPT_ARG_REGEX: Regex =
@@ -40,11 +38,6 @@ pub enum PromptExpansionError {
         command: String,
         error: PromptArgsError,
     },
-    ReadFailed {
-        command: String,
-        path: PathBuf,
-        error: String,
-    },
     MissingArgs {
         command: String,
         missing: Vec<String>,
@@ -55,11 +48,6 @@ impl PromptExpansionError {
     pub fn user_message(&self) -> String {
         match self {
             PromptExpansionError::Args { command, error } => error.describe(command),
-            PromptExpansionError::ReadFailed {
-                command,
-                path,
-                error,
-            } => format!("Could not load prompt file for {command}: {path:?} ({error}).",),
             PromptExpansionError::MissingArgs { command, missing } => {
                 let list = missing.join(", ");
                 format!(
@@ -68,50 +56,6 @@ impl PromptExpansionError {
             }
         }
     }
-}
-
-fn strip_frontmatter(content: &str) -> &str {
-    let mut segments = content.split_inclusive('\n');
-    let Some(first_segment) = segments.next() else {
-        return "";
-    };
-    let first_line = first_segment.trim_end_matches(['\r', '\n']);
-    if first_line.trim() != "---" {
-        return content;
-    }
-
-    let mut frontmatter_closed = false;
-    let mut consumed = first_segment.len();
-    for segment in segments {
-        let line = segment.trim_end_matches(['\r', '\n']);
-        if line.trim() == "---" {
-            frontmatter_closed = true;
-            consumed += segment.len();
-            break;
-        }
-        consumed += segment.len();
-    }
-
-    if !frontmatter_closed {
-        return content;
-    }
-    if consumed >= content.len() {
-        return "";
-    }
-    &content[consumed..]
-}
-
-fn load_prompt_content(
-    prompt: &CustomPrompt,
-    command: &str,
-) -> Result<String, PromptExpansionError> {
-    let raw =
-        fs::read_to_string(&prompt.path).map_err(|error| PromptExpansionError::ReadFailed {
-            command: command.to_string(),
-            path: prompt.path.clone(),
-            error: error.to_string(),
-        })?;
-    Ok(strip_frontmatter(&raw).to_string())
 }
 
 /// Parse a first-line slash command of the form `/name <rest>`.
@@ -262,12 +206,6 @@ pub fn expand_custom_prompt(
         Some(prompt) => prompt,
         None => return Ok(None),
     };
-
-    // Reload prompt content at execution time so edits to `.codex/prompts/*.md` (or `$CODEX_HOME/prompts`)
-    // take effect without restarting the session.
-    let command = format!("/{name}");
-    let content = load_prompt_content(prompt, &command)?;
-
     // If there are named placeholders, expect key=value inputs.
     let required = prompt_argument_names(&prompt.content);
     let local_elements: Vec<TextElement> = text_elements
@@ -294,7 +232,10 @@ pub fn expand_custom_prompt(
             .filter(|k| !inputs.contains_key(k))
             .collect();
         if !missing.is_empty() {
-            return Err(PromptExpansionError::MissingArgs { command, missing });
+            return Err(PromptExpansionError::MissingArgs {
+                command: format!("/{name}"),
+                missing,
+            });
         }
         let (text, elements) = expand_named_placeholders_with_elements(&prompt.content, &inputs);
         return Ok(Some(PromptExpansion {
@@ -625,8 +566,13 @@ mod tests {
 
     #[test]
     fn expand_arguments_basic() {
-        let (prompt, _dir) = prompt_with_content("my-prompt", "Review $USER changes on $BRANCH");
-        let prompts = vec![prompt];
+        let prompts = vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Review $USER changes on $BRANCH".to_string(),
+            description: None,
+            argument_hint: None,
+        }];
 
         let out = expand_custom_prompt("/prompts:my-prompt USER=Alice BRANCH=main", &[], &prompts)
             .unwrap();
@@ -641,8 +587,13 @@ mod tests {
 
     #[test]
     fn quoted_values_ok() {
-        let (prompt, _dir) = prompt_with_content("my-prompt", "Pair $USER with $BRANCH");
-        let prompts = vec![prompt];
+        let prompts = vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "Pair $USER with $BRANCH".to_string(),
+            description: None,
+            argument_hint: None,
+        }];
 
         let out = expand_custom_prompt(
             "/prompts:my-prompt USER=\"Alice Smith\" BRANCH=dev-main",
@@ -704,8 +655,13 @@ mod tests {
 
     #[test]
     fn escaped_placeholder_remains_literal() {
-        let (prompt, _dir) = prompt_with_content("my-prompt", "literal $$USER");
-        let prompts = vec![prompt];
+        let prompts = vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: "literal $$USER".to_string(),
+            description: None,
+            argument_hint: None,
+        }];
 
         let out = expand_custom_prompt("/prompts:my-prompt", &[], &prompts).unwrap();
         assert_eq!(
@@ -894,33 +850,5 @@ mod tests {
                 text_elements: Vec::new(),
             })
         );
-    }
-
-    #[test]
-    fn editing_prompt_file_is_reflected_without_restart() {
-        let (prompt, dir) = prompt_with_content("my-prompt", "Hello $USER");
-        let path = prompt.path.clone();
-        let prompts = vec![prompt];
-
-        let out = expand_custom_prompt("/prompts:my-prompt USER=Alice", &prompts).unwrap();
-        assert_eq!(out, Some("Hello Alice".to_string()));
-
-        fs::write(&path, "Goodbye $USER").unwrap();
-        let _dir = dir;
-
-        let out = expand_custom_prompt("/prompts:my-prompt USER=Alice", &prompts).unwrap();
-        assert_eq!(out, Some("Goodbye Alice".to_string()));
-    }
-
-    #[test]
-    fn frontmatter_is_ignored_when_reloading() {
-        let (prompt, _dir) = prompt_with_content(
-            "my-prompt",
-            "---\ndescription: example\n---\n\nSay Hello.\n",
-        );
-        let prompts = vec![prompt];
-
-        let out = expand_custom_prompt("/prompts:my-prompt", &prompts).unwrap();
-        assert_eq!(out, Some("\nSay Hello.\n".to_string()));
     }
 }

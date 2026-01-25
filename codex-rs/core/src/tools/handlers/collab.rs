@@ -626,7 +626,6 @@ mod tests {
             session,
             turn,
             tracker: Arc::new(Mutex::new(TurnDiffTracker::default())),
-            cancellation_token: tokio_util::sync::CancellationToken::new(),
             call_id: "call-1".to_string(),
             tool_name: tool_name.to_string(),
             payload,

@@ -9,7 +9,6 @@ use serde::Deserialize;
 
 use crate::auth::CodexAuth;
 use crate::error::CodexErr;
-use crate::error::RateLimitedError;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use crate::error::UsageLimitReachedError;
@@ -67,11 +66,9 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                         }
                     }
 
-                    CodexErr::RateLimited(RateLimitedError {
+                    CodexErr::RetryLimit(RetryLimitReachedError {
                         status,
                         request_id: extract_request_id(headers.as_ref()),
-                        retry_after: extract_retry_after(headers.as_ref()),
-                        rate_limits: headers.as_ref().and_then(parse_rate_limit),
                     })
                 } else {
                     CodexErr::UnexpectedStatus(UnexpectedResponseError {
@@ -105,16 +102,6 @@ fn extract_request_id(headers: Option<&HeaderMap>) -> Option<String> {
                     .map(str::to_string)
             })
     })
-}
-
-fn extract_retry_after(headers: Option<&HeaderMap>) -> Option<std::time::Duration> {
-    let value = headers?
-        .get("retry-after")
-        .and_then(|v| v.to_str().ok())?
-        .trim();
-
-    let seconds: u64 = value.parse().ok()?;
-    Some(std::time::Duration::from_secs(seconds))
 }
 
 pub(crate) fn auth_provider_from_auth(

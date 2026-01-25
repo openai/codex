@@ -190,12 +190,6 @@ pub struct Config {
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
-    /// Optional event-driven hooks. When configured, Codex will spawn the hook
-    /// commands in response to certain internal events (e.g. tool begin/end).
-    /// Hooks are **observe-only**: failures are surfaced via logs but do not
-    /// interrupt the agent's execution.
-    pub hooks: Vec<HookConfig>,
-
     /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
@@ -263,9 +257,6 @@ pub struct Config {
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
-
-    /// Ordered list of discovery sources for subagents (`.codex/agents`, `CODEX_HOME/agents`).
-    pub agents_sources: Vec<AgentsSource>,
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
@@ -777,10 +768,6 @@ pub struct ConfigToml {
     #[serde(default)]
     pub notify: Option<Vec<String>>,
 
-    /// Optional event-driven hooks.
-    #[serde(default)]
-    pub hooks: Vec<HookConfig>,
-
     /// System instructions.
     pub instructions: Option<String>,
 
@@ -1002,10 +989,6 @@ pub struct ToolsToml {
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
-
-    /// Enable the `ask_user_question` tool that lets the agent ask structured questions.
-    #[serde(default)]
-    pub ask_user_question: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -1022,22 +1005,8 @@ impl From<ToolsToml> for Tools {
         Self {
             web_search: tools_toml.web_search,
             view_image: tools_toml.view_image,
-            ask_user_question: tools_toml.ask_user_question,
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentsSource {
-    Repo,
-    User,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct AgentsToml {
-    pub sources: Option<Vec<AgentsSource>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -1497,12 +1466,6 @@ impl Config {
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
-        let agents_sources = cfg
-            .agents
-            .as_ref()
-            .and_then(|agents| agents.sources.clone())
-            .unwrap_or_else(|| vec![AgentsSource::Repo, AgentsSource::User]);
-
         let config = Self {
             model,
             review_model,
@@ -1517,7 +1480,6 @@ impl Config {
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
             notify: cfg.notify,
-            hooks: cfg.hooks,
             user_instructions,
             base_instructions,
             model_personality: config_profile.model_personality.or(cfg.model_personality),
@@ -1549,7 +1511,6 @@ impl Config {
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
             codex_home,
-            agents_sources,
             config_layer_stack,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
@@ -1767,28 +1728,11 @@ mod tests {
     use super::*;
     use core_test_support::test_absolute_path;
     use pretty_assertions::assert_eq;
-    use serial_test::serial;
 
     use std::collections::BTreeMap;
     use std::collections::HashMap;
     use std::time::Duration;
     use tempfile::TempDir;
-
-    struct CwdGuard {
-        previous: std::path::PathBuf,
-    }
-
-    impl Drop for CwdGuard {
-        fn drop(&mut self) {
-            std::env::set_current_dir(&self.previous).expect("restore cwd");
-        }
-    }
-
-    fn set_test_cwd(path: &std::path::Path) -> CwdGuard {
-        let previous = std::env::current_dir().expect("read cwd");
-        std::env::set_current_dir(path).expect("set cwd");
-        CwdGuard { previous }
-    }
 
     fn stdio_mcp(command: &str) -> McpServerConfig {
         McpServerConfig {
@@ -2617,10 +2561,8 @@ profile = "project"
     }
 
     #[tokio::test]
-    #[serial]
     async fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
-        let _cwd = set_test_cwd(codex_home.path());
 
         let servers = load_global_mcp_servers(codex_home.path()).await?;
         assert!(servers.is_empty());
@@ -2629,10 +2571,8 @@ profile = "project"
     }
 
     #[tokio::test]
-    #[serial]
     async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
-        let _cwd = set_test_cwd(codex_home.path());
 
         let mut servers = BTreeMap::new();
         servers.insert(
@@ -3721,7 +3661,6 @@ model_verbosity = "high"
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
-                hooks: Vec::new(),
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -3733,7 +3672,6 @@ model_verbosity = "high"
                 tool_output_token_limit: None,
                 agent_max_threads: None,
                 codex_home: fixture.codex_home(),
-                agents_sources: vec![AgentsSource::Repo, AgentsSource::User],
                 config_layer_stack: Default::default(),
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
@@ -3804,7 +3742,6 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
-            hooks: Vec::new(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -3816,7 +3753,6 @@ model_verbosity = "high"
             tool_output_token_limit: None,
             agent_max_threads: None,
             codex_home: fixture.codex_home(),
-            agents_sources: vec![AgentsSource::Repo, AgentsSource::User],
             config_layer_stack: Default::default(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3902,7 +3838,6 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
-            hooks: Vec::new(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -3914,7 +3849,6 @@ model_verbosity = "high"
             tool_output_token_limit: None,
             agent_max_threads: None,
             codex_home: fixture.codex_home(),
-            agents_sources: vec![AgentsSource::Repo, AgentsSource::User],
             config_layer_stack: Default::default(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3986,7 +3920,6 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
-            hooks: Vec::new(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -3998,7 +3931,6 @@ model_verbosity = "high"
             tool_output_token_limit: None,
             agent_max_threads: None,
             codex_home: fixture.codex_home(),
-            agents_sources: vec![AgentsSource::Repo, AgentsSource::User],
             config_layer_stack: Default::default(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -4375,92 +4307,6 @@ mcp_oauth_callback_port = 5678
         }
 
         Ok(())
-    }
-
-    #[test]
-    fn test_hooks_toml_parsing() {
-        let cfg = toml::from_str::<ConfigToml>(
-            r#"
-[[hooks]]
-id = "afplay-on-turn-end"
-when = "turn.end"
-command = ["bash", "-lc", "afplay /System/Library/Sounds/Ping.aiff"]
-
-[[hooks]]
-when = ["tool.exec.begin", "tool.exec.end"]
-matcher = "shell|unified_exec"
-command = ["python3", "scripts/hook.py"]
-timeout_ms = 3000
-include_output = true
-"#,
-        )
-        .expect("TOML deserialization should succeed");
-
-        assert_eq!(cfg.hooks.len(), 2);
-        assert_eq!(cfg.hooks[0].id.as_deref(), Some("afplay-on-turn-end"));
-        assert_eq!(cfg.hooks[0].when, vec!["turn.end".to_string()]);
-        assert_eq!(cfg.hooks[0].include_output, false);
-
-        assert_eq!(
-            cfg.hooks[1].when,
-            vec!["tool.exec.begin".to_string(), "tool.exec.end".to_string()]
-        );
-        assert_eq!(cfg.hooks[1].matcher.as_deref(), Some("shell|unified_exec"));
-        assert_eq!(cfg.hooks[1].timeout_ms, Some(3000));
-        assert!(cfg.hooks[1].include_output);
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-pub struct HookConfig {
-    #[serde(default)]
-    pub id: Option<String>,
-
-    #[serde(deserialize_with = "deserialize_string_or_vec")]
-    pub when: Vec<String>,
-
-    #[serde(default)]
-    pub matcher: Option<String>,
-
-    pub command: Vec<String>,
-
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-
-    /// If true, this hook can block execution for certain pre-execution events
-    /// (currently: `tool.call.begin`) when it exits with code 2.
-    #[serde(default)]
-    pub blocking: bool,
-
-    #[serde(default)]
-    pub include_output: bool,
-
-    #[serde(default)]
-    pub include_patch_contents: bool,
-
-    #[serde(default)]
-    pub include_mcp_arguments: bool,
-
-    /// If true, include the tool invocation payload (tool-specific input) in
-    /// the JSON payload written to stdin.
-    #[serde(default)]
-    pub include_tool_arguments: bool,
-}
-
-fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum StringOrVec {
-        One(String),
-        Many(Vec<String>),
-    }
-
-    match StringOrVec::deserialize(deserializer)? {
-        StringOrVec::One(one) => Ok(vec![one]),
-        StringOrVec::Many(many) => Ok(many),
     }
 }
 

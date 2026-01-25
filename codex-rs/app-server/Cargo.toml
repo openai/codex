@@ -21,7 +21,6 @@ codex-arg0 = { workspace = true }
 codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
 codex-backend-client = { workspace = true }
-codex-git = { workspace = true }
 codex-file-search = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }

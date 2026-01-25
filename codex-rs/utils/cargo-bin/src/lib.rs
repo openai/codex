@@ -353,9 +353,6 @@ fn cargo_bin_via_workspace_build(name: &str) -> Result<PathBuf, CargoBinError> {
         name.to_string()
     };
     let candidate_path = meta.target_directory.join("debug").join(&exe_name);
-    if candidate_path.exists() {
-        return Ok(candidate_path);
-    }
 
     let output = Command::new("cargo")
         .arg("build")
