@@ -1633,76 +1633,18 @@ impl App {
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
-            AppEvent::CodexOp(op) => match op {
-                // Catch potential approvals coming from an external thread and treat them
-                // directly. This support both command and patch approval. In such case
-                // the approval get transferred to the corresponding thread and the external
-                // approval map (`external_approval_routes`) is updated.
-                Op::ExecApproval { id, decision } => {
-                    if let Some((thread_id, original_id)) =
-                        self.external_approval_routes.remove(&id)
-                    {
-                        // Approval of a sub-agent.
-                        self.forward_external_op(
-                            thread_id,
-                            Op::ExecApproval {
-                                id: original_id,
-                                decision,
-                            },
-                        )
-                        .await;
-                        self.finish_external_approval();
-                    } else {
-                        // This is an approval but not external.
-                        self.chat_widget
-                            .submit_op(Op::ExecApproval { id, decision });
-                    }
-                }
-                Op::PatchApproval { id, decision } => {
-                    if let Some((thread_id, original_id)) =
-                        self.external_approval_routes.remove(&id)
-                    {
-                        // Approval of a sub-agent.
-                        self.forward_external_op(
-                            thread_id,
-                            Op::PatchApproval {
-                                id: original_id,
-                                decision,
-                            },
-                        )
-                        .await;
-                        self.finish_external_approval();
-                    } else {
-                        // This is an approval but not external.
-                        self.chat_widget
-                            .submit_op(Op::PatchApproval { id, decision });
-                    }
-                }
-                Op::UserInputAnswer { id, response } => {
+            AppEvent::CodexOp(op) => {
+                if let Op::UserInputAnswer { id, response } = op {
                     if crate::chatwidget::ChatWidget::is_share_request_id(&id) {
                         self.chat_widget.handle_share_response(response);
                         return Ok(AppRunControl::Continue);
                     }
-                    if let Some((thread_id, original_id)) =
-                        self.external_approval_routes.remove(&id)
-                    {
-                        self.forward_external_op(
-                            thread_id,
-                            Op::UserInputAnswer {
-                                id: original_id,
-                                response,
-                            },
-                        )
-                        .await;
-                        self.finish_external_approval();
-                    } else {
-                        self.chat_widget
-                            .submit_op(Op::UserInputAnswer { id, response });
-                    }
+                    self.chat_widget
+                        .submit_op(Op::UserInputAnswer { id, response });
+                } else {
+                    self.chat_widget.submit_op(op);
                 }
-                // Standard path where this is not an external approval response.
-                _ => self.chat_widget.submit_op(op),
-            },
+            }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();
