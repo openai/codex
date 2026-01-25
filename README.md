@@ -638,6 +638,7 @@ This repository is licensed under the [Apache-2.0 License](LICENSE).
 
 - Import `postman.collection.json` in Postman to get pre-built requests for every path in the SmallWallets API.
 - To generate a Postman collection from the OpenAPI file, run `pnpm run export:postman` and import `postman/SmallWallets.postman_collection.json`.
+- Review [docs/private-repo-safety.md](docs/private-repo-safety.md) before committing or sharing collections.
 - Set the environment variables before sending requests:
   - `baseUrl` (defaults to `https://sandbox.smallwallets.dev/v1`)
   - `token` (replace with a valid JWT)

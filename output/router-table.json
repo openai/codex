@@ -1,0 +1,13 @@
+{
+  "routes": {
+    "PW": {
+      "room": "GS-01",
+      "axis": "Axis Primer — Day 1"
+    },
+    "ADM": {
+      "room": "GS-00",
+      "axis": "Unsorted Intake",
+      "notes": "Private intake gate"
+    }
+  }
+}
