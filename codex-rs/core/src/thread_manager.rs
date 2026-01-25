@@ -4,6 +4,7 @@ use crate::CodexAuth;
 #[cfg(any(test, feature = "test-support"))]
 use crate::ModelProviderInfo;
 use crate::agent::AgentControl;
+use crate::agent::status::is_final;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
@@ -21,16 +22,22 @@ use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::user_input::UserInput;
+use serde::Serialize;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use tempfile::TempDir;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 use tracing::warn;
@@ -63,10 +70,20 @@ pub(crate) struct ThreadManagerState {
     models_manager: Arc<ModelsManager>,
     skills_manager: Arc<SkillsManager>,
     session_source: SessionSource,
+    sub_agent_completions: Mutex<HashMap<ThreadId, HashMap<ThreadId, SubAgentCompletionPayload>>>,
+    sub_agent_flush_watchers: Mutex<HashSet<ThreadId>>,
     #[cfg(any(test, feature = "test-support"))]
     #[allow(dead_code)]
     // Captures submitted ops for testing purpose.
     ops_log: Arc<std::sync::Mutex<Vec<(ThreadId, Op)>>>,
+}
+
+#[derive(Serialize)]
+struct SubAgentCompletionPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completed: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    errored: Option<String>,
 }
 
 impl ThreadManager {
@@ -87,6 +104,8 @@ impl ThreadManager {
                 skills_manager: Arc::new(SkillsManager::new(codex_home)),
                 auth_manager,
                 session_source,
+                sub_agent_completions: Mutex::new(HashMap::new()),
+                sub_agent_flush_watchers: Mutex::new(HashSet::new()),
                 #[cfg(any(test, feature = "test-support"))]
                 ops_log: Arc::new(std::sync::Mutex::new(Vec::new())),
             }),
@@ -128,6 +147,8 @@ impl ThreadManager {
                 skills_manager: Arc::new(SkillsManager::new(codex_home)),
                 auth_manager,
                 session_source: SessionSource::Exec,
+                sub_agent_completions: Mutex::new(HashMap::new()),
+                sub_agent_flush_watchers: Mutex::new(HashSet::new()),
                 #[cfg(any(test, feature = "test-support"))]
                 ops_log: Arc::new(std::sync::Mutex::new(Vec::new())),
             }),
@@ -303,6 +324,145 @@ impl ThreadManagerState {
         thread.submit(op).await
     }
 
+    pub(crate) fn spawn_sub_agent_completion_watcher(
+        self: Arc<Self>,
+        parent_thread_id: ThreadId,
+        child_thread_id: ThreadId,
+    ) {
+        tokio::spawn(async move {
+            self.watch_sub_agent_completion(parent_thread_id, child_thread_id)
+                .await;
+        });
+    }
+
+    async fn watch_sub_agent_completion(
+        self: Arc<Self>,
+        parent_thread_id: ThreadId,
+        child_thread_id: ThreadId,
+    ) {
+        let Ok(thread) = self.get_thread(child_thread_id).await else {
+            return;
+        };
+        let mut status_rx = thread.subscribe_status();
+        let mut status = status_rx.borrow().clone();
+        if !is_final(&status) {
+            while status_rx.changed().await.is_ok() {
+                status = status_rx.borrow().clone();
+                if is_final(&status) {
+                    break;
+                }
+            }
+        }
+
+        let payload = match status {
+            AgentStatus::Completed(message) => SubAgentCompletionPayload {
+                completed: Some(message.unwrap_or_default()),
+                errored: None,
+            },
+            AgentStatus::Errored(message) => SubAgentCompletionPayload {
+                completed: None,
+                errored: Some(message),
+            },
+            AgentStatus::Shutdown => SubAgentCompletionPayload {
+                completed: None,
+                errored: Some("shutdown".to_string()),
+            },
+            AgentStatus::NotFound => SubAgentCompletionPayload {
+                completed: None,
+                errored: Some("not_found".to_string()),
+            },
+            _ => return,
+        };
+        self.enqueue_sub_agent_completion(parent_thread_id, child_thread_id, payload)
+            .await;
+    }
+
+    async fn enqueue_sub_agent_completion(
+        self: &Arc<Self>,
+        parent_thread_id: ThreadId,
+        child_thread_id: ThreadId,
+        payload: SubAgentCompletionPayload,
+    ) {
+        {
+            let mut pending = self.sub_agent_completions.lock().await;
+            pending
+                .entry(parent_thread_id)
+                .or_default()
+                .insert(child_thread_id, payload);
+        }
+        self.maybe_flush_parent(parent_thread_id).await;
+    }
+
+    async fn maybe_flush_parent(self: &Arc<Self>, parent_thread_id: ThreadId) {
+        let status = match self.get_thread(parent_thread_id).await {
+            Ok(thread) => thread.agent_status().await,
+            Err(_) => {
+                let mut pending = self.sub_agent_completions.lock().await;
+                pending.remove(&parent_thread_id);
+                return;
+            }
+        };
+
+        if !matches!(status, AgentStatus::Running) {
+            self.flush_parent(parent_thread_id).await;
+            return;
+        }
+
+        let mut watchers = self.sub_agent_flush_watchers.lock().await;
+        if !watchers.insert(parent_thread_id) {
+            return;
+        }
+        let state = Arc::clone(self);
+        tokio::spawn(async move {
+            state.wait_for_parent_idle_and_flush(parent_thread_id).await;
+        });
+    }
+
+    async fn wait_for_parent_idle_and_flush(self: Arc<Self>, parent_thread_id: ThreadId) {
+        let Ok(thread) = self.get_thread(parent_thread_id).await else {
+            let mut watchers = self.sub_agent_flush_watchers.lock().await;
+            watchers.remove(&parent_thread_id);
+            return;
+        };
+        let mut status_rx = thread.subscribe_status();
+        loop {
+            let status = status_rx.borrow().clone();
+            if !matches!(status, AgentStatus::Running) {
+                break;
+            }
+            if status_rx.changed().await.is_err() {
+                break;
+            }
+        }
+        self.flush_parent(parent_thread_id).await;
+
+        let mut watchers = self.sub_agent_flush_watchers.lock().await;
+        watchers.remove(&parent_thread_id);
+    }
+
+    async fn flush_parent(self: &Arc<Self>, parent_thread_id: ThreadId) {
+        let completions = {
+            let mut pending = self.sub_agent_completions.lock().await;
+            pending.remove(&parent_thread_id).unwrap_or_default()
+        };
+        if completions.is_empty() {
+            return;
+        }
+
+        let payload = build_sub_agent_completion_payload(completions);
+        let op = Op::UserInput {
+            items: vec![UserInput::Text {
+                text: payload,
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        };
+
+        if let Err(err) = self.send_op(parent_thread_id, op).await {
+            warn!("failed to deliver sub-agent completions to parent {parent_thread_id}: {err}");
+        }
+    }
+
     /// Remove a thread from the manager by ID, returning it when present.
     pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
         self.threads.write().await.remove(thread_id)
@@ -408,6 +568,19 @@ impl ThreadManagerState {
     pub(crate) fn notify_thread_created(&self, thread_id: ThreadId) {
         let _ = self.thread_created_tx.send(thread_id);
     }
+}
+
+fn build_sub_agent_completion_payload(
+    completions: HashMap<ThreadId, SubAgentCompletionPayload>,
+) -> String {
+    let mut payload = BTreeMap::new();
+    for (thread_id, completion) in completions {
+        payload.insert(thread_id.to_string(), completion);
+    }
+    let json = serde_json::to_string(&payload).unwrap_or_else(|err| {
+        format!("{{\"error\":\"failed to serialize sub-agent completions: {err}\"}}")
+    });
+    format!("The following agents have completed:\n{json}")
 }
 
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message

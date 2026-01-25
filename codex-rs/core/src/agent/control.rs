@@ -5,6 +5,8 @@ use crate::error::Result as CodexResult;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -43,6 +45,12 @@ impl AgentControl {
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
         let reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let parent_thread_id = match session_source.as_ref() {
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn { parent_thread_id })) => {
+                Some(*parent_thread_id)
+            }
+            _ => None,
+        };
 
         // The same `AgentControl` is sent to spawn the thread.
         let new_thread = match session_source {
@@ -61,6 +69,11 @@ impl AgentControl {
         state.notify_thread_created(new_thread.thread_id);
 
         self.send_prompt(new_thread.thread_id, prompt).await?;
+
+        if let Some(parent_thread_id) = parent_thread_id {
+            let state = Arc::clone(&state);
+            state.spawn_sub_agent_completion_watcher(parent_thread_id, new_thread.thread_id);
+        }
 
         Ok(new_thread.thread_id)
     }
