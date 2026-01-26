@@ -28,12 +28,41 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 You can exclude specific tools from the model tool list via `[tools].disallowed_tools`. MCP tool
 descriptions are deferred by default and exposed via `MCPSearch`; disable it if you want full MCP
-descriptions included in the tool list:
+descriptions included in the tool list. `MCPSearch` can also return tool schemas (when requested),
+route a query to the best matching MCP tool (falling back to the latest user message when `query`
+is omitted), and execute MCP tools via a `call` payload, which keeps MCP tools out of the tool list
+while still allowing discovery and invocation. When
+`MCPSearch` is enabled, direct MCP tool calls (such as
+`@mcp__server__tool`) are routed through `MCPSearch` automatically. Use `route: true` when you
+want heuristic selection; use `call` for explicit invocation:
+
+```json
+{"query":"exa","include_schema":true}
+{"query":"search docs","route":true}
+{"route":true}
+{"call":{"qualified_name":"mcp__exa__web_search_exa","arguments":{"query":"foo"}}}
+{"resources":{"action":"list","server":"figma"}}
+{"resources":{"action":"read","server":"figma","uri":"memo://id"}}
+```
 
 ```toml
 [tools]
 disallowed_tools = ["MCPSearch"]
 ```
+
+## Agents
+
+Configure subagent spawning behavior:
+
+```toml
+[agents]
+max_threads = 4
+subagent_model = "gpt-5.2-codex"
+subagent_reasoning_effort = "high"
+```
+
+When `subagent_model` is unset, spawned subagents inherit the current session model.
+When `subagent_reasoning_effort` is unset, spawned subagents inherit the current session reasoning effort.
 
 ## JSON Schema
 

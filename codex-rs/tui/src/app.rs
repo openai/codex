@@ -95,9 +95,12 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
+use toml_edit::Array as TomlArray;
+use toml_edit::Item as TomlItem;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 1024;
+const MCP_SEARCH_TOOL_NAME: &str = "MCPSearch";
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -1512,6 +1515,99 @@ impl App {
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
             }
+            AppEvent::UpdateSubagentModel { model } => {
+                let model = model.and_then(|value| {
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                });
+                self.config.subagent_model = model.clone();
+                self.chat_widget.set_subagent_model(model.clone());
+
+                self.chat_widget.submit_op(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: None,
+                    subagent_model: Some(model.clone()),
+                    subagent_effort: None,
+                    effort: None,
+                    summary: None,
+                    max_output_tokens: None,
+                    history_depth: None,
+                    collaboration_mode: None,
+                    personality: None,
+                    disallowed_tools: None,
+                });
+
+                let edit = if let Some(value) = model {
+                    ConfigEdit::SetPath {
+                        segments: vec!["agents".to_string(), "subagent_model".to_string()],
+                        value: TomlItem::Value(value.into()),
+                    }
+                } else {
+                    ConfigEdit::ClearPath {
+                        segments: vec!["agents".to_string(), "subagent_model".to_string()],
+                    }
+                };
+                let builder = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(self.active_profile.as_deref())
+                    .with_edits(vec![edit]);
+                if let Err(err) = builder.apply().await {
+                    tracing::error!(error = %err, "failed to persist subagent model");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to update subagent model: {err}"));
+                }
+            }
+            AppEvent::UpdateSubagentReasoningEffort(effort) => {
+                self.config.subagent_reasoning_effort = effort;
+                self.chat_widget.set_subagent_reasoning_effort(effort);
+
+                self.chat_widget.submit_op(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: None,
+                    subagent_model: None,
+                    subagent_effort: Some(effort),
+                    effort: None,
+                    summary: None,
+                    max_output_tokens: None,
+                    history_depth: None,
+                    collaboration_mode: None,
+                    personality: None,
+                    disallowed_tools: None,
+                });
+
+                let edit = if let Some(value) = effort {
+                    ConfigEdit::SetPath {
+                        segments: vec![
+                            "agents".to_string(),
+                            "subagent_reasoning_effort".to_string(),
+                        ],
+                        value: TomlItem::Value(value.to_string().into()),
+                    }
+                } else {
+                    ConfigEdit::ClearPath {
+                        segments: vec![
+                            "agents".to_string(),
+                            "subagent_reasoning_effort".to_string(),
+                        ],
+                    }
+                };
+                let builder = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(self.active_profile.as_deref())
+                    .with_edits(vec![edit]);
+                if let Err(err) = builder.apply().await {
+                    tracing::error!(error = %err, "failed to persist subagent reasoning effort");
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to update subagent reasoning effort: {err}"
+                    ));
+                }
+            }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
             }
@@ -1521,8 +1617,18 @@ impl App {
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
+            AppEvent::OpenSubagentReasoningPopup {
+                preset,
+                model_override,
+            } => {
+                self.chat_widget
+                    .open_subagent_reasoning_popup(preset, model_override);
+            }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
+            }
+            AppEvent::OpenSubagentModelPrompt { initial } => {
+                self.chat_widget.open_subagent_model_prompt(initial);
             }
             AppEvent::OpenFullAccessConfirmation {
                 preset,
@@ -1695,10 +1801,15 @@ impl App {
                                         approval_policy: Some(preset.approval),
                                         sandbox_policy: Some(preset.sandbox.clone()),
                                         model: None,
+                                        subagent_model: None,
+                                        subagent_effort: None,
                                         effort: None,
                                         summary: None,
+                                        max_output_tokens: None,
+                                        history_depth: None,
                                         collaboration_mode: None,
                                         personality: None,
+                                        disallowed_tools: None,
                                     },
                                 ));
                                 self.app_event_tx
@@ -1908,6 +2019,60 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Failed to update experimental features: {err}"
                     ));
+                }
+            }
+            AppEvent::UpdateMcpSearchEnabled { enabled } => {
+                let mut disallowed_tools = self.config.disallowed_tools.clone();
+                if enabled {
+                    disallowed_tools.retain(|tool| tool != MCP_SEARCH_TOOL_NAME);
+                } else if !disallowed_tools
+                    .iter()
+                    .any(|tool| tool == MCP_SEARCH_TOOL_NAME)
+                {
+                    disallowed_tools.push(MCP_SEARCH_TOOL_NAME.to_string());
+                }
+                self.config.disallowed_tools = disallowed_tools.clone();
+                self.chat_widget.set_mcp_search_enabled(enabled);
+
+                self.chat_widget.submit_op(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: None,
+                    subagent_model: None,
+                    subagent_effort: None,
+                    effort: None,
+                    summary: None,
+                    max_output_tokens: None,
+                    history_depth: None,
+                    collaboration_mode: None,
+                    personality: None,
+                    disallowed_tools: Some(disallowed_tools.clone()),
+                });
+
+                let mut edits = Vec::new();
+                if disallowed_tools.is_empty() {
+                    edits.push(ConfigEdit::ClearPath {
+                        segments: vec!["tools".to_string(), "disallowed_tools".to_string()],
+                    });
+                } else {
+                    let mut array = TomlArray::new();
+                    for tool in &disallowed_tools {
+                        array.push(tool.clone());
+                    }
+                    edits.push(ConfigEdit::SetPath {
+                        segments: vec!["tools".to_string(), "disallowed_tools".to_string()],
+                        value: TomlItem::Value(array.into()),
+                    });
+                }
+
+                let builder = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(self.active_profile.as_deref())
+                    .with_edits(edits);
+                if let Err(err) = builder.apply().await {
+                    tracing::error!(error = %err, "failed to persist MCPSearch setting");
+                    self.chat_widget
+                        .add_error_message(format!("Failed to update MCPSearch setting: {err}"));
                 }
             }
             AppEvent::SkipNextWorldWritableScan => {

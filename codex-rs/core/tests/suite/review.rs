@@ -819,10 +819,15 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
             approval_policy: None,
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
+            disallowed_tools: None,
         })
         .await
         .unwrap();

@@ -2637,8 +2637,15 @@ impl ChatWidget {
                 approval_policy: None,
                 sandbox_policy: None,
                 model: Some(switch_model.clone()),
+                subagent_model: None,
+                subagent_effort: None,
                 effort: Some(Some(default_effort)),
                 summary: None,
+                max_output_tokens: None,
+                history_depth: None,
+                collaboration_mode: None,
+                personality: None,
+                disallowed_tools: None,
             }));
             tx.send(AppEvent::UpdateModel(switch_model.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
@@ -2869,8 +2876,15 @@ impl ChatWidget {
                 approval_policy: None,
                 sandbox_policy: None,
                 model: Some(model_for_action.clone()),
+                subagent_model: None,
+                subagent_effort: None,
                 effort: Some(effort_for_action),
                 summary: None,
+                max_output_tokens: None,
+                history_depth: None,
+                collaboration_mode: None,
+                personality: None,
+                disallowed_tools: None,
             }));
             tx.send(AppEvent::UpdateModel(model_for_action.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
@@ -3040,8 +3054,15 @@ impl ChatWidget {
                 approval_policy: None,
                 sandbox_policy: None,
                 model: Some(model.clone()),
+                subagent_model: None,
+                subagent_effort: None,
                 effort: Some(effort),
                 summary: None,
+                max_output_tokens: None,
+                history_depth: None,
+                collaboration_mode: None,
+                personality: None,
+                disallowed_tools: None,
             }));
         self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
         self.app_event_tx
@@ -3191,8 +3212,15 @@ impl ChatWidget {
                 approval_policy: Some(approval),
                 sandbox_policy: Some(sandbox_clone.clone()),
                 model: None,
+                subagent_model: None,
+                subagent_effort: None,
                 effort: None,
                 summary: None,
+                max_output_tokens: None,
+                history_depth: None,
+                collaboration_mode: None,
+                personality: None,
+                disallowed_tools: None,
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));

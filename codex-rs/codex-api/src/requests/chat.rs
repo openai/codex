@@ -26,6 +26,7 @@ pub struct ChatRequestBuilder<'a> {
     tools: &'a [Value],
     conversation_id: Option<String>,
     session_source: Option<SessionSource>,
+    max_tokens: Option<u32>,
 }
 
 impl<'a> ChatRequestBuilder<'a> {
@@ -42,6 +43,7 @@ impl<'a> ChatRequestBuilder<'a> {
             tools,
             conversation_id: None,
             session_source: None,
+            max_tokens: None,
         }
     }
 
@@ -52,6 +54,11 @@ impl<'a> ChatRequestBuilder<'a> {
 
     pub fn session_source(mut self, source: Option<SessionSource>) -> Self {
         self.session_source = source;
+        self
+    }
+
+    pub fn max_tokens(mut self, max_tokens: Option<u32>) -> Self {
+        self.max_tokens = max_tokens;
         self
     }
 
@@ -291,12 +298,17 @@ impl<'a> ChatRequestBuilder<'a> {
             }
         }
 
-        let payload = json!({
+        let mut payload = json!({
             "model": self.model,
             "messages": messages,
             "stream": true,
             "tools": self.tools,
         });
+        if let Some(max_tokens) = self.max_tokens
+            && let Some(obj) = payload.as_object_mut()
+        {
+            obj.insert("max_tokens".to_string(), json!(max_tokens));
+        }
 
         let mut headers = build_conversation_headers(self.conversation_id);
         if let Some(subagent) = subagent_header(&self.session_source) {

@@ -3457,6 +3457,7 @@ async fn approvals_popup_navigation_skips_disabled() {
             AppEvent::CodexOp(Op::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::OnRequest),
                 personality: None,
+                disallowed_tools: None,
                 ..
             })
         )),
@@ -3468,6 +3469,7 @@ async fn approvals_popup_navigation_skips_disabled() {
             AppEvent::CodexOp(Op::OverrideTurnContext {
                 approval_policy: Some(AskForApproval::Never),
                 personality: None,
+                disallowed_tools: None,
                 ..
             })
         )),

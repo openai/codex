@@ -63,7 +63,9 @@ pub struct GetArgs {
 }
 
 #[derive(Debug, clap::Parser)]
-#[command(override_usage = "codex mcp add [OPTIONS] <NAME> (--url <URL> | -- <COMMAND>...)")]
+#[command(
+    override_usage = "codex mcp add [OPTIONS] <NAME> (--url <URL> | --sse-url <URL> | -- <COMMAND>...)"
+)]
 pub struct AddArgs {
     /// Name for the MCP server configuration.
     pub name: String,
@@ -76,7 +78,7 @@ pub struct AddArgs {
 #[command(
     group(
         ArgGroup::new("transport")
-            .args(["command", "url"])
+            .args(["command", "url", "sse_url"])
             .required(true)
             .multiple(false)
     )
@@ -87,6 +89,14 @@ pub struct AddMcpTransportArgs {
 
     #[command(flatten)]
     pub streamable_http: Option<AddMcpStreamableHttpArgs>,
+
+    #[command(flatten)]
+    pub sse: Option<AddMcpSseArgs>,
+
+    /// Optional environment variable to read for a bearer token.
+    /// Only valid with streamable HTTP or SSE servers.
+    #[arg(long = "bearer-token-env-var", value_name = "ENV_VAR")]
+    pub bearer_token_env_var: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -114,15 +124,17 @@ pub struct AddMcpStreamableHttpArgs {
     /// URL for a streamable HTTP MCP server.
     #[arg(long)]
     pub url: String,
+}
 
-    /// Optional environment variable to read for a bearer token.
-    /// Only valid with streamable HTTP servers.
-    #[arg(
-        long = "bearer-token-env-var",
-        value_name = "ENV_VAR",
-        requires = "url"
-    )]
-    pub bearer_token_env_var: Option<String>,
+#[derive(Debug, clap::Args)]
+pub struct AddMcpSseArgs {
+    /// URL for an SSE MCP server.
+    #[arg(long = "sse-url")]
+    pub sse_url: String,
+
+    /// Optional message POST URL for SSE MCP servers.
+    #[arg(long = "message-url")]
+    pub message_url: Option<String>,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -200,10 +212,18 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         .await
         .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
 
-    let transport = match transport_args {
-        AddMcpTransportArgs {
-            stdio: Some(stdio), ..
-        } => {
+    let AddMcpTransportArgs {
+        stdio,
+        streamable_http,
+        sse,
+        bearer_token_env_var,
+    } = transport_args;
+
+    let transport = match (stdio, streamable_http, sse) {
+        (Some(stdio), None, None) => {
+            if bearer_token_env_var.is_some() {
+                bail!("--bearer-token-env-var is only valid with --url or --sse-url");
+            }
             let mut command_parts = stdio.command.into_iter();
             let command_bin = command_parts
                 .next()
@@ -223,20 +243,29 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
                 cwd: None,
             }
         }
-        AddMcpTransportArgs {
-            streamable_http:
-                Some(AddMcpStreamableHttpArgs {
-                    url,
-                    bearer_token_env_var,
-                }),
-            ..
-        } => McpServerTransportConfig::StreamableHttp {
-            url,
+        (None, Some(AddMcpStreamableHttpArgs { url }), None) => {
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var,
+                http_headers: None,
+                env_http_headers: None,
+            }
+        }
+        (
+            None,
+            None,
+            Some(AddMcpSseArgs {
+                sse_url,
+                message_url,
+            }),
+        ) => McpServerTransportConfig::Sse {
+            sse_url,
+            message_url,
             bearer_token_env_var,
             http_headers: None,
             env_http_headers: None,
         },
-        AddMcpTransportArgs { .. } => bail!("exactly one of --command or --url must be provided"),
+        _ => bail!("exactly one of --command, --url, or --sse-url must be provided"),
     };
 
     let new_entry = McpServerConfig {
@@ -445,6 +474,22 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                             "env_http_headers": env_http_headers,
                         })
                     }
+                    McpServerTransportConfig::Sse {
+                        sse_url,
+                        message_url,
+                        bearer_token_env_var,
+                        http_headers,
+                        env_http_headers,
+                    } => {
+                        serde_json::json!({
+                            "type": "sse",
+                            "sse_url": sse_url,
+                            "message_url": message_url,
+                            "bearer_token_env_var": bearer_token_env_var,
+                            "http_headers": http_headers,
+                            "env_http_headers": env_http_headers,
+                        })
+                    }
                 };
 
                 serde_json::json!({
@@ -474,6 +519,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
 
     let mut stdio_rows: Vec<[String; 7]> = Vec::new();
     let mut http_rows: Vec<[String; 5]> = Vec::new();
+    let mut sse_rows: Vec<[String; 6]> = Vec::new();
 
     for (name, cfg) in entries {
         match &cfg.transport {
@@ -532,9 +578,38 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     auth_status,
                 ]);
             }
+            McpServerTransportConfig::Sse {
+                sse_url,
+                message_url,
+                bearer_token_env_var,
+                ..
+            } => {
+                let status = format_mcp_status(cfg);
+                let auth_status = auth_statuses
+                    .get(name.as_str())
+                    .map(|entry| entry.auth_status)
+                    .unwrap_or(McpAuthStatus::Unsupported)
+                    .to_string();
+                let bearer_token_display =
+                    bearer_token_env_var.as_deref().unwrap_or("-").to_string();
+                let message_url_display = message_url
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("-")
+                    .to_string();
+                sse_rows.push([
+                    name.clone(),
+                    sse_url.clone(),
+                    message_url_display,
+                    bearer_token_display,
+                    status,
+                    auth_status,
+                ]);
+            }
         }
     }
 
+    let mut printed = false;
     if !stdio_rows.is_empty() {
         let mut widths = [
             "Name".len(),
@@ -588,13 +663,13 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                 auth_w = widths[6],
             );
         }
-    }
-
-    if !stdio_rows.is_empty() && !http_rows.is_empty() {
-        println!();
+        printed = true;
     }
 
     if !http_rows.is_empty() {
+        if printed {
+            println!();
+        }
         let mut widths = [
             "Name".len(),
             "Url".len(),
@@ -635,6 +710,60 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                 token_w = widths[2],
                 status_w = widths[3],
                 auth_w = widths[4],
+            );
+        }
+        printed = true;
+    }
+
+    if !sse_rows.is_empty() {
+        if printed {
+            println!();
+        }
+        let mut widths = [
+            "Name".len(),
+            "SSE Url".len(),
+            "Message Url".len(),
+            "Bearer Token Env Var".len(),
+            "Status".len(),
+            "Auth".len(),
+        ];
+        for row in &sse_rows {
+            for (i, cell) in row.iter().enumerate() {
+                widths[i] = widths[i].max(cell.len());
+            }
+        }
+
+        println!(
+            "{name:<name_w$}  {sse_url:<sse_w$}  {message_url:<msg_w$}  {token:<token_w$}  {status:<status_w$}  {auth:<auth_w$}",
+            name = "Name",
+            sse_url = "SSE Url",
+            message_url = "Message Url",
+            token = "Bearer Token Env Var",
+            status = "Status",
+            auth = "Auth",
+            name_w = widths[0],
+            sse_w = widths[1],
+            msg_w = widths[2],
+            token_w = widths[3],
+            status_w = widths[4],
+            auth_w = widths[5],
+        );
+
+        for row in &sse_rows {
+            println!(
+                "{name:<name_w$}  {sse_url:<sse_w$}  {message_url:<msg_w$}  {token:<token_w$}  {status:<status_w$}  {auth:<auth_w$}",
+                name = row[0].as_str(),
+                sse_url = row[1].as_str(),
+                message_url = row[2].as_str(),
+                token = row[3].as_str(),
+                status = row[4].as_str(),
+                auth = row[5].as_str(),
+                name_w = widths[0],
+                sse_w = widths[1],
+                msg_w = widths[2],
+                token_w = widths[3],
+                status_w = widths[4],
+                auth_w = widths[5],
             );
         }
     }
@@ -678,6 +807,20 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
             } => serde_json::json!({
                 "type": "streamable_http",
                 "url": url,
+                "bearer_token_env_var": bearer_token_env_var,
+                "http_headers": http_headers,
+                "env_http_headers": env_http_headers,
+            }),
+            McpServerTransportConfig::Sse {
+                sse_url,
+                message_url,
+                bearer_token_env_var,
+                http_headers,
+                env_http_headers,
+            } => serde_json::json!({
+                "type": "sse",
+                "sse_url": sse_url,
+                "message_url": message_url,
                 "bearer_token_env_var": bearer_token_env_var,
                 "http_headers": http_headers,
                 "env_http_headers": env_http_headers,
@@ -760,6 +903,46 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
         } => {
             println!("  transport: streamable_http");
             println!("  url: {url}");
+            let bearer_token_display = bearer_token_env_var.as_deref().unwrap_or("-");
+            println!("  bearer_token_env_var: {bearer_token_display}");
+            let headers_display = match http_headers {
+                Some(map) if !map.is_empty() => {
+                    let mut pairs: Vec<_> = map.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs
+                        .into_iter()
+                        .map(|(k, _)| format!("{k}=*****"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+                _ => "-".to_string(),
+            };
+            println!("  http_headers: {headers_display}");
+            let env_headers_display = match env_http_headers {
+                Some(map) if !map.is_empty() => {
+                    let mut pairs: Vec<_> = map.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs
+                        .into_iter()
+                        .map(|(k, var)| format!("{k}={var}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+                _ => "-".to_string(),
+            };
+            println!("  env_http_headers: {env_headers_display}");
+        }
+        McpServerTransportConfig::Sse {
+            sse_url,
+            message_url,
+            bearer_token_env_var,
+            http_headers,
+            env_http_headers,
+        } => {
+            println!("  transport: sse");
+            println!("  sse_url: {sse_url}");
+            let message_url_display = message_url.as_deref().unwrap_or("-");
+            println!("  message_url: {message_url_display}");
             let bearer_token_display = bearer_token_env_var.as_deref().unwrap_or("-");
             println!("  bearer_token_env_var: {bearer_token_display}");
             let headers_display = match http_headers {

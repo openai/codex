@@ -9,6 +9,8 @@ const ORCHESTRATOR_PROMPT: &str = include_str!("../../templates/agents/orchestra
 /// Default model override used.
 // TODO(jif) update when we have something smarter.
 const EXPLORER_MODEL: &str = "gpt-5.2-codex";
+/// Base instructions for the worker role.
+const WORKER_PROMPT: &str = include_str!("../../gpt-5.2-codex_prompt.md");
 
 /// Enumerated list of all supported agent roles.
 const ALL_ROLES: [AgentRole; 3] = [
@@ -64,8 +66,7 @@ impl AgentRole {
                 ..Default::default()
             },
             AgentRole::Worker => AgentProfile {
-                // base_instructions: Some(WORKER_PROMPT),
-                // model: Some(WORKER_MODEL),
+                base_instructions: Some(WORKER_PROMPT),
                 ..Default::default()
             },
             AgentRole::Explorer => AgentProfile {

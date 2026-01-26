@@ -25,7 +25,6 @@ use std::collections::HashMap;
 
 const MCP_SEARCH_TOOL_NAME: &str = "MCPSearch";
 const MCP_SEARCH_TOOL_NAME_NORMALIZED: &str = "mcpsearch";
-const MCP_DESCRIPTION_DEFERRED: &str = "Description deferred. Use MCPSearch.";
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
@@ -1039,50 +1038,150 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
 }
 
 fn create_mcp_search_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
+    let call_properties = BTreeMap::from([
         (
-            "query".to_string(),
+            "qualified_name".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Search query to match MCP tool names or descriptions.".to_string(),
+                    "Fully qualified MCP tool name to call directly (no routing). Format: mcp__server__tool (no @). Prefer this when you already know the exact tool.".to_string(),
                 ),
             },
         ),
         (
             "server".to_string(),
             JsonSchema::String {
-                description: Some("Optional MCP server name to scope the search.".to_string()),
+                description: Some(
+                    "MCP server name (used when qualified_name is not set). Use with tool to call directly; both are required for a direct call.".to_string(),
+                ),
+            },
+        ),
+        (
+            "tool".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "MCP tool name (used with server) for a direct call; no routing.".to_string(),
+                ),
+            },
+        ),
+        (
+            "arguments".to_string(),
+            JsonSchema::Object {
+                properties: BTreeMap::new(),
+                required: None,
+                additional_properties: Some(true.into()),
+            },
+        ),
+    ]);
+
+    let resource_properties = BTreeMap::from([
+        (
+            "action".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Resource action: list | list_templates | read. Use read with server+uri."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "server".to_string(),
+            JsonSchema::String {
+                description: Some("MCP server name for the resource action.".to_string()),
+            },
+        ),
+        (
+            "cursor".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Opaque cursor returned by a previous list call for the same server."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "uri".to_string(),
+            JsonSchema::String {
+                description: Some("Resource URI to read when action is read.".to_string()),
+            },
+        ),
+    ]);
+
+    let properties = BTreeMap::from([
+        (
+            "query".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Search query for matching MCP tool names or descriptions. Required for discovery/route; include tool keywords + intent + key entities (repo, url, id). Include the exact tool name if known to avoid ambiguity. Always set it when possible; omit only to reuse the most recent user message.".to_string(),
+                ),
+            },
+        ),
+        (
+            "server".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional MCP server name to scope the search when using query/route. Use this when the user mentions a specific server or only names a provider."
+                        .to_string(),
+                ),
             },
         ),
         (
             "limit".to_string(),
             JsonSchema::Number {
                 description: Some(
-                    "Maximum number of results to return (defaults to 10).".to_string(),
+                    "Maximum number of results to return (defaults to 10). Keep it small unless the user asks for more.".to_string(),
                 ),
+            },
+        ),
+        (
+            "include_schema".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "Include tool input/output schemas in the results (defaults to false); set true when you need required arguments for a follow-up call."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "route".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "Route the query to the best matching MCP tool and auto-call only when unambiguous. Use this when the user wants to run a tool and you can name a specific tool. If multiple tools are plausible, leave route false, return results, and ask the user to choose."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "call".to_string(),
+            JsonSchema::Object {
+                properties: call_properties,
+                required: None,
+                additional_properties: Some(false.into()),
+            },
+        ),
+        (
+            "resources".to_string(),
+            JsonSchema::Object {
+                properties: resource_properties,
+                required: Some(vec!["action".to_string()]),
+                additional_properties: Some(false.into()),
             },
         ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: MCP_SEARCH_TOOL_NAME.to_string(),
-        description:
-            "Search MCP tool names and descriptions when MCP tool descriptions are deferred."
-                .to_string(),
+        description: "Discover, select, and optionally invoke MCP tools. Use this when the user asks to use a tool that is not already listed or when the exact MCP tool name is unknown. For discovery or routing, always provide query (tool keywords + intent + key entities), and include the exact tool name if known. Prefer route: true only when you can name a specific tool and expect a single match; otherwise set route: false to list results and ask the user to pick. Set include_schema: true if you need required arguments. Use call only for direct invocation when you already know the exact tool (qualified_name in mcp__server__tool format, or server+tool) and arguments. If the user provides @mcp__server__tool, translate it to a call. Also supports MCP resources via resources (list, list_templates, read).".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["query".to_string()]),
+            required: None,
             additional_properties: Some(false.into()),
         },
     })
 }
 
-fn should_defer_mcp_descriptions(
-    config: &ToolsConfig,
-    mcp_tools: &HashMap<String, mcp_types::Tool>,
-) -> bool {
-    config.mcp_search_enabled && !mcp_tools.is_empty()
+fn should_defer_mcp_descriptions(config: &ToolsConfig) -> bool {
+    config.mcp_search_enabled
 }
 /// TODO(dylan): deprecate once we get rid of json tool
 #[derive(Serialize, Deserialize)]
@@ -1204,7 +1303,7 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
 ///   and otherwise defaults to "string".
 /// - Fills required child fields (e.g. array items, object properties) with
 ///   permissive defaults when absent.
-fn sanitize_json_schema(value: &mut JsonValue) {
+pub(crate) fn sanitize_json_schema(value: &mut JsonValue) {
     match value {
         JsonValue::Bool(_) => {
             // JSON Schema boolean form: true/false. Coerce to an accept-all string.
@@ -1345,6 +1444,8 @@ pub(crate) fn build_specs(
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
+    let defer_mcp_descriptions = should_defer_mcp_descriptions(config);
+    let has_mcp_tools = mcp_tools.is_some();
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1375,12 +1476,14 @@ pub(crate) fn build_specs(
         builder.register_handler("shell_command", shell_command_handler);
     }
 
-    builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
-    builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
-    builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
-    builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
-    builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
-    builder.register_handler("read_mcp_resource", mcp_resource_handler);
+    if has_mcp_tools && !defer_mcp_descriptions {
+        builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
+        builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
+        builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
+        builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
+        builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
+        builder.register_handler("read_mcp_resource", mcp_resource_handler);
+    }
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
@@ -1469,7 +1572,6 @@ pub(crate) fn build_specs(
     }
 
     if let Some(mcp_tools) = mcp_tools {
-        let defer_mcp_descriptions = should_defer_mcp_descriptions(config, &mcp_tools);
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -1479,10 +1581,11 @@ pub(crate) fn build_specs(
         }
 
         for (name, tool) in entries.into_iter() {
-            let mut tool = tool;
             if defer_mcp_descriptions {
-                tool.description = Some(MCP_DESCRIPTION_DEFERRED.to_string());
+                // Keep MCP tools out of the tool list and block direct calls when MCPSearch is on.
+                continue;
             }
+
             match mcp_tool_to_openai_tool(name.clone(), tool) {
                 Ok(converted_tool) => {
                     builder.push_spec(ToolSpec::Function(converted_tool));
@@ -1648,9 +1751,6 @@ mod tests {
         for spec in [
             create_exec_command_tool(),
             create_write_stdin_tool(),
-            create_list_mcp_resources_tool(),
-            create_list_mcp_resource_templates_tool(),
-            create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
             create_request_user_input_tool(),
             create_apply_patch_freeform_tool(),
@@ -1658,6 +1758,7 @@ mod tests {
                 external_web_access: Some(true),
             },
             create_view_image_tool(),
+            create_mcp_search_tool(),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
@@ -1801,14 +1902,12 @@ mod tests {
             Some(WebSearchMode::Cached),
             &[
                 "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
+                MCP_SEARCH_TOOL_NAME,
             ],
         );
     }
@@ -1823,14 +1922,12 @@ mod tests {
             Some(WebSearchMode::Cached),
             &[
                 "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
+                MCP_SEARCH_TOOL_NAME,
             ],
         );
     }
@@ -1847,14 +1944,12 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
+                MCP_SEARCH_TOOL_NAME,
             ],
         );
     }
@@ -1871,14 +1966,12 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
+                MCP_SEARCH_TOOL_NAME,
             ],
         );
     }
@@ -1893,13 +1986,11 @@ mod tests {
             Some(WebSearchMode::Cached),
             &[
                 "local_shell",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "web_search",
                 "view_image",
+                MCP_SEARCH_TOOL_NAME,
             ],
         );
     }
@@ -1914,14 +2005,12 @@ mod tests {
             Some(WebSearchMode::Cached),
             &[
                 "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
+                MCP_SEARCH_TOOL_NAME,
             ],
         );
     }
@@ -1936,13 +2025,11 @@ mod tests {
             Some(WebSearchMode::Cached),
             &[
                 "shell",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "web_search",
                 "view_image",
+                MCP_SEARCH_TOOL_NAME,
             ],
         );
     }
@@ -1957,14 +2044,12 @@ mod tests {
             Some(WebSearchMode::Cached),
             &[
                 "shell_command",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
+                MCP_SEARCH_TOOL_NAME,
             ],
         );
     }
@@ -1980,14 +2065,12 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
+                MCP_SEARCH_TOOL_NAME,
             ],
         );
     }
@@ -2004,13 +2087,11 @@ mod tests {
             &[
                 "exec_command",
                 "write_stdin",
-                "list_mcp_resources",
-                "list_mcp_resource_templates",
-                "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
                 "web_search",
                 "view_image",
+                MCP_SEARCH_TOOL_NAME,
             ],
         );
     }
@@ -2191,7 +2272,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_tool_descriptions_defer_when_search_enabled() {
+    fn mcp_tools_hidden_when_search_enabled() {
         let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline("o3", &config);
         let features = Features::with_defaults();
@@ -2202,7 +2283,6 @@ mod tests {
             disallowed_tools: &config.disallowed_tools,
         });
 
-        let long_description = "a".repeat(50);
         let (tools, _) = build_specs(
             &tools_config,
             Some(HashMap::from([(
@@ -2217,7 +2297,7 @@ mod tests {
                     output_schema: None,
                     title: None,
                     annotations: None,
-                    description: Some(long_description),
+                    description: Some("a".repeat(50)),
                 },
             )])),
         )
@@ -2228,13 +2308,11 @@ mod tests {
                 .iter()
                 .any(|tool| tool_name(&tool.spec) == MCP_SEARCH_TOOL_NAME)
         );
-        let tool = find_tool(&tools, "test_server/do_deferred");
-        match &tool.spec {
-            ToolSpec::Function(ResponsesApiTool { description, .. }) => {
-                assert_eq!(description, MCP_DESCRIPTION_DEFERRED);
-            }
-            other => panic!("expected function tool, got {other:?}"),
-        }
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "test_server/do_deferred")
+        );
     }
 
     #[test]
@@ -2289,7 +2367,10 @@ mod tests {
 
     #[test]
     fn test_build_specs_mcp_tools_sorted_by_name() {
-        let config = test_config();
+        let mut config = test_config();
+        config
+            .disallowed_tools
+            .push(MCP_SEARCH_TOOL_NAME.to_string());
         let model_info = ModelsManager::construct_model_info_offline("o3", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);

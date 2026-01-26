@@ -242,7 +242,7 @@ impl ToolHandler for McpResourceHandler {
     }
 }
 
-async fn handle_list_resources(
+pub(crate) async fn handle_list_resources(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     call_id: String,
@@ -349,7 +349,7 @@ async fn handle_list_resources(
     }
 }
 
-async fn handle_list_resource_templates(
+pub(crate) async fn handle_list_resource_templates(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     call_id: String,
@@ -460,7 +460,7 @@ async fn handle_list_resource_templates(
     }
 }
 
-async fn handle_read_resource(
+pub(crate) async fn handle_read_resource(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     call_id: String,

@@ -85,6 +85,8 @@ async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
             model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })

@@ -72,26 +72,30 @@ async fn generate_and_emit_prompt_suggestion(
     turn_context: Arc<TurnContext>,
     last_agent_message: String,
 ) -> Result<()> {
-    let truncated = truncate_text(
-        &last_agent_message,
-        TruncationPolicy::Tokens(PROMPT_SUGGESTION_INPUT_TOKENS),
-    );
-    let input = vec![
-        ResponseItem::Message {
+    let mut input = if let Some(history_depth) = turn_context.history_depth {
+        let mut history = session.clone_history().await;
+        history.retain_last_n_user_turns(history_depth);
+        history.for_prompt()
+    } else {
+        let truncated = truncate_text(
+            &last_agent_message,
+            TruncationPolicy::Tokens(PROMPT_SUGGESTION_INPUT_TOKENS),
+        );
+        vec![ResponseItem::Message {
             id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText { text: truncated }],
             end_turn: None,
-        },
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: PROMPT_SUGGESTION_USER_MESSAGE.to_string(),
-            }],
-            end_turn: None,
-        },
-    ];
+        }]
+    };
+    input.push(ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: PROMPT_SUGGESTION_USER_MESSAGE.to_string(),
+        }],
+        end_turn: None,
+    });
 
     let output_schema = match turn_context.client.get_provider().wire_api {
         WireApi::Chat => None,
@@ -106,6 +110,7 @@ async fn generate_and_emit_prompt_suggestion(
             text: PROMPT_SUGGESTION_INSTRUCTIONS.to_string(),
         },
         personality: None,
+        max_output_tokens: turn_context.max_output_tokens,
         output_schema,
     };
 

@@ -56,6 +56,7 @@ async fn run_remote_compact_task_inner_impl(
         parallel_tool_calls: false,
         base_instructions: sess.get_base_instructions().await,
         personality: turn_context.personality,
+        max_output_tokens: None,
         output_schema: None,
     };
 

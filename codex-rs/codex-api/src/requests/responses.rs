@@ -33,6 +33,7 @@ pub struct ResponsesRequestBuilder<'a> {
     tools: Option<&'a [Value]>,
     parallel_tool_calls: bool,
     reasoning: Option<Reasoning>,
+    max_output_tokens: Option<u32>,
     include: Vec<String>,
     prompt_cache_key: Option<String>,
     text: Option<TextControls>,
@@ -65,6 +66,11 @@ impl<'a> ResponsesRequestBuilder<'a> {
 
     pub fn reasoning(mut self, reasoning: Option<Reasoning>) -> Self {
         self.reasoning = reasoning;
+        self
+    }
+
+    pub fn max_output_tokens(mut self, max_output_tokens: Option<u32>) -> Self {
+        self.max_output_tokens = max_output_tokens;
         self
     }
 
@@ -132,6 +138,7 @@ impl<'a> ResponsesRequestBuilder<'a> {
             tool_choice: "auto",
             parallel_tool_calls: self.parallel_tool_calls,
             reasoning: self.reasoning,
+            max_output_tokens: self.max_output_tokens,
             store,
             stream: true,
             include: self.include,

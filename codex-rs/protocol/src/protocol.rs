@@ -125,6 +125,12 @@ pub enum Op {
 
         /// Will only be honored if the model is configured to use reasoning.
         summary: ReasoningSummaryConfig,
+        /// Optional maximum output tokens for this turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_output_tokens: Option<u32>,
+        /// Optional limit on how many recent user turns to include in context.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        history_depth: Option<u32>,
         // The JSON schema to use for the final assistant message
         final_output_json_schema: Option<Value>,
 
@@ -162,6 +168,20 @@ pub enum Op {
         #[serde(skip_serializing_if = "Option::is_none")]
         model: Option<String>,
 
+        /// Optional model override for spawned subagents.
+        ///
+        /// Use `Some(Some(_))` to set a model, `Some(None)` to clear the override,
+        /// or `None` to leave the existing value unchanged.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subagent_model: Option<Option<String>>,
+
+        /// Updated reasoning effort override for spawned subagents.
+        ///
+        /// Use `Some(Some(_))` to set a specific effort, `Some(None)` to clear
+        /// the override, or `None` to leave the existing value unchanged.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subagent_effort: Option<Option<ReasoningEffortConfig>>,
+
         /// Updated reasoning effort (honored only for reasoning-capable models).
         ///
         /// Use `Some(Some(_))` to set a specific effort, `Some(None)` to clear
@@ -172,6 +192,12 @@ pub enum Op {
         /// Updated reasoning summary preference (honored only for reasoning-capable models).
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
+        /// Updated maximum output tokens.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_output_tokens: Option<u32>,
+        /// Updated limit on how many recent user turns to include in context.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        history_depth: Option<u32>,
 
         /// EXPERIMENTAL - set a pre-set collaboration mode.
         /// Takes precedence over model, effort, and developer instructions if set.
@@ -181,6 +207,10 @@ pub enum Op {
         /// Updated personality preference.
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
+
+        /// Override disallowed tools for subsequent turns.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        disallowed_tools: Option<Vec<String>>,
     },
 
     /// Approve a command execution
@@ -1677,6 +1707,10 @@ pub struct TurnContextItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
     pub summary: ReasoningSummaryConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_depth: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

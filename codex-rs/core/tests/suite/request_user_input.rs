@@ -134,6 +134,8 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Plan,
                 settings: Settings {
@@ -255,6 +257,8 @@ where
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })

@@ -133,14 +133,12 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
 
     let expected_tools_names = vec![
         "shell_command",
-        "list_mcp_resources",
-        "list_mcp_resource_templates",
-        "read_mcp_resource",
         "update_plan",
         "request_user_input",
         "apply_patch",
         "web_search",
         "view_image",
+        "MCPSearch",
     ];
     let body0 = req1.single_request().body_json();
 
@@ -351,10 +349,15 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(new_policy.clone()),
             model: Some("o3".to_string()),
+            subagent_model: None,
+            subagent_effort: None,
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -428,10 +431,15 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: None,
             model: Some("gpt-5.1-codex".to_string()),
+            subagent_model: None,
+            subagent_effort: None,
             effort: Some(Some(ReasoningEffort::Low)),
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -587,6 +595,8 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
@@ -682,6 +692,8 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             model: default_model.clone(),
             effort: default_effort,
             summary: default_summary,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
@@ -701,6 +713,8 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             model: default_model.clone(),
             effort: default_effort,
             summary: default_summary,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
@@ -782,6 +796,8 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             model: default_model,
             effort: default_effort,
             summary: default_summary,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
@@ -801,6 +817,8 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,

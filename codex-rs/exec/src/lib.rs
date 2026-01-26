@@ -473,6 +473,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                     model: default_model,
                     effort: default_effort,
                     summary: default_summary,
+                    max_output_tokens: None,
+                    history_depth: None,
                     final_output_json_schema: output_schema,
                     collaboration_mode: None,
                     personality: None,

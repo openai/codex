@@ -12,6 +12,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
+use core_test_support::disallow_mcp_search;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -414,6 +415,7 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
     let rmcp_test_server_bin = stdio_server_bin()?;
 
     let mut builder = test_codex().with_config(move |config| {
+        disallow_mcp_search(config);
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
             server_name.to_string(),
@@ -503,6 +505,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
     let openai_png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ee9bQAAAABJRU5ErkJggg==";
 
     let mut builder = test_codex().with_config(move |config| {
+        disallow_mcp_search(config);
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
             server_name.to_string(),
@@ -547,6 +550,8 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -768,6 +773,7 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
     let rmcp_test_server_bin = stdio_server_bin()?;
 
     let mut builder = test_codex().with_config(move |config| {
+        disallow_mcp_search(config);
         config.tool_output_token_limit = Some(50_000);
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(

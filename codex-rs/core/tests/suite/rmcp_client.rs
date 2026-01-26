@@ -20,6 +20,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
+use core_test_support::disallow_mcp_search;
 use core_test_support::responses;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::skip_if_no_network;
@@ -73,6 +74,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
+            disallow_mcp_search(config);
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 server_name.to_string(),
@@ -118,6 +120,8 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -213,6 +217,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
+            disallow_mcp_search(config);
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 server_name.to_string(),
@@ -258,6 +263,8 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -410,6 +417,7 @@ async fn stdio_image_completions_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
+            disallow_mcp_search(config);
             config.model_provider.wire_api = codex_core::WireApi::Chat;
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
@@ -456,6 +464,8 @@ async fn stdio_image_completions_round_trip() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -560,6 +570,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
+            disallow_mcp_search(config);
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 server_name.to_string(),
@@ -602,6 +613,8 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -718,6 +731,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
+            disallow_mcp_search(config);
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 server_name.to_string(),
@@ -759,6 +773,8 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -907,6 +923,7 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
 
     let fixture = test_codex()
         .with_config(move |config| {
+            disallow_mcp_search(config);
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 server_name.to_string(),
@@ -948,6 +965,8 @@ async fn streamable_http_with_oauth_round_trip() -> anyhow::Result<()> {
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })

@@ -45,6 +45,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
@@ -88,6 +89,8 @@ use tracing::instrument;
 use tracing::trace_span;
 use tracing::warn;
 use uuid::Uuid;
+
+const MCP_SEARCH_TOOL_NAME: &str = "MCPSearch";
 
 use crate::ModelProviderInfo;
 use crate::WireApi;
@@ -321,6 +324,8 @@ impl Codex {
             provider: config.model_provider.clone(),
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
+            max_output_tokens: None,
+            history_depth: None,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
             personality: config.model_personality,
@@ -452,6 +457,8 @@ pub(crate) struct TurnContext {
     pub(crate) tools_config: ToolsConfig,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
+    pub(crate) max_output_tokens: Option<u32>,
+    pub(crate) history_depth: Option<u32>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
@@ -479,6 +486,8 @@ pub(crate) struct SessionConfiguration {
 
     collaboration_mode: CollaborationMode,
     model_reasoning_summary: ReasoningSummaryConfig,
+    max_output_tokens: Option<u32>,
+    history_depth: Option<u32>,
 
     /// Developer instructions that supplement the base instructions.
     developer_instructions: Option<String>,
@@ -550,6 +559,27 @@ impl SessionConfiguration {
         if let Some(cwd) = updates.cwd.clone() {
             next_configuration.cwd = cwd;
         }
+        if let Some(max_output_tokens) = updates.max_output_tokens {
+            next_configuration.max_output_tokens = Some(max_output_tokens);
+        }
+        if let Some(history_depth) = updates.history_depth {
+            next_configuration.history_depth = Some(history_depth);
+        }
+        if let Some(disallowed_tools) = updates.disallowed_tools.clone() {
+            let mut updated_config = (*next_configuration.original_config_do_not_use).clone();
+            updated_config.disallowed_tools = disallowed_tools;
+            next_configuration.original_config_do_not_use = Arc::new(updated_config);
+        }
+        if let Some(subagent_model) = updates.subagent_model.clone() {
+            let mut updated_config = (*next_configuration.original_config_do_not_use).clone();
+            updated_config.subagent_model = subagent_model;
+            next_configuration.original_config_do_not_use = Arc::new(updated_config);
+        }
+        if let Some(subagent_effort) = updates.subagent_effort {
+            let mut updated_config = (*next_configuration.original_config_do_not_use).clone();
+            updated_config.subagent_reasoning_effort = subagent_effort;
+            next_configuration.original_config_do_not_use = Arc::new(updated_config);
+        }
         Ok(next_configuration)
     }
 }
@@ -563,6 +593,30 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) reasoning_summary: Option<ReasoningSummaryConfig>,
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
+    pub(crate) disallowed_tools: Option<Vec<String>>,
+    pub(crate) subagent_model: Option<Option<String>>,
+    pub(crate) subagent_effort: Option<Option<ReasoningEffortConfig>>,
+    pub(crate) max_output_tokens: Option<u32>,
+    pub(crate) history_depth: Option<u32>,
+    pub(crate) turn_max_output_tokens: Option<u32>,
+    pub(crate) turn_history_depth: Option<u32>,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct TurnOverrides {
+    pub(crate) final_output_json_schema: Option<Option<Value>>,
+    pub(crate) max_output_tokens: Option<u32>,
+    pub(crate) history_depth: Option<u32>,
+}
+
+impl SessionSettingsUpdate {
+    fn turn_overrides(&self) -> TurnOverrides {
+        TurnOverrides {
+            final_output_json_schema: self.final_output_json_schema.clone(),
+            max_output_tokens: self.turn_max_output_tokens,
+            history_depth: self.turn_history_depth,
+        }
+    }
 }
 
 impl Session {
@@ -628,6 +682,8 @@ impl Session {
             tools_config,
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,
+            max_output_tokens: session_configuration.max_output_tokens,
+            history_depth: session_configuration.history_depth,
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
@@ -1055,12 +1111,13 @@ impl Session {
                 }
             }
         };
+        let overrides = updates.turn_overrides();
 
         Ok(self
             .new_turn_from_configuration(
                 sub_id,
                 session_configuration,
-                updates.final_output_json_schema,
+                overrides,
                 sandbox_policy_changed,
             )
             .await)
@@ -1070,7 +1127,7 @@ impl Session {
         &self,
         sub_id: String,
         session_configuration: SessionConfiguration,
-        final_output_json_schema: Option<Option<Value>>,
+        overrides: TurnOverrides,
         sandbox_policy_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
@@ -1111,8 +1168,14 @@ impl Session {
             self.conversation_id,
             sub_id,
         );
-        if let Some(final_schema) = final_output_json_schema {
+        if let Some(final_schema) = overrides.final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;
+        }
+        if let Some(max_output_tokens) = overrides.max_output_tokens {
+            turn_context.max_output_tokens = Some(max_output_tokens);
+        }
+        if let Some(history_depth) = overrides.history_depth {
+            turn_context.history_depth = Some(history_depth);
         }
         Arc::new(turn_context)
     }
@@ -1135,8 +1198,13 @@ impl Session {
             let state = self.state.lock().await;
             state.session_configuration.clone()
         };
-        self.new_turn_from_configuration(sub_id, session_configuration, None, false)
-            .await
+        self.new_turn_from_configuration(
+            sub_id,
+            session_configuration,
+            TurnOverrides::default(),
+            false,
+        )
+        .await
     }
 
     pub(crate) async fn current_collaboration_mode(&self) -> CollaborationMode {
@@ -2150,10 +2218,15 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 approval_policy,
                 sandbox_policy,
                 model,
+                subagent_model,
+                subagent_effort,
                 effort,
                 summary,
+                max_output_tokens,
+                history_depth,
                 collaboration_mode,
                 personality,
+                disallowed_tools,
             } => {
                 let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
                     collab_mode
@@ -2174,7 +2247,12 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         sandbox_policy,
                         collaboration_mode: Some(collaboration_mode),
                         reasoning_summary: summary,
+                        max_output_tokens,
+                        history_depth,
                         personality,
+                        disallowed_tools,
+                        subagent_model,
+                        subagent_effort,
                         ..Default::default()
                     },
                 )
@@ -2370,6 +2448,8 @@ mod handlers {
                 model,
                 effort,
                 summary,
+                max_output_tokens,
+                history_depth,
                 final_output_json_schema,
                 items,
                 collaboration_mode,
@@ -2395,6 +2475,9 @@ mod handlers {
                         reasoning_summary: Some(summary),
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
+                        turn_max_output_tokens: max_output_tokens,
+                        turn_history_depth: history_depth,
+                        ..Default::default()
                     },
                 )
             }
@@ -2924,6 +3007,8 @@ async fn spawn_review_thread(
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
+        max_output_tokens: parent_turn_context.max_output_tokens,
+        history_depth: parent_turn_context.history_depth,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
@@ -3061,13 +3146,23 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     if !explicit_mcp_calls.is_empty() {
-        let explicit_items = run_explicit_mcp_tool_calls(
-            &sess,
-            &turn_context,
-            &turn_diff_tracker,
-            explicit_mcp_calls,
-        )
-        .await;
+        let explicit_items = if turn_context.tools_config.mcp_search_enabled {
+            run_explicit_mcp_tool_calls_via_search(
+                &sess,
+                &turn_context,
+                &turn_diff_tracker,
+                explicit_mcp_calls,
+            )
+            .await
+        } else {
+            run_explicit_mcp_tool_calls(
+                &sess,
+                &turn_context,
+                &turn_diff_tracker,
+                explicit_mcp_calls,
+            )
+            .await
+        };
         if !explicit_items.is_empty() {
             sess.record_conversation_items(&turn_context, &explicit_items)
                 .await;
@@ -3092,7 +3187,11 @@ pub(crate) async fn run_turn(
         let sampling_request_input: Vec<ResponseItem> = {
             sess.record_conversation_items(&turn_context, &pending_input)
                 .await;
-            sess.clone_history().await.for_prompt()
+            let mut history = sess.clone_history().await;
+            if let Some(history_depth) = turn_context.history_depth {
+                history.retain_last_n_user_turns(history_depth);
+            }
+            history.for_prompt()
         };
 
         let sampling_request_input_messages = sampling_request_input
@@ -3273,6 +3372,103 @@ async fn run_explicit_mcp_tool_calls(
                 server: call.server,
                 tool: call.tool,
                 raw_arguments: arguments,
+            },
+        };
+
+        match router
+            .dispatch_tool_call(
+                Arc::clone(sess),
+                Arc::clone(turn_context),
+                Arc::clone(turn_diff_tracker),
+                tool_call,
+            )
+            .await
+        {
+            Ok(output) => items.push(ResponseItem::from(output)),
+            Err(err) => items.push(ResponseItem::FunctionCallOutput {
+                call_id,
+                output: codex_protocol::models::FunctionCallOutputPayload {
+                    content: err.to_string(),
+                    success: Some(false),
+                    ..Default::default()
+                },
+            }),
+        }
+    }
+
+    items
+}
+
+async fn run_explicit_mcp_tool_calls_via_search(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    turn_diff_tracker: &SharedTurnDiffTracker,
+    calls: Vec<ExplicitMcpToolCall>,
+) -> Vec<ResponseItem> {
+    let mcp_tools = sess
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .list_all_tools()
+        .await
+        .into_iter()
+        .map(|(name, tool)| (name, tool.tool))
+        .collect::<HashMap<_, _>>();
+
+    let router = ToolRouter::from_config(&turn_context.tools_config, Some(mcp_tools.clone()));
+    let mut items = Vec::new();
+
+    for call in calls {
+        let tool = mcp_tools.get(&call.qualified_name);
+        let arguments = match coerce_explicit_mcp_arguments(&call, tool) {
+            ExplicitMcpArgsOutcome::Ready(arguments) => arguments,
+            ExplicitMcpArgsOutcome::NeedsInput(message) => {
+                sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                    .await;
+                continue;
+            }
+        };
+
+        let arguments_value = match serde_json::from_str::<Value>(&arguments) {
+            Ok(value) => value,
+            Err(err) => {
+                let message = format!("Failed to parse MCP arguments for MCPSearch: {err}");
+                sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                    .await;
+                continue;
+            }
+        };
+
+        let search_payload = serde_json::json!({
+            "call": {
+                "qualified_name": call.qualified_name,
+                "arguments": arguments_value,
+            }
+        });
+        let search_arguments = match serde_json::to_string(&search_payload) {
+            Ok(value) => value,
+            Err(err) => {
+                let message = format!("Failed to serialize MCPSearch call payload: {err}");
+                sess.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                    .await;
+                continue;
+            }
+        };
+
+        let call_id = Uuid::new_v4().to_string();
+        items.push(ResponseItem::FunctionCall {
+            id: None,
+            name: MCP_SEARCH_TOOL_NAME.to_string(),
+            arguments: search_arguments.clone(),
+            call_id: call_id.clone(),
+        });
+
+        let tool_call = crate::tools::router::ToolCall {
+            tool_name: MCP_SEARCH_TOOL_NAME.to_string(),
+            call_id: call_id.clone(),
+            payload: crate::tools::context::ToolPayload::Function {
+                arguments: search_arguments,
             },
         };
 
@@ -3621,6 +3817,7 @@ async fn run_sampling_request(
         parallel_tool_calls: model_supports_parallel,
         base_instructions,
         personality: turn_context.personality,
+        max_output_tokens: turn_context.max_output_tokens,
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
@@ -3743,6 +3940,8 @@ async fn try_run_sampling_request(
         collaboration_mode: Some(collaboration_mode),
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
+        max_output_tokens: turn_context.max_output_tokens,
+        history_depth: turn_context.history_depth,
         user_instructions: turn_context.user_instructions.clone(),
         developer_instructions: turn_context.developer_instructions.clone(),
         final_output_json_schema: turn_context.final_output_json_schema.clone(),
@@ -4374,6 +4573,8 @@ mod tests {
             provider: config.model_provider.clone(),
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
+            max_output_tokens: None,
+            history_depth: None,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.model_personality,
@@ -4454,6 +4655,8 @@ mod tests {
             provider: config.model_provider.clone(),
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
+            max_output_tokens: None,
+            history_depth: None,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.model_personality,
@@ -4718,6 +4921,8 @@ mod tests {
             provider: config.model_provider.clone(),
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
+            max_output_tokens: None,
+            history_depth: None,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.model_personality,
@@ -4827,6 +5032,8 @@ mod tests {
             provider: config.model_provider.clone(),
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
+            max_output_tokens: None,
+            history_depth: None,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.model_personality,

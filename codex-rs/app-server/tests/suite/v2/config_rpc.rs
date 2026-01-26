@@ -125,6 +125,7 @@ view_image = false
         ToolsV2 {
             web_search: Some(true),
             view_image: Some(false),
+            disallowed_tools: None,
         }
     );
     assert_eq!(

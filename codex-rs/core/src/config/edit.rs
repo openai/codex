@@ -146,6 +146,31 @@ mod document_helpers {
                     entry["env_http_headers"] = table_from_pairs(headers.iter());
                 }
             }
+            McpServerTransportConfig::Sse {
+                sse_url,
+                message_url,
+                bearer_token_env_var,
+                http_headers,
+                env_http_headers,
+            } => {
+                entry["sse_url"] = value(sse_url.clone());
+                if let Some(message_url) = message_url {
+                    entry["message_url"] = value(message_url.clone());
+                }
+                if let Some(env_var) = bearer_token_env_var {
+                    entry["bearer_token_env_var"] = value(env_var.clone());
+                }
+                if let Some(headers) = http_headers
+                    && !headers.is_empty()
+                {
+                    entry["http_headers"] = table_from_pairs(headers.iter());
+                }
+                if let Some(headers) = env_http_headers
+                    && !headers.is_empty()
+                {
+                    entry["env_http_headers"] = table_from_pairs(headers.iter());
+                }
+            }
         }
 
         if !config.enabled {

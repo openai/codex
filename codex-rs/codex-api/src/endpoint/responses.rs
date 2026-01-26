@@ -95,6 +95,7 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             .tools(&prompt.tools)
             .parallel_tool_calls(prompt.parallel_tool_calls)
             .reasoning(reasoning)
+            .max_output_tokens(prompt.max_output_tokens)
             .include(include)
             .prompt_cache_key(prompt_cache_key)
             .text(text)

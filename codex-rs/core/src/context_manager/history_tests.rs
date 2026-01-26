@@ -419,6 +419,79 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
 }
 
 #[test]
+fn retain_last_n_user_turns_preserves_prefix() {
+    let items = vec![
+        assistant_msg("session prefix item"),
+        user_msg("u1"),
+        assistant_msg("a1"),
+        user_msg("u2"),
+        assistant_msg("a2"),
+        user_msg("u3"),
+        assistant_msg("a3"),
+    ];
+
+    let mut history = create_history_with_items(items);
+    history.retain_last_n_user_turns(1);
+    assert_eq!(
+        history.for_prompt(),
+        vec![
+            assistant_msg("session prefix item"),
+            user_msg("u3"),
+            assistant_msg("a3"),
+        ]
+    );
+
+    let mut history = create_history_with_items(vec![
+        assistant_msg("session prefix item"),
+        user_msg("u1"),
+        assistant_msg("a1"),
+    ]);
+    history.retain_last_n_user_turns(0);
+    assert_eq!(
+        history.for_prompt(),
+        vec![assistant_msg("session prefix item")]
+    );
+}
+
+#[test]
+fn retain_last_n_user_turns_ignores_session_prefix_user_messages() {
+    let items = vec![
+        user_input_text_msg("<environment_context>ctx</environment_context>"),
+        user_input_text_msg("<user_instructions>do the thing</user_instructions>"),
+        user_input_text_msg(
+            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
+        ),
+        user_input_text_msg(
+            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+        ),
+        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg("turn 1 user"),
+        assistant_msg("turn 1 assistant"),
+        user_input_text_msg("turn 2 user"),
+        assistant_msg("turn 2 assistant"),
+    ];
+
+    let mut history = create_history_with_items(items);
+    history.retain_last_n_user_turns(1);
+
+    let expected_prefix_and_last_turn = vec![
+        user_input_text_msg("<environment_context>ctx</environment_context>"),
+        user_input_text_msg("<user_instructions>do the thing</user_instructions>"),
+        user_input_text_msg(
+            "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>",
+        ),
+        user_input_text_msg(
+            "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>",
+        ),
+        user_input_text_msg("<user_shell_command>echo 42</user_shell_command>"),
+        user_input_text_msg("turn 2 user"),
+        assistant_msg("turn 2 assistant"),
+    ];
+
+    assert_eq!(history.for_prompt(), expected_prefix_and_last_turn);
+}
+
+#[test]
 fn remove_first_item_handles_custom_tool_pair() {
     let items = vec![
         ResponseItem::CustomToolCall {

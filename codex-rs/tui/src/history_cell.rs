@@ -1450,6 +1450,44 @@ pub(crate) fn new_mcp_tools_output(
                     lines.push(vec!["    • Env HTTP headers: ".into(), display.into()].into());
                 }
             }
+            McpServerTransportConfig::Sse {
+                sse_url,
+                message_url,
+                http_headers,
+                env_http_headers,
+                ..
+            } => {
+                lines.push(vec!["    • SSE URL: ".into(), sse_url.clone().into()].into());
+                if let Some(message_url) = message_url.as_ref() {
+                    lines.push(
+                        vec!["    • Message URL: ".into(), message_url.clone().into()].into(),
+                    );
+                }
+                if let Some(headers) = http_headers.as_ref()
+                    && !headers.is_empty()
+                {
+                    let mut pairs: Vec<_> = headers.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    let display = pairs
+                        .into_iter()
+                        .map(|(name, _)| format!("{name}=*****"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    lines.push(vec!["    • HTTP headers: ".into(), display.into()].into());
+                }
+                if let Some(headers) = env_http_headers.as_ref()
+                    && !headers.is_empty()
+                {
+                    let mut pairs: Vec<_> = headers.iter().collect();
+                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    let display = pairs
+                        .into_iter()
+                        .map(|(name, var)| format!("{name}={var}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    lines.push(vec!["    • Env HTTP headers: ".into(), display.into()].into());
+                }
+            }
         }
 
         if names.is_empty() {
@@ -1517,7 +1555,7 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
     PlainHistoryCell { lines }
 }
 
-/// Render all tools available to the agent (built-in + MCP).
+/// Render tools available to the agent.
 pub(crate) fn new_tools_output(mut tools: Vec<String>) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = vec![
         "/tools".magenta().into(),

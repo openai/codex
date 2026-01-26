@@ -96,6 +96,8 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -142,6 +144,8 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -198,6 +202,8 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -211,10 +217,15 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             approval_policy: None,
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
+            disallowed_tools: None,
         })
         .await?;
 
@@ -231,6 +242,8 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -350,6 +363,8 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -363,10 +378,15 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             approval_policy: None,
             sandbox_policy: None,
             model: Some(remote_slug.to_string()),
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
+            disallowed_tools: None,
         })
         .await?;
 
@@ -383,6 +403,8 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             model: remote_slug.to_string(),
             effort: test.config.model_reasoning_effort,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })

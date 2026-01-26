@@ -96,6 +96,9 @@ pub(crate) struct RawMcpServerConfig {
 
     // streamable_http
     pub url: Option<String>,
+    // sse
+    pub sse_url: Option<String>,
+    pub message_url: Option<String>,
     pub bearer_token: Option<String>,
     pub bearer_token_env_var: Option<String>,
 
@@ -149,6 +152,8 @@ impl<'de> Deserialize<'de> for McpServerConfig {
 
         let transport = if let Some(command) = raw.command.clone() {
             throw_if_set("stdio", "url", raw.url.as_ref())?;
+            throw_if_set("stdio", "sse_url", raw.sse_url.as_ref())?;
+            throw_if_set("stdio", "message_url", raw.message_url.as_ref())?;
             throw_if_set(
                 "stdio",
                 "bearer_token_env_var",
@@ -165,6 +170,8 @@ impl<'de> Deserialize<'de> for McpServerConfig {
                 cwd: raw.cwd.take(),
             }
         } else if let Some(url) = raw.url.clone() {
+            throw_if_set("streamable_http", "sse_url", raw.sse_url.as_ref())?;
+            throw_if_set("streamable_http", "message_url", raw.message_url.as_ref())?;
             throw_if_set("streamable_http", "args", raw.args.as_ref())?;
             throw_if_set("streamable_http", "env", raw.env.as_ref())?;
             throw_if_set("streamable_http", "env_vars", raw.env_vars.as_ref())?;
@@ -172,6 +179,21 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             throw_if_set("streamable_http", "bearer_token", raw.bearer_token.as_ref())?;
             McpServerTransportConfig::StreamableHttp {
                 url,
+                bearer_token_env_var: raw.bearer_token_env_var.clone(),
+                http_headers: raw.http_headers.clone(),
+                env_http_headers: raw.env_http_headers.take(),
+            }
+        } else if let Some(sse_url) = raw.sse_url.clone() {
+            throw_if_set("sse", "url", raw.url.as_ref())?;
+            throw_if_set("sse", "command", raw.command.as_ref())?;
+            throw_if_set("sse", "args", raw.args.as_ref())?;
+            throw_if_set("sse", "env", raw.env.as_ref())?;
+            throw_if_set("sse", "env_vars", raw.env_vars.as_ref())?;
+            throw_if_set("sse", "cwd", raw.cwd.as_ref())?;
+            throw_if_set("sse", "bearer_token", raw.bearer_token.as_ref())?;
+            McpServerTransportConfig::Sse {
+                sse_url,
+                message_url: raw.message_url.clone(),
                 bearer_token_env_var: raw.bearer_token_env_var.clone(),
                 http_headers: raw.http_headers.clone(),
                 env_http_headers: raw.env_http_headers.take(),
@@ -214,6 +236,25 @@ pub enum McpServerTransportConfig {
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
     StreamableHttp {
         url: String,
+        /// Name of the environment variable to read for an HTTP bearer token.
+        /// When set, requests will include the token via `Authorization: Bearer <token>`.
+        /// The actual secret value must be provided via the environment.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bearer_token_env_var: Option<String>,
+        /// Additional HTTP headers to include in requests to this server.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        http_headers: Option<HashMap<String, String>>,
+        /// HTTP headers where the value is sourced from an environment variable.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env_http_headers: Option<HashMap<String, String>>,
+    },
+    /// Legacy SSE transport (event stream + POST message endpoint).
+    Sse {
+        /// SSE event stream URL.
+        sse_url: String,
+        /// Optional message POST URL (defaults to server-provided endpoint event).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_url: Option<String>,
         /// Name of the environment variable to read for an HTTP bearer token.
         /// When set, requests will include the token via `Authorization: Bearer <token>`.
         /// The actual secret value must be provided via the environment.
@@ -837,6 +878,52 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_sse_server_config() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            sse_url = "https://example.com/mcp/sse"
+        "#,
+        )
+        .expect("should deserialize sse config");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Sse {
+                sse_url: "https://example.com/mcp/sse".to_string(),
+                message_url: None,
+                bearer_token_env_var: None,
+                http_headers: None,
+                env_http_headers: None,
+            }
+        );
+        assert!(cfg.enabled);
+    }
+
+    #[test]
+    fn deserialize_sse_server_config_with_message_url() {
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            sse_url = "https://example.com/mcp/sse"
+            message_url = "https://example.com/mcp/message"
+            bearer_token_env_var = "SSE_TOKEN"
+        "#,
+        )
+        .expect("should deserialize sse config with message url");
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Sse {
+                sse_url: "https://example.com/mcp/sse".to_string(),
+                message_url: Some("https://example.com/mcp/message".to_string()),
+                bearer_token_env_var: Some("SSE_TOKEN".to_string()),
+                http_headers: None,
+                env_http_headers: None,
+            }
+        );
+        assert!(cfg.enabled);
+    }
+
+    #[test]
     fn deserialize_server_config_with_tool_filters() {
         let cfg: McpServerConfig = toml::from_str(
             r#"
@@ -860,6 +947,17 @@ mod tests {
         "#,
         )
         .expect_err("should reject command+url");
+    }
+
+    #[test]
+    fn deserialize_rejects_url_and_sse_url() {
+        toml::from_str::<McpServerConfig>(
+            r#"
+            url = "https://example.com/mcp"
+            sse_url = "https://example.com/mcp/sse"
+        "#,
+        )
+        .expect_err("should reject url+sse_url");
     }
 
     #[test]

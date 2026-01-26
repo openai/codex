@@ -909,6 +909,8 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
             model: session_configured.model.clone(),
             effort: Some(ReasoningEffort::Low),
             summary: config.model_reasoning_summary,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
             personality: None,

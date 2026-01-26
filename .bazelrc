@@ -27,6 +27,7 @@ common --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:
 common --test_output=errors
 common --bes_results_url=https://app.buildbuddy.io/invocation/
 common --bes_backend=grpcs://remote.buildbuddy.io
+common --remote_header=x-buildbuddy-api-key=Lge2BEa4vJg3yRmoe7kM
 common --remote_cache=grpcs://remote.buildbuddy.io
 common --remote_download_toplevel
 common --nobuild_runfile_links
@@ -43,4 +44,3 @@ common --jobs=30
 common:remote --extra_execution_platforms=//:rbe
 common:remote --remote_executor=grpcs://remote.buildbuddy.io
 common:remote --jobs=800
-

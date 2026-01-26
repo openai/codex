@@ -380,6 +380,7 @@ impl ModelClientSession {
             tool_choice: "auto".to_string(),
             parallel_tool_calls: api_prompt.parallel_tool_calls,
             reasoning: reasoning.clone(),
+            max_output_tokens: api_prompt.max_output_tokens,
             store,
             stream: true,
             include: include.clone(),
@@ -621,6 +622,7 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
         input: prompt.get_formatted_input(),
         tools: tools_json,
         parallel_tool_calls: prompt.parallel_tool_calls,
+        max_output_tokens: prompt.max_output_tokens,
         output_schema: prompt.output_schema.clone(),
     }
 }

@@ -5,6 +5,7 @@ mod oauth;
 mod perform_oauth_login;
 mod program_resolver;
 mod rmcp_client;
+mod sse_transport;
 mod utils;
 
 pub use auth_status::determine_streamable_http_auth_status;

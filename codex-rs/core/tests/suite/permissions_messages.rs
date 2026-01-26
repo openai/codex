@@ -107,10 +107,15 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -228,10 +233,15 @@ async fn resume_replays_permissions_messages() -> Result<()> {
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -310,10 +320,15 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 

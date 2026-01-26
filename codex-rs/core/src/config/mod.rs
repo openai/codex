@@ -253,6 +253,12 @@ pub struct Config {
 
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
+    /// Optional model override for spawned subagents. When unset, subagents inherit
+    /// the current session model.
+    pub subagent_model: Option<String>,
+    /// Optional reasoning effort override for spawned subagents. When unset,
+    /// subagents inherit the current session reasoning effort.
+    pub subagent_reasoning_effort: Option<ReasoningEffort>,
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
@@ -581,11 +587,13 @@ fn mcp_server_matches_requirement(
             McpServerTransportConfig::Stdio { command: got_command, .. }
                 if got_command == want_command
         ),
-        McpServerIdentity::Url { url: want_url } => matches!(
-            &server.transport,
-            McpServerTransportConfig::StreamableHttp { url: got_url, .. }
-                if got_url == want_url
-        ),
+        McpServerIdentity::Url { url: want_url } => match &server.transport {
+            McpServerTransportConfig::StreamableHttp { url: got_url, .. } => got_url == want_url,
+            McpServerTransportConfig::Sse {
+                sse_url: got_url, ..
+            } => got_url == want_url,
+            _ => false,
+        },
     }
 }
 
@@ -1020,6 +1028,12 @@ pub struct AgentsToml {
     /// When unset, no limit is enforced.
     #[schemars(range(min = 1))]
     pub max_threads: Option<usize>,
+    /// Optional model override for spawned subagents.
+    /// When unset, subagents inherit the current session model.
+    pub subagent_model: Option<String>,
+    /// Optional reasoning effort override for spawned subagents.
+    /// When unset, subagents inherit the current session reasoning effort.
+    pub subagent_reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -1412,6 +1426,14 @@ impl Config {
                 "agents.max_threads must be at least 1",
             ));
         }
+        let subagent_model = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.subagent_model.clone());
+        let subagent_reasoning_effort = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.subagent_reasoning_effort);
 
         let ghost_snapshot = {
             let mut config = GhostSnapshotConfig::default();
@@ -1555,6 +1577,8 @@ impl Config {
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
+            subagent_model,
+            subagent_reasoning_effort,
             codex_home,
             config_layer_stack,
             history,
@@ -3718,6 +3742,8 @@ model_verbosity = "high"
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
                 agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+                subagent_model: None,
+                subagent_reasoning_effort: None,
                 codex_home: fixture.codex_home(),
                 config_layer_stack: Default::default(),
                 history: History::default(),
@@ -3801,6 +3827,8 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            subagent_model: None,
+            subagent_reasoning_effort: None,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
@@ -3899,6 +3927,8 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            subagent_model: None,
+            subagent_reasoning_effort: None,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
@@ -3983,6 +4013,8 @@ model_verbosity = "high"
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
+            subagent_model: None,
+            subagent_reasoning_effort: None,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),

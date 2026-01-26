@@ -1836,8 +1836,15 @@ impl App {
                                         approval_policy: Some(preset.approval),
                                         sandbox_policy: Some(preset.sandbox.clone()),
                                         model: None,
+                                        subagent_model: None,
+                                        subagent_effort: None,
                                         effort: None,
                                         summary: None,
+                                        max_output_tokens: None,
+                                        history_depth: None,
+                                        collaboration_mode: None,
+                                        personality: None,
+                                        disallowed_tools: None,
                                     },
                                 ));
                                 self.app_event_tx

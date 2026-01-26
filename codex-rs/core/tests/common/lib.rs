@@ -71,6 +71,19 @@ pub fn test_tmp_path_buf() -> PathBuf {
     test_tmp_path().into_path_buf()
 }
 
+pub fn disallow_mcp_search(config: &mut Config) {
+    const MCP_SEARCH_TOOL_NAME: &str = "MCPSearch";
+    if !config
+        .disallowed_tools
+        .iter()
+        .any(|tool| tool == MCP_SEARCH_TOOL_NAME)
+    {
+        config
+            .disallowed_tools
+            .push(MCP_SEARCH_TOOL_NAME.to_string());
+    }
+}
+
 /// Returns a default `Config` whose on-disk state is confined to the provided
 /// temporary directory. Using a per-test directory keeps tests hermetic and
 /// avoids clobbering a developer’s real `~/.codex`.

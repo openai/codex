@@ -113,6 +113,14 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
+    /// Update the subagent model override in the running app and widget.
+    UpdateSubagentModel {
+        model: Option<String>,
+    },
+
+    /// Update the subagent reasoning effort override in the running app and widget.
+    UpdateSubagentReasoningEffort(Option<ReasoningEffort>),
+
     /// Update the active collaboration mask in the running app and widget.
     UpdateCollaborationMode(CollaborationModeMask),
 
@@ -135,9 +143,20 @@ pub(crate) enum AppEvent {
         model: ModelPreset,
     },
 
+    /// Open the reasoning selection popup after picking a subagent model.
+    OpenSubagentReasoningPopup {
+        preset: ModelPreset,
+        model_override: Option<String>,
+    },
+
     /// Open the full model picker (non-auto models).
     OpenAllModelsPopup {
         models: Vec<ModelPreset>,
+    },
+
+    /// Open the subagent model input prompt.
+    OpenSubagentModelPrompt {
+        initial: Option<String>,
     },
 
     /// Open the confirmation prompt before enabling full access mode.
@@ -196,6 +215,11 @@ pub(crate) enum AppEvent {
     /// Update feature flags and persist them to the top-level config.
     UpdateFeatureFlags {
         updates: Vec<(Feature, bool)>,
+    },
+
+    /// Update MCPSearch tool aggregation and persist it to config.
+    UpdateMcpSearchEnabled {
+        enabled: bool,
     },
 
     /// Update whether the full access warning prompt has been acknowledged.

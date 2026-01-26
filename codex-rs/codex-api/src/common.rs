@@ -25,6 +25,8 @@ pub struct Prompt {
     pub tools: Vec<Value>,
     /// Whether parallel tool calls are permitted.
     pub parallel_tool_calls: bool,
+    /// Optional cap on output tokens.
+    pub max_output_tokens: Option<u32>,
     /// Optional output schema used to build the `text.format` controls.
     pub output_schema: Option<Value>,
 }
@@ -131,6 +133,8 @@ pub struct ResponsesApiRequest<'a> {
     pub tool_choice: &'static str,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
     pub store: bool,
     pub stream: bool,
     pub include: Vec<String>,
@@ -149,6 +153,8 @@ pub struct ResponseCreateWsRequest {
     pub tool_choice: String,
     pub parallel_tool_calls: bool,
     pub reasoning: Option<Reasoning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
     pub store: bool,
     pub stream: bool,
     pub include: Vec<String>,

@@ -105,10 +105,15 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
             approval_policy: None,
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -154,6 +159,8 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
             model: test.session_configured.model.clone(),
             effort: None,
             summary: test.config.model_reasoning_summary,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
             personality: None,
@@ -186,10 +193,15 @@ async fn override_then_user_turn_uses_updated_collaboration_instructions() -> Re
             approval_policy: None,
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -205,6 +217,8 @@ async fn override_then_user_turn_uses_updated_collaboration_instructions() -> Re
             model: test.session_configured.model.clone(),
             effort: None,
             summary: test.config.model_reasoning_summary,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
@@ -239,10 +253,15 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             approval_policy: None,
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(base_mode),
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -258,6 +277,8 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             model: test.session_configured.model.clone(),
             effort: None,
             summary: test.config.model_reasoning_summary,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(turn_mode),
             final_output_json_schema: None,
             personality: None,
@@ -293,10 +314,15 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
             approval_policy: None,
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(first_text))),
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -317,10 +343,15 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
             approval_policy: None,
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(second_text))),
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -362,10 +393,15 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
             approval_policy: None,
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -386,10 +422,15 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
             approval_policy: None,
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -437,10 +478,15 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
             approval_policy: None,
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -492,10 +538,15 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
             approval_policy: None,
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(""))),
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 

@@ -279,6 +279,8 @@ impl TestCodex {
                 model: session_model,
                 effort: None,
                 summary: ReasoningSummary::Auto,
+                max_output_tokens: None,
+                history_depth: None,
                 collaboration_mode: None,
                 personality: None,
             })

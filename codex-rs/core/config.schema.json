@@ -14,6 +14,18 @@
           "format": "uint",
           "minimum": 1.0,
           "type": "integer"
+        },
+        "subagent_model": {
+          "description": "Optional model override for spawned subagents. When unset, subagents inherit the current session model.",
+          "type": "string"
+        },
+        "subagent_reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Optional reasoning effort override for spawned subagents. When unset, subagents inherit the current session reasoning effort."
         }
       },
       "type": "object"
@@ -755,6 +767,12 @@
             "type": "string"
           },
           "type": "object"
+        },
+        "message_url": {
+          "type": "string"
+        },
+        "sse_url": {
+          "type": "string"
         },
         "startup_timeout_ms": {
           "default": null,

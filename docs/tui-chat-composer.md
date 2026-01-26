@@ -203,6 +203,10 @@ This behavior is kept in sync between `codex-rs/tui` and `codex-rs/tui2`.
 The composer supports `@mcp__server__tool` mentions for MCP tools. When a line starts with a
 qualified MCP tool name, the core interprets it as an explicit tool invocation and runs
 the tool before the model responds.
+When MCPSearch aggregation is enabled, explicit `@mcp__...` mentions are routed through
+`MCPSearch` before the model responds; otherwise they run the MCP tool directly.
+This uses an explicit `MCPSearch` call (no routing). For heuristic selection, invoke
+`MCPSearch` with `route: true` or a query.
 
 Examples:
 

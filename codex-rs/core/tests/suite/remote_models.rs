@@ -139,10 +139,15 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             approval_policy: None,
             sandbox_policy: None,
             model: Some(REMOTE_MODEL_SLUG.to_string()),
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -178,6 +183,8 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             model: REMOTE_MODEL_SLUG.to_string(),
             effort: None,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -368,10 +375,15 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             approval_policy: None,
             sandbox_policy: None,
             model: Some(model.to_string()),
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -388,6 +400,8 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             model: model.to_string(),
             effort: None,
             summary: ReasoningSummary::Auto,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
         })

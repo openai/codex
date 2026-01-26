@@ -3874,12 +3874,15 @@ impl CodexMessageProcessor {
                     approval_policy: params.approval_policy.map(AskForApproval::to_core),
                     sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
                     model: params.model,
+                    subagent_model: None,
+                    subagent_effort: None,
                     effort: params.effort.map(Some),
                     summary: params.summary,
                     max_output_tokens: None,
                     history_depth: None,
                     collaboration_mode: params.collaboration_mode,
                     personality: params.personality,
+                    disallowed_tools: None,
                 })
                 .await;
         }

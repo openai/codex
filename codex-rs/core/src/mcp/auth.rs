@@ -68,5 +68,13 @@ async fn compute_auth_status(
             )
             .await
         }
+        McpServerTransportConfig::Sse {
+            bearer_token_env_var,
+            ..
+        } => Ok(if bearer_token_env_var.is_some() {
+            McpAuthStatus::BearerToken
+        } else {
+            McpAuthStatus::Unsupported
+        }),
     }
 }

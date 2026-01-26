@@ -148,6 +148,7 @@ use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
+use crate::bottom_pane::McpSearchToggleView;
 use crate::bottom_pane::PromptSuggestionsView;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
@@ -205,12 +206,14 @@ use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const MCP_SEARCH_TOOL_NAME: &str = "MCPSearch";
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
@@ -2439,10 +2442,10 @@ impl ChatWidget {
             }
             KeyEvent {
                 code: KeyCode::Up,
-                modifiers: KeyModifiers::ALT,
+                modifiers,
                 kind: KeyEventKind::Press,
                 ..
-            } if !self.queued_user_messages.is_empty() => {
+            } if modifiers.contains(KeyModifiers::ALT) && !self.queued_user_messages.is_empty() => {
                 // Prefer the most recently queued item.
                 if let Some(user_message) = self.queued_user_messages.pop_back() {
                     let local_image_paths = user_message
@@ -2608,6 +2611,9 @@ impl ChatWidget {
             SlashCommand::Personality => {
                 self.open_personality_popup();
             }
+            SlashCommand::SubagentModel => {
+                self.open_subagent_model_popup();
+            }
             SlashCommand::Collab => {
                 if self.collaboration_modes_enabled() {
                     self.open_collaboration_modes_popup();
@@ -2669,6 +2675,9 @@ impl ChatWidget {
             }
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
+            }
+            SlashCommand::McpSearch => {
+                self.open_mcp_search_toggle_view();
             }
             SlashCommand::Quit | SlashCommand::Exit => {
                 self.request_quit_without_confirmation();
@@ -3423,12 +3432,15 @@ impl ChatWidget {
                 approval_policy: None,
                 sandbox_policy: None,
                 model: Some(switch_model.clone()),
+                subagent_model: None,
+                subagent_effort: None,
                 effort: Some(Some(default_effort)),
                 summary: None,
                 max_output_tokens: None,
                 history_depth: None,
                 collaboration_mode: None,
                 personality: None,
+                disallowed_tools: None,
             }));
             tx.send(AppEvent::UpdateModel(switch_model.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(Some(default_effort)));
@@ -3578,6 +3590,65 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+        pub(crate) fn open_subagent_model_popup(&mut self) {
+            if !self.is_session_configured() {
+                self.add_info_message(
+                    "Subagent model selection is disabled until startup completes.".to_string(),
+                    None,
+                );
+                return;
+            }
+
+            let presets: Vec<ModelPreset> = match self.models_manager.try_list_models(&self.config)
+            {
+                Ok(models) => models,
+                Err(_) => {
+                    self.add_info_message(
+                        "Models are being updated; please try /subagent-model again in a moment."
+                            .to_string(),
+                        None,
+                    );
+                    return;
+                }
+            };
+
+            self.open_subagent_model_popup_with_presets(presets);
+        }
+
+        pub(crate) fn open_subagent_model_prompt(&mut self, initial: Option<String>) {
+            let session_label = self.model_display_name().to_string();
+            let initial_text = initial.or_else(|| self.config.subagent_model.clone());
+            let models_manager = Arc::clone(&self.models_manager);
+            let config = self.config.clone();
+            let tx = self.app_event_tx.clone();
+            let view = CustomPromptView::new(
+                "Set subagent model".to_string(),
+                "Type a model slug and press Enter".to_string(),
+                Some(format!("Session model: {session_label}")),
+                initial_text,
+                Box::new(move |model: String| {
+                    let trimmed = model.trim();
+                    if trimmed.is_empty() {
+                        tx.send(AppEvent::UpdateSubagentModel { model: None });
+                        tx.send(AppEvent::UpdateSubagentReasoningEffort(None));
+                        return;
+                    }
+
+                    let preset = models_manager
+                        .try_list_models(&config)
+                        .ok()
+                        .and_then(|models| {
+                            models.into_iter().find(|preset| preset.model == trimmed)
+                        })
+                        .unwrap_or_else(|| Self::fallback_subagent_preset(trimmed));
+                    tx.send(AppEvent::OpenSubagentReasoningPopup {
+                        preset,
+                        model_override: Some(trimmed.to_string()),
+                    });
+                }),
+            );
+            self.bottom_pane.show_view(Box::new(view));
+        }
     }
 
     fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
@@ -3700,6 +3771,100 @@ impl ChatWidget {
         });
     }
 
+    fn open_subagent_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
+        let presets: Vec<ModelPreset> = presets
+            .into_iter()
+            .filter(|preset| preset.show_in_picker)
+            .collect();
+
+        let session_model = self.current_model().to_string();
+        let session_label = presets
+            .iter()
+            .find(|preset| preset.model == session_model)
+            .map(|preset| preset.display_name.to_string())
+            .unwrap_or_else(|| self.model_display_name().to_string());
+        let current_override = self.config.subagent_model.clone();
+        let preset_override_match = current_override
+            .as_ref()
+            .is_some_and(|model| presets.iter().any(|preset| preset.model == *model));
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+        items.push(SelectionItem {
+            name: "Inherit session model".to_string(),
+            description: Some(format!("Use {session_label} (current session model).")),
+            is_current: current_override.is_none(),
+            actions: Self::subagent_selection_actions(None, None),
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        let custom_description = if let Some(override_model) = current_override.as_ref()
+            && !preset_override_match
+        {
+            Some(format!("Current override: {override_model}"))
+        } else {
+            Some("Enter any model slug.".to_string())
+        };
+        let custom_initial = current_override.clone();
+        let custom_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::OpenSubagentModelPrompt {
+                initial: custom_initial.clone(),
+            });
+        })];
+        items.push(SelectionItem {
+            name: "Custom model...".to_string(),
+            description: custom_description,
+            is_current: current_override.is_some() && !preset_override_match,
+            actions: custom_actions,
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        for preset in presets {
+            let description =
+                (!preset.description.is_empty()).then_some(preset.description.to_string());
+            let model = preset.model.clone();
+            let single_supported_effort = preset.supported_reasoning_efforts.len() <= 1;
+            let preset_for_action = preset.clone();
+            let model_for_action = model.clone();
+            let actions: Vec<SelectionAction> = if single_supported_effort {
+                Self::subagent_selection_actions(
+                    Some(model.clone()),
+                    Some(preset.default_reasoning_effort),
+                )
+            } else {
+                vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenSubagentReasoningPopup {
+                        preset: preset_for_action.clone(),
+                        model_override: Some(model_for_action.clone()),
+                    });
+                })]
+            };
+            items.push(SelectionItem {
+                name: preset.display_name.clone(),
+                description,
+                is_current: current_override.as_ref() == Some(&model),
+                is_default: preset.is_default,
+                actions,
+                dismiss_on_select: single_supported_effort,
+                ..Default::default()
+            });
+        }
+
+        let initial_selected_idx = items.iter().position(|item| item.is_current);
+        let header = self.model_menu_header(
+            "Select Subagent Model",
+            "Subagents inherit the current model unless overridden.",
+        );
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            header,
+            initial_selected_idx,
+            ..Default::default()
+        });
+    }
+
     fn is_auto_model(model: &str) -> bool {
         model.starts_with("codex-auto-")
     }
@@ -3816,12 +3981,15 @@ impl ChatWidget {
                 approval_policy: None,
                 sandbox_policy: None,
                 model: Some(model_for_action.clone()),
+                subagent_model: None,
+                subagent_effort: None,
                 effort: Some(effort_for_action),
                 summary: None,
                 max_output_tokens: None,
                 history_depth: None,
                 collaboration_mode: None,
                 personality: None,
+                disallowed_tools: None,
             }));
             tx.send(AppEvent::UpdateModel(model_for_action.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
@@ -3835,6 +4003,202 @@ impl ChatWidget {
                 effort_label
             );
         })]
+    }
+
+    fn subagent_selection_actions(
+        model_for_action: Option<String>,
+        effort_for_action: Option<ReasoningEffortConfig>,
+    ) -> Vec<SelectionAction> {
+        vec![Box::new(move |tx| {
+            let effort_label = effort_for_action
+                .map(|effort| effort.to_string())
+                .unwrap_or_else(|| "default".to_string());
+            tx.send(AppEvent::UpdateSubagentModel {
+                model: model_for_action.clone(),
+            });
+            tx.send(AppEvent::UpdateSubagentReasoningEffort(effort_for_action));
+            tracing::info!(
+                "Selected subagent model: {}, Selected effort: {}",
+                model_for_action
+                    .as_deref()
+                    .unwrap_or("inherit-session-model"),
+                effort_label
+            );
+        })]
+    }
+
+    fn fallback_subagent_preset(model: &str) -> ModelPreset {
+        let supported_reasoning_efforts = ReasoningEffortConfig::iter()
+            .map(|effort| ReasoningEffortPreset {
+                effort,
+                description: String::new(),
+            })
+            .collect();
+        ModelPreset {
+            id: model.to_string(),
+            model: model.to_string(),
+            display_name: model.to_string(),
+            description: String::new(),
+            default_reasoning_effort: ReasoningEffortConfig::Medium,
+            supported_reasoning_efforts,
+            is_default: false,
+            upgrade: None,
+            show_in_picker: false,
+            supported_in_api: true,
+        }
+    }
+
+    /// Open a popup to choose the reasoning effort (stage 2) for a subagent model.
+    pub(crate) fn open_subagent_reasoning_popup(
+        &mut self,
+        preset: ModelPreset,
+        model_override: Option<String>,
+    ) {
+        let default_effort: ReasoningEffortConfig = preset.default_reasoning_effort;
+        let supported = preset.supported_reasoning_efforts;
+
+        let warn_effort = if supported
+            .iter()
+            .any(|option| option.effort == ReasoningEffortConfig::XHigh)
+        {
+            Some(ReasoningEffortConfig::XHigh)
+        } else if supported
+            .iter()
+            .any(|option| option.effort == ReasoningEffortConfig::High)
+        {
+            Some(ReasoningEffortConfig::High)
+        } else {
+            None
+        };
+        let warning_text = warn_effort.map(|effort| {
+            let effort_label = Self::reasoning_effort_label(effort);
+            format!("⚠ {effort_label} reasoning effort can quickly consume Plus plan rate limits.")
+        });
+        let warn_for_model = preset.model.starts_with("gpt-5.1-codex")
+            || preset.model.starts_with("gpt-5.1-codex-max")
+            || preset.model.starts_with("gpt-5.2");
+
+        struct EffortChoice {
+            stored: Option<ReasoningEffortConfig>,
+            display: ReasoningEffortConfig,
+        }
+        let mut choices: Vec<EffortChoice> = Vec::new();
+        for effort in ReasoningEffortConfig::iter() {
+            if supported.iter().any(|option| option.effort == effort) {
+                choices.push(EffortChoice {
+                    stored: Some(effort),
+                    display: effort,
+                });
+            }
+        }
+        if choices.is_empty() {
+            choices.push(EffortChoice {
+                stored: Some(default_effort),
+                display: default_effort,
+            });
+        }
+
+        if choices.len() == 1 {
+            if let Some(effort) = choices.first().and_then(|c| c.stored) {
+                self.apply_subagent_model_and_effort(model_override, Some(effort));
+            } else {
+                self.apply_subagent_model_and_effort(model_override, None);
+            }
+            return;
+        }
+
+        let default_choice: Option<ReasoningEffortConfig> = choices
+            .iter()
+            .any(|choice| choice.stored == Some(default_effort))
+            .then_some(Some(default_effort))
+            .flatten()
+            .or_else(|| choices.iter().find_map(|choice| choice.stored))
+            .or(Some(default_effort));
+
+        let is_current_model = match (&self.config.subagent_model, &model_override) {
+            (None, None) => true,
+            (Some(current), Some(selected)) => current == selected,
+            _ => false,
+        };
+        let highlight_choice = if is_current_model {
+            self.config.subagent_reasoning_effort
+        } else {
+            default_choice
+        };
+        let selection_choice = highlight_choice.or(default_choice);
+        let initial_selected_idx = choices
+            .iter()
+            .position(|choice| choice.stored == selection_choice)
+            .or_else(|| {
+                selection_choice
+                    .and_then(|effort| choices.iter().position(|choice| choice.display == effort))
+            });
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for choice in choices.iter() {
+            let effort = choice.display;
+            let mut effort_label = Self::reasoning_effort_label(effort).to_string();
+            if choice.stored == default_choice {
+                effort_label.push_str(" (default)");
+            }
+
+            let description = choice
+                .stored
+                .and_then(|effort| {
+                    supported
+                        .iter()
+                        .find(|option| option.effort == effort)
+                        .map(|option| option.description.to_string())
+                })
+                .filter(|text| !text.is_empty());
+
+            let show_warning = warn_for_model && warn_effort == Some(effort);
+            let selected_description = if show_warning {
+                warning_text.as_ref().map(|warning_message| {
+                    description.as_ref().map_or_else(
+                        || warning_message.clone(),
+                        |d| format!("{d}\n{warning_message}"),
+                    )
+                })
+            } else {
+                None
+            };
+
+            let actions = Self::subagent_selection_actions(model_override.clone(), choice.stored);
+
+            items.push(SelectionItem {
+                name: effort_label,
+                description,
+                selected_description,
+                is_current: is_current_model && choice.stored == highlight_choice,
+                actions,
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from(
+            format!("Select Subagent Reasoning Level for {}", preset.model).bold(),
+        ));
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            initial_selected_idx,
+            ..Default::default()
+        });
+    }
+
+    fn apply_subagent_model_and_effort(
+        &self,
+        model: Option<String>,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
+        self.app_event_tx
+            .send(AppEvent::UpdateSubagentModel { model });
+        self.app_event_tx
+            .send(AppEvent::UpdateSubagentReasoningEffort(effort));
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
@@ -3991,12 +4355,15 @@ impl ChatWidget {
                 approval_policy: None,
                 sandbox_policy: None,
                 model: Some(model.clone()),
+                subagent_model: None,
+                subagent_effort: None,
                 effort: Some(effort),
                 summary: None,
                 max_output_tokens: None,
                 history_depth: None,
                 collaboration_mode: None,
                 personality: None,
+                disallowed_tools: None,
             }));
         self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
         self.app_event_tx
@@ -4166,6 +4533,16 @@ impl ChatWidget {
         self.bottom_pane.show_view(Box::new(view));
     }
 
+    pub(crate) fn open_mcp_search_toggle_view(&mut self) {
+        let enabled = !self
+            .config
+            .disallowed_tools
+            .iter()
+            .any(|tool| tool == MCP_SEARCH_TOOL_NAME);
+        let view = McpSearchToggleView::new(enabled, self.app_event_tx.clone());
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
     pub(crate) fn open_prompt_suggestions_view(&mut self, suggestion: Option<String>) {
         let enabled = self.config.features.enabled(Feature::PromptSuggestions);
         let view = PromptSuggestionsView::new(suggestion, enabled, self.app_event_tx.clone());
@@ -4183,12 +4560,15 @@ impl ChatWidget {
                 approval_policy: Some(approval),
                 sandbox_policy: Some(sandbox_clone.clone()),
                 model: None,
+                subagent_model: None,
+                subagent_effort: None,
                 effort: None,
                 summary: None,
                 max_output_tokens: None,
                 history_depth: None,
                 collaboration_mode: None,
                 personality: None,
+                disallowed_tools: None,
             }));
             tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
@@ -4784,6 +5164,31 @@ impl ChatWidget {
         if feature == Feature::PromptSuggestions && !enabled {
             self.latest_prompt_suggestion = None;
         }
+    }
+
+    pub(crate) fn set_mcp_search_enabled(&mut self, enabled: bool) {
+        if enabled {
+            self.config
+                .disallowed_tools
+                .retain(|tool| tool != MCP_SEARCH_TOOL_NAME);
+        } else if !self
+            .config
+            .disallowed_tools
+            .iter()
+            .any(|tool| tool == MCP_SEARCH_TOOL_NAME)
+        {
+            self.config
+                .disallowed_tools
+                .push(MCP_SEARCH_TOOL_NAME.to_string());
+        }
+    }
+
+    pub(crate) fn set_subagent_model(&mut self, model: Option<String>) {
+        self.config.subagent_model = model;
+    }
+
+    pub(crate) fn set_subagent_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        self.config.subagent_reasoning_effort = effort;
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
@@ -5466,6 +5871,7 @@ impl ChatWidget {
         let view = CustomPromptView::new(
             "Custom review instructions".to_string(),
             "Type instructions and press Enter".to_string(),
+            None,
             None,
             Box::new(move |prompt: String| {
                 let trimmed = prompt.trim().to_string();

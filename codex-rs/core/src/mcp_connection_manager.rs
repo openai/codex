@@ -893,6 +893,28 @@ async fn make_rmcp_client(
             .await
             .map_err(StartupOutcomeError::from)
         }
+        McpServerTransportConfig::Sse {
+            sse_url,
+            message_url,
+            http_headers,
+            env_http_headers,
+            bearer_token_env_var,
+        } => {
+            let resolved_bearer_token =
+                match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
+                    Ok(token) => token,
+                    Err(error) => return Err(error.into()),
+                };
+            RmcpClient::new_sse_client(
+                &sse_url,
+                message_url,
+                resolved_bearer_token,
+                http_headers,
+                env_http_headers,
+            )
+            .await
+            .map_err(StartupOutcomeError::from)
+        }
     }
 }
 

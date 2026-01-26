@@ -119,10 +119,15 @@ async fn override_turn_context_records_permissions_update() -> Result<()> {
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -162,10 +167,15 @@ async fn override_turn_context_records_environment_update() -> Result<()> {
             approval_policy: None,
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 
@@ -199,10 +209,15 @@ async fn override_turn_context_records_collaboration_update() -> Result<()> {
             approval_policy: None,
             sandbox_policy: None,
             model: None,
+            subagent_model: None,
+            subagent_effort: None,
             effort: None,
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
+            disallowed_tools: None,
         })
         .await?;
 

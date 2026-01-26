@@ -14,11 +14,13 @@ pub enum SlashCommand {
     // more frequently used commands should be listed first.
     Model,
     Personality,
+    SubagentModel,
     Approvals,
     Permissions,
     #[strum(serialize = "setup-elevated-sandbox")]
     ElevateSandbox,
     Experimental,
+    McpSearch,
     Skills,
     Review,
     New,
@@ -65,12 +67,17 @@ impl SlashCommand {
             SlashCommand::Ps => "view background terminals",
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Personality => "choose a communication style for responses",
+            SlashCommand::SubagentModel => {
+                "choose the model and reasoning effort used by spawned subagents"
+            }
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent => "switch the active agent thread",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::Experimental => "toggle experimental features",
+            SlashCommand::Experimental => "toggle experimental features",
+            SlashCommand::McpSearch => "toggle MCPSearch tool aggregation",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Tools => "list available tools",
             SlashCommand::Logout => "log out of Codex",
@@ -96,10 +103,12 @@ impl SlashCommand {
             // | SlashCommand::Undo
             | SlashCommand::Model
             | SlashCommand::Personality
+            | SlashCommand::SubagentModel
             | SlashCommand::Approvals
             | SlashCommand::Permissions
             | SlashCommand::ElevateSandbox
             | SlashCommand::Experimental
+            | SlashCommand::McpSearch
             | SlashCommand::Review
             | SlashCommand::Logout => false,
             SlashCommand::Diff

@@ -63,6 +63,7 @@ impl<T: HttpTransport, A: AuthProvider> ChatClient<T, A> {
             ChatRequestBuilder::new(model, &prompt.instructions, &prompt.input, &prompt.tools)
                 .conversation_id(conversation_id)
                 .session_source(session_source)
+                .max_tokens(prompt.max_output_tokens)
                 .build(self.streaming.provider())?;
 
         self.stream_request(request).await

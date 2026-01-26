@@ -60,6 +60,7 @@ use crate::oauth::OAuthCredentialsStoreMode;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
 use crate::program_resolver;
+use crate::sse_transport::SseClientTransport;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use crate::utils::convert_call_tool_result;
@@ -76,6 +77,9 @@ enum PendingTransport {
     StreamableHttpWithOAuth {
         transport: StreamableHttpClientTransport<AuthClient<reqwest::Client>>,
         oauth_persistor: OAuthPersistor,
+    },
+    Sse {
+        transport: SseClientTransport,
     },
 }
 
@@ -225,6 +229,31 @@ impl RmcpClient {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub async fn new_sse_client(
+        sse_url: &str,
+        message_url: Option<String>,
+        bearer_token: Option<String>,
+        http_headers: Option<HashMap<String, String>>,
+        env_http_headers: Option<HashMap<String, String>>,
+    ) -> Result<Self> {
+        let default_headers = build_default_headers(http_headers, env_http_headers)?;
+        let http_client =
+            apply_default_headers(reqwest::Client::builder(), &default_headers).build()?;
+        let transport = SseClientTransport::connect(
+            http_client,
+            sse_url.to_string(),
+            message_url,
+            bearer_token,
+        )
+        .await?;
+        Ok(Self {
+            state: Mutex::new(ClientState::Connecting {
+                transport: Some(PendingTransport::Sse { transport }),
+            }),
+        })
+    }
+
     /// Perform the initialization handshake with the MCP server.
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle#initialization
     pub async fn initialize(
@@ -254,6 +283,10 @@ impl RmcpClient {
                     }) => (
                         service::serve_client(client_handler.clone(), transport).boxed(),
                         Some(oauth_persistor),
+                    ),
+                    Some(PendingTransport::Sse { transport }) => (
+                        service::serve_client(client_handler.clone(), transport).boxed(),
+                        None,
                     ),
                     None => return Err(anyhow!("client already initializing")),
                 },

@@ -30,6 +30,8 @@ fn resume_history(
         collaboration_mode: None,
         effort: config.model_reasoning_effort,
         summary: config.model_reasoning_summary,
+        max_output_tokens: None,
+        history_depth: None,
         user_instructions: None,
         developer_instructions: None,
         final_output_json_schema: None,

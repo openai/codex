@@ -38,10 +38,15 @@ async fn override_turn_context_does_not_persist_when_config_exists() {
             approval_policy: None,
             sandbox_policy: None,
             model: Some("o3".to_string()),
+            subagent_model: None,
+            subagent_effort: None,
             effort: Some(Some(ReasoningEffort::High)),
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
+            disallowed_tools: None,
         })
         .await
         .expect("submit override");
@@ -82,10 +87,15 @@ async fn override_turn_context_does_not_create_config_file() {
             approval_policy: None,
             sandbox_policy: None,
             model: Some("o3".to_string()),
+            subagent_model: None,
+            subagent_effort: None,
             effort: Some(Some(ReasoningEffort::Medium)),
             summary: None,
+            max_output_tokens: None,
+            history_depth: None,
             collaboration_mode: None,
             personality: None,
+            disallowed_tools: None,
         })
         .await
         .expect("submit override");

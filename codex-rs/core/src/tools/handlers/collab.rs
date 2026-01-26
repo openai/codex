@@ -140,6 +140,9 @@ mod spawn {
         agent_role
             .apply_to_config(&mut config)
             .map_err(FunctionCallError::RespondToModel)?;
+        if let Some(subagent_model) = config.subagent_model.clone() {
+            config.model = Some(subagent_model);
+        }
 
         let result = session
             .services
@@ -598,7 +601,8 @@ fn build_agent_spawn_config(
     config.base_instructions = Some(base_instructions.text.clone());
     config.model = Some(turn.client.get_model());
     config.model_provider = turn.client.get_provider();
-    config.model_reasoning_effort = turn.client.get_reasoning_effort();
+    let session_effort = turn.client.get_reasoning_effort();
+    config.model_reasoning_effort = config.subagent_reasoning_effort.or(session_effort);
     config.model_reasoning_summary = turn.client.get_reasoning_summary();
     config.developer_instructions = turn.developer_instructions.clone();
     config.compact_prompt = turn.compact_prompt.clone();

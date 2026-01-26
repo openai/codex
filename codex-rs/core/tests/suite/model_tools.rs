@@ -62,13 +62,11 @@ async fn model_selects_expected_tools() {
         codex_tools,
         vec![
             "local_shell".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
-            "read_mcp_resource".to_string(),
             "update_plan".to_string(),
             "request_user_input".to_string(),
             "web_search".to_string(),
-            "view_image".to_string()
+            "view_image".to_string(),
+            "MCPSearch".to_string()
         ],
         "codex-mini-latest should expose the local shell tool",
     );
@@ -78,14 +76,12 @@ async fn model_selects_expected_tools() {
         gpt5_codex_tools,
         vec![
             "shell_command".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
-            "read_mcp_resource".to_string(),
             "update_plan".to_string(),
             "request_user_input".to_string(),
             "apply_patch".to_string(),
             "web_search".to_string(),
-            "view_image".to_string()
+            "view_image".to_string(),
+            "MCPSearch".to_string()
         ],
         "gpt-5-codex should expose the apply_patch tool",
     );
@@ -95,14 +91,12 @@ async fn model_selects_expected_tools() {
         gpt51_codex_tools,
         vec![
             "shell_command".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
-            "read_mcp_resource".to_string(),
             "update_plan".to_string(),
             "request_user_input".to_string(),
             "apply_patch".to_string(),
             "web_search".to_string(),
-            "view_image".to_string()
+            "view_image".to_string(),
+            "MCPSearch".to_string()
         ],
         "gpt-5.1-codex should expose the apply_patch tool",
     );
@@ -112,13 +106,11 @@ async fn model_selects_expected_tools() {
         gpt5_tools,
         vec![
             "shell".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
-            "read_mcp_resource".to_string(),
             "update_plan".to_string(),
             "request_user_input".to_string(),
             "web_search".to_string(),
-            "view_image".to_string()
+            "view_image".to_string(),
+            "MCPSearch".to_string()
         ],
         "gpt-5 should expose the apply_patch tool",
     );
@@ -128,14 +120,12 @@ async fn model_selects_expected_tools() {
         gpt51_tools,
         vec![
             "shell_command".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
-            "read_mcp_resource".to_string(),
             "update_plan".to_string(),
             "request_user_input".to_string(),
             "apply_patch".to_string(),
             "web_search".to_string(),
-            "view_image".to_string()
+            "view_image".to_string(),
+            "MCPSearch".to_string()
         ],
         "gpt-5.1 should expose the apply_patch tool",
     );
@@ -145,14 +135,12 @@ async fn model_selects_expected_tools() {
         vec![
             "exec_command".to_string(),
             "write_stdin".to_string(),
-            "list_mcp_resources".to_string(),
-            "list_mcp_resource_templates".to_string(),
-            "read_mcp_resource".to_string(),
             "update_plan".to_string(),
             "request_user_input".to_string(),
             "apply_patch".to_string(),
             "web_search".to_string(),
-            "view_image".to_string()
+            "view_image".to_string(),
+            "MCPSearch".to_string()
         ],
         "exp-5.1 should expose the apply_patch tool",
     );

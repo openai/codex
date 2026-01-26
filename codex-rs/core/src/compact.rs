@@ -98,6 +98,8 @@ async fn run_compact_task_inner(
         collaboration_mode: Some(collaboration_mode),
         effort: turn_context.client.get_reasoning_effort(),
         summary: turn_context.client.get_reasoning_summary(),
+        max_output_tokens: turn_context.max_output_tokens,
+        history_depth: turn_context.history_depth,
         user_instructions: turn_context.user_instructions.clone(),
         developer_instructions: turn_context.developer_instructions.clone(),
         final_output_json_schema: turn_context.final_output_json_schema.clone(),

@@ -195,6 +195,31 @@ impl ContextManager {
         self.replace(snapshot[..cut_idx].to_vec());
     }
 
+    /// Retain only the most recent `num_turns` user turns while preserving any session prefix.
+    pub(crate) fn retain_last_n_user_turns(&mut self, num_turns: u32) {
+        let snapshot = self.items.clone();
+        let user_positions = user_message_positions(&snapshot);
+        let Some(&first_user_idx) = user_positions.first() else {
+            self.replace(snapshot);
+            return;
+        };
+        if num_turns == 0 {
+            self.replace(snapshot[..first_user_idx].to_vec());
+            return;
+        }
+
+        let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
+        let keep_from = if n_from_end >= user_positions.len() {
+            first_user_idx
+        } else {
+            user_positions[user_positions.len() - n_from_end]
+        };
+
+        let mut retained = snapshot[..first_user_idx].to_vec();
+        retained.extend_from_slice(&snapshot[keep_from..]);
+        self.replace(retained);
+    }
+
     pub(crate) fn update_token_info(
         &mut self,
         usage: &TokenUsage,

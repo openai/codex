@@ -42,14 +42,20 @@ impl CustomPromptView {
         title: String,
         placeholder: String,
         context_label: Option<String>,
+        initial_text: Option<String>,
         on_submit: PromptSubmitted,
     ) -> Self {
+        let mut textarea = TextArea::new();
+        if let Some(initial_text) = initial_text.as_deref() {
+            textarea.set_text_clearing_elements(initial_text);
+            textarea.set_cursor(initial_text.len());
+        }
         Self {
             title,
             placeholder,
             context_label,
             on_submit,
-            textarea: TextArea::new(),
+            textarea,
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,
         }
