@@ -1374,6 +1374,20 @@ impl CodexMessageProcessor {
                     });
                     break AgentStatus::Errored(message);
                 }
+                EventMsg::ExecApprovalRequest(_)
+                | EventMsg::ApplyPatchApprovalRequest(_)
+                | EventMsg::RequestUserInput(_)
+                | EventMsg::ElicitationRequest(_) => {
+                    // `exec/run` has no interactive channel; fail fast instead of hanging.
+                    let message =
+                        "exec/run encountered a blocking approval or input request".to_string();
+                    error = Some(TurnError {
+                        message: message.clone(),
+                        codex_error_info: None,
+                        additional_details: None,
+                    });
+                    break AgentStatus::Errored(message);
+                }
                 _ => {}
             }
         };
