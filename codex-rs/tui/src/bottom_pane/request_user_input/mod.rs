@@ -6,23 +6,24 @@
 //! - Typing while focused on options jumps into notes to keep freeform input fast.
 //! - Enter advances to the next question; the last question submits all answers.
 //! - Freeform-only questions submit an empty answer list when empty.
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 mod layout;
 mod render;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
+use crate::bottom_pane::default_chat_composer;
 use crate::bottom_pane::scroll_state::ScrollState;
-use crate::bottom_pane::textarea::TextArea;
-use crate::bottom_pane::textarea::TextAreaState;
 
 use codex_core::protocol::Op;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
@@ -31,7 +32,6 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 
 const NOTES_PLACEHOLDER: &str = "Add notes (optional)";
 const ANSWER_PLACEHOLDER: &str = "Type your answer (optional)";
-const SELECT_OPTION_PLACEHOLDER: &str = "Select an option to add notes (optional)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
@@ -40,16 +40,27 @@ enum Focus {
 }
 
 struct NotesEntry {
-    text: TextArea,
-    state: RefCell<TextAreaState>,
+    composer: ChatComposer,
 }
 
 impl NotesEntry {
-    fn new() -> Self {
-        Self {
-            text: TextArea::new(),
-            state: RefCell::new(TextAreaState::default()),
-        }
+    fn new(
+        app_event_tx: AppEventSender,
+        enhanced_keys_supported: bool,
+        placeholder_text: &'static str,
+    ) -> Self {
+        let mut composer = default_chat_composer(
+            true,
+            app_event_tx,
+            enhanced_keys_supported,
+            placeholder_text.to_string(),
+            false,
+        );
+        composer.set_popups_enabled(false);
+        composer.set_footer_enabled(false);
+        composer.set_prompt_inset_enabled(false);
+        composer.set_task_running(false);
+        Self { composer }
     }
 }
 
@@ -73,10 +84,15 @@ pub(crate) struct RequestUserInputOverlay {
     current_idx: usize,
     focus: Focus,
     done: bool,
+    enhanced_keys_supported: bool,
 }
 
 impl RequestUserInputOverlay {
-    pub(crate) fn new(request: RequestUserInputEvent, app_event_tx: AppEventSender) -> Self {
+    pub(crate) fn new(
+        request: RequestUserInputEvent,
+        app_event_tx: AppEventSender,
+        enhanced_keys_supported: bool,
+    ) -> Self {
         let mut overlay = Self {
             app_event_tx,
             request,
@@ -85,6 +101,7 @@ impl RequestUserInputOverlay {
             current_idx: 0,
             focus: Focus::Options,
             done: false,
+            enhanced_keys_supported,
         };
         overlay.reset_for_request();
         overlay.ensure_focus_available();
@@ -168,20 +185,6 @@ impl RequestUserInputOverlay {
         answer.option_notes.get_mut(idx)
     }
 
-    fn notes_placeholder(&self) -> &'static str {
-        if self.has_options()
-            && self
-                .current_answer()
-                .is_some_and(|answer| answer.selected.is_none())
-        {
-            SELECT_OPTION_PLACEHOLDER
-        } else if self.has_options() {
-            NOTES_PLACEHOLDER
-        } else {
-            ANSWER_PLACEHOLDER
-        }
-    }
-
     /// Ensure the focus mode is valid for the current question.
     fn ensure_focus_available(&mut self) {
         if self.question_count() == 0 {
@@ -194,23 +197,44 @@ impl RequestUserInputOverlay {
 
     /// Rebuild local answer state from the current request.
     fn reset_for_request(&mut self) {
+        let app_event_tx = self.app_event_tx.clone();
+        let enhanced_keys_supported = self.enhanced_keys_supported;
         self.answers = self
             .request
             .questions
             .iter()
             .map(|question| {
                 let mut option_state = ScrollState::new();
+                let mut has_options = false;
                 let mut option_notes = Vec::new();
                 if let Some(options) = question.options.as_ref()
                     && !options.is_empty()
                 {
+                    has_options = true;
                     option_state.selected_idx = Some(0);
-                    option_notes = (0..options.len()).map(|_| NotesEntry::new()).collect();
+                    option_notes = (0..options.len())
+                        .map(|_| {
+                            NotesEntry::new(
+                                app_event_tx.clone(),
+                                enhanced_keys_supported,
+                                NOTES_PLACEHOLDER,
+                            )
+                        })
+                        .collect();
                 }
+                let placeholder_text = if has_options {
+                    NOTES_PLACEHOLDER
+                } else {
+                    ANSWER_PLACEHOLDER
+                };
                 AnswerState {
                     selected: option_state.selected_idx,
                     option_state,
-                    notes: NotesEntry::new(),
+                    notes: NotesEntry::new(
+                        app_event_tx.clone(),
+                        enhanced_keys_supported,
+                        placeholder_text,
+                    ),
                     option_notes,
                 }
             })
@@ -282,10 +306,15 @@ impl RequestUserInputOverlay {
             let notes = if options.is_some_and(|opts| !opts.is_empty()) {
                 selected_idx
                     .and_then(|selected| answer_state.option_notes.get(selected))
-                    .map(|entry| entry.text.text().trim().to_string())
+                    .map(|entry| entry.composer.current_text().trim().to_string())
                     .unwrap_or_default()
             } else {
-                answer_state.notes.text.text().trim().to_string()
+                answer_state
+                    .notes
+                    .composer
+                    .current_text()
+                    .trim()
+                    .to_string()
             };
             let selected_label = selected_idx.and_then(|selected_idx| {
                 question
@@ -331,7 +360,7 @@ impl RequestUserInputOverlay {
                 if options.is_some_and(|opts| !opts.is_empty()) {
                     false
                 } else {
-                    answer.notes.text.text().trim().is_empty()
+                    answer.notes.composer.current_text().trim().is_empty()
                 }
             })
             .count()
@@ -342,8 +371,8 @@ impl RequestUserInputOverlay {
         let Some(entry) = self.current_notes_entry() else {
             return 3;
         };
-        let usable_width = width.saturating_sub(2);
-        let text_height = entry.text.desired_height(usable_width).clamp(1, 6);
+        let composer_height = entry.composer.desired_textarea_height(width);
+        let text_height = composer_height.saturating_sub(2).clamp(1, 6);
         text_height.saturating_add(2).clamp(3, 8)
     }
 }
@@ -401,14 +430,16 @@ impl BottomPaneView for RequestUserInputOverlay {
                         self.focus = Focus::Notes;
                         self.ensure_selected_for_notes();
                         if let Some(entry) = self.current_notes_entry_mut() {
-                            entry.text.input(key_event);
+                            entry.composer.handle_key_event(key_event);
                         }
                     }
                     _ => {}
                 }
             }
             Focus::Notes => {
-                if matches!(key_event.code, KeyCode::Enter) {
+                if matches!(key_event.code, KeyCode::Enter)
+                    && key_event.modifiers == KeyModifiers::NONE
+                {
                     self.go_next_or_submit();
                     return;
                 }
@@ -433,10 +464,28 @@ impl BottomPaneView for RequestUserInputOverlay {
                 // Notes are per option when options exist.
                 self.ensure_selected_for_notes();
                 if let Some(entry) = self.current_notes_entry_mut() {
-                    entry.text.input(key_event);
+                    entry.composer.handle_key_event(key_event);
                 }
             }
         }
+    }
+
+    fn flush_paste_burst_if_due(&mut self) -> bool {
+        self.ensure_selected_for_notes();
+        if let Some(entry) = self.current_notes_entry_mut() {
+            entry.composer.flush_paste_burst_if_due()
+        } else {
+            false
+        }
+    }
+
+    fn is_in_paste_burst(&self) -> bool {
+        self.current_notes_entry()
+            .is_some_and(|entry| entry.composer.is_in_paste_burst())
+    }
+
+    fn recommended_redraw_delay(&self) -> Option<Duration> {
+        Some(ChatComposer::recommended_paste_flush_delay())
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
@@ -453,21 +502,14 @@ impl BottomPaneView for RequestUserInputOverlay {
         if pasted.is_empty() {
             return false;
         }
-        if matches!(self.focus, Focus::Notes) {
-            self.ensure_selected_for_notes();
-            if let Some(entry) = self.current_notes_entry_mut() {
-                entry.text.insert_str(&pasted);
-                return true;
-            }
-            return true;
-        }
         if matches!(self.focus, Focus::Options) {
             // Treat pastes the same as typing: switch into notes.
             self.focus = Focus::Notes;
+        }
+        if matches!(self.focus, Focus::Notes) {
             self.ensure_selected_for_notes();
             if let Some(entry) = self.current_notes_entry_mut() {
-                entry.text.insert_str(&pasted);
-                return true;
+                return entry.composer.handle_paste(pasted);
             }
             return true;
         }
@@ -569,6 +611,7 @@ mod tests {
         let mut overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_with_options("q1", "First")]),
             tx,
+            true,
         );
         overlay.try_consume_user_input_request(request_event(
             "turn-2",
@@ -592,6 +635,7 @@ mod tests {
         let mut overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
             tx,
+            true,
         );
 
         overlay.submit_answers();
@@ -611,6 +655,7 @@ mod tests {
         let mut overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_without_options("q1", "Notes")]),
             tx,
+            true,
         );
 
         overlay.submit_answers();
@@ -629,6 +674,7 @@ mod tests {
         let mut overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
             tx,
+            true,
         );
 
         {
@@ -639,7 +685,7 @@ mod tests {
         overlay
             .current_notes_entry_mut()
             .expect("notes entry missing")
-            .text
+            .composer
             .insert_str("Notes for option 2");
 
         overlay.submit_answers();
@@ -664,6 +710,7 @@ mod tests {
         let overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_with_options("q1", "Area")]),
             tx,
+            true,
         );
         let area = Rect::new(0, 0, 64, 16);
         insta::assert_snapshot!(
@@ -678,6 +725,7 @@ mod tests {
         let overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_with_options("q1", "Area")]),
             tx,
+            true,
         );
         let area = Rect::new(0, 0, 60, 8);
         insta::assert_snapshot!(
@@ -721,6 +769,7 @@ mod tests {
                 }],
             ),
             tx,
+            true,
         );
         {
             let answer = overlay.current_answer_mut().expect("answer missing");
@@ -740,6 +789,7 @@ mod tests {
         let overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_without_options("q1", "Goal")]),
             tx,
+            true,
         );
         let area = Rect::new(0, 0, 64, 10);
         insta::assert_snapshot!(
@@ -754,12 +804,13 @@ mod tests {
         let mut overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
             tx,
+            true,
         );
         overlay.focus = Focus::Notes;
         overlay
             .current_notes_entry_mut()
             .expect("notes entry missing")
-            .text
+            .composer
             .insert_str("Notes");
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Down));

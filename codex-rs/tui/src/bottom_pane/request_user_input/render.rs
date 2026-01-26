@@ -5,7 +5,6 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
-use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
 
 use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
@@ -251,18 +250,9 @@ impl RequestUserInputOverlay {
                 width: input_area.width.saturating_sub(prefix_width),
                 height: 1,
             };
-            let state = *entry.state.borrow();
-            return entry.text.cursor_pos_with_state(textarea_rect, state);
+            return entry.composer.cursor_pos_textarea_only(textarea_rect);
         }
-        let text_area_height = input_area.height.saturating_sub(2);
-        let textarea_rect = Rect {
-            x: input_area.x.saturating_add(1),
-            y: input_area.y.saturating_add(1),
-            width: input_area.width.saturating_sub(2),
-            height: text_area_height,
-        };
-        let state = *entry.state.borrow();
-        entry.text.cursor_pos_with_state(textarea_rect, state)
+        entry.composer.cursor_pos_textarea_only(input_area)
     }
 
     /// Render the notes input box or inline notes field.
@@ -296,65 +286,12 @@ impl RequestUserInputOverlay {
                 width: area.width.saturating_sub(prefix_width),
                 height: 1,
             };
-            let mut state = entry.state.borrow_mut();
             Clear.render(textarea_rect, buf);
-            StatefulWidgetRef::render_ref(&(&entry.text), textarea_rect, buf, &mut state);
-            if entry.text.text().is_empty() {
-                Paragraph::new(Line::from(self.notes_placeholder().dim()))
-                    .render(textarea_rect, buf);
-            }
+            entry.composer.render_textarea_only(textarea_rect, buf);
             return;
         }
-        // Draw a light ASCII frame around the notes area.
-        let top_border = format!("+{}+", "-".repeat(area.width.saturating_sub(2) as usize));
-        let bottom_border = top_border.clone();
-        Paragraph::new(Line::from(top_border)).render(
-            Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: 1,
-            },
-            buf,
-        );
-        Paragraph::new(Line::from(bottom_border)).render(
-            Rect {
-                x: area.x,
-                y: area.y.saturating_add(area.height.saturating_sub(1)),
-                width: area.width,
-                height: 1,
-            },
-            buf,
-        );
-        for row in 1..area.height.saturating_sub(1) {
-            Line::from(vec![
-                "|".into(),
-                " ".repeat(area.width.saturating_sub(2) as usize).into(),
-                "|".into(),
-            ])
-            .render(
-                Rect {
-                    x: area.x,
-                    y: area.y.saturating_add(row),
-                    width: area.width,
-                    height: 1,
-                },
-                buf,
-            );
-        }
-        let text_area_height = area.height.saturating_sub(2);
-        let textarea_rect = Rect {
-            x: area.x.saturating_add(1),
-            y: area.y.saturating_add(1),
-            width: area.width.saturating_sub(2),
-            height: text_area_height,
-        };
-        let mut state = entry.state.borrow_mut();
-        Clear.render(textarea_rect, buf);
-        StatefulWidgetRef::render_ref(&(&entry.text), textarea_rect, buf, &mut state);
-        if entry.text.text().is_empty() {
-            Paragraph::new(Line::from(self.notes_placeholder().dim())).render(textarea_rect, buf);
-        }
+        Clear.render(area, buf);
+        entry.composer.render_textarea_only(area, buf);
     }
 
     fn focus_is_options(&self) -> bool {
@@ -371,5 +308,5 @@ impl RequestUserInputOverlay {
 }
 
 fn notes_prefix() -> &'static str {
-    "Notes: "
+    "Notes"
 }

@@ -7,6 +7,7 @@
 //! - Handling submit vs newline on Enter.
 //! - Turning raw key streams into explicit paste operations on platforms where terminals
 //!   don't provide reliable bracketed paste (notably Windows).
+//! - Supporting textarea-only embedding by disabling popups/footers and rendering the core input.
 //!
 //! # Key Event Routing
 //!
@@ -201,6 +202,7 @@ pub(crate) struct ChatComposer {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
     active_popup: ActivePopup,
+    popups_enabled: bool,
     app_event_tx: AppEventSender,
     history: ChatComposerHistory,
     quit_shortcut_expires_at: Option<Instant>,
@@ -224,6 +226,8 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    footer_enabled: bool,
+    prompt_inset_enabled: bool,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
     footer_flash: Option<FooterFlash>,
@@ -253,6 +257,22 @@ enum ActivePopup {
 
 const FOOTER_SPACING_HEIGHT: u16 = 0;
 
+pub(crate) fn default_chat_composer(
+    has_input_focus: bool,
+    app_event_tx: AppEventSender,
+    enhanced_keys_supported: bool,
+    placeholder_text: String,
+    disable_paste_burst: bool,
+) -> ChatComposer {
+    ChatComposer::new(
+        has_input_focus,
+        app_event_tx,
+        enhanced_keys_supported,
+        placeholder_text,
+        disable_paste_burst,
+    )
+}
+
 impl ChatComposer {
     pub fn new(
         has_input_focus: bool,
@@ -267,6 +287,7 @@ impl ChatComposer {
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             active_popup: ActivePopup::None,
+            popups_enabled: true,
             app_event_tx,
             history: ChatComposerHistory::new(),
             quit_shortcut_expires_at: None,
@@ -286,6 +307,8 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            footer_enabled: true,
+            prompt_inset_enabled: true,
             footer_mode: FooterMode::ShortcutSummary,
             footer_hint_override: None,
             footer_flash: None,
@@ -320,6 +343,66 @@ impl ChatComposer {
         self.collaboration_modes_enabled = enabled;
     }
 
+    pub(crate) fn set_popups_enabled(&mut self, enabled: bool) {
+        self.popups_enabled = enabled;
+        if !enabled {
+            self.active_popup = ActivePopup::None;
+        }
+    }
+
+    pub(crate) fn set_footer_enabled(&mut self, enabled: bool) {
+        self.footer_enabled = enabled;
+    }
+
+    pub(crate) fn set_prompt_inset_enabled(&mut self, enabled: bool) {
+        self.prompt_inset_enabled = enabled;
+    }
+
+    pub(crate) fn desired_textarea_height(&self, width: u16) -> u16 {
+        let cols_with_margin = if self.prompt_inset_enabled {
+            LIVE_PREFIX_COLS + 3
+        } else {
+            4
+        };
+        self.textarea
+            .desired_height(width.saturating_sub(cols_with_margin))
+            + 2
+    }
+
+    pub(crate) fn cursor_pos_textarea_only(&self, area: Rect) -> Option<(u16, u16)> {
+        if !self.input_enabled {
+            return None;
+        }
+        let textarea_rect = if area.height > 2 && area.width > 2 {
+            area.inset(Insets::tlbr(1, 1, 1, 1))
+        } else {
+            area
+        };
+        if textarea_rect.is_empty() {
+            return None;
+        }
+        let state = *self.textarea_state.borrow();
+        let render_rect = self.textarea_render_rect(textarea_rect);
+        if render_rect.is_empty() {
+            return None;
+        }
+        self.textarea.cursor_pos_with_state(render_rect, state)
+    }
+
+    pub(crate) fn render_textarea_only(&self, area: Rect, buf: &mut Buffer) {
+        let style = user_message_style();
+        Block::default().style(style).render_ref(area, buf);
+        let textarea_rect = if area.height > 2 && area.width > 2 {
+            area.inset(Insets::tlbr(1, 1, 1, 1))
+        } else {
+            area
+        };
+        if textarea_rect.is_empty() {
+            return;
+        }
+        self.render_textarea(textarea_rect, buf);
+    }
+
     pub fn set_collaboration_mode_indicator(
         &mut self,
         indicator: Option<CollaborationModeIndicator>,
@@ -328,26 +411,128 @@ impl ChatComposer {
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
-        let footer_props = self.footer_props();
-        let footer_hint_height = self
-            .custom_footer_height()
-            .unwrap_or_else(|| footer_height(footer_props));
-        let footer_spacing = Self::footer_spacing(footer_hint_height);
-        let footer_total_height = footer_hint_height + footer_spacing;
-        let popup_constraint = match &self.active_popup {
-            ActivePopup::Command(popup) => {
-                Constraint::Max(popup.calculate_required_height(area.width))
+        let footer_total_height = if self.footer_enabled {
+            let footer_props = self.footer_props();
+            let footer_hint_height = self
+                .custom_footer_height()
+                .unwrap_or_else(|| footer_height(footer_props));
+            let footer_spacing = Self::footer_spacing(footer_hint_height);
+            footer_hint_height + footer_spacing
+        } else {
+            0
+        };
+        let popup_constraint = if self.popups_enabled {
+            match &self.active_popup {
+                ActivePopup::Command(popup) => {
+                    Constraint::Max(popup.calculate_required_height(area.width))
+                }
+                ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
+                ActivePopup::Skill(popup) => {
+                    Constraint::Max(popup.calculate_required_height(area.width))
+                }
+                ActivePopup::None => Constraint::Max(footer_total_height),
             }
-            ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
-            ActivePopup::Skill(popup) => {
-                Constraint::Max(popup.calculate_required_height(area.width))
-            }
-            ActivePopup::None => Constraint::Max(footer_total_height),
+        } else {
+            Constraint::Max(footer_total_height)
         };
         let [composer_rect, popup_rect] =
             Layout::vertical([Constraint::Min(3), popup_constraint]).areas(area);
         let textarea_rect = composer_rect.inset(Insets::tlbr(1, LIVE_PREFIX_COLS, 1, 1));
         [composer_rect, textarea_rect, popup_rect]
+    }
+
+    fn render_footer(&self, popup_rect: Rect, buf: &mut Buffer) {
+        let footer_props = self.footer_props();
+        let custom_height = self.custom_footer_height();
+        let footer_hint_height = custom_height.unwrap_or_else(|| footer_height(footer_props));
+        let footer_spacing = Self::footer_spacing(footer_hint_height);
+        let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
+            let [_, hint_rect] = Layout::vertical([
+                Constraint::Length(footer_spacing),
+                Constraint::Length(footer_hint_height),
+            ])
+            .areas(popup_rect);
+            hint_rect
+        } else {
+            popup_rect
+        };
+        let mut left_content_width = None;
+        if self.footer_flash_visible() {
+            if let Some(flash) = self.footer_flash.as_ref() {
+                flash.line.render(inset_footer_hint_area(hint_rect), buf);
+                left_content_width = Some(flash.line.width() as u16);
+            }
+        } else if let Some(items) = self.footer_hint_override.as_ref() {
+            render_footer_hint_items(hint_rect, buf, items);
+            left_content_width = Some(footer_hint_items_width(items));
+        } else {
+            render_footer(hint_rect, buf, footer_props);
+            left_content_width = Some(footer_line_width(footer_props));
+        }
+        render_mode_indicator(
+            hint_rect,
+            buf,
+            self.collaboration_mode_indicator,
+            !footer_props.is_task_running,
+            left_content_width,
+        );
+    }
+
+    fn textarea_render_rect(&self, textarea_rect: Rect) -> Rect {
+        let rect = if self.prompt_inset_enabled && textarea_rect.x < LIVE_PREFIX_COLS {
+            Rect {
+                x: textarea_rect.x.saturating_add(LIVE_PREFIX_COLS),
+                width: textarea_rect.width.saturating_sub(LIVE_PREFIX_COLS),
+                ..textarea_rect
+            }
+        } else {
+            textarea_rect
+        };
+        if self.prompt_inset_enabled {
+            rect
+        } else {
+            Rect {
+                x: rect.x.saturating_add(2),
+                width: rect.width.saturating_sub(2),
+                ..rect
+            }
+        }
+    }
+
+    fn render_textarea(&self, textarea_rect: Rect, buf: &mut Buffer) {
+        let render_rect = self.textarea_render_rect(textarea_rect);
+        if render_rect.is_empty() {
+            return;
+        }
+        let prompt_x = if self.prompt_inset_enabled {
+            textarea_rect
+                .x
+                .checked_sub(LIVE_PREFIX_COLS)
+                .unwrap_or(textarea_rect.x)
+        } else {
+            textarea_rect.x
+        };
+        let prompt = if self.input_enabled {
+            "›".bold()
+        } else {
+            "›".dim()
+        };
+        buf.set_span(prompt_x, textarea_rect.y, &prompt, render_rect.width);
+
+        let mut state = self.textarea_state.borrow_mut();
+        StatefulWidgetRef::render_ref(&(&self.textarea), render_rect, buf, &mut state);
+        if self.textarea.text().is_empty() {
+            let text = if self.input_enabled {
+                self.placeholder_text.as_str().to_string()
+            } else {
+                self.input_disabled_placeholder
+                    .as_deref()
+                    .unwrap_or("Input disabled.")
+                    .to_string()
+            };
+            let placeholder = Span::from(text).dim();
+            Line::from(vec![placeholder]).render_ref(render_rect.inner(Margin::new(0, 0)), buf);
+        }
     }
 
     fn footer_spacing(footer_hint_height: u16) -> u16 {
@@ -1628,7 +1813,9 @@ impl ChatComposer {
         text = text.trim().to_string();
         text_elements = Self::trim_text_elements(&expanded_input, &text, text_elements);
 
-        if let Some((name, _rest, _rest_offset)) = parse_slash_name(&text) {
+        if self.popups_enabled
+            && let Some((name, _rest, _rest_offset)) = parse_slash_name(&text)
+        {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
             if !treat_as_plain_text {
                 let is_builtin =
@@ -1714,21 +1901,24 @@ impl ChatComposer {
         // the '/name' token and our caret-based heuristic hides the popup,
         // but Enter/Ctrl+Shift+Q should still dispatch the command rather than submit
         // literal text.
-        if let Some(result) = self.try_dispatch_bare_slash_command() {
+        if self.popups_enabled
+            && let Some(result) = self.try_dispatch_bare_slash_command()
+        {
             return (result, true);
         }
 
         // If we're in a paste-like burst capture, treat Enter/Ctrl+Shift+Q as part of the burst
         // and accumulate it rather than submitting or inserting immediately.
         // Do not treat as paste inside a slash-command context.
-        let in_slash_context = matches!(self.active_popup, ActivePopup::Command(_))
-            || self
-                .textarea
-                .text()
-                .lines()
-                .next()
-                .unwrap_or("")
-                .starts_with('/');
+        let in_slash_context = self.popups_enabled
+            && (matches!(self.active_popup, ActivePopup::Command(_))
+                || self
+                    .textarea
+                    .text()
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .starts_with('/'));
         if !self.disable_paste_burst
             && self.paste_burst.is_active()
             && !in_slash_context
@@ -1757,7 +1947,9 @@ impl ChatComposer {
             .map(|img| img.path.clone())
             .collect::<Vec<_>>();
         let original_pending_pastes = self.pending_pastes.clone();
-        if let Some(result) = self.try_dispatch_slash_command_with_args() {
+        if self.popups_enabled
+            && let Some(result) = self.try_dispatch_slash_command_with_args()
+        {
             return (result, true);
         }
 
@@ -2176,6 +2368,10 @@ impl ChatComposer {
     }
 
     fn sync_popups(&mut self) {
+        if !self.popups_enabled {
+            self.active_popup = ActivePopup::None;
+            return;
+        }
         let file_token = Self::current_at_token(&self.textarea);
         let browsing_history = self
             .history
@@ -2446,108 +2642,66 @@ impl Renderable for ChatComposer {
 
         let [_, textarea_rect, _] = self.layout_areas(area);
         let state = *self.textarea_state.borrow();
-        self.textarea.cursor_pos_with_state(textarea_rect, state)
+        let render_rect = self.textarea_render_rect(textarea_rect);
+        if render_rect.is_empty() {
+            return None;
+        }
+        self.textarea.cursor_pos_with_state(render_rect, state)
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        let footer_props = self.footer_props();
-        let footer_hint_height = self
-            .custom_footer_height()
-            .unwrap_or_else(|| footer_height(footer_props));
-        let footer_spacing = Self::footer_spacing(footer_hint_height);
-        let footer_total_height = footer_hint_height + footer_spacing;
+        let footer_total_height = if self.footer_enabled {
+            let footer_props = self.footer_props();
+            let footer_hint_height = self
+                .custom_footer_height()
+                .unwrap_or_else(|| footer_height(footer_props));
+            let footer_spacing = Self::footer_spacing(footer_hint_height);
+            footer_hint_height + footer_spacing
+        } else {
+            0
+        };
         const COLS_WITH_MARGIN: u16 = LIVE_PREFIX_COLS + 1;
-        self.textarea
-            .desired_height(width.saturating_sub(COLS_WITH_MARGIN))
-            + 2
-            + match &self.active_popup {
+        let popup_height = if self.popups_enabled {
+            match &self.active_popup {
                 ActivePopup::None => footer_total_height,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
                 ActivePopup::Skill(c) => c.calculate_required_height(width),
             }
+        } else {
+            footer_total_height
+        };
+        self.textarea
+            .desired_height(width.saturating_sub(COLS_WITH_MARGIN))
+            + 2
+            + popup_height
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
         let [composer_rect, textarea_rect, popup_rect] = self.layout_areas(area);
-        match &self.active_popup {
-            ActivePopup::Command(popup) => {
-                popup.render_ref(popup_rect, buf);
-            }
-            ActivePopup::File(popup) => {
-                popup.render_ref(popup_rect, buf);
-            }
-            ActivePopup::Skill(popup) => {
-                popup.render_ref(popup_rect, buf);
-            }
-            ActivePopup::None => {
-                let footer_props = self.footer_props();
-                let custom_height = self.custom_footer_height();
-                let footer_hint_height =
-                    custom_height.unwrap_or_else(|| footer_height(footer_props));
-                let footer_spacing = Self::footer_spacing(footer_hint_height);
-                let hint_rect = if footer_spacing > 0 && footer_hint_height > 0 {
-                    let [_, hint_rect] = Layout::vertical([
-                        Constraint::Length(footer_spacing),
-                        Constraint::Length(footer_hint_height),
-                    ])
-                    .areas(popup_rect);
-                    hint_rect
-                } else {
-                    popup_rect
-                };
-                let mut left_content_width = None;
-                if self.footer_flash_visible() {
-                    if let Some(flash) = self.footer_flash.as_ref() {
-                        flash.line.render(inset_footer_hint_area(hint_rect), buf);
-                        left_content_width = Some(flash.line.width() as u16);
-                    }
-                } else if let Some(items) = self.footer_hint_override.as_ref() {
-                    render_footer_hint_items(hint_rect, buf, items);
-                    left_content_width = Some(footer_hint_items_width(items));
-                } else {
-                    render_footer(hint_rect, buf, footer_props);
-                    left_content_width = Some(footer_line_width(footer_props));
+        if self.popups_enabled {
+            match &self.active_popup {
+                ActivePopup::Command(popup) => {
+                    popup.render_ref(popup_rect, buf);
                 }
-                render_mode_indicator(
-                    hint_rect,
-                    buf,
-                    self.collaboration_mode_indicator,
-                    !footer_props.is_task_running,
-                    left_content_width,
-                );
+                ActivePopup::File(popup) => {
+                    popup.render_ref(popup_rect, buf);
+                }
+                ActivePopup::Skill(popup) => {
+                    popup.render_ref(popup_rect, buf);
+                }
+                ActivePopup::None => {
+                    if self.footer_enabled {
+                        self.render_footer(popup_rect, buf);
+                    }
+                }
             }
+        } else if self.footer_enabled {
+            self.render_footer(popup_rect, buf);
         }
         let style = user_message_style();
         Block::default().style(style).render_ref(composer_rect, buf);
-        if !textarea_rect.is_empty() {
-            let prompt = if self.input_enabled {
-                "›".bold()
-            } else {
-                "›".dim()
-            };
-            buf.set_span(
-                textarea_rect.x - LIVE_PREFIX_COLS,
-                textarea_rect.y,
-                &prompt,
-                textarea_rect.width,
-            );
-        }
-
-        let mut state = self.textarea_state.borrow_mut();
-        StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
-        if self.textarea.text().is_empty() {
-            let text = if self.input_enabled {
-                self.placeholder_text.as_str().to_string()
-            } else {
-                self.input_disabled_placeholder
-                    .as_deref()
-                    .unwrap_or("Input disabled.")
-                    .to_string()
-            };
-            let placeholder = Span::from(text).dim();
-            Line::from(vec![placeholder]).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
-        }
+        self.render_textarea(textarea_rect, buf);
     }
 }
 

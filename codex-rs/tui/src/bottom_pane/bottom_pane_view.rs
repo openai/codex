@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::bottom_pane::ApprovalRequest;
 use crate::render::renderable::Renderable;
 use codex_protocol::request_user_input::RequestUserInputEvent;
@@ -25,6 +27,22 @@ pub(crate) trait BottomPaneView: Renderable {
     /// needs a redraw.
     fn handle_paste(&mut self, _pasted: String) -> bool {
         false
+    }
+
+    /// Flush a pending paste-burst when due. Return true if the view modified
+    /// its state and needs a redraw.
+    fn flush_paste_burst_if_due(&mut self) -> bool {
+        false
+    }
+
+    /// Return true if the view is currently capturing a paste-burst.
+    fn is_in_paste_burst(&self) -> bool {
+        false
+    }
+
+    /// Recommended delay to schedule the next redraw while capturing a burst.
+    fn recommended_redraw_delay(&self) -> Option<Duration> {
+        None
     }
 
     /// Try to handle approval request; return the original value if not

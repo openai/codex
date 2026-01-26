@@ -2713,9 +2713,7 @@ impl ChatWidget {
         } else if self.bottom_pane.is_in_paste_burst() {
             // While capturing a burst, schedule a follow-up tick and skip this frame
             // to avoid redundant renders between ticks.
-            frame_requester.schedule_frame_in(
-                crate::bottom_pane::ChatComposer::recommended_paste_flush_delay(),
-            );
+            frame_requester.schedule_frame_in(self.bottom_pane.recommended_paste_burst_delay());
             true
         } else {
             false

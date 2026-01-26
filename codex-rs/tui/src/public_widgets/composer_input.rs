@@ -13,6 +13,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::InputResult;
+use crate::bottom_pane::default_chat_composer;
 use crate::render::renderable::Renderable;
 
 /// Action returned from feeding a key event into the ComposerInput.
@@ -37,7 +38,8 @@ impl ComposerInput {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = AppEventSender::new(tx.clone());
         // `enhanced_keys_supported=true` enables Shift+Enter newline hint/behavior.
-        let inner = ChatComposer::new(true, sender, true, "Compose new task".to_string(), false);
+        let inner =
+            default_chat_composer(true, sender, true, "Compose new task".to_string(), false);
         Self { inner, _tx: tx, rx }
     }
 

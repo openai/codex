@@ -105,6 +105,7 @@ pub(crate) enum CancellationEvent {
 
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
+pub(crate) use chat_composer::default_chat_composer;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
@@ -130,6 +131,7 @@ pub(crate) struct BottomPane {
     frame_requester: FrameRequester,
 
     has_input_focus: bool,
+    enhanced_keys_supported: bool,
     is_task_running: bool,
     esc_backtrack_hint: bool,
     animations_enabled: bool,
@@ -167,7 +169,7 @@ impl BottomPane {
             animations_enabled,
             skills,
         } = params;
-        let mut composer = ChatComposer::new(
+        let mut composer = default_chat_composer(
             has_input_focus,
             app_event_tx.clone(),
             enhanced_keys_supported,
@@ -182,6 +184,7 @@ impl BottomPane {
             app_event_tx,
             frame_requester,
             has_input_focus,
+            enhanced_keys_supported,
             is_task_running: false,
             status: None,
             unified_exec_footer: UnifiedExecFooter::new(),
@@ -246,6 +249,7 @@ impl BottomPane {
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         // If a modal/view is active, handle it here; otherwise forward to composer.
         if let Some(view) = self.view_stack.last_mut() {
+            let mut paste_burst_delay = None;
             if key_event.code == KeyCode::Esc
                 && matches!(view.on_ctrl_c(), CancellationEvent::Handled)
                 && view.is_complete()
@@ -257,9 +261,14 @@ impl BottomPane {
                 if view.is_complete() {
                     self.view_stack.clear();
                     self.on_active_view_complete();
+                } else if view.is_in_paste_burst() {
+                    paste_burst_delay = view.recommended_redraw_delay();
                 }
             }
             self.request_redraw();
+            if let Some(delay) = paste_burst_delay {
+                self.request_redraw_in(delay);
+            }
             InputResult::None
         } else {
             // If a task is running and a status line is visible, allow Esc to
@@ -320,6 +329,10 @@ impl BottomPane {
             let needs_redraw = view.handle_paste(pasted);
             if view.is_complete() {
                 self.on_active_view_complete();
+            } else if view.is_in_paste_burst()
+                && let Some(delay) = view.recommended_redraw_delay()
+            {
+                self.request_redraw_in(delay);
             }
             if needs_redraw {
                 self.request_redraw();
@@ -328,6 +341,9 @@ impl BottomPane {
             let needs_redraw = self.composer.handle_paste(pasted);
             if needs_redraw {
                 self.request_redraw();
+            }
+            if self.composer.is_in_paste_burst() {
+                self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
             }
         }
     }
@@ -623,7 +639,11 @@ impl BottomPane {
             request
         };
 
-        let modal = RequestUserInputOverlay::new(request, self.app_event_tx.clone());
+        let modal = RequestUserInputOverlay::new(
+            request,
+            self.app_event_tx.clone(),
+            self.enhanced_keys_supported,
+        );
         self.pause_status_timer_for_modal();
         self.set_composer_input_enabled(
             false,
@@ -665,11 +685,28 @@ impl BottomPane {
     }
 
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
-        self.composer.flush_paste_burst_if_due()
+        if let Some(view) = self.view_stack.last_mut() {
+            view.flush_paste_burst_if_due()
+        } else {
+            self.composer.flush_paste_burst_if_due()
+        }
     }
 
     pub(crate) fn is_in_paste_burst(&self) -> bool {
-        self.composer.is_in_paste_burst()
+        if let Some(view) = self.view_stack.last() {
+            view.is_in_paste_burst()
+        } else {
+            self.composer.is_in_paste_burst()
+        }
+    }
+
+    pub(crate) fn recommended_paste_burst_delay(&self) -> Duration {
+        if let Some(view) = self.view_stack.last() {
+            view.recommended_redraw_delay()
+                .unwrap_or_else(ChatComposer::recommended_paste_flush_delay)
+        } else {
+            ChatComposer::recommended_paste_flush_delay()
+        }
     }
 
     pub(crate) fn on_history_entry_response(
