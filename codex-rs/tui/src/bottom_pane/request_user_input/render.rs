@@ -57,6 +57,8 @@ impl RequestUserInputOverlay {
         if area.width == 0 || area.height == 0 {
             return;
         }
+        // Paint the same menu surface used by other bottom-pane overlays and
+        // then render the overlay content inside its inset area.
         let content_area = render_menu_surface(area, buf);
         if content_area.width == 0 || content_area.height == 0 {
             return;
