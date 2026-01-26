@@ -253,6 +253,7 @@ pub(crate) struct ChatComposer {
     collaboration_modes_enabled: bool,
     config: ChatComposerConfig,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    personality_command_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -337,6 +338,7 @@ impl ChatComposer {
             collaboration_modes_enabled: false,
             config,
             collaboration_mode_indicator: None,
+            personality_command_enabled: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -368,6 +370,10 @@ impl ChatComposer {
         self.collaboration_mode_indicator = indicator;
     }
 
+    pub fn set_personality_command_enabled(&mut self, enabled: bool) {
+        self.personality_command_enabled = enabled;
+    }
+
     /// Centralized feature gating keeps config checks out of call sites.
     fn popups_enabled(&self) -> bool {
         self.config.popups_enabled
@@ -380,7 +386,6 @@ impl ChatComposer {
     fn image_paste_enabled(&self) -> bool {
         self.config.image_paste_enabled
     }
-
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let footer_props = self.footer_props();
         let footer_hint_height = self
@@ -1690,9 +1695,12 @@ impl ChatComposer {
         {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
             if !treat_as_plain_text {
-                let is_builtin =
-                    slash_commands::find_builtin_command(name, self.collaboration_modes_enabled)
-                        .is_some();
+                let is_builtin = slash_commands::find_builtin_command(
+                    name,
+                    self.collaboration_modes_enabled,
+                    self.personality_command_enabled,
+                )
+                .is_some();
                 let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
                 let is_known_prompt = name
                     .strip_prefix(&prompt_prefix)
@@ -1863,8 +1871,11 @@ impl ChatComposer {
         let first_line = self.textarea.text().lines().next().unwrap_or("");
         if let Some((name, rest, _rest_offset)) = parse_slash_name(first_line)
             && rest.is_empty()
-            && let Some(cmd) =
-                slash_commands::find_builtin_command(name, self.collaboration_modes_enabled)
+            && let Some(cmd) = slash_commands::find_builtin_command(
+                name,
+                self.collaboration_modes_enabled,
+                self.personality_command_enabled,
+            )
         {
             self.textarea.set_text_clearing_elements("");
             Some(InputResult::Command(cmd))
@@ -1887,8 +1898,11 @@ impl ChatComposer {
             if let Some((name, rest, _rest_offset)) = parse_slash_name(&text)
                 && !rest.is_empty()
                 && !name.contains('/')
-                && let Some(cmd) =
-                    slash_commands::find_builtin_command(name, self.collaboration_modes_enabled)
+                && let Some(cmd) = slash_commands::find_builtin_command(
+                    name,
+                    self.collaboration_modes_enabled,
+                    self.personality_command_enabled,
+                )
                 && cmd == SlashCommand::Review
             {
                 self.textarea.set_text_clearing_elements("");
@@ -2327,7 +2341,12 @@ impl ChatComposer {
             return rest_after_name.is_empty();
         }
 
-        if slash_commands::has_builtin_prefix(name, self.collaboration_modes_enabled) {
+        if slash_commands::has_builtin_prefix(
+            name,
+            self.collaboration_modes_enabled,
+            self.personality_command_enabled,
+        )
+        {
             return true;
         }
 
@@ -2377,10 +2396,12 @@ impl ChatComposer {
             _ => {
                 if is_editing_slash_command_name {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
+                    let personality_command_enabled = self.personality_command_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
                             collaboration_modes_enabled,
+                            personality_command_enabled,
                         },
                     );
                     command_popup.on_composer_text_change(first_line.to_string());
@@ -2389,7 +2410,6 @@ impl ChatComposer {
             }
         }
     }
-
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.custom_prompts = prompts.clone();
         if let ActivePopup::Command(popup) = &mut self.active_popup {

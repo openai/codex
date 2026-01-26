@@ -750,6 +750,13 @@
           },
           "type": "object"
         },
+        "scopes": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "startup_timeout_ms": {
           "default": null,
           "format": "uint64",

@@ -27,7 +27,8 @@ pub(crate) struct GenericDisplayRow {
     pub match_indices: Option<Vec<usize>>, // indices to bold (char positions)
     pub description: Option<String>,       // optional grey text after the name
     pub disabled_reason: Option<String>,   // optional disabled message
-    pub wrap_indent: Option<usize>,        // optional indent for wrapped lines
+    pub is_disabled: bool,
+    pub wrap_indent: Option<usize>, // optional indent for wrapped lines
 }
 
 const MENU_SURFACE_INSET_V: u16 = 1;
@@ -311,11 +312,16 @@ pub(crate) fn render_rows(
         }
 
         let mut full_line = build_full_line(row, desc_col);
-        if Some(i) == state.selected_idx {
+        if Some(i) == state.selected_idx && !row.is_disabled {
             // Match previous behavior: cyan + bold for the selected row.
             // Reset the style first to avoid inheriting dim from keyboard shortcuts.
             full_line.spans.iter_mut().for_each(|span| {
                 span.style = Style::default().fg(Color::Cyan).bold();
+            });
+        }
+        if row.is_disabled {
+            full_line.spans.iter_mut().for_each(|span| {
+                span.style = span.style.dim();
             });
         }
 
@@ -393,9 +399,14 @@ pub(crate) fn render_rows_single_line(
         }
 
         let mut full_line = build_full_line(row, desc_col);
-        if Some(i) == state.selected_idx {
+        if Some(i) == state.selected_idx && !row.is_disabled {
             full_line.spans.iter_mut().for_each(|span| {
                 span.style = Style::default().fg(Color::Cyan).bold();
+            });
+        }
+        if row.is_disabled {
+            full_line.spans.iter_mut().for_each(|span| {
+                span.style = span.style.dim();
             });
         }
 

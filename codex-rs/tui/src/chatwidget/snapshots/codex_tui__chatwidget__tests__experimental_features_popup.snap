@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
   Experimental features
-  Toggle beta features. Changes are saved to config.toml.
+  Toggle experimental features. Changes are saved to config.toml.
 
 › [ ] Ghost snapshots  Capture undo snapshots each turn.
   [x] Shell tool       Allow the model to run shell commands.

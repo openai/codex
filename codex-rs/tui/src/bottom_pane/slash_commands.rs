@@ -19,12 +19,14 @@ pub(crate) fn windows_degraded_sandbox_active() -> bool {
 /// Return the built-ins that should be visible/usable for the current input.
 pub(crate) fn builtins_for_input(
     collaboration_modes_enabled: bool,
+    personality_command_enabled: bool,
 ) -> Vec<(&'static str, SlashCommand)> {
     let allow_elevate_sandbox = windows_degraded_sandbox_active();
     built_in_slash_commands()
         .into_iter()
         .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
         .filter(|(_, cmd)| collaboration_modes_enabled || *cmd != SlashCommand::Collab)
+        .filter(|(_, cmd)| personality_command_enabled || *cmd != SlashCommand::Personality)
         .collect()
 }
 
@@ -32,16 +34,21 @@ pub(crate) fn builtins_for_input(
 pub(crate) fn find_builtin_command(
     name: &str,
     collaboration_modes_enabled: bool,
+    personality_command_enabled: bool,
 ) -> Option<SlashCommand> {
-    builtins_for_input(collaboration_modes_enabled)
+    builtins_for_input(collaboration_modes_enabled, personality_command_enabled)
         .into_iter()
         .find(|(command_name, _)| *command_name == name)
         .map(|(_, cmd)| cmd)
 }
 
 /// Whether any visible built-in fuzzily matches the provided prefix.
-pub(crate) fn has_builtin_prefix(name: &str, collaboration_modes_enabled: bool) -> bool {
-    builtins_for_input(collaboration_modes_enabled)
+pub(crate) fn has_builtin_prefix(
+    name: &str,
+    collaboration_modes_enabled: bool,
+    personality_command_enabled: bool,
+) -> bool {
+    builtins_for_input(collaboration_modes_enabled, personality_command_enabled)
         .into_iter()
         .any(|(command_name, _)| fuzzy_match(command_name, name).is_some())
 }
