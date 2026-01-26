@@ -94,6 +94,7 @@ fn gpt_52_codex() -> ModelPreset {
                 "Extra high reasoning depth for complex problems",
             ),
         ],
+        supports_personality: false,
         is_default: true,
         upgrade: None,
         show_in_picker: true,
@@ -126,6 +127,7 @@ fn gpt_5_1_codex_max() -> ModelPreset {
                 "Extra high reasoning depth for complex problems",
             ),
         ],
+        supports_personality: false,
         is_default: false,
         upgrade: Some(gpt52_codex_upgrade(
             "gpt-5.1-codex-max",
@@ -160,6 +162,7 @@ fn gpt_5_1_codex_mini() -> ModelPreset {
                 "Maximizes reasoning depth for complex or ambiguous problems",
             ),
         ],
+        supports_personality: false,
         is_default: false,
         upgrade: Some(gpt52_codex_upgrade(
             "gpt-5.1-codex-mini",
@@ -204,6 +207,7 @@ fn gpt_5_2() -> ModelPreset {
                 "Extra high reasoning for complex problems",
             ),
         ],
+        supports_personality: false,
         is_default: false,
         upgrade: Some(gpt52_codex_upgrade(
             "gpt-5.2",
@@ -246,6 +250,7 @@ fn bengalfox() -> ModelPreset {
                 "Extra high reasoning depth for complex problems",
             ),
         ],
+        supports_personality: true,
         is_default: false,
         upgrade: None,
         show_in_picker: false,
@@ -278,6 +283,7 @@ fn boomslang() -> ModelPreset {
                 "Extra high reasoning depth for complex problems",
             ),
         ],
+        supports_personality: false,
         is_default: false,
         upgrade: None,
         show_in_picker: false,
@@ -306,6 +312,7 @@ fn gpt_5_codex() -> ModelPreset {
                 "Maximizes reasoning depth for complex or ambiguous problems",
             ),
         ],
+        supports_personality: false,
         is_default: false,
         upgrade: Some(gpt52_codex_upgrade(
             "gpt-5-codex",
@@ -340,6 +347,7 @@ fn gpt_5_codex_mini() -> ModelPreset {
                 "Maximizes reasoning depth for complex or ambiguous problems",
             ),
         ],
+        supports_personality: false,
         is_default: false,
         upgrade: Some(gpt52_codex_upgrade(
             "gpt-5-codex-mini",
@@ -378,6 +386,7 @@ fn gpt_5_1_codex() -> ModelPreset {
                 "Maximizes reasoning depth for complex or ambiguous problems",
             ),
         ],
+        supports_personality: false,
         is_default: false,
         upgrade: Some(gpt52_codex_upgrade(
             "gpt-5.1-codex",
@@ -420,6 +429,7 @@ fn gpt_5() -> ModelPreset {
                 "Maximizes reasoning depth for complex or ambiguous problems",
             ),
         ],
+        supports_personality: false,
         is_default: false,
         upgrade: Some(gpt52_codex_upgrade(
             "gpt-5",
@@ -458,6 +468,7 @@ fn gpt_5_1() -> ModelPreset {
                 "Maximizes reasoning depth for complex or ambiguous problems",
             ),
         ],
+        supports_personality: false,
         is_default: false,
         upgrade: Some(gpt52_codex_upgrade(
             "gpt-5.1",
