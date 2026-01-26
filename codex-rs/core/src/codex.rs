@@ -277,11 +277,14 @@ impl Codex {
                 crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
             )
             .await;
+        let (collaboration_settings, reasoning_summary) =
+            resolve_session_collaboration_settings(&conversation_history, model, &config);
+        let model = collaboration_settings.model.clone();
 
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
-        // 3. base_intructions for current model
+        // 3. base instructions for current model
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
         let base_instructions = config
             .base_instructions
@@ -289,17 +292,14 @@ impl Codex {
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.model_personality));
 
-        // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into config.collaboration_mode
-        // to avoid extracting these fields separately and constructing CollaborationMode here.
-        let collaboration_mode = CollaborationMode::Custom(Settings {
-            model: model.clone(),
-            reasoning_effort: config.model_reasoning_effort,
-            developer_instructions: None,
-        });
+        // TODO (aibrahim): Consolidate config.model and config.model_reasoning_effort into
+        // config.collaboration_mode to avoid extracting these fields separately and constructing
+        // CollaborationMode here.
+        let collaboration_mode = CollaborationMode::Custom(collaboration_settings);
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
-            model_reasoning_summary: config.model_reasoning_summary,
+            model_reasoning_summary: reasoning_summary,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
             personality: config.model_personality,
@@ -386,6 +386,43 @@ impl Codex {
     pub(crate) async fn agent_status(&self) -> AgentStatus {
         self.agent_status.borrow().clone()
     }
+}
+
+fn resolve_session_collaboration_settings(
+    conversation_history: &InitialHistory,
+    default_model: String,
+    config: &Config,
+) -> (Settings, ReasoningSummaryConfig) {
+    let fallback_settings = Settings {
+        model: default_model,
+        reasoning_effort: config.model_reasoning_effort,
+        developer_instructions: None,
+    };
+    let fallback_summary = config.model_reasoning_summary;
+    let Some(ctx) = last_turn_context_from_history(conversation_history) else {
+        return (fallback_settings, fallback_summary);
+    };
+    (
+        Settings {
+            model: ctx.model,
+            reasoning_effort: ctx.effort,
+            developer_instructions: None,
+        },
+        ctx.summary,
+    )
+}
+
+fn last_turn_context_from_history(
+    conversation_history: &InitialHistory,
+) -> Option<TurnContextItem> {
+    conversation_history
+        .get_rollout_items()
+        .into_iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::TurnContext(ctx) => Some(ctx),
+            _ => None,
+        })
 }
 
 /// Context for an initialized model agent

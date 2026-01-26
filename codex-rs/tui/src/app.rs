@@ -1680,9 +1680,6 @@ impl App {
     }
 
     fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        // TODO(aibrahim): Remove this and don't use config as a state object.
-        // Instead, explicitly pass the stored collaboration mode's effort into new sessions.
-        self.config.model_reasoning_effort = effort;
         self.chat_widget.set_reasoning_effort(effort);
     }
 
@@ -2150,6 +2147,7 @@ mod tests {
     #[tokio::test]
     async fn update_reasoning_effort_updates_collaboration_mode() {
         let mut app = make_test_app().await;
+        app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
 
@@ -2161,7 +2159,7 @@ mod tests {
         );
         assert_eq!(
             app.config.model_reasoning_effort,
-            Some(ReasoningEffortConfig::High)
+            Some(ReasoningEffortConfig::Medium)
         );
     }
 

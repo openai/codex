@@ -3386,10 +3386,6 @@ impl ChatWidget {
             }));
             tx.send(AppEvent::UpdateModel(model_for_action.clone()));
             tx.send(AppEvent::UpdateReasoningEffort(effort_for_action));
-            tx.send(AppEvent::PersistModelSelection {
-                model: model_for_action.clone(),
-                effort: effort_for_action,
-            });
             tracing::info!(
                 "Selected model: {}, Selected effort: {}",
                 model_for_action,
@@ -3560,10 +3556,6 @@ impl ChatWidget {
         self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
         self.app_event_tx
             .send(AppEvent::UpdateReasoningEffort(effort));
-        self.app_event_tx.send(AppEvent::PersistModelSelection {
-            model: model.clone(),
-            effort,
-        });
         tracing::info!(
             "Selected model: {}, Selected effort: {}",
             model,

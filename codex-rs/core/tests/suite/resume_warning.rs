@@ -9,7 +9,6 @@ use codex_core::protocol::InitialHistory;
 use codex_core::protocol::ResumedHistory;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::TurnContextItem;
-use codex_core::protocol::WarningEvent;
 use codex_protocol::ThreadId;
 use core::time::Duration;
 use core_test_support::load_default_config_for_test;
@@ -66,21 +65,23 @@ async fn emits_warning_when_resumed_model_differs() {
     // Act: resume the conversation.
     let NewThread {
         thread: conversation,
+        session_configured,
         ..
     } = thread_manager
         .resume_thread_with_history(config, initial_history, auth_manager)
         .await
         .expect("resume conversation");
 
-    // Assert: a Warning event is emitted describing the model mismatch.
-    let warning = wait_for_event(&conversation, |ev| matches!(ev, EventMsg::Warning(_))).await;
-    let EventMsg::Warning(WarningEvent { message }) = warning else {
-        panic!("expected warning event");
-    };
-    assert!(message.contains("previous-model"));
-    assert!(message.contains("current-model"));
+    // Assert: the resumed session inherits the model that was recorded in the rollout,
+    // so there is no mismatch warning to emit.
+    assert_eq!(session_configured.model, "previous-model");
+    let warning = tokio::time::timeout(
+        Duration::from_millis(200),
+        wait_for_event(&conversation, |ev| matches!(ev, EventMsg::Warning(_))),
+    )
+    .await;
+    assert!(warning.is_err(), "unexpected mismatch warning emitted");
 
     // Drain the TurnComplete/Shutdown window to avoid leaking tasks between tests.
-    // The warning is emitted during initialization, so a short sleep is sufficient.
     tokio::time::sleep(Duration::from_millis(50)).await;
 }
