@@ -2058,7 +2058,6 @@ impl App {
         self.reset_transcript_state();
         if let Some(thread_id) = self
             .active_thread_id
-            .clone()
             .or_else(|| self.chat_widget.thread_id())
         {
             let session_configured = self.session_configured_for_thread(thread_id);

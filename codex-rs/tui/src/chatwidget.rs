@@ -800,7 +800,6 @@ impl ChatWidget {
         let model_for_header = event.model.clone();
         let reasoning_effort = event
             .reasoning_effort
-            .clone()
             .or_else(|| self.current_collaboration_mode.reasoning_effort());
         self.session_header.set_model(&model_for_header);
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
