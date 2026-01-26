@@ -1091,8 +1091,6 @@ pub struct ExecRunParams {
     pub model: Option<String>,
     pub model_provider: Option<String>,
     pub cwd: Option<String>,
-    pub approval_policy: Option<AskForApproval>,
-    pub sandbox_policy: Option<SandboxPolicy>,
     pub effort: Option<ReasoningEffort>,
     pub summary: Option<ReasoningSummary>,
     pub collaboration_mode: Option<CollaborationMode>,

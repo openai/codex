@@ -1398,25 +1398,40 @@ impl CodexMessageProcessor {
             return;
         }
 
-        if let Some(policy) = params.sandbox_policy.as_ref() {
-            let requested_policy = policy.clone().to_core();
-            if let Err(err) = self.config.sandbox_policy.can_set(&requested_policy) {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("invalid sandbox policy: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
+        if let Err(err) = self
+            .config
+            .approval_policy
+            .can_set(&codex_protocol::protocol::AskForApproval::Never)
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("invalid approval policy: {err}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        if let Err(err) = self
+            .config
+            .sandbox_policy
+            .can_set(&codex_protocol::protocol::SandboxPolicy::ReadOnly)
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("invalid sandbox policy: {err}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
         }
 
         let mut typesafe_overrides = self.build_thread_config_overrides(
             params.model,
             params.model_provider,
             params.cwd,
-            params.approval_policy,
-            None,
+            Some(codex_app_server_protocol::AskForApproval::Never),
+            Some(codex_app_server_protocol::SandboxMode::ReadOnly),
             params.base_instructions,
             params.developer_instructions,
             params.personality,
@@ -1458,8 +1473,8 @@ impl CodexMessageProcessor {
 
         let thread_ids_to_skip_listener_attachment =
             self.thread_ids_to_skip_listener_attachment.clone();
-        let thread_id_for_turn = thread_id.clone();
-        let thread_id_for_remove = thread_id.clone();
+        let thread_id_for_turn = thread_id;
+        let thread_id_for_remove = thread_id;
         thread_ids_to_skip_listener_attachment
             .lock()
             .await
@@ -1468,17 +1483,16 @@ impl CodexMessageProcessor {
         let response_result: Result<ExecRunResponse, JSONRPCErrorError> = async {
             let has_turn_overrides = params.effort.is_some()
                 || params.summary.is_some()
-                || params.collaboration_mode.is_some()
-                || params.sandbox_policy.is_some();
+                || params.collaboration_mode.is_some();
             if has_turn_overrides {
                 let _ = thread
                     .submit(Op::OverrideTurnContext {
                         cwd: None,
                         approval_policy: None,
-                        sandbox_policy: params.sandbox_policy.map(|policy| policy.to_core()),
+                        sandbox_policy: None,
                         model: None,
                         effort: params.effort.map(Some),
-                        summary: params.summary.clone(),
+                        summary: params.summary,
                         collaboration_mode: params.collaboration_mode.clone(),
                         personality: None,
                     })

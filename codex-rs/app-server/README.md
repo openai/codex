@@ -380,9 +380,7 @@ Run a single turn to completion without subscribing to streamed turn/item events
         "type": "text",
         "text": "Generate a concise thread title",
         "textElements": []
-    }],
-    "approvalPolicy": "never",                    // optional
-    "sandboxPolicy": { "type": "readOnly" }       // optional
+    }]
 } }
 { "id": 31, "result": {
     "threadId": "thread-123",
@@ -397,6 +395,7 @@ Notes:
 
 - `exec/run` is best for one-off utilities (for example, generating a title) where you just need the final result.
 - `exec/run` always runs ephemerally, so it does not create a rollout and will not appear in `thread/list`.
+- `exec/run` forces `approvalPolicy: "never"` and a read-only sandbox.
 - Use `turn/start` when you want streaming events, intermediate items, or a long-lived thread.
 
 ### Example: One-off command execution
