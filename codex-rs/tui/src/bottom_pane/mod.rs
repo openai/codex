@@ -252,6 +252,9 @@ impl BottomPane {
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         // If a modal/view is active, handle it here; otherwise forward to composer.
         if !self.view_stack.is_empty() {
+            // We need three pieces of information after routing the key:
+            // whether Esc completed the view, whether the view finished for any
+            // reason, and whether a paste-burst timer should be scheduled.
             let (ctrl_c_completed, view_complete, view_in_paste_burst) = {
                 let last_index = self.view_stack.len() - 1;
                 let view = &mut self.view_stack[last_index];
@@ -692,6 +695,8 @@ impl BottomPane {
     }
 
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
+        // Give the active view the first chance to flush paste-burst state so
+        // overlays that reuse the composer behave consistently.
         if let Some(view) = self.view_stack.last_mut()
             && view.flush_paste_burst_if_due()
         {
@@ -701,6 +706,8 @@ impl BottomPane {
     }
 
     pub(crate) fn is_in_paste_burst(&self) -> bool {
+        // A view can hold paste-burst state independently of the primary
+        // composer, so check it first.
         self.view_stack
             .last()
             .is_some_and(|view| view.is_in_paste_burst())

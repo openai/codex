@@ -65,7 +65,10 @@ pub(crate) struct RequestUserInputOverlay {
     request: RequestUserInputEvent,
     // Queue of incoming requests to process after the current one.
     queue: VecDeque<RequestUserInputEvent>,
+    // Reuse the shared chat composer so notes/freeform answers match the
+    // primary input styling and behavior.
     composer: ChatComposer,
+    // One entry per question: selection state plus a stored notes draft.
     answers: Vec<AnswerState>,
     current_idx: usize,
     focus: Focus,
@@ -80,6 +83,8 @@ impl RequestUserInputOverlay {
         enhanced_keys_supported: bool,
         disable_paste_burst: bool,
     ) -> Self {
+        // Use the same composer widget, but disable popups/slash-commands and
+        // image-path attachment so it behaves like a focused notes field.
         let mut composer = ChatComposer::new_with_config(
             has_input_focus,
             app_event_tx.clone(),
@@ -88,6 +93,7 @@ impl RequestUserInputOverlay {
             disable_paste_burst,
             ChatComposerConfig::plain_text(),
         );
+        // The overlay renders its own footer hints, so keep the composer footer empty.
         composer.set_footer_hint_override(Some(Vec::new()));
         let mut overlay = Self {
             app_event_tx,
