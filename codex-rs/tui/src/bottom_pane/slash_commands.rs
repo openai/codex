@@ -34,9 +34,9 @@ pub(crate) fn find_builtin_command(
         personality_command_enabled,
         allow_elevate_sandbox,
     )
-        .into_iter()
-        .find(|(command_name, _)| *command_name == name)
-        .map(|(_, cmd)| cmd)
+    .into_iter()
+    .find(|(command_name, _)| *command_name == name)
+    .map(|(_, cmd)| cmd)
 }
 
 /// Whether any visible built-in fuzzily matches the provided prefix.
@@ -51,6 +51,6 @@ pub(crate) fn has_builtin_prefix(
         personality_command_enabled,
         allow_elevate_sandbox,
     )
-        .into_iter()
-        .any(|(command_name, _)| fuzzy_match(command_name, name).is_some())
+    .into_iter()
+    .any(|(command_name, _)| fuzzy_match(command_name, name).is_some())
 }
