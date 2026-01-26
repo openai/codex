@@ -4,6 +4,7 @@ pub use thread_id::ThreadId;
 pub mod approvals;
 pub mod config_types;
 pub mod custom_prompts;
+pub mod dynamic_tools;
 pub mod items;
 pub mod message_history;
 pub mod models;
