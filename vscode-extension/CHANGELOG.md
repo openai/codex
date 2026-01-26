@@ -4,7 +4,15 @@
 
 ## Unreleased
 
+- 追加: 複数アカウントの切替（TUI / app-server / VSCode を横断して対応）
+- 追加: Settings のアカウント管理（`/account`）、および CLI variant の切替 UI
+- 追加: app-server 経由のログインフロー（Settings から起動）
+- 変更: アクティブアカウント未設定時は legacy auth をデフォルトにする
+- 変更: rewind を `thread/rollback` ベースに切り替え
+- 変更: mine-only の UI を selected `cli.variant` に応じて出し分け
+- 改善: セッション承認（approval）UI の構造/更新ロジックを改善
 - 修正: チャット内の長いパス/URLが折り返されず横にはみ出すことがある問題を修正（自動リンク化されたファイル/URL表示を含む）
+- 修正: 長いリンクの折り返しを改善
 - 改善: セッションタブのプロジェクト（workspace）グループ枠の横幅をタブ幅に合わせ、見出し（プロジェクト名）は幅内で省略表示するように修正
 
 ## 0.1.16

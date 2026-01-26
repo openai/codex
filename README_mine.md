@@ -133,6 +133,12 @@ Codex-Mine では `config.toml` に `[[hooks]]` を定義して、内部イベ�
 - 特徴: デフォルトは observe-only（失敗はログに出るが、エージェントの実行は止めない）。ただし `blocking = true` を使うと tool 実行をブロックできる（後述）。
 - 実行cwd: 可能なら git repo root、無ければセッションの `cwd`
 
+### VSCode拡張（codex-ui-vscode-extension）
+
+ローカル開発では `vscode-extension/package.json` の `version` は上げない（Publish 時のみ更新）。そのため、`vsix:install` でインストールされる拡張の表示バージョン（例: `0.1.16`）と、実際に含まれる機能差分（main の最新）が一致しない場合がある。
+
+- 変更履歴は `vscode-extension/CHANGELOG.md` の `Unreleased` を参照する
+
 #### Claude Code 互換: tool 実行のブロック（統合hooks）
 
 Claude Code の `PreToolUse` に寄せて、Codex-Mine の `[[hooks]]` でもツール呼び出しをブロックできる。
