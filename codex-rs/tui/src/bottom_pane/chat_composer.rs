@@ -79,11 +79,9 @@ use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
-use ratatui::layout::Margin;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
@@ -96,15 +94,20 @@ use super::file_search_popup::FileSearchPopup;
 use super::footer::CollaborationModeIndicator;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
+use super::footer::SummaryLeft;
+use super::footer::can_show_left_with_context;
+use super::footer::context_window_line;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
 use super::footer::footer_hint_items_width;
 use super::footer::footer_line_width;
 use super::footer::inset_footer_hint_area;
+use super::footer::render_context_right;
 use super::footer::render_footer;
 use super::footer::render_footer_hint_items;
-use super::footer::render_mode_indicator;
+use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
+use super::footer::shortcut_summary_layout;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
@@ -2502,6 +2505,12 @@ impl Renderable for ChatComposer {
             }
             ActivePopup::None => {
                 let footer_props = self.footer_props();
+                let show_cycle_hint = !footer_props.is_task_running;
+                let context_line = context_window_line(
+                    footer_props.context_window_percent,
+                    footer_props.context_window_used_tokens,
+                );
+                let context_width = context_line.width() as u16;
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
                     custom_height.unwrap_or_else(|| footer_height(footer_props));
@@ -2516,26 +2525,60 @@ impl Renderable for ChatComposer {
                 } else {
                     popup_rect
                 };
-                let mut left_content_width = None;
-                if self.footer_flash_visible() {
+                let indicator = self.collaboration_mode_indicator;
+                let left_width = if self.footer_flash_visible() {
+                    self.footer_flash
+                        .as_ref()
+                        .map(|flash| flash.line.width() as u16)
+                        .unwrap_or(0)
+                } else if let Some(items) = self.footer_hint_override.as_ref() {
+                    footer_hint_items_width(items)
+                } else {
+                    footer_line_width(footer_props, indicator, show_cycle_hint)
+                };
+                let can_show_both =
+                    can_show_left_with_context(hint_rect, left_width, context_width);
+                let has_override =
+                    self.footer_flash_visible() || self.footer_hint_override.is_some();
+                let summary_layout =
+                    if !has_override && matches!(footer_props.mode, FooterMode::ShortcutSummary) {
+                        Some(shortcut_summary_layout(
+                            hint_rect,
+                            context_width,
+                            indicator,
+                            show_cycle_hint,
+                        ))
+                    } else {
+                        None
+                    };
+                let show_context = summary_layout
+                    .as_ref()
+                    .map(|(_, show_context)| *show_context)
+                    .unwrap_or(can_show_both);
+
+                if let Some((summary_left, _)) = summary_layout {
+                    match summary_left {
+                        SummaryLeft::Default => {
+                            render_footer(hint_rect, buf, footer_props, indicator, show_cycle_hint);
+                        }
+                        SummaryLeft::Custom(line) => {
+                            render_footer_line(hint_rect, buf, line);
+                        }
+                        SummaryLeft::None => {}
+                    }
+                } else if self.footer_flash_visible() {
                     if let Some(flash) = self.footer_flash.as_ref() {
                         flash.line.render(inset_footer_hint_area(hint_rect), buf);
-                        left_content_width = Some(flash.line.width() as u16);
                     }
                 } else if let Some(items) = self.footer_hint_override.as_ref() {
                     render_footer_hint_items(hint_rect, buf, items);
-                    left_content_width = Some(footer_hint_items_width(items));
                 } else {
-                    render_footer(hint_rect, buf, footer_props);
-                    left_content_width = Some(footer_line_width(footer_props));
+                    render_footer(hint_rect, buf, footer_props, indicator, show_cycle_hint);
                 }
-                render_mode_indicator(
-                    hint_rect,
-                    buf,
-                    self.collaboration_mode_indicator,
-                    !footer_props.is_task_running,
-                    left_content_width,
-                );
+
+                if show_context {
+                    render_context_right(hint_rect, buf, &context_line);
+                }
             }
         }
         let style = user_message_style();
@@ -2565,8 +2608,13 @@ impl Renderable for ChatComposer {
                     .unwrap_or("Input disabled.")
                     .to_string()
             };
-            let placeholder = Span::from(text).dim();
-            Line::from(vec![placeholder]).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
+            if !textarea_rect.is_empty() {
+                let text_x = textarea_rect.x;
+                let text_y = textarea_rect.y;
+                let text_width = textarea_rect.width;
+                let placeholder = text.dim();
+                buf.set_span(text_x, text_y, &placeholder, text_width);
+            }
         }
     }
 }

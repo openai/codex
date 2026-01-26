@@ -130,51 +130,157 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
 }
 
 pub(crate) fn footer_height(props: FooterProps) -> u16 {
-    footer_lines(props).len() as u16
+    footer_lines(props, None, false).len() as u16
 }
 
-pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
+pub(crate) fn render_footer(
+    area: Rect,
+    buf: &mut Buffer,
+    props: FooterProps,
+    indicator: Option<CollaborationModeIndicator>,
+    show_cycle_hint: bool,
+) {
     Paragraph::new(prefix_lines(
-        footer_lines(props),
+        footer_lines(props, indicator, show_cycle_hint),
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
     ))
     .render(area, buf);
 }
 
-pub(crate) fn render_mode_indicator(
-    area: Rect,
-    buf: &mut Buffer,
+pub(crate) fn render_footer_line(area: Rect, buf: &mut Buffer, line: Line<'static>) {
+    Paragraph::new(prefix_lines(
+        vec![line],
+        " ".repeat(FOOTER_INDENT_COLS).into(),
+        " ".repeat(FOOTER_INDENT_COLS).into(),
+    ))
+    .render(area, buf);
+}
+
+pub(crate) fn left_fits(area: Rect, left_width: u16) -> bool {
+    let max_width = area.width.saturating_sub(FOOTER_INDENT_COLS as u16);
+    left_width <= max_width
+}
+
+pub(crate) fn shortcut_summary_line(
     indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
-    left_content_width: Option<u16>,
-) {
+    show_shortcuts_hint: bool,
+) -> Line<'static> {
+    let mut line = Line::from("");
+    if show_shortcuts_hint {
+        line.push_span(key_hint::plain(KeyCode::Char('?')));
+        line.push_span(" for shortcuts".dim());
+    }
+
+    if let Some(indicator) = indicator {
+        if show_shortcuts_hint {
+            line.push_span(" · ".dim());
+        }
+        line.push_span(indicator.styled_span(show_cycle_hint));
+    }
+
+    line
+}
+
+pub(crate) enum SummaryLeft {
+    Default,
+    Custom(Line<'static>),
+    None,
+}
+
+pub(crate) fn shortcut_summary_layout(
+    area: Rect,
+    context_width: u16,
+    indicator: Option<CollaborationModeIndicator>,
+    show_cycle_hint: bool,
+) -> (SummaryLeft, bool) {
+    let default_line = shortcut_summary_line(indicator, show_cycle_hint, true);
+    let default_width = default_line.width() as u16;
+    if can_show_left_with_context(area, default_width, context_width) {
+        return (SummaryLeft::Default, true);
+    }
+
     let Some(indicator) = indicator else {
-        return;
+        return (SummaryLeft::None, true);
     };
+
+    if show_cycle_hint {
+        let mode_with_cycle = shortcut_summary_line(Some(indicator), true, false);
+        let mode_with_cycle_width = mode_with_cycle.width() as u16;
+        if can_show_left_with_context(area, mode_with_cycle_width, context_width) {
+            return (SummaryLeft::Custom(mode_with_cycle), true);
+        }
+    }
+
+    let mode_only = shortcut_summary_line(Some(indicator), false, false);
+    let mode_only_width = mode_only.width() as u16;
+    if can_show_left_with_context(area, mode_only_width, context_width) {
+        return (SummaryLeft::Custom(mode_only), true);
+    }
+    if left_fits(area, mode_only_width) {
+        return (SummaryLeft::Custom(mode_only), false);
+    }
+
+    (SummaryLeft::None, true)
+}
+
+fn right_aligned_x(area: Rect, content_width: u16) -> Option<u16> {
+    if area.is_empty() {
+        return None;
+    }
+
+    let right_padding = FOOTER_INDENT_COLS as u16;
+    let max_width = area.width.saturating_sub(right_padding);
+    if content_width == 0 || max_width == 0 {
+        return None;
+    }
+
+    if content_width >= max_width {
+        return Some(area.x.saturating_add(right_padding));
+    }
+
+    Some(
+        area.x
+            .saturating_add(area.width)
+            .saturating_sub(content_width)
+            .saturating_sub(right_padding),
+    )
+}
+
+pub(crate) fn can_show_left_with_context(area: Rect, left_width: u16, context_width: u16) -> bool {
+    let Some(context_x) = right_aligned_x(area, context_width) else {
+        return true;
+    };
+    let left_extent = FOOTER_INDENT_COLS as u16 + left_width;
+    left_extent <= context_x.saturating_sub(area.x)
+}
+
+pub(crate) fn render_context_right(area: Rect, buf: &mut Buffer, line: &Line<'static>) {
     if area.is_empty() {
         return;
     }
 
-    let span = indicator.styled_span(show_cycle_hint);
-    let label_width = span.width() as u16;
-    if label_width == 0 || label_width > area.width {
+    let context_width = line.width() as u16;
+    let Some(mut x) = right_aligned_x(area, context_width) else {
         return;
-    }
-
-    let x = area
-        .x
-        .saturating_add(area.width)
-        .saturating_sub(label_width)
-        .saturating_sub(FOOTER_INDENT_COLS as u16);
+    };
     let y = area.y + area.height.saturating_sub(1);
-    if let Some(left_content_width) = left_content_width {
-        let left_extent = FOOTER_INDENT_COLS as u16 + left_content_width;
-        if left_extent >= x.saturating_sub(area.x) {
-            return;
+    let max_x = area.x.saturating_add(area.width);
+
+    for span in &line.spans {
+        if x >= max_x {
+            break;
         }
+        let span_width = span.width() as u16;
+        if span_width == 0 {
+            continue;
+        }
+        let remaining = max_x.saturating_sub(x);
+        let draw_width = span_width.min(remaining);
+        buf.set_span(x, y, span, draw_width);
+        x = x.saturating_add(span_width);
     }
-    buf.set_span(x, y, &span, label_width);
 }
 
 pub(crate) fn inset_footer_hint_area(mut area: Rect) -> Rect {
@@ -193,25 +299,26 @@ pub(crate) fn render_footer_hint_items(area: Rect, buf: &mut Buffer, items: &[(S
     footer_hint_items_line(items).render(inset_footer_hint_area(area), buf);
 }
 
-fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
-    // Show the context indicator on the left, appended after the primary hint
-    // (e.g., "? for shortcuts"). Keep it visible even when typing (i.e., when
-    // the shortcut hint is hidden). Hide it only for the multi-line
-    // ShortcutOverlay.
+fn footer_lines(
+    props: FooterProps,
+    indicator: Option<CollaborationModeIndicator>,
+    show_cycle_hint: bool,
+) -> Vec<Line<'static>> {
+    // Render left-side hints only. The context indicator is rendered
+    // separately, right-aligned by the caller.
     match props.mode {
         FooterMode::QuitShortcutReminder => {
             vec![quit_shortcut_reminder_line(props.quit_shortcut_key)]
         }
         FooterMode::ShortcutSummary => {
-            let mut line = context_window_line(
-                props.context_window_percent,
-                props.context_window_used_tokens,
-            );
-            line.push_span(" · ".dim());
-            line.extend(vec![
+            let mut line = Line::from(vec![
                 key_hint::plain(KeyCode::Char('?')).into(),
                 " for shortcuts".dim(),
             ]);
+            if let Some(indicator) = indicator {
+                line.push_span(" · ".dim());
+                line.push_span(indicator.styled_span(show_cycle_hint));
+            }
             vec![line]
         }
         FooterMode::ShortcutOverlay => {
@@ -230,12 +337,8 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
         }
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
         FooterMode::ContextOnly => {
-            let mut line = context_window_line(
-                props.context_window_percent,
-                props.context_window_used_tokens,
-            );
+            let mut line = Line::from("");
             if props.is_task_running && props.steer_enabled {
-                line.push_span(" · ".dim());
                 line.push_span(key_hint::plain(KeyCode::Tab));
                 line.push_span(" to queue message".dim());
             }
@@ -244,8 +347,12 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
     }
 }
 
-pub(crate) fn footer_line_width(props: FooterProps) -> u16 {
-    footer_lines(props)
+pub(crate) fn footer_line_width(
+    props: FooterProps,
+    indicator: Option<CollaborationModeIndicator>,
+    show_cycle_hint: bool,
+) -> u16 {
+    footer_lines(props, indicator, show_cycle_hint)
         .last()
         .map(|line| line.width() as u16)
         .unwrap_or(0)
@@ -396,7 +503,7 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'static> {
+pub(crate) fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'static> {
     if let Some(percent) = percent {
         let percent = percent.clamp(0, 100);
         return Line::from(vec![Span::from(format!("{percent}% context left")).dim()]);
@@ -620,7 +727,35 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = Rect::new(0, 0, f.area().width, height);
-                render_footer(area, f.buffer_mut(), props);
+                let context_line = context_window_line(
+                    props.context_window_percent,
+                    props.context_window_used_tokens,
+                );
+                let context_width = context_line.width() as u16;
+                let show_cycle_hint = !props.is_task_running;
+                let left_width = footer_line_width(props, None, show_cycle_hint);
+                let can_show_both = can_show_left_with_context(area, left_width, context_width);
+                if matches!(props.mode, FooterMode::ShortcutSummary) {
+                    let (summary_left, show_context) =
+                        shortcut_summary_layout(area, context_width, None, show_cycle_hint);
+                    match summary_left {
+                        SummaryLeft::Default => {
+                            render_footer(area, f.buffer_mut(), props, None, show_cycle_hint);
+                        }
+                        SummaryLeft::Custom(line) => {
+                            render_footer_line(area, f.buffer_mut(), line);
+                        }
+                        SummaryLeft::None => {}
+                    }
+                    if show_context {
+                        render_context_right(area, f.buffer_mut(), &context_line);
+                    }
+                } else {
+                    render_footer(area, f.buffer_mut(), props, None, show_cycle_hint);
+                    if can_show_both {
+                        render_context_right(area, f.buffer_mut(), &context_line);
+                    }
+                }
             })
             .unwrap();
         assert_snapshot!(name, terminal.backend());
@@ -637,14 +772,35 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = Rect::new(0, 0, f.area().width, height);
-                render_footer(area, f.buffer_mut(), props);
-                render_mode_indicator(
-                    area,
-                    f.buffer_mut(),
-                    indicator,
-                    !props.is_task_running,
-                    Some(footer_line_width(props)),
+                let context_line = context_window_line(
+                    props.context_window_percent,
+                    props.context_window_used_tokens,
                 );
+                let context_width = context_line.width() as u16;
+                let show_cycle_hint = !props.is_task_running;
+                let left_width = footer_line_width(props, indicator, show_cycle_hint);
+                let can_show_both = can_show_left_with_context(area, left_width, context_width);
+                if matches!(props.mode, FooterMode::ShortcutSummary) {
+                    let (summary_left, show_context) =
+                        shortcut_summary_layout(area, context_width, indicator, show_cycle_hint);
+                    match summary_left {
+                        SummaryLeft::Default => {
+                            render_footer(area, f.buffer_mut(), props, indicator, show_cycle_hint);
+                        }
+                        SummaryLeft::Custom(line) => {
+                            render_footer_line(area, f.buffer_mut(), line);
+                        }
+                        SummaryLeft::None => {}
+                    }
+                    if show_context {
+                        render_context_right(area, f.buffer_mut(), &context_line);
+                    }
+                } else {
+                    render_footer(area, f.buffer_mut(), props, indicator, show_cycle_hint);
+                    if can_show_both {
+                        render_context_right(area, f.buffer_mut(), &context_line);
+                    }
+                }
             })
             .unwrap();
         assert_snapshot!(name, terminal.backend());
