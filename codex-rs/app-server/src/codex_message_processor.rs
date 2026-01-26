@@ -3589,6 +3589,7 @@ impl CodexMessageProcessor {
                 name: connector.connector_name,
                 description: connector.connector_description,
                 logo_url: connector.logo_url,
+                logo_url_dark: connector.logo_url_dark,
                 install_url: connector.install_url,
                 is_accessible: connector.is_accessible,
             })
