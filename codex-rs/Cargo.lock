@@ -1559,11 +1559,13 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "crossbeam-channel",
  "ignore",
  "nucleo-matcher",
  "pretty_assertions",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
