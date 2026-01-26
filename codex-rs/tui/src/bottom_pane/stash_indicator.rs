@@ -3,7 +3,8 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use crate::render::renderable::Renderable;
-use crate::wrapping::{RtOptions, word_wrap_lines};
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_lines;
 
 pub(crate) struct StashIndicator {
     pub stash_exists: bool,
@@ -53,7 +54,8 @@ mod tests {
     use super::*;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
-    use ratatui::{buffer::Buffer, layout::Rect};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
 
     #[test]
     fn desired_height_no_stash() {
