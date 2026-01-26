@@ -154,34 +154,26 @@ fn create_approval_parameters() -> BTreeMap<String, JsonSchema> {
             },
         ),
         (
-            "request_approval".to_string(),
+            "justification".to_string(),
             JsonSchema::String {
                 description: Some(
-                    r#"
+                    r#"Only set if sandbox_permissions is \"require_escalated\". 
                     Request approval from the user to run this command outside the sandbox. 
-                    Phrased a simple question that summarizes the purpose of the 
+                    Phrased as a simple question that summarizes the purpose of the 
                     command as it relates to the task at hand - e.g. 'Do you want to 
-                    fetch and pull the latest version of this git branch?'
-                   "#
+                    fetch and pull the latest version of this git branch?'"#
                     .to_string(),
                 ),
             },
         ),
         (
-            "justification".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Only set if sandbox_permissions is \"require_escalated\". 1-sentence explanation of why we want to run this command."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "rule_prefix".to_string(),
+            "prefix_rule".to_string(),
             JsonSchema::Array {
                 items: Box::new(JsonSchema::String { description: None }),
                 description: Some(
-                    r#"Only specify when request_approval is present. Prefix pattern for the rule to persist for this command. Should be a short but reasonable prefix, usually 2-3 arguments. e.g. [\"git\", \"pull\"] or [\"uv\", \"run\"]."#.to_string(),
+                    r#"Only specify when sandbox_permissions is `require_escalated`. 
+                    Suggest a prefix command pattern that will allow you to fulfill similar requests from the user in the future.
+                    Should be a short but reasonable prefix, e.g. [\"git\", \"pull\"] or [\"uv\", \"run\"] or [\"pytest\"]."#.to_string(),
                 ),
             },
         ),

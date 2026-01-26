@@ -77,6 +77,17 @@ fn default_tty() -> bool {
     false
 }
 
+fn normalize_request_approval(request_approval: Option<String>) -> Option<String> {
+    request_approval.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
 #[async_trait]
 impl ToolHandler for UnifiedExecHandler {
     fn kind(&self) -> ToolKind {
@@ -151,6 +162,9 @@ impl ToolHandler for UnifiedExecHandler {
                 } else {
                     None
                 };
+                // Normalize early so empty/whitespace request_approval does not trigger
+                // escalated permissions and bypass sandbox without a real approval prompt.
+                let request_approval = normalize_request_approval(request_approval);
 
                 let sandbox_permissions = if request_approval.is_some() {
                     if !request_rule_enabled {
@@ -384,5 +398,14 @@ mod tests {
 
         assert_eq!(command[2], "echo hello");
         Ok(())
+    }
+
+    #[test]
+    fn normalize_request_approval_trims_and_drops_empty_values() {
+        assert_eq!(normalize_request_approval(Some("   ".to_string())), None);
+        assert_eq!(
+            normalize_request_approval(Some("  ok?  ".to_string())),
+            Some("ok?".to_string())
+        );
     }
 }

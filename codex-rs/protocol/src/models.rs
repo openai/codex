@@ -226,25 +226,25 @@ impl DeveloperInstructions {
         request_rule_enabled: bool,
     ) -> DeveloperInstructions {
         let text = match approval_policy {
-            AskForApproval::Never => APPROVAL_POLICY_NEVER.trim_end(),
-            AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.trim_end(),
-            AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.trim_end(),
-            AskForApproval::OnRequest => APPROVAL_POLICY_ON_REQUEST.trim_end(),
+            AskForApproval::Never => APPROVAL_POLICY_NEVER.to_string(),
+            AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.to_string(),
+            AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.to_string(),
+            AskForApproval::OnRequest => {
+                if !request_rule_enabled {
+                    APPROVAL_POLICY_ON_REQUEST.to_string()
+                } else {
+                    let command_prefixes = format_allow_prefixes(exec_policy);
+                    match command_prefixes {
+                        Some(prefixes) => {
+                            format!("{APPROVAL_POLICY_ON_REQUEST_RULE}\n{prefixes}")
+                        }
+                        None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
+                    }
+                }
+            }
         };
 
-        let mut instructions = DeveloperInstructions::new(text);
-
-        if request_rule_enabled && matches!(approval_policy, AskForApproval::OnRequest) {
-            let request_rule = APPROVAL_POLICY_ON_REQUEST_RULE.trim_end();
-            instructions =
-                instructions.concat(DeveloperInstructions::new(format!("\n{request_rule}")));
-            if let Some(prefixes) = format_allow_prefixes(exec_policy) {
-                instructions =
-                    instructions.concat(DeveloperInstructions::new(format!("\n{prefixes}")));
-            }
-        }
-
-        instructions
+        DeveloperInstructions::new(text)
     }
 
     pub fn into_text(self) -> String {
@@ -253,6 +253,9 @@ impl DeveloperInstructions {
 
     pub fn concat(self, other: impl Into<DeveloperInstructions>) -> Self {
         let mut text = self.text;
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
         text.push_str(&other.into().text);
         Self { text }
     }
@@ -919,7 +922,7 @@ mod tests {
         assert_eq!(
             workspace_write,
             DeveloperInstructions::new(
-                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted."
+                "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted, including local network access."
             )
         );
 
