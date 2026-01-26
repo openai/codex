@@ -35,6 +35,7 @@ impl SearchItem {
 pub struct SearchManager {
     nucleo: Nucleo<SearchItem>,
     cancel_flag: Arc<AtomicBool>,
+    walker_running: Arc<AtomicBool>,
     walk_handle: Option<JoinHandle<()>>,
     limit: NonZero<usize>,
     compute_indices: bool,
@@ -59,6 +60,7 @@ impl SearchManager {
         let search_directory_buf = search_directory.to_path_buf();
         let override_matcher = build_override_matcher(search_directory, exclude)?;
         let cancel_flag = Arc::new(AtomicBool::new(false));
+        let walker_running = Arc::new(AtomicBool::new(true));
         let mut nucleo = Nucleo::new(
             Config::DEFAULT,
             notify,
@@ -74,12 +76,14 @@ impl SearchManager {
             threads.get(),
             override_matcher,
             cancel_flag.clone(),
+            walker_running.clone(),
             injector,
         )?);
 
         Ok(Self {
             nucleo,
             cancel_flag,
+            walker_running,
             walk_handle,
             limit,
             compute_indices,
@@ -165,8 +169,29 @@ impl SearchManager {
         self.cancel_flag.store(true, Ordering::Relaxed);
     }
 
+    pub fn walker_running(&self) -> bool {
+        self.walker_running.load(Ordering::Relaxed)
+    }
+
     pub fn search_directory(&self) -> &Path {
         &self.search_directory
+    }
+}
+
+struct WalkerRunningGuard {
+    flag: Arc<AtomicBool>,
+}
+
+impl WalkerRunningGuard {
+    fn new(flag: Arc<AtomicBool>) -> Self {
+        flag.store(true, Ordering::Relaxed);
+        Self { flag }
+    }
+}
+
+impl Drop for WalkerRunningGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::Relaxed);
     }
 }
 
@@ -419,6 +444,7 @@ where
             let mut last_sent_query: String = String::new();
             let mut current_query = query.clone();
             let mut sent_once = false;
+            let mut last_sent_running = false;
             let start = std::time::Instant::now();
             let mut last_progress = start;
 
@@ -450,23 +476,23 @@ where
 
                 let paths_changed = paths != last_sent_paths;
                 let timeout_elapsed = start.elapsed() >= config.first_result_timeout;
+                let walker_running = manager.walker_running();
+                let ui_running = walker_running || status.running || flag_was_set || status.changed;
+                let running_changed = sent_once && last_sent_running && !ui_running;
 
                 let should_emit = !cancellation_token.load(Ordering::Relaxed)
                     && (paths_changed
                         || current_query != last_sent_query
-                        || (!sent_once
-                            && (flag_was_set
-                                || status.changed
-                                || !status.running
-                                || timeout_elapsed)));
+                        || running_changed
+                        || (!sent_once && (flag_was_set || status.changed || timeout_elapsed)));
 
                 if should_emit {
-                    let ui_running = status.running || flag_was_set || status.changed;
                     callback(current_query.clone(), results.clone(), ui_running);
                     sent_once = true;
                     last_sent_paths = paths;
                     last_sent_query.clear();
                     last_sent_query.push_str(&current_query);
+                    last_sent_running = ui_running;
                     last_progress = std::time::Instant::now();
                 }
 
@@ -474,17 +500,18 @@ where
                     break;
                 }
 
-                if !status.running && !flag_was_set {
+                if !status.running && !flag_was_set && !walker_running {
                     if sent_once {
                         if last_progress.elapsed() >= config.first_result_timeout {
                             break;
                         }
-                    } else if timeout_elapsed {
-                        if !cancellation_token.load(Ordering::Relaxed) {
-                            let ui_running = status.running || flag_was_set || status.changed;
-                            callback(current_query.clone(), results, ui_running);
+                    } else if timeout_elapsed && !cancellation_token.load(Ordering::Relaxed) {
+                        let ui_running =
+                            walker_running || status.running || flag_was_set || status.changed;
+                        callback(current_query.clone(), results, ui_running);
+                        if !walker_running {
+                            break;
                         }
-                        break;
                     }
                 }
             }
@@ -497,11 +524,13 @@ fn spawn_walker(
     threads: usize,
     override_matcher: Option<ignore::overrides::Override>,
     cancel_flag: Arc<AtomicBool>,
+    walker_running: Arc<AtomicBool>,
     injector: nucleo::Injector<SearchItem>,
 ) -> anyhow::Result<JoinHandle<()>> {
     thread::Builder::new()
         .name("codex-file-search-walker".to_string())
         .spawn(move || {
+            let _walker_running_guard = WalkerRunningGuard::new(walker_running);
             let search_directory = Arc::new(search_directory);
             let mut walk_builder = WalkBuilder::new(search_directory.as_path());
             walk_builder
