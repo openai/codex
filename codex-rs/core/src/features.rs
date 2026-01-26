@@ -346,7 +346,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
-    // Beta program. Rendered in the `/experimental` menu for users.
+    // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
         id: Feature::UnifiedExec,
         key: "unified_exec",
