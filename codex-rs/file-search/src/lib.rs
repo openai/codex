@@ -3,15 +3,14 @@ use crossbeam_channel::Sender;
 use crossbeam_channel::unbounded;
 use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
-use nucleo_matcher::Matcher;
-use nucleo_matcher::Utf32Str;
-use nucleo_matcher::pattern::AtomKind;
-use nucleo_matcher::pattern::CaseMatching;
-use nucleo_matcher::pattern::Normalization;
-use nucleo_matcher::pattern::Pattern;
+use nucleo::Config;
+use nucleo::Injector;
+use nucleo::Matcher;
+use nucleo::Nucleo;
+use nucleo::Utf32String;
+use nucleo::pattern::CaseMatching;
+use nucleo::pattern::Normalization;
 use serde::Serialize;
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
 use std::num::NonZero;
 use std::path::Path;
 use std::path::PathBuf;
@@ -29,18 +28,25 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::process::Command;
 
+#[cfg(test)]
+use nucleo::Utf32Str;
+#[cfg(test)]
+use nucleo::pattern::AtomKind;
+#[cfg(test)]
+use nucleo::pattern::Pattern;
+
 mod cli;
 
 pub use cli::Cli;
 
 /// A single match result returned from the search.
 ///
-/// * `score` – Relevance score returned by `nucleo_matcher`.
+/// * `score` – Relevance score returned by `nucleo`.
 /// * `path`  – Path to the matched file (relative to the search directory).
 /// * `indices` – Optional list of character indices that matched the query.
 ///   These are only filled when the caller of [`run`] sets
 ///   `compute_indices` to `true`.  The indices vector follows the
-///   guidance from `nucleo_matcher::Pattern::indices`: they are
+///   guidance from `nucleo::pattern::Pattern::indices`: they are
 ///   unique and sorted in ascending order so that callers can use
 ///   them directly for highlighting.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -128,11 +134,6 @@ impl FileSearchSession {
             query.clear();
             query.push_str(pattern_text);
         }
-        {
-            #[expect(clippy::unwrap_used)]
-            let mut pattern = self.inner.pattern.write().unwrap();
-            *pattern = create_pattern(pattern_text);
-        }
         self.inner.query_generation.fetch_add(1, Ordering::Relaxed);
         let _ = self.inner.work_tx.send(WorkSignal::QueryUpdated);
     }
@@ -209,6 +210,18 @@ pub fn create_session(
     let override_matcher = build_override_matcher(search_directory, &exclude)?;
     let (work_tx, work_rx) = unbounded();
 
+    let notify_tx = work_tx.clone();
+    let notify = Arc::new(move || {
+        let _ = notify_tx.send(WorkSignal::NucleoNotify);
+    });
+    let nucleo = Nucleo::new(
+        Config::DEFAULT.match_paths(),
+        notify,
+        Some(threads.get()),
+        1,
+    );
+    let injector = nucleo.injector();
+
     let latest_snapshot = FileSearchSnapshot {
         matches: Vec::new(),
         total_match_count: 0,
@@ -228,21 +241,20 @@ pub fn create_session(
         complete_emitted: AtomicBool::new(false),
         completion_mutex: Mutex::new(()),
         completion_cv: Condvar::new(),
-        corpus: RwLock::new(Vec::new()),
         scanned_file_count: AtomicUsize::new(0),
         query_generation: AtomicU64::new(0),
         query: RwLock::new(String::new()),
-        pattern: RwLock::new(create_pattern("")),
         latest_snapshot: RwLock::new(latest_snapshot),
         reporter,
         work_tx: work_tx.clone(),
     });
 
     let matcher_inner = inner.clone();
-    let matcher_handle = thread::spawn(move || matcher_worker(matcher_inner, work_rx));
+    let matcher_handle = thread::spawn(move || matcher_worker(matcher_inner, work_rx, nucleo));
 
     let walker_inner = inner.clone();
-    let walker_handle = thread::spawn(move || walker_worker(walker_inner, override_matcher));
+    let walker_handle =
+        thread::spawn(move || walker_worker(walker_inner, override_matcher, injector));
 
     Ok(FileSearchSession {
         inner,
@@ -414,6 +426,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn create_pattern(pattern: &str) -> Pattern {
     Pattern::new(
         pattern,
@@ -435,11 +448,9 @@ struct SessionInner {
     complete_emitted: AtomicBool,
     completion_mutex: Mutex<()>,
     completion_cv: Condvar,
-    corpus: RwLock<Vec<Arc<str>>>,
     scanned_file_count: AtomicUsize,
     query_generation: AtomicU64,
     query: RwLock<String>,
-    pattern: RwLock<Pattern>,
     latest_snapshot: RwLock<FileSearchSnapshot>,
     reporter: Arc<dyn SessionReporter>,
     work_tx: Sender<WorkSignal>,
@@ -448,6 +459,7 @@ struct SessionInner {
 enum WorkSignal {
     CorpusAppended,
     QueryUpdated,
+    NucleoNotify,
     WalkComplete,
     Cancelled,
 }
@@ -468,7 +480,11 @@ fn build_override_matcher(
     Ok(Some(matcher))
 }
 
-fn walker_worker(inner: Arc<SessionInner>, override_matcher: Option<ignore::overrides::Override>) {
+fn walker_worker(
+    inner: Arc<SessionInner>,
+    override_matcher: Option<ignore::overrides::Override>,
+    injector: Injector<Arc<str>>,
+) {
     if inner.cancelled.load(Ordering::Relaxed) {
         return;
     }
@@ -499,15 +515,17 @@ fn walker_worker(inner: Arc<SessionInner>, override_matcher: Option<ignore::over
     struct WorkerBuffer {
         buffer: Vec<Arc<str>>,
         inner: Arc<SessionInner>,
+        injector: Injector<Arc<str>>,
     }
 
     impl WorkerBuffer {
         const BATCH_SIZE: usize = 256;
 
-        fn new(inner: Arc<SessionInner>) -> Self {
+        fn new(inner: Arc<SessionInner>, injector: Injector<Arc<str>>) -> Self {
             Self {
                 buffer: Vec::with_capacity(Self::BATCH_SIZE),
                 inner,
+                injector,
             }
         }
 
@@ -527,11 +545,9 @@ fn walker_worker(inner: Arc<SessionInner>, override_matcher: Option<ignore::over
                 return;
             }
             let appended = self.buffer.len();
-            {
-                #[expect(clippy::unwrap_used)]
-                let mut corpus = self.inner.corpus.write().unwrap();
-                corpus.extend(self.buffer.drain(..));
-            }
+            self.injector.extend(self.buffer.drain(..), |path, cols| {
+                cols[0] = Utf32String::from(path.as_ref());
+            });
             self.inner
                 .scanned_file_count
                 .fetch_add(appended, Ordering::Relaxed);
@@ -564,7 +580,7 @@ fn walker_worker(inner: Arc<SessionInner>, override_matcher: Option<ignore::over
     }
 
     walker.run(|| {
-        let mut worker_buffer = WorkerBuffer::new(inner.clone());
+        let mut worker_buffer = WorkerBuffer::new(inner.clone(), injector.clone());
         // Each worker keeps a local counter so we only read the atomic flag
         // every N entries which is cheaper than checking on every file.
         const CHECK_INTERVAL: usize = 1024;
@@ -593,24 +609,18 @@ fn walker_worker(inner: Arc<SessionInner>, override_matcher: Option<ignore::over
     let _ = inner.work_tx.send(WorkSignal::WalkComplete);
 }
 
-fn matcher_worker(inner: Arc<SessionInner>, work_rx: Receiver<WorkSignal>) -> anyhow::Result<()> {
-    let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
-    let mut utf32buf: Vec<char> = Vec::new();
-    let mut indices_matcher = if inner.compute_indices {
-        Some(Matcher::new(nucleo_matcher::Config::DEFAULT))
-    } else {
-        None
-    };
+fn matcher_worker(
+    inner: Arc<SessionInner>,
+    work_rx: Receiver<WorkSignal>,
+    mut nucleo: Nucleo<Arc<str>>,
+) -> anyhow::Result<()> {
+    const TICK_TIMEOUT_MS: u64 = 10;
 
-    let mut pattern = {
-        #[expect(clippy::unwrap_used)]
-        inner.pattern.read().unwrap().clone()
-    };
+    let config = Config::DEFAULT.match_paths();
+    let mut indices_matcher = inner.compute_indices.then(|| Matcher::new(config.clone()));
 
     let mut last_query_generation = inner.query_generation.load(Ordering::Relaxed);
-    let mut last_scored_corpus_len = 0usize;
-    let mut top_n_heap: BinaryHeap<Reverse<(u32, Arc<str>)>> = BinaryHeap::new();
-    let mut total_match_count = 0usize;
+    let mut last_query = String::new();
     let mut last_matches: Vec<FileMatch> = Vec::new();
 
     let mut emit_pending = false;
@@ -631,6 +641,7 @@ fn matcher_worker(inner: Arc<SessionInner>, work_rx: Receiver<WorkSignal>) -> an
         let mut saw_signal = false;
         let mut saw_walk_complete_signal = false;
         let mut saw_cancel_signal = false;
+        let mut saw_nucleo_notify = false;
 
         match work_rx.recv_timeout(timeout) {
             Ok(signal) => {
@@ -638,6 +649,7 @@ fn matcher_worker(inner: Arc<SessionInner>, work_rx: Receiver<WorkSignal>) -> an
                 match signal {
                     WorkSignal::WalkComplete => saw_walk_complete_signal = true,
                     WorkSignal::Cancelled => saw_cancel_signal = true,
+                    WorkSignal::NucleoNotify => saw_nucleo_notify = true,
                     WorkSignal::CorpusAppended | WorkSignal::QueryUpdated => {}
                 }
             }
@@ -650,6 +662,7 @@ fn matcher_worker(inner: Arc<SessionInner>, work_rx: Receiver<WorkSignal>) -> an
             match signal {
                 WorkSignal::WalkComplete => saw_walk_complete_signal = true,
                 WorkSignal::Cancelled => saw_cancel_signal = true,
+                WorkSignal::NucleoNotify => saw_nucleo_notify = true,
                 WorkSignal::CorpusAppended | WorkSignal::QueryUpdated => {}
             }
         }
@@ -663,89 +676,67 @@ fn matcher_worker(inner: Arc<SessionInner>, work_rx: Receiver<WorkSignal>) -> an
             continue;
         }
 
+        let current_query = {
+            #[expect(clippy::unwrap_used)]
+            inner.query.read().unwrap().clone()
+        };
         let current_generation = inner.query_generation.load(Ordering::Relaxed);
-        let query_changed = current_generation != last_query_generation;
+        let query_changed =
+            current_generation != last_query_generation || current_query != last_query;
         if query_changed {
-            pattern = {
-                #[expect(clippy::unwrap_used)]
-                inner.pattern.read().unwrap().clone()
-            };
-            top_n_heap.clear();
-            total_match_count = 0;
-            last_scored_corpus_len = 0;
+            let append = current_query.starts_with(&last_query);
+            nucleo.pattern.reparse(
+                0,
+                &current_query,
+                CaseMatching::Smart,
+                Normalization::Smart,
+                append,
+            );
             last_query_generation = current_generation;
+            last_query = current_query.clone();
         }
 
-        let query_is_empty = {
-            #[expect(clippy::unwrap_used)]
-            inner.query.read().unwrap().is_empty()
-        };
-
-        let (corpus_len, to_score) = {
-            #[expect(clippy::unwrap_used)]
-            let corpus = inner.corpus.read().unwrap();
-            let corpus_len = corpus.len();
-            let start = if query_changed {
-                0
-            } else {
-                last_scored_corpus_len.min(corpus_len)
-            };
-            let to_score = if query_is_empty {
-                Vec::new()
-            } else {
-                corpus[start..corpus_len].to_vec()
-            };
-            (corpus_len, to_score)
-        };
-
-        if !query_is_empty {
-            for path in &to_score {
-                let haystack: Utf32Str<'_> = Utf32Str::new(path.as_ref(), &mut utf32buf);
-                if let Some(score) = pattern.score(haystack, &mut matcher) {
-                    total_match_count += 1;
-                    if top_n_heap.len() < inner.limit {
-                        top_n_heap.push(Reverse((score, path.clone())));
-                    } else if let Some(min_element) = top_n_heap.peek()
-                        && score > min_element.0.0
-                    {
-                        top_n_heap.pop();
-                        top_n_heap.push(Reverse((score, path.clone())));
-                    }
-                }
-            }
+        let query_is_empty = current_query.is_empty();
+        if !query_is_empty && (query_changed || saw_nucleo_notify || emit_pending) {
+            let _ = nucleo.tick(TICK_TIMEOUT_MS);
         }
 
-        last_scored_corpus_len = corpus_len;
+        let matches = if query_is_empty {
+            Vec::new()
+        } else {
+            let snapshot = nucleo.snapshot();
+            let limit = inner.limit.min(snapshot.matched_item_count() as usize);
+            let pattern = snapshot.pattern().column_pattern(0);
+            snapshot
+                .matches()
+                .iter()
+                .take(limit)
+                .filter_map(|match_| {
+                    let item = snapshot.get_item(match_.idx)?;
+                    let indices = if let Some(indices_matcher) = indices_matcher.as_mut() {
+                        let mut idx_vec = Vec::<u32>::new();
+                        let haystack = item.matcher_columns[0].slice(..);
+                        let _ = pattern.indices(haystack, indices_matcher, &mut idx_vec);
+                        idx_vec.sort_unstable();
+                        idx_vec.dedup();
+                        Some(idx_vec)
+                    } else {
+                        None
+                    };
+                    Some(FileMatch {
+                        score: match_.score,
+                        path: item.data.as_ref().to_string(),
+                        indices,
+                    })
+                })
+                .collect()
+        };
 
-        let mut raw_matches: Vec<(u32, Arc<str>)> =
-            top_n_heap.iter().map(|r| r.0.clone()).collect();
-        raw_matches.sort_by(cmp_by_score_desc_then_path_asc::<(u32, Arc<str>), _, _>(
-            |t| t.0,
-            |t| t.1.as_ref(),
-        ));
-
-        let matches: Vec<FileMatch> = raw_matches
-            .into_iter()
-            .map(|(score, path)| {
-                let path_string = path.to_string();
-                let indices = if let Some(ref mut indices_matcher) = indices_matcher {
-                    let mut buf = Vec::<char>::new();
-                    let haystack: Utf32Str<'_> = Utf32Str::new(&path_string, &mut buf);
-                    let mut idx_vec: Vec<u32> = Vec::new();
-                    pattern.indices(haystack, indices_matcher, &mut idx_vec);
-                    idx_vec.sort_unstable();
-                    idx_vec.dedup();
-                    Some(idx_vec)
-                } else {
-                    None
-                };
-                FileMatch {
-                    score,
-                    path: path_string,
-                    indices,
-                }
-            })
-            .collect();
+        let total_match_count = if query_is_empty {
+            0
+        } else {
+            nucleo.snapshot().matched_item_count() as usize
+        };
 
         let snapshot = FileSearchSnapshot {
             matches: matches.clone(),
@@ -861,7 +852,7 @@ mod tests {
     fn verify_score_is_none_for_non_match() {
         let mut utf32buf = Vec::<char>::new();
         let line = "hello";
-        let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
+        let mut matcher = Matcher::new(Config::DEFAULT);
         let haystack: Utf32Str<'_> = Utf32Str::new(line, &mut utf32buf);
         let pattern = create_pattern("zzz");
         let score = pattern.score(haystack, &mut matcher);
@@ -1087,7 +1078,7 @@ mod tests {
         )
         .expect("session");
 
-        session.update_query("file-1999");
+        session.update_query("zzzzzzzz");
         let _ = reporter.wait_for_complete(Duration::from_secs(5));
         let _ = session.join();
 
