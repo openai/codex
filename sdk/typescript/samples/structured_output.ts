@@ -18,5 +18,11 @@ const schema = {
   additionalProperties: false,
 } as const;
 
-const turn = await thread.run("Summarize repository status", { outputSchema: schema });
-console.log(turn.finalResponse);
+try {
+  const turn = await thread.run("Summarize repository status", { outputSchema: schema });
+  console.log(turn.finalResponse);
+  console.log("Usage:", turn.usage);
+} catch (err) {
+  console.error("Codex run failed:", err);
+  process.exit(1);
+}
