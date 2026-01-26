@@ -170,6 +170,7 @@ use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
@@ -213,6 +214,7 @@ pub(crate) type PendingRollbacks = Arc<Mutex<HashMap<ThreadId, RequestId>>>;
 pub(crate) struct TurnSummary {
     pub(crate) file_change_started: HashSet<String>,
     pub(crate) last_error: Option<TurnError>,
+    pub(crate) collaboration_mode_kind: Option<ModeKind>,
 }
 
 pub(crate) type TurnSummaryStore = Arc<Mutex<HashMap<ThreadId, TurnSummary>>>;
@@ -3641,13 +3643,14 @@ impl CodexMessageProcessor {
     }
 
     async fn turn_start(&self, request_id: RequestId, params: TurnStartParams) {
-        let (_, thread) = match self.load_thread(&params.thread_id).await {
+        let (thread_id, thread) = match self.load_thread(&params.thread_id).await {
             Ok(v) => v,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
+        let thread_id_str = params.thread_id.clone();
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
@@ -3655,6 +3658,15 @@ impl CodexMessageProcessor {
             .into_iter()
             .map(V2UserInput::into_core)
             .collect();
+        let collaboration_mode_kind = params.collaboration_mode.as_ref().map(|mode| mode.mode);
+        let config_snapshot = thread.config_snapshot().await;
+        let collaboration_mode_kind =
+            collaboration_mode_kind.or(Some(config_snapshot.collaboration_mode_kind));
+        {
+            let mut summaries = self.turn_summary_store.lock().await;
+            let summary = summaries.entry(thread_id).or_default();
+            summary.collaboration_mode_kind = collaboration_mode_kind;
+        }
 
         let has_any_overrides = params.cwd.is_some()
             || params.approval_policy.is_some()
@@ -3696,6 +3708,7 @@ impl CodexMessageProcessor {
                     items: vec![],
                     error: None,
                     status: TurnStatus::InProgress,
+                    collaboration_mode_kind,
                 };
 
                 let response = TurnStartResponse { turn: turn.clone() };
@@ -3703,7 +3716,7 @@ impl CodexMessageProcessor {
 
                 // Emit v2 turn/started notification.
                 let notif = TurnStartedNotification {
-                    thread_id: params.thread_id,
+                    thread_id: thread_id_str,
                     turn,
                 };
                 self.outgoing
@@ -3740,6 +3753,7 @@ impl CodexMessageProcessor {
             items,
             error: None,
             status: TurnStatus::InProgress,
+            collaboration_mode_kind: None,
         }
     }
 

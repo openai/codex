@@ -14,6 +14,7 @@ use std::time::Duration;
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::CollaborationMode;
+use crate::config_types::ModeKind;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
@@ -1075,6 +1076,7 @@ pub struct TurnCompleteEvent {
 pub struct TurnStartedEvent {
     // TODO(aibrahim): make this not optional
     pub model_context_window: Option<i64>,
+    pub collaboration_mode_kind: ModeKind,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]

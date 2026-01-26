@@ -4,6 +4,7 @@ use crate::error::Result as CodexResult;
 use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
@@ -22,6 +23,7 @@ pub struct ThreadConfigSnapshot {
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
     pub session_source: SessionSource,
+    pub collaboration_mode_kind: ModeKind,
 }
 
 pub struct CodexThread {

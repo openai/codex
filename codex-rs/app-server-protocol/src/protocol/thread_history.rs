@@ -3,6 +3,7 @@ use crate::protocol::v2::Turn;
 use crate::protocol::v2::TurnError;
 use crate::protocol::v2::TurnStatus;
 use crate::protocol::v2::UserInput;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::EventMsg;
@@ -164,6 +165,7 @@ impl ThreadHistoryBuilder {
             items: Vec::new(),
             error: None,
             status: TurnStatus::Completed,
+            collaboration_mode_kind: None,
         }
     }
 
@@ -222,6 +224,7 @@ struct PendingTurn {
     items: Vec<ThreadItem>,
     error: Option<TurnError>,
     status: TurnStatus,
+    collaboration_mode_kind: Option<ModeKind>,
 }
 
 impl From<PendingTurn> for Turn {
@@ -231,6 +234,7 @@ impl From<PendingTurn> for Turn {
             items: value.items,
             error: value.error,
             status: value.status,
+            collaboration_mode_kind: value.collaboration_mode_kind,
         }
     }
 }
@@ -493,6 +497,7 @@ mod tests {
                 id: "turn-1".into(),
                 status: TurnStatus::Completed,
                 error: None,
+                collaboration_mode_kind: None,
                 items: vec![
                     ThreadItem::UserMessage {
                         id: "item-1".into(),
@@ -511,6 +516,7 @@ mod tests {
                 id: "turn-2".into(),
                 status: TurnStatus::Completed,
                 error: None,
+                collaboration_mode_kind: None,
                 items: vec![
                     ThreadItem::UserMessage {
                         id: "item-3".into(),

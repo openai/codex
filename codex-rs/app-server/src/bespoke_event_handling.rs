@@ -85,6 +85,7 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
@@ -115,6 +116,11 @@ pub(crate) async fn apply_bespoke_event_handling(
         msg,
     } = event;
     match msg {
+        EventMsg::TurnStarted(turn_started_event) => {
+            let mut summaries = turn_summary_store.lock().await;
+            let summary = summaries.entry(conversation_id).or_default();
+            summary.collaboration_mode_kind = Some(turn_started_event.collaboration_mode_kind);
+        }
         EventMsg::TurnComplete(_ev) => {
             handle_turn_complete(
                 conversation_id,
@@ -1132,6 +1138,7 @@ async fn emit_turn_completed_with_status(
     event_turn_id: String,
     status: TurnStatus,
     error: Option<TurnError>,
+    collaboration_mode_kind: Option<ModeKind>,
     outgoing: &OutgoingMessageSender,
 ) {
     let notification = TurnCompletedNotification {
@@ -1141,6 +1148,7 @@ async fn emit_turn_completed_with_status(
             items: vec![],
             error,
             status,
+            collaboration_mode_kind,
         },
     };
     outgoing
@@ -1248,13 +1256,22 @@ async fn handle_turn_complete(
     turn_summary_store: &TurnSummaryStore,
 ) {
     let turn_summary = find_and_remove_turn_summary(conversation_id, turn_summary_store).await;
+    let collaboration_mode_kind = turn_summary.collaboration_mode_kind;
 
     let (status, error) = match turn_summary.last_error {
         Some(error) => (TurnStatus::Failed, Some(error)),
         None => (TurnStatus::Completed, None),
     };
 
-    emit_turn_completed_with_status(conversation_id, event_turn_id, status, error, outgoing).await;
+    emit_turn_completed_with_status(
+        conversation_id,
+        event_turn_id,
+        status,
+        error,
+        collaboration_mode_kind,
+        outgoing,
+    )
+    .await;
 }
 
 async fn handle_turn_interrupted(
@@ -1263,13 +1280,14 @@ async fn handle_turn_interrupted(
     outgoing: &OutgoingMessageSender,
     turn_summary_store: &TurnSummaryStore,
 ) {
-    find_and_remove_turn_summary(conversation_id, turn_summary_store).await;
+    let turn_summary = find_and_remove_turn_summary(conversation_id, turn_summary_store).await;
 
     emit_turn_completed_with_status(
         conversation_id,
         event_turn_id,
         TurnStatus::Interrupted,
         None,
+        turn_summary.collaboration_mode_kind,
         outgoing,
     )
     .await;
