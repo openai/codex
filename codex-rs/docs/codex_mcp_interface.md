@@ -94,6 +94,7 @@ Each response yields:
     - `reasoningEffort` – one of `minimal|low|medium|high`
     - `description` – human-friendly label for the effort
   - `defaultReasoningEffort` – suggested effort for the UI
+  - `supportsPersonality` – whether the model supports personality-specific instructions
   - `isDefault` – whether the model is recommended for most users
 - `nextCursor` – pass into the next request to continue paging (optional)
 
