@@ -81,7 +81,7 @@ Example (from OpenAI's official VSCode extension):
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`.
 - `thread/archive` — move a thread’s rollout file into the archived directory; returns `{}` on success.
-- `thread/unarchive` — move an archived rollout file back into the sessions directory; returns `{}` on success.
+- `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
@@ -217,7 +217,7 @@ Use `thread/unarchive` to move an archived rollout back into the sessions direct
 
 ```json
 { "method": "thread/unarchive", "id": 24, "params": { "threadId": "thr_b" } }
-{ "id": 24, "result": {} }
+{ "id": 24, "result": { "thread": { "id": "thr_b" } } }
 ```
 
 ### Example: Start a turn (send user input)

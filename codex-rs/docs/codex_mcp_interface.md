@@ -80,7 +80,8 @@ Interrupt a running turn: `interruptConversation`.
 List/resume/archive: `listConversations`, `resumeConversation`, `archiveConversation`.
 
 For v2 threads, use `thread/list` with `archived: true` to list archived rollouts and
-`thread/unarchive` to restore them to the active sessions directory.
+`thread/unarchive` to restore them to the active sessions directory (it returns the restored
+thread summary).
 
 ## Models
 

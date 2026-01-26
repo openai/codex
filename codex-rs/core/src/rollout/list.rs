@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::ffi::OsStr;
 use std::io::{self};
 use std::num::NonZero;
 use std::ops::ControlFlow;
@@ -1115,4 +1116,14 @@ pub async fn find_archived_thread_path_by_id_str(
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
     find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str).await
+}
+
+/// Extract the `YYYY/MM/DD` directory components from a rollout filename.
+pub fn rollout_date_parts(file_name: &OsStr) -> Option<(String, String, String)> {
+    let name = file_name.to_string_lossy();
+    let date = name.strip_prefix("rollout-")?.get(..10)?;
+    let year = date.get(..4)?.to_string();
+    let month = date.get(5..7)?.to_string();
+    let day = date.get(8..10)?.to_string();
+    Some((year, month, day))
 }
