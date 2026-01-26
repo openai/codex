@@ -69,6 +69,9 @@ mod tests {
         );
         assert_eq!(args.prompt, None);
         assert_eq!(cli.config_overrides.raw_overrides.len(), 1);
-        assert_eq!(cli.config_overrides.raw_overrides[0], "reasoning_level=xhigh");
+        assert_eq!(
+            cli.config_overrides.raw_overrides[0],
+            "reasoning_level=xhigh"
+        );
     }
 }
