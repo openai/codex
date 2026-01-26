@@ -117,7 +117,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
     assert_eq!(thread.id, conversation_id);
     assert_eq!(thread.preview, preview);
     assert_eq!(thread.model_provider, "mock_provider");
-    assert!(thread.path.is_absolute());
+    assert!(thread.path.as_ref().expect("thread path").is_absolute());
     assert_eq!(thread.cwd, PathBuf::from("/"));
     assert_eq!(thread.cli_version, "0.0.0");
     assert_eq!(thread.source, SessionSource::Cli);
@@ -169,7 +169,7 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
 
-    let thread_path = thread.path.clone();
+    let thread_path = thread.path.clone().expect("thread path");
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: "not-a-valid-thread-id".to_string(),

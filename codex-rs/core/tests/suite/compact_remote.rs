@@ -230,7 +230,12 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
     )
     .await?;
     let codex = harness.test().codex.clone();
-    let rollout_path = harness.test().session_configured.rollout_path.clone();
+    let rollout_path = harness
+        .test()
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
 
     let responses_mock = responses::mount_sse_once(
         harness.server(),

@@ -422,7 +422,11 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
 
     let mut builder = test_codex();
     let initial = builder.build(&server).await?;
-    let rollout_path = initial.session_configured.rollout_path.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
     let home = initial.home.clone();
 
     let collab_text = "resume instructions";
