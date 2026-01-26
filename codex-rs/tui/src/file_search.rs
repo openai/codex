@@ -57,8 +57,8 @@ impl FileSearchManager {
         st.latest_query.push_str(&query);
 
         if query.is_empty() {
-            if let Some(session) = st.session.as_ref() {
-                session.update_query("");
+            if let Some(session) = st.session.take() {
+                session.cancel();
             }
             return;
         }
@@ -111,10 +111,13 @@ impl TuiSessionReporter {
     fn send_snapshot(&self, snapshot: &file_search::FileSearchSnapshot) {
         #[expect(clippy::unwrap_used)]
         let st = self.state.lock().unwrap();
-        if st.session_token != self.session_token || st.latest_query.is_empty() {
+        if st.session_token != self.session_token
+            || st.latest_query.is_empty()
+            || snapshot.query.is_empty()
+        {
             return;
         }
-        let query = st.latest_query.clone();
+        let query = snapshot.query.clone();
         drop(st);
         self.app_tx.send(AppEvent::FileSearchResult {
             query,

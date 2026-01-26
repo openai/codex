@@ -73,6 +73,7 @@ pub struct FileSearchResults {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct FileSearchSnapshot {
+    pub query: String,
     pub matches: Vec<FileMatch>,
     pub total_match_count: usize,
     pub scanned_file_count: usize,
@@ -232,6 +233,7 @@ fn create_session_inner(
     let injector = nucleo.injector();
 
     let latest_snapshot = FileSearchSnapshot {
+        query: String::new(),
         matches: Vec::new(),
         total_match_count: 0,
         scanned_file_count: 0,
@@ -755,6 +757,7 @@ fn matcher_worker(
         };
 
         let snapshot = FileSearchSnapshot {
+            query: current_query.clone(),
             matches: matches.clone(),
             total_match_count,
             scanned_file_count: inner.scanned_file_count.load(Ordering::Relaxed),
@@ -819,6 +822,7 @@ impl Default for RunReporter {
     fn default() -> Self {
         Self {
             snapshot: RwLock::new(FileSearchSnapshot {
+                query: String::new(),
                 matches: Vec::new(),
                 total_match_count: 0,
                 scanned_file_count: 0,
