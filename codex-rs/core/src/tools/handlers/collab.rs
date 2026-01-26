@@ -78,7 +78,6 @@ impl ToolHandler for CollabHandler {
 mod spawn {
     use super::*;
     use crate::agent::AgentRole;
-    use crate::agent::MAX_THREAD_SPAWN_DEPTH;
     use crate::agent::exceeds_thread_spawn_depth_limit;
     use crate::agent::next_thread_spawn_depth;
     use codex_protocol::protocol::SessionSource;
@@ -112,9 +111,10 @@ mod spawn {
         }
         let session_source = turn.client.get_session_source();
         let child_depth = next_thread_spawn_depth(&session_source);
-        if exceeds_thread_spawn_depth_limit(child_depth) {
+        let max_depth = turn.client.config().agent_max_depth;
+        if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
             return Err(FunctionCallError::RespondToModel(format!(
-                "agent depth limit reached: max depth is {MAX_THREAD_SPAWN_DEPTH}"
+                "agent depth limit reached: max depth is {max_depth}"
             )));
         }
         session
@@ -615,7 +615,6 @@ mod tests {
     use super::*;
     use crate::CodexAuth;
     use crate::ThreadManager;
-    use crate::agent::MAX_THREAD_SPAWN_DEPTH;
     use crate::built_in_model_providers;
     use crate::client::ModelClient;
     use crate::codex::make_session_and_context;
@@ -751,9 +750,10 @@ mod tests {
         let manager = thread_manager();
         session.services.agent_control = manager.agent_control();
 
+        let max_depth = session.services.config.agent_max_depth;
         let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
-            depth: MAX_THREAD_SPAWN_DEPTH,
+            depth: max_depth,
         });
         turn.client = ModelClient::new(
             turn.client.config(),
@@ -779,7 +779,7 @@ mod tests {
         assert_eq!(
             err,
             FunctionCallError::RespondToModel(format!(
-                "agent depth limit reached: max depth is {MAX_THREAD_SPAWN_DEPTH}"
+                "agent depth limit reached: max depth is {max_depth}"
             ))
         );
     }

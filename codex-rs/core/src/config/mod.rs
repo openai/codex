@@ -90,6 +90,7 @@ pub use codex_git::GhostSnapshotConfig;
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
+pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
@@ -253,6 +254,9 @@ pub struct Config {
 
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
+
+    /// Maximum nesting depth for sub-agents.
+    pub agent_max_depth: i32,
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
@@ -1013,6 +1017,10 @@ pub struct AgentsToml {
     /// When unset, no limit is enforced.
     #[schemars(range(min = 1))]
     pub max_threads: Option<usize>,
+
+    /// Maximum nesting depth for sub-agents.
+    #[schemars(range(min = 1))]
+    pub max_depth: Option<i32>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -1390,6 +1398,18 @@ impl Config {
             ));
         }
 
+        let agent_max_depth = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.max_depth)
+            .unwrap_or(DEFAULT_AGENT_MAX_DEPTH);
+        if agent_max_depth < 1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.max_depth must be at least 1",
+            ));
+        }
+
         let ghost_snapshot = {
             let mut config = GhostSnapshotConfig::default();
             if let Some(ghost_snapshot) = cfg.ghost_snapshot.as_ref()
@@ -1532,6 +1552,7 @@ impl Config {
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
+            agent_max_depth,
             codex_home,
             config_layer_stack,
             history,
