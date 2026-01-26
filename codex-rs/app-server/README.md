@@ -114,7 +114,20 @@ Start a fresh thread when you need a new Codex conversation.
     "cwd": "/Users/me/project",
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
-    "personality": "friendly"
+    "personality": "friendly",
+    "dynamicTools": [
+        {
+            "name": "lookup_ticket",
+            "description": "Fetch a ticket by id",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" }
+                },
+                "required": ["id"]
+            }
+        }
+    ],
 } }
 { "id": 10, "result": {
     "thread": {

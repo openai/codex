@@ -326,6 +326,15 @@ pub struct ToolsV2 {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DynamicToolSpec {
+    pub name: String,
+    pub description: String,
+    pub input_schema: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
 pub struct ProfileV2 {
@@ -905,6 +914,8 @@ pub struct Model {
     pub description: String,
     pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,
     pub default_reasoning_effort: ReasoningEffort,
+    #[serde(default)]
+    pub supports_personality: bool,
     // Only one model should be marked as default.
     pub is_default: bool,
 }
@@ -1088,6 +1099,7 @@ pub struct ThreadStartParams {
     pub developer_instructions: Option<String>,
     pub personality: Option<Personality>,
     pub ephemeral: Option<bool>,
+    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     /// If true, opt into emitting raw response items on the event stream.
     ///
     /// This is for internal use only (e.g. Codex Cloud).
@@ -2370,6 +2382,25 @@ pub struct FileChangeRequestApprovalParams {
 #[ts(export_to = "v2/")]
 pub struct FileChangeRequestApprovalResponse {
     pub decision: FileChangeApprovalDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DynamicToolCallParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub call_id: String,
+    pub tool: String,
+    pub arguments: JsonValue,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct DynamicToolCallResponse {
+    pub output: String,
+    pub success: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

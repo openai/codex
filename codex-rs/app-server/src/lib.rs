@@ -40,6 +40,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 mod bespoke_event_handling;
 mod codex_message_processor;
 mod config_api;
+mod dynamic_tools;
 mod error_code;
 mod fuzzy_file_search;
 mod message_processor;
