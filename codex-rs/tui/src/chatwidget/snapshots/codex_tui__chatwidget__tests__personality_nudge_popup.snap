@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  New: response personalities
+  Prefer a different style? Try /personality.
+
+› 1. Choose a personality  Pick Friendly or Pragmatic for future responses.
+  2. Not now               You can run /personality any time.
+
+  Press enter to confirm or esc to go back

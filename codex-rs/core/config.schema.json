@@ -456,6 +456,10 @@
           "description": "Tracks whether the user has seen the model migration prompt",
           "type": "boolean"
         },
+        "hide_personality_nudge": {
+          "description": "Tracks whether the user has already seen the personality selection nudge.",
+          "type": "boolean"
+        },
         "hide_rate_limit_model_nudge": {
           "description": "Tracks whether the user opted out of the rate limit model switch reminder.",
           "type": "boolean"

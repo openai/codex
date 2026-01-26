@@ -126,6 +126,9 @@ pub(crate) enum AppEvent {
         model: ModelPreset,
     },
 
+    /// Open the personality selection popup.
+    OpenPersonalityPopup,
+
     /// Open the full model picker (non-auto models).
     OpenAllModelsPopup {
         models: Vec<ModelPreset>,
@@ -202,6 +205,9 @@ pub(crate) enum AppEvent {
     /// Update whether the rate limit switch prompt has been acknowledged for the session.
     UpdateRateLimitSwitchPromptHidden(bool),
 
+    /// Update whether the personality nudge has been acknowledged for the session.
+    UpdatePersonalityNudgeHidden(bool),
+
     /// Persist the acknowledgement flag for the full access warning prompt.
     PersistFullAccessWarningAcknowledged,
 
@@ -211,6 +217,9 @@ pub(crate) enum AppEvent {
 
     /// Persist the acknowledgement flag for the rate limit switch prompt.
     PersistRateLimitSwitchPromptHidden,
+
+    /// Persist the acknowledgement flag for the personality nudge.
+    PersistPersonalityNudgeHidden,
 
     /// Persist the acknowledgement flag for the model migration prompt.
     PersistModelMigrationPromptAcknowledged {

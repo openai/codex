@@ -798,6 +798,7 @@ async fn make_chatwidget_manual(
         plan_type: None,
         rate_limit_warnings: RateLimitWarningState::default(),
         rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
+        personality_nudge: PersonalityNudgeState::default(),
         rate_limit_poller: None,
         stream_controller: None,
         running_commands: HashMap::new(),
@@ -1123,6 +1124,78 @@ async fn rate_limit_switch_prompt_respects_hidden_notice() {
     assert!(matches!(
         chat.rate_limit_switch_prompt,
         RateLimitSwitchPromptState::Idle
+    ));
+}
+
+fn session_configured_event_for(model: &str) -> Event {
+    let rollout_file = NamedTempFile::new().expect("rollout file");
+    Event {
+        id: "session-configured".into(),
+        msg: EventMsg::SessionConfigured(codex_core::protocol::SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            model: model.to_string(),
+            model_provider_id: "test-provider".to_string(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            cwd: PathBuf::from("/home/user/project"),
+            reasoning_effort: Some(ReasoningEffortConfig::default()),
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            rollout_path: Some(rollout_file.path().to_path_buf()),
+        }),
+    }
+}
+
+#[tokio::test]
+async fn personality_nudge_respects_hidden_notice() {
+    let (mut chat, _rx, _) = make_chatwidget_manual(Some("bengalfox")).await;
+    chat.config.notices.hide_personality_nudge = Some(true);
+
+    chat.handle_codex_event(session_configured_event_for("bengalfox"));
+    chat.maybe_show_post_turn_nudges();
+
+    assert!(matches!(
+        chat.personality_nudge,
+        PersonalityNudgeState::Idle
+    ));
+}
+
+#[tokio::test]
+async fn personality_nudge_shows_once_and_hides_after_seen() {
+    let (mut chat, mut rx, _) = make_chatwidget_manual(Some("bengalfox")).await;
+
+    chat.handle_codex_event(session_configured_event_for("bengalfox"));
+    assert!(matches!(
+        chat.personality_nudge,
+        PersonalityNudgeState::Pending
+    ));
+
+    chat.maybe_show_post_turn_nudges();
+    assert!(matches!(
+        chat.personality_nudge,
+        PersonalityNudgeState::Shown
+    ));
+
+    let mut saw_update = false;
+    let mut saw_persist = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::UpdatePersonalityNudgeHidden(true) => saw_update = true,
+            AppEvent::PersistPersonalityNudgeHidden => saw_persist = true,
+            _ => {}
+        }
+    }
+    assert!(saw_update, "expected UpdatePersonalityNudgeHidden(true)");
+    assert!(saw_persist, "expected PersistPersonalityNudgeHidden");
+
+    chat.set_personality_nudge_hidden(true);
+    chat.schedule_personality_nudge_if_needed();
+
+    assert!(matches!(
+        chat.personality_nudge,
+        PersonalityNudgeState::Idle
     ));
 }
 
@@ -2979,6 +3052,16 @@ async fn personality_selection_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("personality_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn personality_nudge_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+    chat.handle_codex_event(session_configured_event_for("bengalfox"));
+    chat.maybe_show_post_turn_nudges();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("personality_nudge_popup", popup);
 }
 
 #[tokio::test]
