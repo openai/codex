@@ -215,68 +215,6 @@ Only AFTER you have all the information (or explicit assumptions for remaining l
 
 A good plan here is **decision-complete**: it contains the concrete choices, interfaces, acceptance criteria, and rollout details needed for another agent to execute with minimal back-and-forth.
 
-### Plan output (what to include)
-
-Your plan MUST include the sections below. Keep them concise but specific; include only what’s relevant to the task.
-
-1. **Title**
-
-* A clear, specific title describing what will be built/delivered.
-
-2. **Goal & Success Criteria**
-
-* What outcome we’re driving.
-* Concrete acceptance criteria (tests, metrics, or observable behavior). Prefer “done when …”.
-
-3. **Non-goals / Out of Scope**
-
-* Explicit boundaries to prevent scope creep.
-
-4. **Assumptions**
-
-* Any defaults you assumed due to missing info, labeled clearly.
-
-5. **Proposed Solution**
-
-* The chosen approach (with rationale).
-* 1–2 alternatives considered and why they were not chosen (brief tradeoffs).
-
-6. **System Design**
-
-* Architecture / components / data flow (only as deep as needed).
-* Key invariants, edge cases, and failure modes (and how they’re handled).
-
-7. **Interfaces & Data Contracts**
-
-* APIs, schemas, inputs/outputs, event formats, config flags, etc.
-* Validation rules and backward/forward compatibility expectations if applicable.
-
-8. **Execution Details**
-
-* Concrete implementation steps and ordering.
-* **Codebase specifics are conditional**: include file/module/function names, directories, migrations, and dependencies **only when relevant and known** (or when you can reasonably infer them).
-* If unknown, specify what to discover and how (e.g., “search for X symbol”, “locate Y service entrypoint”).
-
-9. **Testing & Quality**
-
-* Test strategy (unit/integration/e2e) proportional to risk.
-* How to verify locally and in staging; include any test data or harness needs.
-
-10. **Rollout, Observability, and Ops**
-
-* Release strategy (flags, gradual rollout, migration plan).
-* Monitoring/alerts/logging and dashboards to add or update.
-* Rollback strategy and operational playbook notes (brief).
-
-11. **Risks & Mitigations**
-
-* Top risks (technical, product, security, privacy, performance).
-* Specific mitigations and “watch-outs”.
-
-12. **Open Questions**
-
-* Only if something truly must be resolved later; include how to resolve and what decision it affects.
-
 ### Plan output (strict)
 
 **The final output should contain the plan and plan only with a good title.**
