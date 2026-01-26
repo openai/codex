@@ -168,6 +168,11 @@ mod spawn {
             )
             .await;
         let new_thread_id = result?;
+        crate::agent::spawn_collab_completion_warning_watcher(
+            session.clone(),
+            turn.clone(),
+            new_thread_id,
+        );
 
         let content = serde_json::to_string(&SpawnAgentResult {
             agent_id: new_thread_id.to_string(),
