@@ -18,7 +18,6 @@ pub struct ReadFileHandler;
 const MAX_LINE_LENGTH: usize = 500;
 const TAB_WIDTH: usize = 4;
 
-// TODO(jif) add support for block comments
 const COMMENT_PREFIXES: &[&str] = &["#", "//", "--"];
 
 /// JSON arguments accepted by the `read_file` tool handler.
@@ -73,6 +72,7 @@ struct LineRecord {
     raw: String,
     display: String,
     indent: usize,
+    is_comment: bool,
 }
 
 impl LineRecord {
@@ -85,9 +85,7 @@ impl LineRecord {
     }
 
     fn is_comment(&self) -> bool {
-        COMMENT_PREFIXES
-            .iter()
-            .any(|prefix| self.raw.trim().starts_with(prefix))
+        self.is_comment
     }
 }
 
@@ -222,6 +220,7 @@ mod slice {
 
 mod indentation {
     use crate::function_tool::FunctionCallError;
+    use crate::tools::handlers::read_file::COMMENT_PREFIXES;
     use crate::tools::handlers::read_file::IndentationArgs;
     use crate::tools::handlers::read_file::LineRecord;
     use crate::tools::handlers::read_file::TAB_WIDTH;
@@ -374,6 +373,7 @@ mod indentation {
         let mut buffer = Vec::new();
         let mut lines = Vec::new();
         let mut number = 0usize;
+        let mut in_block_comment = false;
 
         loop {
             buffer.clear();
@@ -395,16 +395,59 @@ mod indentation {
             number += 1;
             let raw = String::from_utf8_lossy(&buffer).into_owned();
             let indent = measure_indent(&raw);
+            let is_comment = classify_comment_line(&raw, &mut in_block_comment);
             let display = format_line(&buffer);
             lines.push(LineRecord {
                 number,
                 raw,
                 display,
                 indent,
+                is_comment,
             });
         }
 
         Ok(lines)
+    }
+
+    fn classify_comment_line(raw: &str, in_block_comment: &mut bool) -> bool {
+        let trimmed = raw.trim_start();
+        if *in_block_comment {
+            if let Some(end) = trimmed.find("*/") {
+                *in_block_comment = false;
+                let after = &trimmed[end + 2..];
+                if after.trim().is_empty() {
+                    return true;
+                }
+                if let Some(start) = after.find("/*")
+                    && !after[start + 2..].contains("*/")
+                {
+                    *in_block_comment = true;
+                }
+                return false;
+            }
+            return true;
+        }
+
+        if COMMENT_PREFIXES
+            .iter()
+            .any(|prefix| trimmed.starts_with(prefix))
+        {
+            return true;
+        }
+
+        if let Some(start) = trimmed.find("/*") {
+            let before = trimmed[..start].trim();
+            let after_start = &trimmed[start + 2..];
+            if let Some(end) = after_start.find("*/") {
+                let after = &after_start[end + 2..];
+                let has_code = !before.is_empty() || !after.trim().is_empty();
+                return !has_code;
+            }
+            *in_block_comment = true;
+            return before.is_empty();
+        }
+
+        false
     }
 
     fn compute_effective_indents(records: &[LineRecord]) -> Vec<usize> {
@@ -984,6 +1027,67 @@ private:
                 "L21:                 return fallback();".to_string(),
                 "L22:         }".to_string(),
                 "L23:     }".to_string(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn indentation_mode_handles_inline_block_comment_headers() -> anyhow::Result<()> {
+        let mut temp = NamedTempFile::new()?;
+        use std::io::Write as _;
+        write!(
+            temp,
+            "let x = 1; /* start\n * header line\n */\nfn main() {{\n    let y = 2;\n}}\n"
+        )?;
+
+        let options = IndentationArgs {
+            include_siblings: false,
+            include_header: true,
+            anchor_line: Some(5),
+            max_levels: 1,
+            ..Default::default()
+        };
+
+        let lines = read_block(temp.path(), 5, 200, options).await?;
+        assert_eq!(
+            lines,
+            vec![
+                "L2:  * header line".to_string(),
+                "L3:  */".to_string(),
+                "L4: fn main() {".to_string(),
+                "L5:     let y = 2;".to_string(),
+                "L6: }".to_string(),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn indentation_mode_rejects_inline_block_comment_with_trailing_code() -> anyhow::Result<()>
+    {
+        let mut temp = NamedTempFile::new()?;
+        use std::io::Write as _;
+        write!(
+            temp,
+            "/* header? */ let y = 2;\nfn main() {{\n    let x = 1;\n}}\n"
+        )?;
+
+        let options = IndentationArgs {
+            include_siblings: false,
+            include_header: true,
+            anchor_line: Some(3),
+            max_levels: 1,
+            ..Default::default()
+        };
+
+        let lines = read_block(temp.path(), 3, 200, options).await?;
+        assert_eq!(
+            lines,
+            vec![
+                "L2: fn main() {".to_string(),
+                "L3:     let x = 1;".to_string(),
+                "L4: }".to_string(),
             ]
         );
         Ok(())
