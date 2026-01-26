@@ -2381,6 +2381,8 @@ pub struct FileChangeRequestApprovalResponse {
 pub struct ToolRequestUserInputOption {
     pub label: String,
     pub description: String,
+    #[serde(default)]
+    pub is_other: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

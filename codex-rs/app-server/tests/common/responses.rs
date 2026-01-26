@@ -69,10 +69,12 @@ pub fn create_request_user_input_sse_response(call_id: &str) -> anyhow::Result<S
             "question": "Proceed with the plan?",
             "options": [{
                 "label": "Yes (Recommended)",
-                "description": "Continue the current plan."
+                "description": "Continue the current plan.",
+                "isOther": false
             }, {
                 "label": "No",
-                "description": "Stop and revisit the approach."
+                "description": "Stop and revisit the approach.",
+                "isOther": false
             }]
         }]
     }))?;

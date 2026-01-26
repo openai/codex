@@ -512,14 +512,17 @@ mod tests {
                 RequestUserInputQuestionOption {
                     label: "Option 1".to_string(),
                     description: "First choice.".to_string(),
+                    is_other: false,
                 },
                 RequestUserInputQuestionOption {
                     label: "Option 2".to_string(),
                     description: "Second choice.".to_string(),
+                    is_other: false,
                 },
                 RequestUserInputQuestionOption {
                     label: "Option 3".to_string(),
                     description: "Third choice.".to_string(),
+                    is_other: false,
                 },
             ]),
         }
@@ -700,22 +703,27 @@ mod tests {
                         RequestUserInputQuestionOption {
                             label: "Discuss a code change (Recommended)".to_string(),
                             description: "Walk through a plan and edit code together.".to_string(),
+                            is_other: false,
                         },
                         RequestUserInputQuestionOption {
                             label: "Run tests".to_string(),
                             description: "Pick a crate and run its tests.".to_string(),
+                            is_other: false,
                         },
                         RequestUserInputQuestionOption {
                             label: "Review a diff".to_string(),
                             description: "Summarize or review current changes.".to_string(),
+                            is_other: false,
                         },
                         RequestUserInputQuestionOption {
                             label: "Refactor".to_string(),
                             description: "Tighten structure and remove dead code.".to_string(),
+                            is_other: false,
                         },
                         RequestUserInputQuestionOption {
                             label: "Ship it".to_string(),
                             description: "Finalize and open a PR.".to_string(),
+                            is_other: false,
                         },
                     ]),
                 }],

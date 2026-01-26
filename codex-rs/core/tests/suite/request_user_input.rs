@@ -96,10 +96,12 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
             "question": "Proceed with the plan?",
             "options": [{
                 "label": "Yes (Recommended)",
-                "description": "Continue the current plan."
+                "description": "Continue the current plan.",
+                "isOther": false
             }, {
                 "label": "No",
-                "description": "Stop and revisit the approach."
+                "description": "Stop and revisit the approach.",
+                "isOther": false
             }]
         }]
     })
@@ -215,10 +217,12 @@ where
             "question": "Proceed with the plan?",
             "options": [{
                 "label": "Yes (Recommended)",
-                "description": "Continue the current plan."
+                "description": "Continue the current plan.",
+                "isOther": false
             }, {
                 "label": "No",
-                "description": "Stop and revisit the approach."
+                "description": "Stop and revisit the approach.",
+                "isOther": false
             }]
         }]
     })

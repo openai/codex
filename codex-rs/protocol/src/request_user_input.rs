@@ -9,6 +9,10 @@ use ts_rs::TS;
 pub struct RequestUserInputQuestionOption {
     pub label: String,
     pub description: String,
+    #[serde(rename = "isOther", default)]
+    #[schemars(rename = "isOther")]
+    #[ts(rename = "isOther")]
+    pub is_other: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

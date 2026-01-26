@@ -551,15 +551,28 @@ fn create_request_user_input_tool() -> ToolSpec {
             ),
         },
     );
+    option_props.insert(
+        "isOther".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "True when this option is the free-form \"Other\" choice (label meaning \"Other\" in any language). Otherwise false."
+                    .to_string(),
+            ),
+        },
+    );
 
     let options_schema = JsonSchema::Array {
         description: Some(
-            "Optional 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Only include \"Other\" option if we want to include a free form option. If the question is free form in nature, please do not have any option."
+            "Optional 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Only include an \"Other\" option if we want a free form choice; set isOther=true only for that option. If the question is free form in nature, please do not have any option."
                 .to_string(),
         ),
         items: Box::new(JsonSchema::Object {
             properties: option_props,
-            required: Some(vec!["label".to_string(), "description".to_string()]),
+            required: Some(vec![
+                "label".to_string(),
+                "description".to_string(),
+                "isOther".to_string(),
+            ]),
             additional_properties: Some(false.into()),
         }),
     };

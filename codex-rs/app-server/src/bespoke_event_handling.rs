@@ -282,6 +282,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                                 .map(|option| ToolRequestUserInputOption {
                                     label: option.label,
                                     description: option.description,
+                                    is_other: option.is_other,
                                 })
                                 .collect()
                         }),
