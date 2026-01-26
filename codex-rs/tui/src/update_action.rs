@@ -7,6 +7,8 @@ pub enum UpdateAction {
     BunGlobalLatest,
     /// Update via `brew upgrade codex`.
     BrewUpgrade,
+    /// Update via the curl installer.
+    CurlInstallerUpdate,
 }
 
 impl UpdateAction {
@@ -16,6 +18,13 @@ impl UpdateAction {
             UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
             UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
             UpdateAction::BrewUpgrade => ("brew", &["upgrade", "codex"]),
+            UpdateAction::CurlInstallerUpdate => (
+                "bash",
+                &[
+                    "-c",
+                    "set -euo pipefail; curl -fsSL https://raw.githubusercontent.com/openai/codex/main/installer/update.sh | bash",
+                ],
+            ),
         }
     }
 
@@ -32,12 +41,14 @@ pub(crate) fn get_update_action() -> Option<UpdateAction> {
     let exe = std::env::current_exe().unwrap_or_default();
     let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
     let managed_by_bun = std::env::var_os("CODEX_MANAGED_BY_BUN").is_some();
+    let managed_by_curl = std::env::var_os("CODEX_MANAGED_BY_CURL").is_some();
 
     detect_update_action(
         cfg!(target_os = "macos"),
         &exe,
         managed_by_npm,
         managed_by_bun,
+        managed_by_curl,
     )
 }
 
@@ -47,11 +58,14 @@ fn detect_update_action(
     current_exe: &std::path::Path,
     managed_by_npm: bool,
     managed_by_bun: bool,
+    managed_by_curl: bool,
 ) -> Option<UpdateAction> {
     if managed_by_npm {
         Some(UpdateAction::NpmGlobalLatest)
     } else if managed_by_bun {
         Some(UpdateAction::BunGlobalLatest)
+    } else if managed_by_curl {
+        Some(UpdateAction::CurlInstallerUpdate)
     } else if is_macos
         && (current_exe.starts_with("/opt/homebrew") || current_exe.starts_with("/usr/local"))
     {
@@ -68,15 +82,21 @@ mod tests {
     #[test]
     fn detects_update_action_without_env_mutation() {
         assert_eq!(
-            detect_update_action(false, std::path::Path::new("/any/path"), false, false),
+            detect_update_action(
+                false,
+                std::path::Path::new("/any/path"),
+                false,
+                false,
+                false
+            ),
             None
         );
         assert_eq!(
-            detect_update_action(false, std::path::Path::new("/any/path"), true, false),
+            detect_update_action(false, std::path::Path::new("/any/path"), true, false, false),
             Some(UpdateAction::NpmGlobalLatest)
         );
         assert_eq!(
-            detect_update_action(false, std::path::Path::new("/any/path"), false, true),
+            detect_update_action(false, std::path::Path::new("/any/path"), false, true, false),
             Some(UpdateAction::BunGlobalLatest)
         );
         assert_eq!(
@@ -84,7 +104,8 @@ mod tests {
                 true,
                 std::path::Path::new("/opt/homebrew/bin/codex"),
                 false,
-                false
+                false,
+                false,
             ),
             Some(UpdateAction::BrewUpgrade)
         );
@@ -93,9 +114,14 @@ mod tests {
                 true,
                 std::path::Path::new("/usr/local/bin/codex"),
                 false,
-                false
+                false,
+                false,
             ),
             Some(UpdateAction::BrewUpgrade)
+        );
+        assert_eq!(
+            detect_update_action(false, std::path::Path::new("/any/path"), false, false, true),
+            Some(UpdateAction::CurlInstallerUpdate)
         );
     }
 }
