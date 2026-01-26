@@ -258,4 +258,68 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn scan_index_returns_none_when_entry_missing() -> std::io::Result<()> {
+        let temp = TempDir::new()?;
+        let path = session_index_path(temp.path());
+        let id = ThreadId::new();
+        let lines = vec![SessionIndexEntry {
+            id,
+            thread_name: "present".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+        }];
+        write_index(&path, &lines)?;
+
+        let missing_name = scan_index_from_end_by_name(&path, "missing")?;
+        assert_eq!(missing_name, None);
+
+        let missing_id = scan_index_from_end_by_id(&path, &ThreadId::new())?;
+        assert_eq!(missing_id, None);
+        Ok(())
+    }
+
+    #[test]
+    fn scan_index_finds_latest_match_among_mixed_entries() -> std::io::Result<()> {
+        let temp = TempDir::new()?;
+        let path = session_index_path(temp.path());
+        let id_target = ThreadId::new();
+        let id_other = ThreadId::new();
+        let expected = SessionIndexEntry {
+            id: id_target,
+            thread_name: "target".to_string(),
+            updated_at: "2024-01-03T00:00:00Z".to_string(),
+        };
+        let expected_other = SessionIndexEntry {
+            id: id_other,
+            thread_name: "target".to_string(),
+            updated_at: "2024-01-02T00:00:00Z".to_string(),
+        };
+        // Resolution is based on append order (scan from end), not updated_at.
+        let lines = vec![
+            SessionIndexEntry {
+                id: id_target,
+                thread_name: "target".to_string(),
+                updated_at: "2024-01-01T00:00:00Z".to_string(),
+            },
+            expected_other.clone(),
+            expected.clone(),
+            SessionIndexEntry {
+                id: ThreadId::new(),
+                thread_name: "another".to_string(),
+                updated_at: "2024-01-04T00:00:00Z".to_string(),
+            },
+        ];
+        write_index(&path, &lines)?;
+
+        let found_by_name = scan_index_from_end_by_name(&path, "target")?;
+        assert_eq!(found_by_name, Some(expected.clone()));
+
+        let found_by_id = scan_index_from_end_by_id(&path, &id_target)?;
+        assert_eq!(found_by_id, Some(expected));
+
+        let found_other_by_id = scan_index_from_end_by_id(&path, &id_other)?;
+        assert_eq!(found_other_by_id, Some(expected_other));
+        Ok(())
+    }
 }
