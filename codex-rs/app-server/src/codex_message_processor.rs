@@ -110,6 +110,7 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSortKey;
+use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -129,7 +130,6 @@ use codex_chatgpt::connectors;
 use codex_core::AuthManager;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
-use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::InitialHistory;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
@@ -202,6 +202,9 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
+
+use crate::filters::compute_source_filters;
+use crate::filters::source_kind_matches;
 
 type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
 pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ThreadId, PendingInterruptQueue>>>;
@@ -1646,6 +1649,7 @@ impl CodexMessageProcessor {
             limit,
             sort_key,
             model_providers,
+            source_kinds,
             archived,
         } = params;
 
@@ -1662,6 +1666,7 @@ impl CodexMessageProcessor {
                 requested_page_size,
                 cursor,
                 model_providers,
+                source_kinds,
                 core_sort_key,
                 archived.unwrap_or(false),
             )
@@ -2339,6 +2344,7 @@ impl CodexMessageProcessor {
                 requested_page_size,
                 cursor,
                 model_providers,
+                None,
                 CoreThreadSortKey::UpdatedAt,
                 false,
             )
@@ -2359,6 +2365,7 @@ impl CodexMessageProcessor {
         requested_page_size: usize,
         cursor: Option<String>,
         model_providers: Option<Vec<String>>,
+        source_kinds: Option<Vec<ThreadSourceKind>>,
         sort_key: CoreThreadSortKey,
         archived: bool,
     ) -> Result<(Vec<ConversationSummary>, Option<String>), JSONRPCErrorError> {
@@ -2388,6 +2395,8 @@ impl CodexMessageProcessor {
             None => Some(vec![self.config.model_provider_id.clone()]),
         };
         let fallback_provider = self.config.model_provider_id.clone();
+        let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
+        let allowed_sources = allowed_sources_vec.as_slice();
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
@@ -2397,7 +2406,7 @@ impl CodexMessageProcessor {
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
-                    INTERACTIVE_SESSION_SOURCES,
+                    allowed_sources,
                     model_provider_filter.as_deref(),
                     fallback_provider.as_str(),
                 )
@@ -2413,7 +2422,7 @@ impl CodexMessageProcessor {
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
-                    INTERACTIVE_SESSION_SOURCES,
+                    allowed_sources,
                     model_provider_filter.as_deref(),
                     fallback_provider.as_str(),
                 )
@@ -2441,6 +2450,11 @@ impl CodexMessageProcessor {
                         fallback_provider.as_str(),
                         updated_at,
                     )
+                })
+                .filter(|summary| {
+                    source_kind_filter
+                        .as_ref()
+                        .is_none_or(|filter| source_kind_matches(&summary.source, filter))
                 })
                 .collect::<Vec<_>>();
             if filtered.len() > remaining {

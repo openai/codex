@@ -41,6 +41,7 @@ mod bespoke_event_handling;
 mod codex_message_processor;
 mod config_api;
 mod error_code;
+mod filters;
 mod fuzzy_file_search;
 mod message_processor;
 mod models;
