@@ -508,21 +508,19 @@ mod tests {
             id: id.to_string(),
             header: header.to_string(),
             question: "Choose an option.".to_string(),
+            is_other: false,
             options: Some(vec![
                 RequestUserInputQuestionOption {
                     label: "Option 1".to_string(),
                     description: "First choice.".to_string(),
-                    is_other: false,
                 },
                 RequestUserInputQuestionOption {
                     label: "Option 2".to_string(),
                     description: "Second choice.".to_string(),
-                    is_other: false,
                 },
                 RequestUserInputQuestionOption {
                     label: "Option 3".to_string(),
                     description: "Third choice.".to_string(),
-                    is_other: false,
                 },
             ]),
         }
@@ -533,6 +531,7 @@ mod tests {
             id: id.to_string(),
             header: header.to_string(),
             question: "Share details.".to_string(),
+            is_other: false,
             options: None,
         }
     }
@@ -699,31 +698,27 @@ mod tests {
                     id: "q1".to_string(),
                     header: "Next Step".to_string(),
                     question: "What would you like to do next?".to_string(),
+                    is_other: false,
                     options: Some(vec![
                         RequestUserInputQuestionOption {
                             label: "Discuss a code change (Recommended)".to_string(),
                             description: "Walk through a plan and edit code together.".to_string(),
-                            is_other: false,
                         },
                         RequestUserInputQuestionOption {
                             label: "Run tests".to_string(),
                             description: "Pick a crate and run its tests.".to_string(),
-                            is_other: false,
                         },
                         RequestUserInputQuestionOption {
                             label: "Review a diff".to_string(),
                             description: "Summarize or review current changes.".to_string(),
-                            is_other: false,
                         },
                         RequestUserInputQuestionOption {
                             label: "Refactor".to_string(),
                             description: "Tighten structure and remove dead code.".to_string(),
-                            is_other: false,
                         },
                         RequestUserInputQuestionOption {
                             label: "Ship it".to_string(),
                             description: "Finalize and open a PR.".to_string(),
-                            is_other: false,
                         },
                     ]),
                 }],

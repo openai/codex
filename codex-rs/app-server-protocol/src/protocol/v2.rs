@@ -2381,8 +2381,6 @@ pub struct FileChangeRequestApprovalResponse {
 pub struct ToolRequestUserInputOption {
     pub label: String,
     pub description: String,
-    #[serde(default)]
-    pub is_other: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -2393,6 +2391,8 @@ pub struct ToolRequestUserInputQuestion {
     pub id: String,
     pub header: String,
     pub question: String,
+    #[serde(default)]
+    pub is_other: bool,
     pub options: Option<Vec<ToolRequestUserInputOption>>,
 }
 

@@ -276,13 +276,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                         id: question.id,
                         header: question.header,
                         question: question.question,
+                        is_other: question.is_other,
                         options: question.options.map(|options| {
                             options
                                 .into_iter()
                                 .map(|option| ToolRequestUserInputOption {
                                     label: option.label,
                                     description: option.description,
-                                    is_other: option.is_other,
                                 })
                                 .collect()
                         }),
