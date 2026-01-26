@@ -109,6 +109,8 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 

@@ -15,10 +15,12 @@ use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use core_test_support::load_default_config_for_test;
+use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketTestServer;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::start_websocket_server;
+use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -57,6 +59,40 @@ async fn responses_websocket_streams_request() {
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
     assert_eq!(body["input"].as_array().map(Vec::len), Some(1));
 
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_emits_reasoning_included_event() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![vec![ev_response_created("resp-1"), ev_completed("resp-1")]],
+        response_headers: vec![("X-Reasoning-Included".to_string(), "true".to_string())],
+    }])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    let mut stream = session
+        .stream(&prompt)
+        .await
+        .expect("websocket stream failed");
+
+    let mut saw_reasoning_included = false;
+    while let Some(event) = stream.next().await {
+        match event.expect("event") {
+            ResponseEvent::ServerReasoningIncluded(true) => {
+                saw_reasoning_included = true;
+            }
+            ResponseEvent::Completed { .. } => break,
+            _ => {}
+        }
+    }
+
+    assert!(saw_reasoning_included);
     server.shutdown().await;
 }
 
@@ -134,6 +170,7 @@ fn message_item(text: &str) -> ResponseItem {
         id: None,
         role: "user".into(),
         content: vec![ContentItem::InputText { text: text.into() }],
+        end_turn: None,
     }
 }
 

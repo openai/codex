@@ -16,6 +16,7 @@ use serde_json::Value;
 use std::io::BufRead;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -23,6 +24,8 @@ use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
 use tracing::debug;
 use tracing::trace;
+
+const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
 
 /// Streams SSE events from an on-disk fixture for tests.
 pub fn stream_from_fixture(
@@ -49,6 +52,7 @@ pub fn spawn_response_stream(
     stream_response: StreamResponse,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
+    turn_state: Option<Arc<OnceLock<String>>>,
 ) -> ResponseStream {
     let rate_limits = parse_rate_limit(&stream_response.headers);
     let models_etag = stream_response
@@ -56,6 +60,18 @@ pub fn spawn_response_stream(
         .get("X-Models-Etag")
         .and_then(|v| v.to_str().ok())
         .map(ToString::to_string);
+    let reasoning_included = stream_response
+        .headers
+        .get(X_REASONING_INCLUDED_HEADER)
+        .is_some();
+    if let Some(turn_state) = turn_state.as_ref()
+        && let Some(header_value) = stream_response
+            .headers
+            .get("x-codex-turn-state")
+            .and_then(|v| v.to_str().ok())
+    {
+        let _ = turn_state.set(header_value.to_string());
+    }
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(async move {
         if let Some(snapshot) = rate_limits {
@@ -63,6 +79,11 @@ pub fn spawn_response_stream(
         }
         if let Some(etag) = models_etag {
             let _ = tx_event.send(Ok(ResponseEvent::ModelsEtag(etag))).await;
+        }
+        if reasoning_included {
+            let _ = tx_event
+                .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
+                .await;
         }
         process_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
     });
@@ -207,6 +228,11 @@ pub fn process_responses_event(
                         response_error = ApiError::QuotaExceeded;
                     } else if is_usage_not_included(&error) {
                         response_error = ApiError::UsageNotIncluded;
+                    } else if is_invalid_prompt_error(&error) {
+                        let message = error
+                            .message
+                            .unwrap_or_else(|| "Invalid request.".to_string());
+                        response_error = ApiError::InvalidRequest { message };
                     } else {
                         let delay = try_parse_retry_after(&error);
                         let message = error.message.unwrap_or_default();
@@ -384,6 +410,10 @@ fn is_quota_exceeded_error(error: &Error) -> bool {
 
 fn is_usage_not_included(error: &Error) -> bool {
     error.code.as_deref() == Some("usage_not_included")
+}
+
+fn is_invalid_prompt_error(error: &Error) -> bool {
+    error.code.as_deref() == Some("invalid_prompt")
 }
 
 fn rate_limit_regex() -> &'static regex_lite::Regex {
@@ -699,6 +729,27 @@ mod tests {
         assert_eq!(events.len(), 1);
 
         assert_matches!(events[0], Err(ApiError::QuotaExceeded));
+    }
+
+    #[tokio::test]
+    async fn invalid_prompt_without_type_is_invalid_request() {
+        let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_invalid_prompt_no_type","object":"response","created_at":1759771628,"status":"failed","background":false,"error":{"code":"invalid_prompt","message":"Invalid prompt: we've limited access to this content for safety reasons."},"incomplete_details":null}}"#;
+
+        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+
+        let events = collect_events(&[sse1.as_bytes()]).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Err(ApiError::InvalidRequest { message }) => {
+                assert_eq!(
+                    message,
+                    "Invalid prompt: we've limited access to this content for safety reasons."
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 
     #[tokio::test]

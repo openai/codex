@@ -24,15 +24,18 @@ common --incompatible_strict_action_env
 common --test_env=PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 common --test_output=errors
-common --bes_results_url=https://app.buildbuddy.io/invocation/
-common --bes_backend=grpcs://remote.buildbuddy.io
-common --remote_cache=grpcs://remote.buildbuddy.io
-common --remote_download_toplevel
 common --nobuild_runfile_links
-common --remote_timeout=3600
-common --noexperimental_throttle_remote_action_building
-common --experimental_remote_execution_keepalive
-common --grpc_keepalive_time=30s
+
+# BuildBuddy integration (optional).
+# Enable with `--config=buildbuddy` (and `--config=remote` for remote execution).
+common:buildbuddy --bes_results_url=https://app.buildbuddy.io/invocation/
+common:buildbuddy --bes_backend=grpcs://remote.buildbuddy.io
+common:buildbuddy --remote_cache=grpcs://remote.buildbuddy.io
+common:buildbuddy --remote_download_toplevel
+common:buildbuddy --remote_timeout=3600
+common:buildbuddy --noexperimental_throttle_remote_action_building
+common:buildbuddy --experimental_remote_execution_keepalive
+common:buildbuddy --grpc_keepalive_time=30s
 
 # This limits both in-flight executions and concurrent downloads. Even with high number
 # of jobs execution will still be limited by CPU cores, so this just pays a bit of
@@ -42,4 +45,3 @@ common --jobs=30
 common:remote --extra_execution_platforms=//:rbe
 common:remote --remote_executor=grpcs://remote.buildbuddy.io
 common:remote --jobs=800
-

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -9,8 +10,12 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
+use codex_protocol::request_user_input::RequestUserInputArgs;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -32,7 +37,6 @@ use codex_protocol::protocol::InitialHistory;
 /// The returned `events_rx` yields non-approval events emitted by the sub-agent.
 /// Approval requests are handled via `parent_session` and are not surfaced.
 /// The returned `ops_tx` allows the caller to submit additional `Op`s to the sub-agent.
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_codex_thread_interactive(
     config: Config,
     auth_manager: Arc<AuthManager>,
@@ -40,7 +44,6 @@ pub(crate) async fn run_codex_thread_interactive(
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
-    session_source: SessionSource,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -52,7 +55,7 @@ pub(crate) async fn run_codex_thread_interactive(
         models_manager,
         Arc::clone(&parent_session.services.skills_manager),
         initial_history.unwrap_or(InitialHistory::New),
-        session_source,
+        SessionSource::SubAgent(SubAgentSource::Review),
         parent_session.services.agent_control.clone(),
     )
     .await?;
@@ -104,7 +107,6 @@ pub(crate) async fn run_codex_thread_one_shot(
     parent_session: Arc<Session>,
     parent_ctx: Arc<TurnContext>,
     cancel_token: CancellationToken,
-    session_source: SessionSource,
     initial_history: Option<InitialHistory>,
 ) -> Result<Codex, CodexErr> {
     // Use a child token so we can stop the delegate after completion without
@@ -117,7 +119,6 @@ pub(crate) async fn run_codex_thread_one_shot(
         parent_session,
         parent_ctx,
         child_cancel.clone(),
-        session_source,
         initial_history,
     )
     .await?;
@@ -232,6 +233,20 @@ async fn forward_events(
                         )
                         .await;
                     }
+                    Event {
+                        id,
+                        msg: EventMsg::RequestUserInput(event),
+                    } => {
+                        handle_request_user_input(
+                            &codex,
+                            id,
+                            &parent_session,
+                            &parent_ctx,
+                            event,
+                            &cancel_token,
+                        )
+                        .await;
+                    }
                     other => {
                         match tx_sub.send(other).or_cancel(&cancel_token).await {
                             Ok(Ok(())) => {}
@@ -335,6 +350,55 @@ async fn handle_patch_approval(
     )
     .await;
     let _ = codex.submit(Op::PatchApproval { id, decision }).await;
+}
+
+async fn handle_request_user_input(
+    codex: &Codex,
+    id: String,
+    parent_session: &Session,
+    parent_ctx: &TurnContext,
+    event: RequestUserInputEvent,
+    cancel_token: &CancellationToken,
+) {
+    let args = RequestUserInputArgs {
+        questions: event.questions,
+    };
+    let response_fut =
+        parent_session.request_user_input(parent_ctx, parent_ctx.sub_id.clone(), args);
+    let response = await_user_input_with_cancel(
+        response_fut,
+        parent_session,
+        &parent_ctx.sub_id,
+        cancel_token,
+    )
+    .await;
+    let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
+}
+
+async fn await_user_input_with_cancel<F>(
+    fut: F,
+    parent_session: &Session,
+    sub_id: &str,
+    cancel_token: &CancellationToken,
+) -> RequestUserInputResponse
+where
+    F: core::future::Future<Output = Option<RequestUserInputResponse>>,
+{
+    tokio::select! {
+        biased;
+        _ = cancel_token.cancelled() => {
+            let empty = RequestUserInputResponse {
+                answers: HashMap::new(),
+            };
+            parent_session
+                .notify_user_input_response(sub_id, empty.clone())
+                .await;
+            empty
+        }
+        response = fut => response.unwrap_or_else(|| RequestUserInputResponse {
+            answers: HashMap::new(),
+        }),
+    }
 }
 
 /// Await an approval decision, aborting on cancellation.

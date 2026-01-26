@@ -275,7 +275,6 @@ impl<'a> FlexRenderable<'a> {
                     };
                     let child_size = child.desired_height(area.width).min(max_child_extent);
                     child_sizes[i] = child_size;
-                    allocated_size += child_size;
                     allocated_flex_space += child_size;
                 }
             }
@@ -396,10 +395,9 @@ impl<'a> Renderable for InsetRenderable<'a> {
         self.child.render(area.inset(self.insets), buf);
     }
     fn desired_height(&self, width: u16) -> u16 {
-        self.child
-            .desired_height(width - self.insets.left - self.insets.right)
-            + self.insets.top
-            + self.insets.bottom
+        let inset_width = self.insets.left.saturating_add(self.insets.right);
+        let inner_width = width.saturating_sub(inset_width);
+        self.child.desired_height(inner_width) + self.insets.top + self.insets.bottom
     }
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.child.cursor_pos(area.inset(self.insets))

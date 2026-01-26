@@ -204,9 +204,6 @@ pub fn update_account_meta(
         });
     meta.kind = Some(kind);
     meta.email = email;
-    if loaded.active_account.as_deref() == Some(account_name) {
-        // Keep as-is
-    }
     save_accounts(codex_home, &loaded)?;
     Ok(())
 }

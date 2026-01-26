@@ -14,10 +14,12 @@ use super::selection_popup_common::render_rows_single_line;
 use crate::key_hint;
 use crate::render::Insets;
 use crate::render::RectExt;
-use codex_common::fuzzy_match::fuzzy_match;
 use codex_core::skills::model::SkillMetadata;
 
-use crate::text_formatting::truncate_text;
+use crate::skills_helpers::match_skill;
+use crate::skills_helpers::skill_description;
+use crate::skills_helpers::skill_display_name;
+use crate::skills_helpers::truncated_skill_display_name;
 
 pub(crate) struct SkillPopup {
     query: String,
@@ -87,12 +89,8 @@ impl SkillPopup {
             .into_iter()
             .map(|(idx, indices, _score)| {
                 let skill = &self.skills[idx];
-                let name = truncate_text(&skill.name, 21);
-                let description = skill
-                    .short_description
-                    .as_ref()
-                    .unwrap_or(&skill.description)
-                    .clone();
+                let name = truncated_skill_display_name(skill);
+                let description = skill_description(skill).to_string();
                 GenericDisplayRow {
                     name,
                     match_indices: indices,
@@ -117,15 +115,16 @@ impl SkillPopup {
         }
 
         for (idx, skill) in self.skills.iter().enumerate() {
-            if let Some((indices, score)) = fuzzy_match(&skill.name, filter) {
-                out.push((idx, Some(indices), score));
+            let display_name = skill_display_name(skill);
+            if let Some((indices, score)) = match_skill(filter, display_name, &skill.name) {
+                out.push((idx, indices, score));
             }
         }
 
         out.sort_by(|a, b| {
             a.2.cmp(&b.2).then_with(|| {
-                let an = &self.skills[a.0].name;
-                let bn = &self.skills[b.0].name;
+                let an = skill_display_name(&self.skills[a.0]);
+                let bn = skill_display_name(&self.skills[b.0]);
                 an.cmp(bn)
             })
         });

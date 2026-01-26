@@ -1,4 +1,6 @@
 use crate::auth::AuthCredentialsStoreMode;
+use crate::config::edit::ConfigEdit;
+use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -10,9 +12,9 @@ use crate::config::types::OtelConfig;
 use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
 use crate::config::types::SandboxWorkspaceWrite;
-use crate::config::types::ScrollInputMode;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
+use crate::config::types::SkillsConfig;
 use crate::config::types::Tui;
 use crate::config::types::UriBasedFileOpener;
 use crate::config_loader::ConfigLayerStack;
@@ -40,6 +42,8 @@ use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
@@ -85,6 +89,7 @@ pub use codex_git::GhostSnapshotConfig;
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
+pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
@@ -123,6 +128,9 @@ pub struct Config {
 
     /// Info needed to make an API request to the model.
     pub model_provider: ModelProviderInfo,
+
+    /// Optionally specify the personality of the model
+    pub model_personality: Option<Personality>,
 
     /// Approval policy for executing commands.
     pub approval_policy: Constrained<AskForApproval>,
@@ -182,12 +190,6 @@ pub struct Config {
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
-    /// Optional event-driven hooks. When configured, Codex will spawn the hook
-    /// commands in response to certain internal events (e.g. tool begin/end).
-    /// Hooks are **observe-only**: failures are surfaced via logs but do not
-    /// interrupt the agent's execution.
-    pub hooks: Vec<HookConfig>,
-
     /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
@@ -198,57 +200,8 @@ pub struct Config {
     /// Show startup tooltips in the TUI welcome screen.
     pub show_tooltips: bool,
 
-    /// Override the events-per-wheel-tick factor for TUI2 scroll normalization.
-    ///
-    /// This is the same `tui.scroll_events_per_tick` value from `config.toml`, plumbed through the
-    /// merged [`Config`] object (see [`Tui`]) so TUI2 can normalize scroll event density per
-    /// terminal.
-    pub tui_scroll_events_per_tick: Option<u16>,
-
-    /// Override the number of lines applied per wheel tick in TUI2.
-    ///
-    /// This is the same `tui.scroll_wheel_lines` value from `config.toml` (see [`Tui`]). TUI2
-    /// applies it to wheel-like scroll streams. Trackpad-like scrolling uses a separate
-    /// `tui.scroll_trackpad_lines` setting.
-    pub tui_scroll_wheel_lines: Option<u16>,
-
-    /// Override the number of lines per tick-equivalent used for trackpad scrolling in TUI2.
-    ///
-    /// This is the same `tui.scroll_trackpad_lines` value from `config.toml` (see [`Tui`]).
-    pub tui_scroll_trackpad_lines: Option<u16>,
-
-    /// Trackpad acceleration: approximate number of events required to gain +1x speed in TUI2.
-    ///
-    /// This is the same `tui.scroll_trackpad_accel_events` value from `config.toml` (see [`Tui`]).
-    pub tui_scroll_trackpad_accel_events: Option<u16>,
-
-    /// Trackpad acceleration: maximum multiplier applied to trackpad-like streams in TUI2.
-    ///
-    /// This is the same `tui.scroll_trackpad_accel_max` value from `config.toml` (see [`Tui`]).
-    pub tui_scroll_trackpad_accel_max: Option<u16>,
-
-    /// Control how TUI2 interprets mouse scroll input (wheel vs trackpad).
-    ///
-    /// This is the same `tui.scroll_mode` value from `config.toml` (see [`Tui`]).
-    pub tui_scroll_mode: ScrollInputMode,
-
-    /// Override the wheel tick detection threshold (ms) for TUI2 auto scroll mode.
-    ///
-    /// This is the same `tui.scroll_wheel_tick_detect_max_ms` value from `config.toml` (see
-    /// [`Tui`]).
-    pub tui_scroll_wheel_tick_detect_max_ms: Option<u64>,
-
-    /// Override the wheel-like end-of-stream threshold (ms) for TUI2 auto scroll mode.
-    ///
-    /// This is the same `tui.scroll_wheel_like_max_duration_ms` value from `config.toml` (see
-    /// [`Tui`]).
-    pub tui_scroll_wheel_like_max_duration_ms: Option<u64>,
-
-    /// Invert mouse scroll direction for TUI2.
-    ///
-    /// This is the same `tui.scroll_invert` value from `config.toml` (see [`Tui`]) and is applied
-    /// consistently to both mouse wheels and trackpads.
-    pub tui_scroll_invert: bool,
+    /// Start the TUI in the specified collaboration mode (plan/execute/etc.).
+    pub experimental_mode: Option<ModeKind>,
 
     /// Controls whether the TUI uses the terminal's alternate screen buffer.
     ///
@@ -298,12 +251,12 @@ pub struct Config {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
+    /// Maximum number of agent threads that can be open concurrently.
+    pub agent_max_threads: Option<usize>,
+
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
-
-    /// Ordered list of discovery sources for subagents (`.codex/agents`, `CODEX_HOME/agents`).
-    pub agents_sources: Vec<AgentsSource>,
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
@@ -348,7 +301,8 @@ pub struct Config {
     /// model info's default preference.
     pub include_apply_patch_tool: bool,
 
-    pub web_search_mode: WebSearchMode,
+    /// Explicit or feature-derived web search mode.
+    pub web_search_mode: Option<WebSearchMode>,
 
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
@@ -400,6 +354,7 @@ pub struct ConfigBuilder {
     cli_overrides: Option<Vec<(String, TomlValue)>>,
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
+    fallback_cwd: Option<PathBuf>,
 }
 
 impl ConfigBuilder {
@@ -423,21 +378,29 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn fallback_cwd(mut self, fallback_cwd: Option<PathBuf>) -> Self {
+        self.fallback_cwd = fallback_cwd;
+        self
+    }
+
     pub async fn build(self) -> std::io::Result<Config> {
         let Self {
             codex_home,
             cli_overrides,
             harness_overrides,
             loader_overrides,
+            fallback_cwd,
         } = self;
         let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
         let cli_overrides = cli_overrides.unwrap_or_default();
-        let harness_overrides = harness_overrides.unwrap_or_default();
+        let mut harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
-        let cwd = match harness_overrides.cwd.as_deref() {
+        let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
+        let cwd = match cwd_override {
             Some(path) => AbsolutePathBuf::try_from(path)?,
             None => AbsolutePathBuf::current_dir()?,
         };
+        harness_overrides.cwd = Some(cwd.to_path_buf());
         let config_layer_stack =
             load_config_layers_state(&codex_home, Some(cwd), &cli_overrides, loader_overrides)
                 .await?;
@@ -536,7 +499,7 @@ pub async fn load_config_as_toml_with_cli_overrides(
     Ok(cfg)
 }
 
-fn deserialize_config_toml_with_base(
+pub(crate) fn deserialize_config_toml_with_base(
     root_value: TomlValue,
     config_base_dir: &Path,
 ) -> std::io::Result<ConfigToml> {
@@ -758,30 +721,17 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
             ));
         }
     }
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
-
-    // Read existing config or create empty string if file doesn't exist
-    let content = match std::fs::read_to_string(&config_path) {
-        Ok(content) => content,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e),
-    };
-
-    // Parse as DocumentMut for editing while preserving structure
-    let mut doc = content.parse::<DocumentMut>().map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("failed to parse config.toml: {e}"),
-        )
-    })?;
-
-    // Set the default_oss_provider at root level
     use toml_edit::value;
-    doc["oss_provider"] = value(provider);
 
-    // Write the modified document back
-    std::fs::write(&config_path, doc.to_string())?;
-    Ok(())
+    let edits = [ConfigEdit::SetPath {
+        segments: vec!["oss_provider".to_string()],
+        value: value(provider),
+    }];
+
+    ConfigEditsBuilder::new(codex_home)
+        .with_edits(edits)
+        .apply_blocking()
+        .map_err(|err| std::io::Error::other(format!("failed to persist config.toml: {err}")))
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
@@ -818,16 +768,18 @@ pub struct ConfigToml {
     #[serde(default)]
     pub notify: Option<Vec<String>>,
 
-    /// Optional event-driven hooks.
-    #[serde(default)]
-    pub hooks: Vec<HookConfig>,
-
     /// System instructions.
     pub instructions: Option<String>,
 
     /// Developer instructions inserted as a `developer` role message.
     #[serde(default)]
     pub developer_instructions: Option<String>,
+
+    /// Optional path to a file containing model instructions that will override
+    /// the built-in instructions for the selected model. Users are STRONGLY
+    /// DISCOURAGED from using this field, as deviating from the instructions
+    /// sanctioned by Codex will likely degrade model performance.
+    pub model_instructions_file: Option<AbsolutePathBuf>,
 
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
@@ -912,6 +864,10 @@ pub struct ConfigToml {
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
 
+    /// EXPERIMENTAL
+    /// Optionally specify a personality for the model
+    pub model_personality: Option<Personality>,
+
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
@@ -923,9 +879,11 @@ pub struct ConfigToml {
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
 
-    /// Subagent discovery configuration.
-    #[serde(default)]
+    /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,
+
+    /// User-level skill config entries keyed by SKILL.md path.
+    pub skills: Option<SkillsConfig>,
 
     /// Centralized feature flags (new). Prefer this over individual toggles.
     #[serde(default)]
@@ -971,6 +929,8 @@ pub struct ConfigToml {
     pub notice: Option<Notice>,
 
     /// Legacy, now use features
+    /// Deprecated: ignored. Use `model_instructions_file`.
+    #[schemars(skip)]
     pub experimental_instructions_file: Option<AbsolutePathBuf>,
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub experimental_use_unified_exec_tool: Option<bool>,
@@ -1029,10 +989,15 @@ pub struct ToolsToml {
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
+}
 
-    /// Enable the `ask_user_question` tool that lets the agent ask structured questions.
-    #[serde(default)]
-    pub ask_user_question: Option<bool>,
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AgentsToml {
+    /// Maximum number of agent threads that can be open concurrently.
+    /// When unset, no limit is enforced.
+    #[schemars(range(min = 1))]
+    pub max_threads: Option<usize>,
 }
 
 impl From<ToolsToml> for Tools {
@@ -1040,22 +1005,8 @@ impl From<ToolsToml> for Tools {
         Self {
             web_search: tools_toml.web_search,
             view_image: tools_toml.view_image,
-            ask_user_question: tools_toml.ask_user_question,
         }
     }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentsSource {
-    Repo,
-    User,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct AgentsToml {
-    pub sources: Option<Vec<AgentsSource>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -1226,24 +1177,22 @@ pub fn resolve_oss_provider(
     }
 }
 
-/// Resolve the web search mode from the config, profile, and features.
+/// Resolve the web search mode from explicit config and feature flags.
 fn resolve_web_search_mode(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
     features: &Features,
-) -> WebSearchMode {
-    // Enum gets precedence over features flags
+) -> Option<WebSearchMode> {
     if let Some(mode) = config_profile.web_search.or(config_toml.web_search) {
-        return mode;
+        return Some(mode);
     }
     if features.enabled(Feature::WebSearchCached) {
-        return WebSearchMode::Cached;
+        return Some(WebSearchMode::Cached);
     }
     if features.enabled(Feature::WebSearchRequest) {
-        return WebSearchMode::Live;
+        return Some(WebSearchMode::Live);
     }
-    // Fall back to default
-    WebSearchMode::default()
+    None
 }
 
 impl Config {
@@ -1381,6 +1330,12 @@ impl Config {
             || cfg.sandbox_mode.is_some();
 
         let mut model_providers = built_in_model_providers();
+        if features.enabled(Feature::ResponsesWebsockets)
+            && let Some(provider) = model_providers.get_mut("openai")
+            && provider.is_openai()
+        {
+            provider.wire_api = crate::model_provider_info::WireApi::ResponsesWebsocket;
+        }
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
             model_providers.entry(key).or_insert(provider);
@@ -1403,6 +1358,18 @@ impl Config {
         let shell_environment_policy = cfg.shell_environment_policy.into();
 
         let history = cfg.history.unwrap_or_default();
+
+        let agent_max_threads = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.max_threads)
+            .or(DEFAULT_AGENT_MAX_THREADS);
+        if agent_max_threads == Some(0) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.max_threads must be at least 1",
+            ));
+        }
 
         let ghost_snapshot = {
             let mut config = GhostSnapshotConfig::default();
@@ -1458,14 +1425,12 @@ impl Config {
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
         // behaviour matches other path-like config values.
-        let experimental_instructions_path = config_profile
-            .experimental_instructions_file
+        let model_instructions_path = config_profile
+            .model_instructions_file
             .as_ref()
-            .or(cfg.experimental_instructions_file.as_ref());
-        let file_base_instructions = Self::try_read_non_empty_file(
-            experimental_instructions_path,
-            "experimental instructions file",
-        )?;
+            .or(cfg.model_instructions_file.as_ref());
+        let file_base_instructions =
+            Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
         let base_instructions = base_instructions.or(file_base_instructions);
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
 
@@ -1501,12 +1466,6 @@ impl Config {
         let mcp_servers = constrain_mcp_servers(cfg.mcp_servers.clone(), mcp_servers.as_ref())
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{e}")))?;
 
-        let agents_sources = cfg
-            .agents
-            .as_ref()
-            .and_then(|agents| agents.sources.clone())
-            .unwrap_or_else(|| vec![AgentsSource::Repo, AgentsSource::User]);
-
         let config = Self {
             model,
             review_model,
@@ -1521,9 +1480,9 @@ impl Config {
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
             notify: cfg.notify,
-            hooks: cfg.hooks,
             user_instructions,
             base_instructions,
+            model_personality: config_profile.model_personality.or(cfg.model_personality),
             developer_instructions,
             compact_prompt,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
@@ -1550,8 +1509,8 @@ impl Config {
                 })
                 .collect(),
             tool_output_token_limit: cfg.tool_output_token_limit,
+            agent_max_threads,
             codex_home,
-            agents_sources,
             config_layer_stack,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
@@ -1605,27 +1564,7 @@ impl Config {
                 .unwrap_or_default(),
             animations: cfg.tui.as_ref().map(|t| t.animations).unwrap_or(true),
             show_tooltips: cfg.tui.as_ref().map(|t| t.show_tooltips).unwrap_or(true),
-            tui_scroll_events_per_tick: cfg.tui.as_ref().and_then(|t| t.scroll_events_per_tick),
-            tui_scroll_wheel_lines: cfg.tui.as_ref().and_then(|t| t.scroll_wheel_lines),
-            tui_scroll_trackpad_lines: cfg.tui.as_ref().and_then(|t| t.scroll_trackpad_lines),
-            tui_scroll_trackpad_accel_events: cfg
-                .tui
-                .as_ref()
-                .and_then(|t| t.scroll_trackpad_accel_events),
-            tui_scroll_trackpad_accel_max: cfg
-                .tui
-                .as_ref()
-                .and_then(|t| t.scroll_trackpad_accel_max),
-            tui_scroll_mode: cfg.tui.as_ref().map(|t| t.scroll_mode).unwrap_or_default(),
-            tui_scroll_wheel_tick_detect_max_ms: cfg
-                .tui
-                .as_ref()
-                .and_then(|t| t.scroll_wheel_tick_detect_max_ms),
-            tui_scroll_wheel_like_max_duration_ms: cfg
-                .tui
-                .as_ref()
-                .and_then(|t| t.scroll_wheel_like_max_duration_ms),
-            tui_scroll_invert: cfg.tui.as_ref().map(|t| t.scroll_invert).unwrap_or(false),
+            experimental_mode: cfg.tui.as_ref().and_then(|t| t.experimental_mode),
             tui_alternate_screen: cfg
                 .tui
                 .as_ref()
@@ -1715,6 +1654,30 @@ impl Config {
     }
 }
 
+pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayerStack) -> bool {
+    config_layer_stack
+        .layers_high_to_low()
+        .into_iter()
+        .any(|layer| toml_uses_deprecated_instructions_file(&layer.config))
+}
+
+fn toml_uses_deprecated_instructions_file(value: &TomlValue) -> bool {
+    let Some(table) = value.as_table() else {
+        return false;
+    };
+    if table.contains_key("experimental_instructions_file") {
+        return true;
+    }
+    let Some(profiles) = table.get("profiles").and_then(TomlValue::as_table) else {
+        return false;
+    };
+    profiles.values().any(|profile| {
+        profile.as_table().is_some_and(|profile_table| {
+            profile_table.contains_key("experimental_instructions_file")
+        })
+    })
+}
+
 /// Returns the path to the Codex configuration directory, which can be
 /// specified by the `CODEX_HOME` environment variable. If not set, defaults to
 /// `~/.codex`.
@@ -1765,28 +1728,11 @@ mod tests {
     use super::*;
     use core_test_support::test_absolute_path;
     use pretty_assertions::assert_eq;
-    use serial_test::serial;
 
     use std::collections::BTreeMap;
     use std::collections::HashMap;
     use std::time::Duration;
     use tempfile::TempDir;
-
-    struct CwdGuard {
-        previous: std::path::PathBuf,
-    }
-
-    impl Drop for CwdGuard {
-        fn drop(&mut self) {
-            std::env::set_current_dir(&self.previous).expect("restore cwd");
-        }
-    }
-
-    fn set_test_cwd(path: &std::path::Path) -> CwdGuard {
-        let previous = std::env::current_dir().expect("read cwd");
-        std::env::set_current_dir(path).expect("set cwd");
-        CwdGuard { previous }
-    }
 
     fn stdio_mcp(command: &str) -> McpServerConfig {
         McpServerConfig {
@@ -1871,15 +1817,7 @@ persistence = "none"
                 notifications: Notifications::Enabled(true),
                 animations: true,
                 show_tooltips: true,
-                scroll_events_per_tick: None,
-                scroll_wheel_lines: None,
-                scroll_trackpad_lines: None,
-                scroll_trackpad_accel_events: None,
-                scroll_trackpad_accel_max: None,
-                scroll_mode: ScrollInputMode::Auto,
-                scroll_wheel_tick_detect_max_ms: None,
-                scroll_wheel_like_max_duration_ms: None,
-                scroll_invert: false,
+                experimental_mode: None,
                 alternate_screen: AltScreenMode::Auto,
             }
         );
@@ -2292,15 +2230,12 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn web_search_mode_uses_default_if_unset() {
+    fn web_search_mode_uses_none_if_unset() {
         let cfg = ConfigToml::default();
         let profile = ConfigProfile::default();
         let features = Features::with_defaults();
 
-        assert_eq!(
-            resolve_web_search_mode(&cfg, &profile, &features),
-            WebSearchMode::default()
-        );
+        assert_eq!(resolve_web_search_mode(&cfg, &profile, &features), None);
     }
 
     #[test]
@@ -2315,7 +2250,7 @@ trust_level = "trusted"
 
         assert_eq!(
             resolve_web_search_mode(&cfg, &profile, &features),
-            WebSearchMode::Live
+            Some(WebSearchMode::Live)
         );
     }
 
@@ -2331,7 +2266,7 @@ trust_level = "trusted"
 
         assert_eq!(
             resolve_web_search_mode(&cfg, &profile, &features),
-            WebSearchMode::Disabled
+            Some(WebSearchMode::Disabled)
         );
     }
 
@@ -2359,6 +2294,52 @@ trust_level = "trusted"
         )?;
 
         assert!(!config.features.enabled(Feature::WebSearchRequest));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn project_profile_overrides_user_profile() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let workspace = TempDir::new()?;
+        let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            format!(
+                r#"
+profile = "global"
+
+[profiles.global]
+model = "gpt-global"
+
+[profiles.project]
+model = "gpt-project"
+
+[projects."{workspace_key}"]
+trust_level = "trusted"
+"#,
+            ),
+        )?;
+        let project_config_dir = workspace.path().join(".codex");
+        std::fs::create_dir_all(&project_config_dir)?;
+        std::fs::write(
+            project_config_dir.join(CONFIG_TOML_FILE),
+            r#"
+profile = "project"
+"#,
+        )?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(workspace.path().to_path_buf()),
+                ..Default::default()
+            })
+            .build()
+            .await?;
+
+        assert_eq!(config.active_profile.as_deref(), Some("project"));
+        assert_eq!(config.model.as_deref(), Some("gpt-project"));
 
         Ok(())
     }
@@ -2489,6 +2470,30 @@ trust_level = "trusted"
     }
 
     #[test]
+    fn responses_websockets_feature_updates_openai_provider() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut entries = BTreeMap::new();
+        entries.insert("responses_websockets".to_string(), true);
+        let cfg = ConfigToml {
+            features: Some(crate::features::FeaturesToml { entries }),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.model_provider.wire_api,
+            crate::model_provider_info::WireApi::ResponsesWebsocket
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn config_honors_explicit_file_oauth_store_mode() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {
@@ -2556,10 +2561,8 @@ trust_level = "trusted"
     }
 
     #[tokio::test]
-    #[serial]
     async fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
-        let _cwd = set_test_cwd(codex_home.path());
 
         let servers = load_global_mcp_servers(codex_home.path()).await?;
         assert!(servers.is_empty());
@@ -2568,10 +2571,8 @@ trust_level = "trusted"
     }
 
     #[tokio::test]
-    #[serial]
     async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
-        let _cwd = set_test_cwd(codex_home.path());
 
         let mut servers = BTreeMap::new();
         servers.insert(
@@ -3660,7 +3661,6 @@ model_verbosity = "high"
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
-                hooks: Vec::new(),
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -3670,8 +3670,8 @@ model_verbosity = "high"
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
+                agent_max_threads: None,
                 codex_home: fixture.codex_home(),
-                agents_sources: vec![AgentsSource::Repo, AgentsSource::User],
                 config_layer_stack: Default::default(),
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
@@ -3682,6 +3682,7 @@ model_verbosity = "high"
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: None,
                 model_verbosity: None,
+                model_personality: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 base_instructions: None,
                 developer_instructions: None,
@@ -3689,7 +3690,7 @@ model_verbosity = "high"
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
-                web_search_mode: WebSearchMode::default(),
+                web_search_mode: None,
                 use_experimental_unified_exec_tool: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
@@ -3702,17 +3703,9 @@ model_verbosity = "high"
                 tui_notifications: Default::default(),
                 animations: true,
                 show_tooltips: true,
+                experimental_mode: None,
                 analytics_enabled: Some(true),
                 feedback_enabled: true,
-                tui_scroll_events_per_tick: None,
-                tui_scroll_wheel_lines: None,
-                tui_scroll_trackpad_lines: None,
-                tui_scroll_trackpad_accel_events: None,
-                tui_scroll_trackpad_accel_max: None,
-                tui_scroll_mode: ScrollInputMode::Auto,
-                tui_scroll_wheel_tick_detect_max_ms: None,
-                tui_scroll_wheel_like_max_duration_ms: None,
-                tui_scroll_invert: false,
                 tui_alternate_screen: AltScreenMode::Auto,
                 otel: OtelConfig::default(),
             },
@@ -3749,7 +3742,6 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
-            hooks: Vec::new(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -3759,8 +3751,8 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
+            agent_max_threads: None,
             codex_home: fixture.codex_home(),
-            agents_sources: vec![AgentsSource::Repo, AgentsSource::User],
             config_layer_stack: Default::default(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3771,6 +3763,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
+            model_personality: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
@@ -3778,7 +3771,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: WebSearchMode::default(),
+            web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3791,17 +3784,9 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            experimental_mode: None,
             analytics_enabled: Some(true),
             feedback_enabled: true,
-            tui_scroll_events_per_tick: None,
-            tui_scroll_wheel_lines: None,
-            tui_scroll_trackpad_lines: None,
-            tui_scroll_trackpad_accel_events: None,
-            tui_scroll_trackpad_accel_max: None,
-            tui_scroll_mode: ScrollInputMode::Auto,
-            tui_scroll_wheel_tick_detect_max_ms: None,
-            tui_scroll_wheel_like_max_duration_ms: None,
-            tui_scroll_invert: false,
             tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
         };
@@ -3853,7 +3838,6 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
-            hooks: Vec::new(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -3863,8 +3847,8 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
+            agent_max_threads: None,
             codex_home: fixture.codex_home(),
-            agents_sources: vec![AgentsSource::Repo, AgentsSource::User],
             config_layer_stack: Default::default(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3875,6 +3859,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_verbosity: None,
+            model_personality: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
@@ -3882,7 +3867,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: WebSearchMode::default(),
+            web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3895,17 +3880,9 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            experimental_mode: None,
             analytics_enabled: Some(false),
             feedback_enabled: true,
-            tui_scroll_events_per_tick: None,
-            tui_scroll_wheel_lines: None,
-            tui_scroll_trackpad_lines: None,
-            tui_scroll_trackpad_accel_events: None,
-            tui_scroll_trackpad_accel_max: None,
-            tui_scroll_mode: ScrollInputMode::Auto,
-            tui_scroll_wheel_tick_detect_max_ms: None,
-            tui_scroll_wheel_like_max_duration_ms: None,
-            tui_scroll_invert: false,
             tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
         };
@@ -3943,7 +3920,6 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
-            hooks: Vec::new(),
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -3953,8 +3929,8 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
+            agent_max_threads: None,
             codex_home: fixture.codex_home(),
-            agents_sources: vec![AgentsSource::Repo, AgentsSource::User],
             config_layer_stack: Default::default(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
@@ -3965,6 +3941,7 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_supports_reasoning_summaries: None,
             model_verbosity: Some(Verbosity::High),
+            model_personality: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             base_instructions: None,
             developer_instructions: None,
@@ -3972,7 +3949,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: WebSearchMode::default(),
+            web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3985,17 +3962,9 @@ model_verbosity = "high"
             tui_notifications: Default::default(),
             animations: true,
             show_tooltips: true,
+            experimental_mode: None,
             analytics_enabled: Some(true),
             feedback_enabled: true,
-            tui_scroll_events_per_tick: None,
-            tui_scroll_wheel_lines: None,
-            tui_scroll_trackpad_lines: None,
-            tui_scroll_trackpad_accel_events: None,
-            tui_scroll_trackpad_accel_max: None,
-            tui_scroll_mode: ScrollInputMode::Auto,
-            tui_scroll_wheel_tick_detect_max_ms: None,
-            tui_scroll_wheel_like_max_duration_ms: None,
-            tui_scroll_invert: false,
             tui_alternate_screen: AltScreenMode::Auto,
             otel: OtelConfig::default(),
         };
@@ -4338,92 +4307,6 @@ mcp_oauth_callback_port = 5678
         }
 
         Ok(())
-    }
-
-    #[test]
-    fn test_hooks_toml_parsing() {
-        let cfg = toml::from_str::<ConfigToml>(
-            r#"
-[[hooks]]
-id = "afplay-on-turn-end"
-when = "turn.end"
-command = ["bash", "-lc", "afplay /System/Library/Sounds/Ping.aiff"]
-
-[[hooks]]
-when = ["tool.exec.begin", "tool.exec.end"]
-matcher = "shell|unified_exec"
-command = ["python3", "scripts/hook.py"]
-timeout_ms = 3000
-include_output = true
-"#,
-        )
-        .expect("TOML deserialization should succeed");
-
-        assert_eq!(cfg.hooks.len(), 2);
-        assert_eq!(cfg.hooks[0].id.as_deref(), Some("afplay-on-turn-end"));
-        assert_eq!(cfg.hooks[0].when, vec!["turn.end".to_string()]);
-        assert_eq!(cfg.hooks[0].include_output, false);
-
-        assert_eq!(
-            cfg.hooks[1].when,
-            vec!["tool.exec.begin".to_string(), "tool.exec.end".to_string()]
-        );
-        assert_eq!(cfg.hooks[1].matcher.as_deref(), Some("shell|unified_exec"));
-        assert_eq!(cfg.hooks[1].timeout_ms, Some(3000));
-        assert!(cfg.hooks[1].include_output);
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-pub struct HookConfig {
-    #[serde(default)]
-    pub id: Option<String>,
-
-    #[serde(deserialize_with = "deserialize_string_or_vec")]
-    pub when: Vec<String>,
-
-    #[serde(default)]
-    pub matcher: Option<String>,
-
-    pub command: Vec<String>,
-
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
-
-    /// If true, this hook can block execution for certain pre-execution events
-    /// (currently: `tool.call.begin`) when it exits with code 2.
-    #[serde(default)]
-    pub blocking: bool,
-
-    #[serde(default)]
-    pub include_output: bool,
-
-    #[serde(default)]
-    pub include_patch_contents: bool,
-
-    #[serde(default)]
-    pub include_mcp_arguments: bool,
-
-    /// If true, include the tool invocation payload (tool-specific input) in
-    /// the JSON payload written to stdin.
-    #[serde(default)]
-    pub include_tool_arguments: bool,
-}
-
-fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum StringOrVec {
-        One(String),
-        Many(Vec<String>),
-    }
-
-    match StringOrVec::deserialize(deserializer)? {
-        StringOrVec::One(one) => Ok(vec![one]),
-        StringOrVec::Many(many) => Ok(many),
     }
 }
 

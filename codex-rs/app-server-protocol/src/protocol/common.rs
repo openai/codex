@@ -117,10 +117,6 @@ client_request_definitions! {
         params: v2::ThreadArchiveParams,
         response: v2::ThreadArchiveResponse,
     },
-    ThreadCompact => "thread/compact" {
-        params: v2::ThreadCompactParams,
-        response: v2::ThreadCompactResponse,
-    },
     ThreadRollback => "thread/rollback" {
         params: v2::ThreadRollbackParams,
         response: v2::ThreadRollbackResponse,
@@ -133,13 +129,17 @@ client_request_definitions! {
         params: v2::ThreadLoadedListParams,
         response: v2::ThreadLoadedListResponse,
     },
+    ThreadRead => "thread/read" {
+        params: v2::ThreadReadParams,
+        response: v2::ThreadReadResponse,
+    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
     },
-    AgentsList => "agents/list" {
-        params: v2::AgentsListParams,
-        response: v2::AgentsListResponse,
+    SkillsConfigWrite => "skills/config/write" {
+        params: v2::SkillsConfigWriteParams,
+        response: v2::SkillsConfigWriteResponse,
     },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
@@ -157,6 +157,11 @@ client_request_definitions! {
     ModelList => "model/list" {
         params: v2::ModelListParams,
         response: v2::ModelListResponse,
+    },
+    /// EXPERIMENTAL - list collaboration mode presets.
+    CollaborationModeList => "collaborationMode/list" {
+        params: v2::CollaborationModeListParams,
+        response: v2::CollaborationModeListResponse,
     },
 
     McpServerOauthLogin => "mcpServer/oauth/login" {
@@ -189,11 +194,13 @@ client_request_definitions! {
         response: v2::LogoutAccountResponse,
     },
 
+    /// CODEX-MINE - List configured accounts (multi-account support).
     ListAccounts => "account/list" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v2::ListAccountsResponse,
     },
 
+    /// CODEX-MINE - Switch the active account (multi-account support).
     SwitchAccount => "account/switch" {
         params: v2::SwitchAccountParams,
         response: v2::SwitchAccountResponse,
@@ -519,10 +526,16 @@ server_request_definitions! {
         response: v2::FileChangeRequestApprovalResponse,
     },
 
-    /// Sent when the agent needs structured input from the user (interactive questions).
+    /// CODEX-MINE - Request structured input from the user (legacy compatibility).
     AskUserQuestion => "user/askQuestion" {
         params: v2::AskUserQuestionParams,
         response: v2::AskUserQuestionResponse,
+    },
+
+    /// EXPERIMENTAL - Request input from the user for a tool call.
+    ToolRequestUserInput => "item/tool/requestUserInput" {
+        params: v2::ToolRequestUserInputParams,
+        response: v2::ToolRequestUserInputResponse,
     },
 
     /// DEPRECATED APIs below
@@ -563,6 +576,65 @@ pub struct FuzzyFileSearchResult {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 pub struct FuzzyFileSearchResponse {
     pub files: Vec<FuzzyFileSearchResult>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum AskUserQuestionType {
+    Text,
+    SingleSelect,
+    MultiSelect,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct AskUserQuestionOption {
+    pub label: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub recommended: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct AskUserQuestion {
+    pub id: String,
+    pub prompt: String,
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub question_type: AskUserQuestionType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub placeholder: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub options: Option<Vec<AskUserQuestionOption>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub allow_other: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub required: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct AskUserQuestionRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    pub questions: Vec<AskUserQuestion>,
 }
 
 server_notification_definitions! {
@@ -893,6 +965,23 @@ mod tests {
                     "limit": null,
                     "cursor": null
                 }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_list_collaboration_modes() -> Result<()> {
+        let request = ClientRequest::CollaborationModeList {
+            request_id: RequestId::Integer(7),
+            params: v2::CollaborationModeListParams::default(),
+        };
+        assert_eq!(
+            json!({
+                "method": "collaborationMode/list",
+                "id": 7,
+                "params": {}
             }),
             serde_json::to_value(&request)?,
         );

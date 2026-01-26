@@ -13,18 +13,20 @@ use std::time::Duration;
 
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
-use crate::ask_user_question::AskUserQuestionRequest;
-use crate::ask_user_question::AskUserQuestionResponse;
+use crate::config_types::CollaborationMode;
+use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
 use crate::items::TurnItem;
 use crate::message_history::HistoryEntry;
+use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
+use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use mcp_types::CallToolResult;
@@ -45,6 +47,7 @@ pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
+pub use crate::request_user_input::RequestUserInputEvent;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -52,6 +55,8 @@ pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
 pub const USER_INSTRUCTIONS_CLOSE_TAG: &str = "</user_instructions>";
 pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
 pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
+pub const COLLABORATION_MODE_OPEN_TAG: &str = "<collaboration_mode>";
+pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
 /// Submission Queue Entry - requests from user
@@ -80,7 +85,10 @@ pub enum Op {
     /// This server sends [`EventMsg::TurnAborted`] in response.
     Interrupt,
 
-    /// Input from the user
+    /// Legacy user input.
+    ///
+    /// Prefer [`Op::UserTurn`] so the caller provides full turn context
+    /// (cwd/approval/sandbox/model/etc.) for each turn.
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
@@ -117,13 +125,23 @@ pub enum Op {
         summary: ReasoningSummaryConfig,
         // The JSON schema to use for the final assistant message
         final_output_json_schema: Option<Value>,
+
+        /// EXPERIMENTAL - set a pre-set collaboration mode.
+        /// Takes precedence over model, effort, and developer instructions if set.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        collaboration_mode: Option<CollaborationMode>,
+
+        /// Optional personality override for this turn.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        personality: Option<Personality>,
     },
 
     /// Override parts of the persistent turn context for subsequent turns.
     ///
     /// All fields are optional; when omitted, the existing value is preserved.
     /// This does not enqueue any input – it only updates defaults used for
-    /// future `UserInput` turns.
+    /// turns that rely on persistent session-level context (for example,
+    /// [`Op::UserInput`]).
     OverrideTurnContext {
         /// Updated `cwd` for sandbox/tool calls.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -152,6 +170,15 @@ pub enum Op {
         /// Updated reasoning summary preference (honored only for reasoning-capable models).
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
+
+        /// EXPERIMENTAL - set a pre-set collaboration mode.
+        /// Takes precedence over model, effort, and developer instructions if set.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        collaboration_mode: Option<CollaborationMode>,
+
+        /// Updated personality preference.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        personality: Option<Personality>,
     },
 
     /// Approve a command execution
@@ -180,12 +207,13 @@ pub enum Op {
         decision: ElicitationAction,
     },
 
-    /// Resolve an AskUserQuestion request from the agent/tooling.
-    ResolveAskUserQuestion {
-        /// Tool call id used to correlate the request/response.
-        call_id: String,
+    /// Resolve a request_user_input tool call.
+    #[serde(rename = "user_input_answer", alias = "request_user_input_response")]
+    UserInputAnswer {
+        /// Turn id for the in-flight request.
+        id: String,
         /// User-provided answers.
-        response: AskUserQuestionResponse,
+        response: RequestUserInputResponse,
     },
 
     /// Append an entry to the persistent cross-session message history.
@@ -700,10 +728,6 @@ pub enum EventMsg {
 
     McpToolCallEnd(McpToolCallEndEvent),
 
-    SubAgentRunBegin(SubAgentRunBeginEvent),
-
-    SubAgentRunEnd(SubAgentRunEndEvent),
-
     WebSearchBegin(WebSearchBeginEvent),
 
     WebSearchEnd(WebSearchEndEvent),
@@ -724,9 +748,9 @@ pub enum EventMsg {
 
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
-    ElicitationRequest(ElicitationRequestEvent),
+    RequestUserInput(RequestUserInputEvent),
 
-    AskUserQuestionRequest(AskUserQuestionRequestEvent),
+    ElicitationRequest(ElicitationRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 
@@ -876,16 +900,6 @@ pub enum AgentStatus {
     NotFound,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct AskUserQuestionRequestEvent {
-    pub call_id: String,
-    /// Turn ID that this question belongs to.
-    /// Uses `#[serde(default)]` for backwards compatibility.
-    #[serde(default)]
-    pub turn_id: String,
-    pub request: AskUserQuestionRequest,
-}
-
 /// Codex errors that we expose to clients.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -893,9 +907,6 @@ pub struct AskUserQuestionRequestEvent {
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
-    RateLimited {
-        http_status_code: Option<u16>,
-    },
     HttpConnectionFailed {
         http_status_code: Option<u16>,
     },
@@ -1018,7 +1029,6 @@ impl HasLegacyEvent for ReasoningRawContentDeltaEvent {
 impl HasLegacyEvent for EventMsg {
     fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
         match self {
-            EventMsg::ItemStarted(event) => event.as_legacy_events(show_raw_agent_reasoning),
             EventMsg::ItemCompleted(event) => event.as_legacy_events(show_raw_agent_reasoning),
             EventMsg::AgentMessageContentDelta(event) => {
                 event.as_legacy_events(show_raw_agent_reasoning)
@@ -1267,7 +1277,7 @@ impl fmt::Display for FinalOutput {
             format_with_separators(token_usage.output_tokens),
             if token_usage.reasoning_output_tokens > 0 {
                 format!(
-                    "(reasoning {})",
+                    " (reasoning {})",
                     format_with_separators(token_usage.reasoning_output_tokens)
                 )
             } else {
@@ -1406,6 +1416,30 @@ pub enum InitialHistory {
 }
 
 impl InitialHistory {
+    pub fn forked_from_id(&self) -> Option<ThreadId> {
+        match self {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(resumed) => {
+                resumed.history.iter().find_map(|item| match item {
+                    RolloutItem::SessionMeta(meta_line) => meta_line.meta.forked_from_id,
+                    _ => None,
+                })
+            }
+            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.id),
+                _ => None,
+            }),
+        }
+    }
+
+    pub fn session_cwd(&self) -> Option<PathBuf> {
+        match self {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(resumed) => session_cwd_from_items(&resumed.history),
+            InitialHistory::Forked(items) => session_cwd_from_items(items),
+        }
+    }
+
     pub fn get_rollout_items(&self) -> Vec<RolloutItem> {
         match self {
             InitialHistory::New => Vec::new(),
@@ -1438,6 +1472,30 @@ impl InitialHistory {
             ),
         }
     }
+
+    pub fn get_base_instructions(&self) -> Option<BaseInstructions> {
+        // TODO: SessionMeta should (in theory) always be first in the history, so we can probably only check the first item?
+        match self {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(resumed) => {
+                resumed.history.iter().find_map(|item| match item {
+                    RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
+                    _ => None,
+                })
+            }
+            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
+                _ => None,
+            }),
+        }
+    }
+}
+
+fn session_cwd_from_items(items: &[RolloutItem]) -> Option<PathBuf> {
+    items.iter().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.cwd.clone()),
+        _ => None,
+    })
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS, Default)]
@@ -1486,30 +1544,41 @@ impl fmt::Display for SubAgentSource {
     }
 }
 
+/// SessionMeta contains session-level data that doesn't correspond to a specific turn.
+///
+/// NOTE: There used to be an `instructions` field here, which stored user_instructions, but we
+/// now save that on TurnContext. base_instructions stores the base instructions for the session,
+/// and should be used when there is no config override.
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
     pub id: ThreadId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from_id: Option<ThreadId>,
     pub timestamp: String,
     pub cwd: PathBuf,
     pub originator: String,
     pub cli_version: String,
-    pub instructions: Option<String>,
     #[serde(default)]
     pub source: SessionSource,
     pub model_provider: Option<String>,
+    /// base_instructions for the session. This *should* always be present when creating a new session,
+    /// but may be missing for older sessions. If not present, fall back to rendering the base_instructions
+    /// from ModelsManager.
+    pub base_instructions: Option<BaseInstructions>,
 }
 
 impl Default for SessionMeta {
     fn default() -> Self {
         SessionMeta {
             id: ThreadId::default(),
+            forked_from_id: None,
             timestamp: String::new(),
             cwd: PathBuf::new(),
             originator: String::new(),
             cli_version: String::new(),
-            instructions: None,
             source: SessionSource::default(),
             model_provider: None,
+            base_instructions: None,
         }
     }
 }
@@ -1547,6 +1616,7 @@ impl From<CompactedItem> for ResponseItem {
             content: vec![ContentItem::OutputText {
                 text: value.message,
             }],
+            end_turn: None,
         }
     }
 }
@@ -1558,10 +1628,12 @@ pub struct TurnContextItem {
     pub sandbox_policy: SandboxPolicy,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub personality: Option<Personality>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collaboration_mode: Option<CollaborationMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
     pub summary: ReasoningSummaryConfig,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1686,19 +1758,16 @@ pub struct ReviewLineRange {
     pub end: u32,
 }
 
-#[derive(Debug, Clone, Copy, Display, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[derive(
+    Debug, Clone, Copy, Display, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, Default,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecCommandSource {
+    #[default]
     Agent,
     UserShell,
     UnifiedExecStartup,
     UnifiedExecInteraction,
-}
-
-impl Default for ExecCommandSource {
-    fn default() -> Self {
-        Self::Agent
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1807,22 +1876,6 @@ pub struct TerminalInteractionEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct BackgroundEventEvent {
     pub message: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct SubAgentRunBeginEvent {
-    pub call_id: String,
-    pub name: String,
-    pub description: String,
-    pub color: Option<String>,
-    pub prompt: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct SubAgentRunEndEvent {
-    pub call_id: String,
-    pub duration_ms: i64,
-    pub success: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2008,11 +2061,32 @@ pub enum SkillScope {
 pub struct SkillMetadata {
     pub name: String,
     pub description: String,
-    #[ts(optional)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    /// Legacy short_description from SKILL.md. Prefer SKILL.toml interface.short_description.
     pub short_description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub interface: Option<SkillInterface>,
     pub path: PathBuf,
     pub scope: SkillScope,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq)]
+pub struct SkillInterface {
+    #[ts(optional)]
+    pub display_name: Option<String>,
+    #[ts(optional)]
+    pub short_description: Option<String>,
+    #[ts(optional)]
+    pub icon_small: Option<PathBuf>,
+    #[ts(optional)]
+    pub icon_large: Option<PathBuf>,
+    #[ts(optional)]
+    pub brand_color: Option<String>,
+    #[ts(optional)]
+    pub default_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2032,6 +2106,8 @@ pub struct SkillsListEntry {
 pub struct SessionConfiguredEvent {
     /// Name left as session_id instead of thread_id for backwards compatibility.
     pub session_id: ThreadId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from_id: Option<ThreadId>,
 
     /// Tell the client what model is being queried.
     pub model: String,
@@ -2203,8 +2279,8 @@ pub struct CollabAgentInteractionEndEvent {
 pub struct CollabWaitingBeginEvent {
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
-    /// Thread ID of the receiver.
-    pub receiver_thread_id: ThreadId,
+    /// Thread ID of the receivers.
+    pub receiver_thread_ids: Vec<ThreadId>,
     /// ID of the waiting call.
     pub call_id: String,
 }
@@ -2213,12 +2289,10 @@ pub struct CollabWaitingBeginEvent {
 pub struct CollabWaitingEndEvent {
     /// Thread ID of the sender.
     pub sender_thread_id: ThreadId,
-    /// Thread ID of the receiver.
-    pub receiver_thread_id: ThreadId,
     /// ID of the waiting call.
     pub call_id: String,
-    /// Last known status of the receiver agent reported to the sender agent.
-    pub status: AgentStatus,
+    /// Last known status of the receiver agents reported to the sender agent.
+    pub statuses: HashMap<ThreadId, AgentStatus>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -2297,25 +2371,6 @@ mod tests {
         };
 
         assert!(event.as_legacy_events(false).is_empty());
-    }
-
-    #[test]
-    fn event_msg_item_started_propagates_legacy_web_search_begin_event() {
-        let msg = EventMsg::ItemStarted(ItemStartedEvent {
-            thread_id: ThreadId::new(),
-            turn_id: "turn-1".into(),
-            item: TurnItem::WebSearch(WebSearchItem {
-                id: "search-1".into(),
-                query: "find docs".into(),
-            }),
-        });
-
-        let legacy_events = msg.as_legacy_events(false);
-        assert_eq!(legacy_events.len(), 1);
-        match &legacy_events[0] {
-            EventMsg::WebSearchBegin(event) => assert_eq!(event.call_id, "search-1"),
-            _ => panic!("expected WebSearchBegin event"),
-        }
     }
 
     #[test]
@@ -2426,6 +2481,7 @@ mod tests {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
+                forked_from_id: None,
                 model: "codex-mini-latest".to_string(),
                 model_provider_id: "openai".to_string(),
                 approval_policy: AskForApproval::Never,

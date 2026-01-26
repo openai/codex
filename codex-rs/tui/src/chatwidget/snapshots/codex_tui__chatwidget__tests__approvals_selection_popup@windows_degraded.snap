@@ -3,14 +3,20 @@ source: tui/src/chatwidget/tests.rs
 assertion_line: 2003
 expression: popup
 ---
-  Select Approval Mode
+  Update Model Permissions
 
-› 1. Read Only (current)           Requires approval to edit files and run
-                                   commands.
-  2. Agent (non-elevated sandbox)  Read and edit files, and run commands.
-  3. Agent (full access)           Codex can edit files outside this workspace
-                                   and run commands with network access.
-                                   Exercise caution when using.
+› 1. Read Only (current)             Codex can read files in the current
+                                     workspace. Approval is required to edit
+                                     files or access the internet.
+  2. Default (non-elevated sandbox)  Codex can read and edit files in the
+                                     current workspace, and run commands.
+                                     Approval is required to access the
+                                     internet or edit other files. (Identical
+                                     to Agent mode)
+  3. Full Access                     Codex can edit files outside this
+                                     workspace and access the internet without
+                                     asking for approval. Exercise caution
+                                     when using.
 
   The non-elevated sandbox protects your files and prevents network access under
   most circumstances. However, it carries greater risk if prompt injected. To

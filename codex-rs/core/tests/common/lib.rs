@@ -83,20 +83,6 @@ pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
         .expect("defaults for test should always succeed")
 }
 
-pub async fn load_default_config_for_test_with_cwd(
-    codex_home: &TempDir,
-    cwd: &std::path::Path,
-) -> Config {
-    let mut overrides = default_test_overrides();
-    overrides.cwd = Some(cwd.to_path_buf());
-    ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .harness_overrides(overrides)
-        .build()
-        .await
-        .expect("defaults for test should always succeed")
-}
-
 #[cfg(target_os = "linux")]
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides {

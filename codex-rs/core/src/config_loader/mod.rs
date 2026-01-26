@@ -12,10 +12,13 @@ mod tests;
 
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigToml;
+use crate::config::deserialize_config_toml_with_base;
 use crate::config_loader::config_requirements::ConfigRequirementsWithSources;
 use crate::config_loader::layer_io::LoadedConfigLayers;
+use crate::git_info::resolve_root_git_project_for_trust;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
@@ -46,7 +49,6 @@ const DEFAULT_REQUIREMENTS_TOML_FILE_UNIX: &str = "/etc/codex/requirements.toml"
 /// as skills/ and rules/ will also be honored.
 pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
 
-#[allow(dead_code)]
 const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 
 /// To build up the set of admin-enforced constraints, we build up from multiple
@@ -64,8 +66,10 @@ const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 ///
 /// - admin:    managed preferences (*)
 /// - system    `/etc/codex/config.toml`
-/// - user      `${CODEX_HOME}/config.toml` (**only when no cwd-local config exists**)
-/// - cwd-local `./.codex/config.toml` (in the session working directory)
+/// - user      `${CODEX_HOME}/config.toml`
+/// - cwd       `${PWD}/config.toml` (only when the directory is trusted)
+/// - tree      parent directories up to root looking for `./.codex/config.toml` (trusted only)
+/// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml` (trusted only)
 /// - runtime   e.g., --config flags, model selector in UI
 ///
 /// (*) Only available on macOS via managed device profiles.
@@ -113,6 +117,12 @@ pub async fn load_config_layers_state(
 
     let mut layers = Vec::<ConfigLayerEntry>::new();
 
+    let cli_overrides_layer = if cli_overrides.is_empty() {
+        None
+    } else {
+        Some(overrides::build_cli_overrides_layer(cli_overrides))
+    };
+
     // Include an entry for the "system" config folder, loading its config.toml,
     // if it exists.
     let system_config_toml_file = if cfg!(unix) {
@@ -137,73 +147,42 @@ pub async fn load_config_layers_state(
         layers.push(system_layer);
     }
 
+    // Add a layer for $CODEX_HOME/config.toml if it exists. Note if the file
+    // exists, but is malformed, then this error should be propagated to the
+    // user.
     let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home)?;
-    // Codex-Mine policy: repo-local config is *cwd-local only*.
-    //
-    // We intentionally do not walk parent directories, and we do not special-case
-    // git repo roots. If you want repo-wide defaults, invoke Codex from the repo
-    // root (or use your CODEX_HOME config when no cwd-local config exists).
-    let has_cwd_local_config = cwd.as_ref().is_some_and(|cwd| {
-        let path = cwd.as_path().join(".codex").join(CONFIG_TOML_FILE);
-        path.exists() && path.as_path() != user_file.as_path()
-    });
-
-    // User layer: include it only when we are not overriding via cwd-local
-    // `.codex/config.toml`. When overridden, do not read the user config file.
-    if has_cwd_local_config {
-        tracing::debug!(
-            cwd = cwd
-                .as_ref()
-                .map(|p| p.as_path().display().to_string())
-                .unwrap_or_else(|| "<none>".to_string()),
-            codex_home = %codex_home.display(),
-            "Cwd-local .codex/config.toml found; skipping CODEX_HOME/config.toml"
-        );
-        layers.push(ConfigLayerEntry::new(
+    let user_layer = load_config_toml_for_required_layer(&user_file, |config_toml| {
+        ConfigLayerEntry::new(
             ConfigLayerSource::User {
                 file: user_file.clone(),
             },
-            TomlValue::Table(toml::map::Map::new()),
-        ));
-    } else {
-        let user_layer = load_config_toml_for_required_layer(&user_file, |config_toml| {
-            ConfigLayerEntry::new(
-                ConfigLayerSource::User {
-                    file: user_file.clone(),
-                },
-                config_toml,
-            )
-        })
-        .await?;
-        layers.push(user_layer);
-    }
+            config_toml,
+        )
+    })
+    .await?;
+    layers.push(user_layer);
 
-    // Project layers (from project root to cwd, inclusive).
-    //
-    // Codex-Mine policy: config values from repo-local `.codex/config.toml` are *cwd-local only*.
-    // We still record empty project layers for ancestor `.codex/` folders so repo-scoped assets
-    // like `.codex/skills/` can be discovered consistently.
-    if let Some(cwd) = cwd.as_ref() {
-        let project_root_markers = default_project_root_markers();
-        let project_root = find_project_root(cwd, &project_root_markers).await?;
-
-        let cwd_dot_codex = cwd.as_path().join(".codex");
-        let cwd_dot_codex = AbsolutePathBuf::from_absolute_path(&cwd_dot_codex)?;
-
-        let mut project_layers = load_project_layers(cwd, &project_root).await?;
-        for layer in &mut project_layers {
-            if let ConfigLayerSource::Project { dot_codex_folder } = &layer.name
-                && *dot_codex_folder != cwd_dot_codex
-            {
-                layer.config = TomlValue::Table(toml::map::Map::new());
-            }
+    if let Some(cwd) = cwd {
+        let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
+        for layer in &layers {
+            merge_toml_values(&mut merged_so_far, &layer.config);
         }
-        layers.extend(project_layers);
+        if let Some(cli_overrides_layer) = cli_overrides_layer.as_ref() {
+            merge_toml_values(&mut merged_so_far, cli_overrides_layer);
+        }
+
+        let project_root_markers = project_root_markers_from_config(&merged_so_far)?
+            .unwrap_or_else(default_project_root_markers);
+        if let Some(project_root) =
+            trusted_project_root(&merged_so_far, &cwd, &project_root_markers, codex_home).await?
+        {
+            let project_layers = load_project_layers(&cwd, &project_root).await?;
+            layers.extend(project_layers);
+        }
     }
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.
-    if !cli_overrides.is_empty() {
-        let cli_overrides_layer = overrides::build_cli_overrides_layer(cli_overrides);
+    if let Some(cli_overrides_layer) = cli_overrides_layer {
         layers.push(ConfigLayerEntry::new(
             ConfigLayerSource::SessionFlags,
             cli_overrides_layer,
@@ -387,7 +366,6 @@ async fn load_requirements_from_legacy_scheme(
 ///   empty array, which indicates that root detection should be disabled).
 /// - Returns an error if `project_root_markers` is specified but is not an
 ///   array of strings.
-#[allow(dead_code)]
 fn project_root_markers_from_config(config: &TomlValue) -> io::Result<Option<Vec<String>>> {
     let Some(table) = config.as_table() else {
         return Ok(None);
@@ -417,12 +395,49 @@ fn project_root_markers_from_config(config: &TomlValue) -> io::Result<Option<Vec
     Ok(Some(markers))
 }
 
-#[allow(dead_code)]
 fn default_project_root_markers() -> Vec<String> {
     DEFAULT_PROJECT_ROOT_MARKERS
         .iter()
         .map(ToString::to_string)
         .collect()
+}
+
+async fn trusted_project_root(
+    merged_config: &TomlValue,
+    cwd: &AbsolutePathBuf,
+    project_root_markers: &[String],
+    config_base_dir: &Path,
+) -> io::Result<Option<AbsolutePathBuf>> {
+    let config_toml = deserialize_config_toml_with_base(merged_config.clone(), config_base_dir)?;
+
+    let project_root = find_project_root(cwd, project_root_markers).await?;
+    let projects = config_toml.projects.unwrap_or_default();
+
+    let cwd_key = cwd.as_path().to_string_lossy().to_string();
+    let project_root_key = project_root.as_path().to_string_lossy().to_string();
+    let repo_root_key = resolve_root_git_project_for_trust(cwd.as_path())
+        .map(|root| root.to_string_lossy().to_string());
+
+    let trust_level = projects
+        .get(&cwd_key)
+        .and_then(|project| project.trust_level)
+        .or_else(|| {
+            projects
+                .get(&project_root_key)
+                .and_then(|project| project.trust_level)
+        })
+        .or_else(|| {
+            repo_root_key
+                .as_ref()
+                .and_then(|root| projects.get(root))
+                .and_then(|project| project.trust_level)
+        });
+
+    if matches!(trust_level, Some(TrustLevel::Trusted)) {
+        Ok(Some(project_root))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Takes a `toml::Value` parsed from a config.toml file and walks through it,
@@ -485,7 +500,6 @@ fn copy_shape_from_original(original: &TomlValue, resolved: &TomlValue) -> TomlV
     }
 }
 
-#[allow(dead_code)]
 async fn find_project_root(
     cwd: &AbsolutePathBuf,
     project_root_markers: &[String],
@@ -510,7 +524,6 @@ async fn find_project_root(
 /// `project_root`, inclusive. The list is ordered in _increasing_ precdence,
 /// starting from folders closest to `project_root` (which is the lowest
 /// precedence) to those closest to `cwd` (which is the highest precedence).
-#[allow(dead_code)]
 async fn load_project_layers(
     cwd: &AbsolutePathBuf,
     project_root: &AbsolutePathBuf,
@@ -643,7 +656,7 @@ mod unit_tests {
         let contents = r#"
 # This is a field recognized by config.toml that is an AbsolutePathBuf in
 # the ConfigToml struct.
-experimental_instructions_file = "./some_file.md"
+model_instructions_file = "./some_file.md"
 
 # This is a field recognized by config.toml.
 model = "gpt-1000"
@@ -656,7 +669,7 @@ foo = "xyzzy"
         let normalized_toml_value = resolve_relative_paths_in_config_toml(user_config, base_dir)?;
         let mut expected_toml_value = toml::map::Map::new();
         expected_toml_value.insert(
-            "experimental_instructions_file".to_string(),
+            "model_instructions_file".to_string(),
             TomlValue::String(
                 AbsolutePathBuf::resolve_path_against_base("./some_file.md", base_dir)?
                     .as_path()

@@ -14,6 +14,7 @@ use codex_common::approval_presets::ApprovalPreset;
 use codex_core::protocol::Event;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
+use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
@@ -22,6 +23,7 @@ use crate::history_cell::HistoryCell;
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::openai_models::ReasoningEffort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,21 +43,19 @@ pub(crate) enum WindowsSandboxFallbackReason {
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
+    ExternalApprovalRequest {
+        thread_id: ThreadId,
+        event: Event,
+    },
 
     /// Start a new session.
     NewSession,
 
-    /// Switch the active account (and optionally create it).
-    SwitchAccount {
-        name: String,
-        create_if_missing: bool,
-    },
-
     /// Open the resume picker inside the running TUI session.
     OpenResumePicker,
 
-    /// Open the fork picker inside the running TUI session.
-    OpenForkPicker,
+    /// Fork the current session into a new thread.
+    ForkCurrentSession,
 
     /// Request to exit the application.
     ///
@@ -85,9 +85,6 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
-    /// Refresh discovered subagents (repo + CODEX_HOME).
-    RefreshSubagents,
-
     /// Result of refreshing rate limits
     RateLimitSnapshotFetched(RateLimitSnapshot),
 
@@ -105,6 +102,9 @@ pub(crate) enum AppEvent {
 
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
+
+    /// Update the current collaboration mode in the running app and widget.
+    UpdateCollaborationMode(CollaborationMode),
 
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
@@ -125,6 +125,7 @@ pub(crate) enum AppEvent {
     /// Open the confirmation prompt before enabling full access mode.
     OpenFullAccessConfirmation {
         preset: ApprovalPreset,
+        return_to_permissions: bool,
     },
 
     /// Open the Windows world-writable directories warning.
@@ -212,6 +213,24 @@ pub(crate) enum AppEvent {
     /// Re-open the approval presets popup.
     OpenApprovalsPopup,
 
+    /// Open the skills list popup.
+    OpenSkillsList,
+
+    /// Open the skills enable/disable picker.
+    OpenManageSkillsPopup,
+
+    /// Enable or disable a skill by path.
+    SetSkillEnabled {
+        path: PathBuf,
+        enabled: bool,
+    },
+
+    /// Notify that the manage skills popup was closed.
+    ManageSkillsClosed,
+
+    /// Re-open the permissions presets popup.
+    OpenPermissionsPopup,
+
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),
 
@@ -233,38 +252,6 @@ pub(crate) enum AppEvent {
     /// Open the upload consent popup for feedback after selecting a category.
     OpenFeedbackConsent {
         category: FeedbackCategory,
-    },
-
-    /// AskUserQuestion: option picked (single- or multi-select).
-    AskUserQuestionPick {
-        call_id: String,
-        question_id: String,
-        value: String,
-    },
-
-    /// AskUserQuestion: request freeform input for an "Other…" choice.
-    AskUserQuestionOther {
-        call_id: String,
-        question_id: String,
-        prompt: String,
-    },
-
-    /// AskUserQuestion: text submitted (text questions or "Other…").
-    AskUserQuestionText {
-        call_id: String,
-        question_id: String,
-        text: String,
-    },
-
-    /// AskUserQuestion: finish a multi-select question.
-    AskUserQuestionDone {
-        call_id: String,
-        question_id: String,
-    },
-
-    /// AskUserQuestion: cancel the entire flow.
-    AskUserQuestionCancel {
-        call_id: String,
     },
 
     /// Launch the external editor after a normal draw has completed.

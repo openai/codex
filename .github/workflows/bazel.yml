@@ -4,16 +4,14 @@ name: Bazel (experimental)
 # https://github.com/cerisier/toolchains_llvm_bootstrapped/blob/main/.github/workflows/ci.yaml
 
 on:
-  pull_request: {}
   push:
     branches:
       - main
   workflow_dispatch:
 
 concurrency:
-  # Cancel previous actions from the same PR or branch except 'main' branch.
-  # See https://docs.github.com/en/actions/using-jobs/using-concurrency and https://docs.github.com/en/actions/learn-github-actions/contexts for more info.
-  group: concurrency-group::${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}${{ github.ref_name == 'main' && format('::{0}', github.run_id) || ''}}
+  # Cancel previous actions from the same branch except 'main' branch.
+  group: concurrency-group::${{ github.workflow }}::${{ github.ref_name }}${{ github.ref_name == 'main' && format('::{0}', github.run_id) || ''}}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
   test:
@@ -22,9 +20,9 @@ jobs:
       matrix:
         include:
           # macOS
-          - os: macos-15-xlarge
+          - os: macos-15
             target: aarch64-apple-darwin
-          - os: macos-15-xlarge
+          - os: macos-13
             target: x86_64-apple-darwin
 
           # Linux
@@ -36,6 +34,7 @@ jobs:
             target: aarch64-unknown-linux-musl
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
+
           # TODO: Enable Windows once we fix the toolchain issues there.
           #- os: windows-latest
           #  target: x86_64-pc-windows-gnullvm
@@ -102,9 +101,16 @@ jobs:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
-          bazel $BAZEL_STARTUP_ARGS --bazelrc=.github/workflows/ci.bazelrc test //... \
+          bazelrc_path=".github/workflows/ci.bazelrc"
+          extra_args=()
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+            bazelrc_path=".github/workflows/ci.remote.bazelrc"
+            extra_args+=("--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY")
+          fi
+
+          bazel $BAZEL_STARTUP_ARGS --bazelrc="$bazelrc_path" test //... \
             --build_metadata=REPO_URL=https://github.com/openai/codex.git \
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD) \
             --build_metadata=ROLE=CI \
             --build_metadata=VISIBILITY=PUBLIC \
-            "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY"
+            "${extra_args[@]}"

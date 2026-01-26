@@ -63,6 +63,7 @@ pub(super) fn get_auth_file_for_account(
         .join("auth.json"))
 }
 
+#[allow(dead_code)]
 pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> {
     let auth_file = get_auth_file(codex_home);
     match std::fs::remove_file(&auth_file) {
@@ -571,7 +572,7 @@ mod tests {
     fn keyring_auth_storage_compute_store_key_for_home_directory() -> anyhow::Result<()> {
         let codex_home = PathBuf::from("~/.codex");
 
-        let key = compute_store_key_base(codex_home.as_path())?;
+        let key = compute_store_key(codex_home.as_path(), None)?;
 
         assert_eq!(key, "cli|940db7b1d0e4eb40");
         Ok(())

@@ -137,9 +137,10 @@ impl McpProcess {
 
         let initialized = self.read_jsonrpc_message().await?;
         let os_info = os_info::get();
-        let version = env!("CARGO_PKG_VERSION");
+        let build_version = env!("CARGO_PKG_VERSION");
+        let originator = codex_core::default_client::originator().value;
         let user_agent = format!(
-            "codex_cli_rs/{version} ({} {}; {}) {} (elicitation test; 0.0.0)",
+            "{originator}/{build_version} ({} {}; {}) {} (elicitation test; 0.0.0)",
             os_info.os_type(),
             os_info.version(),
             os_info.architecture().unwrap_or("unknown"),
@@ -158,7 +159,7 @@ impl McpProcess {
                     "serverInfo": {
                         "name": "codex-mcp-server",
                         "title": "Codex",
-                        "version": version,
+                        "version": build_version,
                         "user_agent": user_agent
                     },
                     "protocolVersion": mcp_types::MCP_SCHEMA_VERSION

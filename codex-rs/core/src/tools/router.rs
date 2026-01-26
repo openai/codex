@@ -132,7 +132,6 @@ impl ToolRouter {
         session: Arc<Session>,
         turn: Arc<TurnContext>,
         tracker: SharedTurnDiffTracker,
-        cancellation_token: tokio_util::sync::CancellationToken,
         call: ToolCall,
     ) -> Result<ResponseInputItem, FunctionCallError> {
         let ToolCall {
@@ -147,76 +146,19 @@ impl ToolRouter {
             session,
             turn,
             tracker,
-            cancellation_token,
             call_id,
             tool_name,
             payload,
         };
 
-        invocation.session.services.hook_runner.on_tool_call_begin(
-            invocation.session.as_ref(),
-            invocation.turn.as_ref(),
-            invocation.tool_name.as_str(),
-            invocation.call_id.as_str(),
-            &invocation.payload,
-        );
-
-        if let Err(err) = invocation
-            .session
-            .services
-            .hook_runner
-            .maybe_block_tool_call_begin(
-                invocation.session.as_ref(),
-                invocation.turn.as_ref(),
-                invocation.tool_name.as_str(),
-                invocation.call_id.as_str(),
-                &invocation.payload,
-            )
-            .await
-        {
-            let response = Self::failure_response(failure_call_id, payload_outputs_custom, err);
-            invocation.session.services.hook_runner.on_tool_call_end(
-                invocation.session.as_ref(),
-                invocation.turn.as_ref(),
-                invocation.tool_name.as_str(),
-                invocation.call_id.as_str(),
-                &response,
-            );
-            return Ok(response);
-        }
-
-        match self.registry.dispatch(invocation.clone()).await {
-            Ok(response) => {
-                invocation.session.services.hook_runner.on_tool_call_end(
-                    invocation.session.as_ref(),
-                    invocation.turn.as_ref(),
-                    invocation.tool_name.as_str(),
-                    invocation.call_id.as_str(),
-                    &response,
-                );
-                Ok(response)
-            }
-            Err(FunctionCallError::Fatal(message)) => {
-                invocation.session.services.hook_runner.on_tool_call_fatal(
-                    invocation.session.as_ref(),
-                    invocation.turn.as_ref(),
-                    invocation.tool_name.as_str(),
-                    invocation.call_id.as_str(),
-                    message.as_str(),
-                );
-                Err(FunctionCallError::Fatal(message))
-            }
-            Err(err) => {
-                let response = Self::failure_response(failure_call_id, payload_outputs_custom, err);
-                invocation.session.services.hook_runner.on_tool_call_end(
-                    invocation.session.as_ref(),
-                    invocation.turn.as_ref(),
-                    invocation.tool_name.as_str(),
-                    invocation.call_id.as_str(),
-                    &response,
-                );
-                Ok(response)
-            }
+        match self.registry.dispatch(invocation).await {
+            Ok(response) => Ok(response),
+            Err(FunctionCallError::Fatal(message)) => Err(FunctionCallError::Fatal(message)),
+            Err(err) => Ok(Self::failure_response(
+                failure_call_id,
+                payload_outputs_custom,
+                err,
+            )),
         }
     }
 
@@ -240,235 +182,6 @@ impl ToolRouter {
                     ..Default::default()
                 },
             }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::tools::context::ToolOutput;
-    use crate::tools::registry::ToolHandler;
-    use crate::tools::registry::ToolKind;
-    use crate::turn_diff_tracker::TurnDiffTracker;
-    use async_trait::async_trait;
-    use pretty_assertions::assert_eq;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::time::Duration;
-    use tempfile::TempDir;
-    use tokio::time::Instant;
-    use tokio_util::sync::CancellationToken;
-
-    struct DummyTool;
-
-    #[async_trait]
-    impl ToolHandler for DummyTool {
-        fn kind(&self) -> ToolKind {
-            ToolKind::Function
-        }
-
-        async fn handle(
-            &self,
-            invocation: ToolInvocation,
-        ) -> Result<ToolOutput, FunctionCallError> {
-            assert_eq!(invocation.tool_name, "dummy_tool");
-            Ok(ToolOutput::Function {
-                content: "ok".to_string(),
-                content_items: None,
-                success: Some(true),
-            })
-        }
-    }
-
-    struct PanicTool;
-
-    #[async_trait]
-    impl ToolHandler for PanicTool {
-        fn kind(&self) -> ToolKind {
-            ToolKind::Function
-        }
-
-        async fn handle(
-            &self,
-            _invocation: ToolInvocation,
-        ) -> Result<ToolOutput, FunctionCallError> {
-            panic!("tool should not be executed");
-        }
-    }
-
-    #[tokio::test]
-    async fn tool_call_hooks_fire_on_dispatch() {
-        let (session, turn_context) = crate::codex::make_session_and_context().await;
-        let mut session = Arc::new(session);
-        let turn_context = Arc::new(turn_context);
-
-        let tmp = TempDir::new().expect("create temp dir");
-        let out_path = tmp.path().join("hook_tool_call.jsonl");
-        let out_path_str = out_path.to_string_lossy().to_string();
-        let command = if cfg!(windows) {
-            vec![
-                "powershell".to_string(),
-                "-NoProfile".to_string(),
-                "-Command".to_string(),
-                format!(
-                    "$input | Out-File -FilePath '{}' -Append -Encoding utf8",
-                    out_path_str.replace('\'', "''")
-                ),
-            ]
-        } else {
-            vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                format!("cat >> \"{out_path_str}\""),
-            ]
-        };
-
-        Arc::get_mut(&mut session)
-            .expect("unique arc")
-            .services
-            .hook_runner = crate::hooks::HookRunner::try_new(vec![crate::config::HookConfig {
-            id: Some("test-tool-call".to_string()),
-            when: vec!["tool.call.end".to_string()],
-            matcher: Some("dummy_tool".to_string()),
-            command,
-            timeout_ms: Some(2_000),
-            blocking: false,
-            include_output: false,
-            include_patch_contents: false,
-            include_mcp_arguments: false,
-            include_tool_arguments: false,
-        }])
-        .expect("build hook runner");
-
-        let registry = ToolRegistry::new(HashMap::from([(
-            "dummy_tool".to_string(),
-            Arc::new(DummyTool) as Arc<dyn ToolHandler>,
-        )]));
-        let router = ToolRouter {
-            registry,
-            specs: Vec::new(),
-        };
-
-        let tracker: SharedTurnDiffTracker =
-            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-        let call = ToolCall {
-            tool_name: "dummy_tool".to_string(),
-            call_id: "call-1".to_string(),
-            payload: ToolPayload::Function {
-                arguments: "{}".to_string(),
-            },
-        };
-
-        let _ = router
-            .dispatch_tool_call(
-                Arc::clone(&session),
-                Arc::clone(&turn_context),
-                tracker,
-                CancellationToken::new(),
-                call,
-            )
-            .await
-            .expect("dispatch ok");
-
-        let started = Instant::now();
-        loop {
-            let contents = std::fs::read_to_string(&out_path).unwrap_or_default();
-            if contents.contains("\"type\":\"tool.call.end\"")
-                && contents.contains("\"tool_name\":\"dummy_tool\"")
-            {
-                break;
-            }
-            assert!(
-                started.elapsed() < Duration::from_secs(5),
-                "timed out waiting for hook output to be written"
-            );
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    }
-
-    #[tokio::test]
-    async fn tool_call_blocking_hook_can_deny_dispatch() {
-        let (session, turn_context) = crate::codex::make_session_and_context().await;
-        let session = Arc::new(session);
-        let turn_context = Arc::new(turn_context);
-
-        let command = if cfg!(windows) {
-            vec![
-                "powershell".to_string(),
-                "-NoProfile".to_string(),
-                "-Command".to_string(),
-                "Write-Error \"BLOCKED\"; exit 2".to_string(),
-            ]
-        } else {
-            vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "echo BLOCKED 1>&2; exit 2".to_string(),
-            ]
-        };
-
-        let session = {
-            let mut session = session;
-            Arc::get_mut(&mut session)
-                .expect("unique arc")
-                .services
-                .hook_runner = crate::hooks::HookRunner::try_new(vec![crate::config::HookConfig {
-                id: Some("deny-tool".to_string()),
-                when: vec!["tool.call.begin".to_string()],
-                matcher: Some("panic_tool".to_string()),
-                command,
-                timeout_ms: Some(2_000),
-                blocking: true,
-                include_output: false,
-                include_patch_contents: false,
-                include_mcp_arguments: false,
-                include_tool_arguments: true,
-            }])
-            .expect("build hook runner");
-            session
-        };
-
-        let registry = ToolRegistry::new(HashMap::from([(
-            "panic_tool".to_string(),
-            Arc::new(PanicTool) as Arc<dyn ToolHandler>,
-        )]));
-        let router = ToolRouter {
-            registry,
-            specs: Vec::new(),
-        };
-
-        let tracker: SharedTurnDiffTracker =
-            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-        let call = ToolCall {
-            tool_name: "panic_tool".to_string(),
-            call_id: "call-1".to_string(),
-            payload: ToolPayload::Function {
-                arguments: "{}".to_string(),
-            },
-        };
-
-        let response = router
-            .dispatch_tool_call(
-                Arc::clone(&session),
-                Arc::clone(&turn_context),
-                tracker,
-                CancellationToken::new(),
-                call,
-            )
-            .await
-            .expect("dispatch ok");
-
-        match response {
-            ResponseInputItem::FunctionCallOutput { output, .. } => {
-                assert_eq!(output.success, Some(false));
-                assert!(
-                    output.content.contains("BLOCKED"),
-                    "expected BLOCKED message, got: {}",
-                    output.content
-                );
-            }
-            other => panic!("expected FunctionCallOutput, got {other:?}"),
         }
     }
 }

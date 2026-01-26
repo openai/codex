@@ -179,7 +179,7 @@ if (-not (Ensure-Command 'cargo')) {
 Write-Host "==> Configuring Rust toolchain per rust-toolchain.toml" -ForegroundColor Cyan
 
 # Pin to the workspace toolchain and install components
-$toolchain = '1.90.0'
+$toolchain = '1.92.0'
 & rustup toolchain install $toolchain --profile minimal | Out-Host
 & rustup default $toolchain | Out-Host
 & rustup component add clippy rustfmt rust-src --toolchain $toolchain | Out-Host

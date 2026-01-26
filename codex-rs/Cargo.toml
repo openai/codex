@@ -35,7 +35,6 @@ members = [
     "stdio-to-uds",
     "otel",
     "tui",
-    "tui2",
     "utils/absolute-path",
     "utils/cargo-bin",
     "utils/git",
@@ -51,9 +50,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-# Use upstream release asベースに、fork識別のプレリリースタグを付与。
-# 例: upstream rust-v0.85.0 -> 0.85.0-mine.0
-version = "0.85.0-mine.0"
+version = "0.89.0-mine.0"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
 # crates created with `cargo new -w ...` automatically inherit the 2024
@@ -95,7 +92,6 @@ codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
-codex-tui2 = { path = "tui2" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-cache = { path = "utils/cache" }
 codex-utils-cargo-bin = { path = "utils/cargo-bin" }
@@ -124,12 +120,12 @@ axum = { version = "0.8", default-features = false }
 base64 = "0.22.1"
 bytes = "1.10.1"
 chardetng = "0.1.17"
-chrono = "0.4.42"
+chrono = "0.4.43"
 clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
 crossterm = "0.28.1"
-ctor = "0.5.0"
+ctor = "0.6.3"
 derive_more = "2"
 diffy = "0.4.2"
 dirs = "6"
@@ -180,7 +176,6 @@ pretty_assertions = "1.4.1"
 pulldown-cmark = "0.10"
 rand = "0.9"
 ratatui = "0.29.0"
-ratatui-core = "0.1.0"
 ratatui-macros = "0.6.0"
 regex = "1.12.2"
 regex-lite = "0.1.8"
@@ -227,7 +222,6 @@ tree-sitter-bash = "0.25"
 zstd = "0.13"
 tree-sitter-highlight = "0.25.10"
 ts-rs = "11"
-tui-scrollbar = "0.2.2"
 uds_windows = "1.1.0"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2"

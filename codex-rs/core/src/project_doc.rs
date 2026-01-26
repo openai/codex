@@ -236,8 +236,7 @@ fn candidate_filenames<'a>(config: &'a Config) -> Vec<&'a str> {
 mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
-    use crate::config::ConfigOverrides;
-    use codex_protocol::protocol::SkillScope;
+    use crate::skills::load_skills;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -251,10 +250,6 @@ mod tests {
         let codex_home = TempDir::new().unwrap();
         let mut config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
-            .harness_overrides(ConfigOverrides {
-                cwd: Some(root.path().to_path_buf()),
-                ..ConfigOverrides::default()
-            })
             .build()
             .await
             .expect("defaults for test should always succeed");
@@ -506,6 +501,14 @@ mod tests {
             "pdf-processing",
             "extract from pdfs",
         );
+
+        let skills = load_skills(&cfg);
+        let res = get_user_instructions(
+            &cfg,
+            skills.errors.is_empty().then_some(skills.skills.as_slice()),
+        )
+        .await
+        .expect("instructions expected");
         let expected_path = dunce::canonicalize(
             cfg.codex_home
                 .join("skills/pdf-processing/SKILL.md")
@@ -513,16 +516,6 @@ mod tests {
         )
         .unwrap_or_else(|_| cfg.codex_home.join("skills/pdf-processing/SKILL.md"));
         let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
-        let skills = vec![SkillMetadata {
-            name: "pdf-processing".to_string(),
-            description: "extract from pdfs".to_string(),
-            short_description: None,
-            path: expected_path.clone(),
-            scope: SkillScope::User,
-        }];
-        let res = get_user_instructions(&cfg, Some(skills.as_slice()))
-            .await
-            .expect("instructions expected");
         let usage_rules = "- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.\n- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.\n- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.\n- How to use a skill (progressive disclosure):\n  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.\n  2) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.\n  3) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.\n  4) If `assets/` or templates exist, reuse them instead of recreating from scratch.\n- Coordination and sequencing:\n  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.\n  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.\n- Context hygiene:\n  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.\n  - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.\n  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.\n- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.";
         let expected = format!(
             "base doc\n\n## Skills\nA skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.\n### Available skills\n- pdf-processing: extract from pdfs (file: {expected_path_str})\n### How to use skills\n{usage_rules}"
@@ -535,20 +528,18 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let cfg = make_config(&tmp, 4096, None).await;
         create_skill(cfg.codex_home.clone(), "linting", "run clippy");
+
+        let skills = load_skills(&cfg);
+        let res = get_user_instructions(
+            &cfg,
+            skills.errors.is_empty().then_some(skills.skills.as_slice()),
+        )
+        .await
+        .expect("instructions expected");
         let expected_path =
             dunce::canonicalize(cfg.codex_home.join("skills/linting/SKILL.md").as_path())
                 .unwrap_or_else(|_| cfg.codex_home.join("skills/linting/SKILL.md"));
         let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
-        let skills = vec![SkillMetadata {
-            name: "linting".to_string(),
-            description: "run clippy".to_string(),
-            short_description: None,
-            path: expected_path.clone(),
-            scope: SkillScope::User,
-        }];
-        let res = get_user_instructions(&cfg, Some(skills.as_slice()))
-            .await
-            .expect("instructions expected");
         let usage_rules = "- Discovery: The list above is the skills available in this session (name + description + file path). Skill bodies live on disk at the listed paths.\n- Trigger rules: If the user names a skill (with `$SkillName` or plain text) OR the task clearly matches a skill's description shown above, you must use that skill for that turn. Multiple mentions mean use them all. Do not carry skills across turns unless re-mentioned.\n- Missing/blocked: If a named skill isn't in the list or the path can't be read, say so briefly and continue with the best fallback.\n- How to use a skill (progressive disclosure):\n  1) After deciding to use a skill, open its `SKILL.md`. Read only enough to follow the workflow.\n  2) If `SKILL.md` points to extra folders such as `references/`, load only the specific files needed for the request; don't bulk-load everything.\n  3) If `scripts/` exist, prefer running or patching them instead of retyping large code blocks.\n  4) If `assets/` or templates exist, reuse them instead of recreating from scratch.\n- Coordination and sequencing:\n  - If multiple skills apply, choose the minimal set that covers the request and state the order you'll use them.\n  - Announce which skill(s) you're using and why (one short line). If you skip an obvious skill, say why.\n- Context hygiene:\n  - Keep context small: summarize long sections instead of pasting them; only load extra files when needed.\n  - Avoid deep reference-chasing: prefer opening only files directly linked from `SKILL.md` unless you're blocked.\n  - When variants exist (frameworks, providers, domains), pick only the relevant reference file(s) and note that choice.\n- Safety and fallback: If a skill can't be applied cleanly (missing files, unclear instructions), state the issue, pick the next-best approach, and continue.";
         let expected = format!(
             "## Skills\nA skill is a set of local instructions to follow that is stored in a `SKILL.md` file. Below is the list of skills that can be used. Each entry includes a name, description, and file path so you can open the source for full instructions when using a specific skill.\n### Available skills\n- linting: run clippy (file: {expected_path_str})\n### How to use skills\n{usage_rules}"

@@ -90,13 +90,19 @@ where
     }
 }
 
-/// Spawn a process using regular pipes (no PTY), returning handles for stdin, output, and exit.
-pub async fn spawn_process(
+#[derive(Clone, Copy)]
+enum PipeStdinMode {
+    Piped,
+    Null,
+}
+
+async fn spawn_process_with_stdin_mode(
     program: &str,
     args: &[String],
     cwd: &Path,
     env: &HashMap<String, String>,
     arg0: &Option<String>,
+    stdin_mode: PipeStdinMode,
 ) -> Result<SpawnedProcess> {
     if program.is_empty() {
         anyhow::bail!("missing program for pipe spawn");
@@ -112,7 +118,7 @@ pub async fn spawn_process(
     #[cfg(unix)]
     unsafe {
         command.pre_exec(move || {
-            crate::process_group::set_process_group()?;
+            crate::process_group::detach_from_tty()?;
             #[cfg(target_os = "linux")]
             crate::process_group::set_parent_death_signal(parent_pid)?;
             Ok(())
@@ -128,7 +134,14 @@ pub async fn spawn_process(
     for arg in args {
         command.arg(arg);
     }
-    command.stdin(Stdio::piped());
+    match stdin_mode {
+        PipeStdinMode::Piped => {
+            command.stdin(Stdio::piped());
+        }
+        PipeStdinMode::Null => {
+            command.stdin(Stdio::null());
+        }
+    }
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
 
@@ -147,18 +160,19 @@ pub async fn spawn_process(
     let (output_tx, _) = broadcast::channel::<Vec<u8>>(256);
     let initial_output_rx = output_tx.subscribe();
 
-    let writer_handle = tokio::spawn({
-        let writer = stdin.map(|w| Arc::new(tokio::sync::Mutex::new(w)));
-        async move {
+    let writer_handle = if let Some(stdin) = stdin {
+        let writer = Arc::new(tokio::sync::Mutex::new(stdin));
+        tokio::spawn(async move {
             while let Some(bytes) = writer_rx.recv().await {
-                if let Some(writer) = &writer {
-                    let mut guard = writer.lock().await;
-                    let _ = guard.write_all(&bytes).await;
-                    let _ = guard.flush().await;
-                }
+                let mut guard = writer.lock().await;
+                let _ = guard.write_all(&bytes).await;
+                let _ = guard.flush().await;
             }
-        }
-    });
+        })
+    } else {
+        drop(writer_rx);
+        tokio::spawn(async {})
+    };
 
     let stdout_handle = stdout.map(|stdout| {
         let output_tx = output_tx.clone();
@@ -229,4 +243,26 @@ pub async fn spawn_process(
         output_rx,
         exit_rx,
     })
+}
+
+/// Spawn a process using regular pipes (no PTY), returning handles for stdin, output, and exit.
+pub async fn spawn_process(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    arg0: &Option<String>,
+) -> Result<SpawnedProcess> {
+    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Piped).await
+}
+
+/// Spawn a process using regular pipes, but close stdin immediately.
+pub async fn spawn_process_no_stdin(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    env: &HashMap<String, String>,
+    arg0: &Option<String>,
+) -> Result<SpawnedProcess> {
+    spawn_process_with_stdin_mode(program, args, cwd, env, arg0, PipeStdinMode::Null).await
 }

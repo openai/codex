@@ -18,6 +18,7 @@ codex_rust_crate(
     ),
     integration_compile_data_extra = [
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
+        "models.json",
         "prompt.md",
     ],
     test_data_extra = [

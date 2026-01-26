@@ -13,6 +13,7 @@ use http::HeaderMap;
 use http::HeaderValue;
 use serde_json::Value;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -23,22 +24,28 @@ use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tracing::debug;
+use tracing::error;
+use tracing::info;
 use tracing::trace;
 use url::Url;
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
 
 pub struct ResponsesWebsocketConnection {
     stream: Arc<Mutex<Option<WsStream>>>,
     // TODO (pakrym): is this the right place for timeout?
     idle_timeout: Duration,
+    server_reasoning_included: bool,
 }
 
 impl ResponsesWebsocketConnection {
-    fn new(stream: WsStream, idle_timeout: Duration) -> Self {
+    fn new(stream: WsStream, idle_timeout: Duration, server_reasoning_included: bool) -> Self {
         Self {
             stream: Arc::new(Mutex::new(Some(stream))),
             idle_timeout,
+            server_reasoning_included,
         }
     }
 
@@ -54,11 +61,17 @@ impl ResponsesWebsocketConnection {
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
         let stream = Arc::clone(&self.stream);
         let idle_timeout = self.idle_timeout;
+        let server_reasoning_included = self.server_reasoning_included;
         let request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
 
         tokio::spawn(async move {
+            if server_reasoning_included {
+                let _ = tx_event
+                    .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
+                    .await;
+            }
             let mut guard = stream.lock().await;
             let Some(ws_stream) = guard.as_mut() else {
                 let _ = tx_event
@@ -100,18 +113,23 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
     pub async fn connect(
         &self,
         extra_headers: HeaderMap,
+        turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Result<ResponsesWebsocketConnection, ApiError> {
-        let ws_url = Url::parse(&self.provider.url_for_path("responses"))
+        let ws_url = self
+            .provider
+            .websocket_url_for_path("responses")
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
 
         let mut headers = self.provider.headers.clone();
         headers.extend(extra_headers);
         apply_auth_headers(&mut headers, &self.auth);
 
-        let stream = connect_websocket(ws_url, headers).await?;
+        let (stream, server_reasoning_included) =
+            connect_websocket(ws_url, headers, turn_state).await?;
         Ok(ResponsesWebsocketConnection::new(
             stream,
             self.provider.stream_idle_timeout,
+            server_reasoning_included,
         ))
     }
 }
@@ -130,17 +148,45 @@ fn apply_auth_headers(headers: &mut HeaderMap, auth: &impl AuthProvider) {
     }
 }
 
-async fn connect_websocket(url: Url, headers: HeaderMap) -> Result<WsStream, ApiError> {
+async fn connect_websocket(
+    url: Url,
+    headers: HeaderMap,
+    turn_state: Option<Arc<OnceLock<String>>>,
+) -> Result<(WsStream, bool), ApiError> {
+    info!("connecting to websocket: {url}");
+
     let mut request = url
         .clone()
         .into_client_request()
         .map_err(|err| ApiError::Stream(format!("failed to build websocket request: {err}")))?;
     request.headers_mut().extend(headers);
 
-    let (stream, _) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|err| map_ws_error(err, &url))?;
-    Ok(stream)
+    let response = tokio_tungstenite::connect_async(request).await;
+
+    let (stream, response) = match response {
+        Ok((stream, response)) => {
+            info!(
+                "successfully connected to websocket: {url}, headers: {:?}",
+                response.headers()
+            );
+            (stream, response)
+        }
+        Err(err) => {
+            error!("failed to connect to websocket: {err}, url: {url}");
+            return Err(map_ws_error(err, &url));
+        }
+    };
+
+    let reasoning_included = response.headers().contains_key(X_REASONING_INCLUDED_HEADER);
+    if let Some(turn_state) = turn_state
+        && let Some(header_value) = response
+            .headers()
+            .get(X_CODEX_TURN_STATE_HEADER)
+            .and_then(|value| value.to_str().ok())
+    {
+        let _ = turn_state.set(header_value.to_string());
+    }
+    Ok((stream, reasoning_included))
 }
 
 fn map_ws_error(err: WsError, url: &Url) -> ApiError {
@@ -242,7 +288,7 @@ async fn run_websocket_response_stream(
             Message::Pong(_) => {}
             Message::Close(_) => {
                 return Err(ApiError::Stream(
-                    "websocket closed before response.completed".into(),
+                    "websocket closed by server before response.completed".into(),
                 ));
             }
             _ => {}

@@ -27,8 +27,7 @@ Precedence is **top overrides bottom**:
 1. **MDM** managed preferences (macOS only)
 2. **System** managed config (e.g. `managed_config.toml`)
 3. **Session flags** (CLI overrides, applied as dotted-path TOML writes)
-4. **Cwd-local** config (`./.codex/config.toml` in the session working directory)
-5. **User** config (`$CODEX_HOME/config.toml`) **only when no cwd-local config exists**
+4. **User** config (`config.toml`)
 
 This is what `ConfigLayerStack::effective_config()` implements.
 

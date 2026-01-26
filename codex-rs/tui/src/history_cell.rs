@@ -19,6 +19,7 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::key_hint;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
@@ -43,12 +44,13 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
-use codex_protocol::ask_user_question::AskUserQuestionRequest;
-use codex_protocol::ask_user_question::AskUserQuestionType;
+use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::user_input::TextElement;
+use crossterm::event::KeyCode;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -56,6 +58,7 @@ use mcp_types::Resource;
 use mcp_types::ResourceLink;
 use mcp_types::ResourceTemplate;
 use ratatui::prelude::*;
+use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Styled;
@@ -72,118 +75,6 @@ use std::time::Instant;
 use tracing::error;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
-
-#[derive(Debug)]
-pub(crate) struct SubAgentRunCell {
-    call_id: String,
-    name: String,
-    description: String,
-    color: Option<Color>,
-    prompt: String,
-    started: Option<Instant>,
-    completed: Option<(i64, bool)>,
-    animations_enabled: bool,
-}
-
-pub(crate) fn new_active_subagent_run(
-    call_id: String,
-    name: String,
-    description: String,
-    color: Option<String>,
-    prompt: String,
-    animations_enabled: bool,
-) -> SubAgentRunCell {
-    SubAgentRunCell {
-        call_id,
-        name,
-        description,
-        color: color.as_deref().and_then(parse_named_color),
-        prompt,
-        started: Some(Instant::now()),
-        completed: None,
-        animations_enabled,
-    }
-}
-
-impl SubAgentRunCell {
-    pub(crate) fn call_id(&self) -> &str {
-        &self.call_id
-    }
-
-    pub(crate) fn complete(&mut self, duration_ms: i64, success: bool) {
-        self.completed = Some((duration_ms, success));
-    }
-
-    pub(crate) fn mark_failed(&mut self) {
-        let duration_ms = self
-            .started
-            .as_ref()
-            .map(|t| i64::try_from(t.elapsed().as_millis()).unwrap_or(i64::MAX))
-            .unwrap_or(0);
-        self.complete(duration_ms, false);
-    }
-
-    fn header_line(&self) -> Line<'static> {
-        let agent_span = match self.color {
-            Some(c) => Span::from(format!("@{}", self.name))
-                .style(Style::default().fg(c).add_modifier(Modifier::BOLD)),
-            None => format!("@{}", self.name).bold(),
-        };
-
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.push(spinner(self.started, self.animations_enabled));
-        spans.push(" Subagent ".into());
-        spans.push(agent_span);
-        if !self.description.is_empty() {
-            spans.push(" ".into());
-            spans.push(self.description.clone().dim());
-        }
-        if let Some((duration_ms, success)) = self.completed {
-            let status = if success { "ok" } else { "error" };
-            spans.push(" ".into());
-            spans.push(format!("({status}, {duration_ms}ms)").dim());
-        }
-        Line::from(spans)
-    }
-
-    fn prompt_lines(&self, width: u16) -> Vec<Line<'static>> {
-        if self.prompt.trim().is_empty() {
-            return Vec::new();
-        }
-
-        // Use textwrap for plain-string wrapping as recommended.
-        let options = textwrap::Options::new(width as usize)
-            .initial_indent("  prompt: ")
-            .subsequent_indent("          ");
-        textwrap::wrap(&self.prompt, options)
-            .into_iter()
-            .map(|l| Line::from(l.into_owned().dim()))
-            .collect()
-    }
-}
-
-impl HistoryCell for SubAgentRunCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut out = Vec::new();
-        out.push(self.header_line());
-        out.extend(self.prompt_lines(width));
-        out
-    }
-}
-
-fn parse_named_color(raw: &str) -> Option<Color> {
-    match raw.to_ascii_lowercase().as_str() {
-        "black" => Some(Color::Black),
-        "red" => Some(Color::Red),
-        "green" => Some(Color::Green),
-        "yellow" => Some(Color::Yellow),
-        "blue" => Some(Color::Blue),
-        "magenta" => Some(Color::Magenta),
-        "cyan" => Some(Color::Cyan),
-        "gray" | "grey" => Some(Color::Gray),
-        _ => None,
-    }
-}
 
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
@@ -272,6 +163,75 @@ impl dyn HistoryCell {
 #[derive(Debug)]
 pub(crate) struct UserHistoryCell {
     pub message: String,
+    pub text_elements: Vec<TextElement>,
+    #[allow(dead_code)]
+    pub local_image_paths: Vec<PathBuf>,
+}
+
+/// Build logical lines for a user message with styled text elements.
+///
+/// This preserves explicit newlines while interleaving element spans and skips
+/// malformed byte ranges instead of panicking during history rendering.
+fn build_user_message_lines_with_elements(
+    message: &str,
+    elements: &[TextElement],
+    style: Style,
+    element_style: Style,
+) -> Vec<Line<'static>> {
+    let mut elements = elements.to_vec();
+    elements.sort_by_key(|e| e.byte_range.start);
+    let mut offset = 0usize;
+    let mut raw_lines: Vec<Line<'static>> = Vec::new();
+    for line_text in message.split('\n') {
+        let line_start = offset;
+        let line_end = line_start + line_text.len();
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        // Track how much of the line we've emitted to interleave plain and styled spans.
+        let mut cursor = line_start;
+        for elem in &elements {
+            let start = elem.byte_range.start.max(line_start);
+            let end = elem.byte_range.end.min(line_end);
+            if start >= end {
+                continue;
+            }
+            let rel_start = start - line_start;
+            let rel_end = end - line_start;
+            // Guard against malformed UTF-8 byte ranges from upstream data; skip
+            // invalid elements rather than panicking while rendering history.
+            if !line_text.is_char_boundary(rel_start) || !line_text.is_char_boundary(rel_end) {
+                continue;
+            }
+            let rel_cursor = cursor - line_start;
+            if cursor < start
+                && line_text.is_char_boundary(rel_cursor)
+                && let Some(segment) = line_text.get(rel_cursor..rel_start)
+            {
+                spans.push(Span::from(segment.to_string()));
+            }
+            if let Some(segment) = line_text.get(rel_start..rel_end) {
+                spans.push(Span::styled(segment.to_string(), element_style));
+                cursor = end;
+            }
+        }
+        let rel_cursor = cursor - line_start;
+        if cursor < line_end
+            && line_text.is_char_boundary(rel_cursor)
+            && let Some(segment) = line_text.get(rel_cursor..)
+        {
+            spans.push(Span::from(segment.to_string()));
+        }
+        let line = if spans.is_empty() {
+            Line::from(line_text.to_string()).style(style)
+        } else {
+            Line::from(spans).style(style)
+        };
+        raw_lines.push(line);
+        // Split on '\n' so any '\r' stays in the line; advancing by 1 accounts
+        // for the separator byte.
+        offset = line_end + 1;
+    }
+
+    raw_lines
 }
 
 impl HistoryCell for UserHistoryCell {
@@ -285,13 +245,28 @@ impl HistoryCell for UserHistoryCell {
             .max(1);
 
         let style = user_message_style();
+        let element_style = style.fg(Color::Cyan);
 
-        let wrapped = word_wrap_lines(
-            self.message.lines().map(|l| Line::from(l).style(style)),
-            // Wrap algorithm matches textarea.rs.
-            RtOptions::new(usize::from(wrap_width))
-                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
-        );
+        let wrapped = if self.text_elements.is_empty() {
+            word_wrap_lines(
+                self.message.split('\n').map(|l| Line::from(l).style(style)),
+                // Wrap algorithm matches textarea.rs.
+                RtOptions::new(usize::from(wrap_width))
+                    .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+            )
+        } else {
+            let raw_lines = build_user_message_lines_with_elements(
+                &self.message,
+                &self.text_elements,
+                style,
+                element_style,
+            );
+            word_wrap_lines(
+                raw_lines,
+                RtOptions::new(usize::from(wrap_width))
+                    .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
+            )
+        };
 
         lines.push(Line::from("").style(style));
         lines.extend(prefix_lines(wrapped, "› ".bold().dim(), "  ".into()));
@@ -931,6 +906,8 @@ pub(crate) fn new_session_info(
     requested_model: &str,
     event: SessionConfiguredEvent,
     is_first_event: bool,
+    is_collaboration: bool,
+    collaboration_mode: CollaborationMode,
 ) -> SessionInfoCell {
     let SessionConfiguredEvent {
         model,
@@ -943,6 +920,8 @@ pub(crate) fn new_session_info(
         reasoning_effort,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
+        is_collaboration,
+        collaboration_mode,
     );
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
@@ -967,6 +946,11 @@ pub(crate) fn new_session_info(
                 "  ".into(),
                 "/approvals".into(),
                 " - choose what Codex can do without approval".dim(),
+            ]),
+            Line::from(vec![
+                "  ".into(),
+                "/permissions".into(),
+                " - choose what Codex is allowed to do".dim(),
             ]),
             Line::from(vec![
                 "  ".into(),
@@ -1000,8 +984,16 @@ pub(crate) fn new_session_info(
     SessionInfoCell(CompositeHistoryCell { parts })
 }
 
-pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
-    UserHistoryCell { message }
+pub(crate) fn new_user_prompt(
+    message: String,
+    text_elements: Vec<TextElement>,
+    local_image_paths: Vec<PathBuf>,
+) -> UserHistoryCell {
+    UserHistoryCell {
+        message,
+        text_elements,
+        local_image_paths,
+    }
 }
 
 #[derive(Debug)]
@@ -1011,6 +1003,8 @@ pub(crate) struct SessionHeaderHistoryCell {
     model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
+    is_collaboration: bool,
+    collaboration_mode: CollaborationMode,
 }
 
 impl SessionHeaderHistoryCell {
@@ -1019,6 +1013,8 @@ impl SessionHeaderHistoryCell {
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
         version: &'static str,
+        is_collaboration: bool,
+        collaboration_mode: CollaborationMode,
     ) -> Self {
         Self::new_with_style(
             model,
@@ -1026,6 +1022,8 @@ impl SessionHeaderHistoryCell {
             reasoning_effort,
             directory,
             version,
+            is_collaboration,
+            collaboration_mode,
         )
     }
 
@@ -1035,6 +1033,8 @@ impl SessionHeaderHistoryCell {
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
         version: &'static str,
+        is_collaboration: bool,
+        collaboration_mode: CollaborationMode,
     ) -> Self {
         Self {
             version,
@@ -1042,6 +1042,20 @@ impl SessionHeaderHistoryCell {
             model_style,
             reasoning_effort,
             directory,
+            is_collaboration,
+            collaboration_mode,
+        }
+    }
+
+    fn collaboration_mode_label(&self) -> Option<&'static str> {
+        if !self.is_collaboration {
+            return None;
+        }
+        match &self.collaboration_mode {
+            CollaborationMode::Plan(_) => Some("Plan"),
+            CollaborationMode::PairProgramming(_) => Some("Pair Programming"),
+            CollaborationMode::Execute(_) => Some("Execute"),
+            CollaborationMode::Custom(_) => None,
         }
     }
 
@@ -1102,25 +1116,51 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
+        const CHANGE_MODE_HINT_EXPLANATION: &str = " to change mode";
         const DIR_LABEL: &str = "directory:";
         let label_width = DIR_LABEL.len();
-        let model_label = format!(
-            "{model_label:<label_width$}",
-            model_label = "model:",
-            label_width = label_width
-        );
-        let reasoning_label = self.reasoning_label();
-        let mut model_spans: Vec<Span<'static>> = vec![
-            Span::from(format!("{model_label} ")).dim(),
-            Span::styled(self.model.clone(), self.model_style),
-        ];
-        if let Some(reasoning) = reasoning_label {
-            model_spans.push(Span::from(" "));
-            model_spans.push(Span::from(reasoning));
-        }
-        model_spans.push("   ".dim());
-        model_spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
-        model_spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
+
+        let model_spans: Vec<Span<'static>> = if self.is_collaboration {
+            // Render collaboration mode instead of model
+            let collab_label = format!(
+                "{collab_label:<label_width$}",
+                collab_label = "mode:",
+                label_width = label_width
+            );
+            let mut spans = vec![Span::from(format!("{collab_label} ")).dim()];
+            if self.model == "loading" {
+                spans.push(Span::styled(self.model.clone(), self.model_style));
+            } else if let Some(mode_label) = self.collaboration_mode_label() {
+                spans.push(Span::styled(mode_label.to_string(), self.model_style));
+            } else {
+                spans.push(Span::styled("Custom", self.model_style));
+            }
+            spans.push("   ".dim());
+            let shift_tab_span: Span<'static> = key_hint::shift(KeyCode::Tab).into();
+            spans.push(shift_tab_span.cyan());
+            spans.push(CHANGE_MODE_HINT_EXPLANATION.dim());
+            spans
+        } else {
+            // Render model as before
+            let model_label = format!(
+                "{model_label:<label_width$}",
+                model_label = "model:",
+                label_width = label_width
+            );
+            let reasoning_label = self.reasoning_label();
+            let mut spans = vec![
+                Span::from(format!("{model_label} ")).dim(),
+                Span::styled(self.model.clone(), self.model_style),
+            ];
+            if let Some(reasoning) = reasoning_label {
+                spans.push(Span::from(" "));
+                spans.push(Span::from(reasoning));
+            }
+            spans.push("   ".dim());
+            spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
+            spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
+            spans
+        };
 
         let dir_label = format!("{DIR_LABEL:<label_width$}");
         let dir_prefix = format!("{dir_label} ");
@@ -1445,7 +1485,8 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         "  • No MCP servers configured.".italic().into(),
         Line::from(vec![
             "    See the ".into(),
-            "\u{1b}]8;;https://github.com/openai/codex/blob/main/docs/config.md#mcp_servers\u{7}MCP docs\u{1b}]8;;\u{7}".underlined(),
+            "\u{1b}]8;;https://developers.openai.com/codex/mcp\u{7}MCP docs\u{1b}]8;;\u{7}"
+                .underlined(),
             " to configure them.".into(),
         ])
         .style(Style::default().add_modifier(Modifier::DIM)),
@@ -1629,154 +1670,6 @@ pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHist
     PlainHistoryCell { lines }
 }
 
-#[derive(Debug)]
-pub(crate) struct AskUserQuestionSummaryCell {
-    title: String,
-    request: AskUserQuestionRequest,
-    answers: HashMap<String, serde_json::Value>,
-    cancelled: bool,
-}
-
-impl AskUserQuestionSummaryCell {
-    pub(crate) fn new(
-        title: String,
-        request: AskUserQuestionRequest,
-        answers: HashMap<String, serde_json::Value>,
-        cancelled: bool,
-    ) -> Self {
-        Self {
-            title,
-            request,
-            answers,
-            cancelled,
-        }
-    }
-}
-
-impl HistoryCell for AskUserQuestionSummaryCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        let mut header: Vec<Span<'static>> = vec![
-            "• ".dim(),
-            "AskUserQuestion".bold(),
-            " ".into(),
-            self.title.clone().into(),
-        ];
-        if self.cancelled {
-            header.push(" (cancelled)".dim().italic());
-        }
-        lines.push(header.into());
-
-        let md = {
-            let mut out = String::new();
-
-            for q in &self.request.questions {
-                let qid = q.id.as_str();
-                out.push_str(&format!("- **{}**\n", q.prompt.trim()));
-
-                let raw_answer = self.answers.get(qid);
-                let selected_values: Vec<String> = match raw_answer {
-                    None => Vec::new(),
-                    Some(serde_json::Value::String(s)) => vec![s.clone()],
-                    Some(serde_json::Value::Array(arr)) => arr
-                        .iter()
-                        .map(|v| {
-                            v.as_str()
-                                .map(str::to_string)
-                                .unwrap_or_else(|| v.to_string())
-                        })
-                        .collect(),
-                    Some(other) => vec![other.to_string()],
-                };
-
-                match q.question_type {
-                    AskUserQuestionType::Text => {
-                        let text = selected_values.first().map(String::as_str).unwrap_or("");
-                        if text.trim().is_empty() {
-                            out.push_str("  - _No answer_\n");
-                        } else {
-                            out.push_str(&format!("  - Answer: {}\n", text.trim()));
-                        }
-                    }
-                    AskUserQuestionType::SingleSelect | AskUserQuestionType::MultiSelect => {
-                        let options = q.options.as_deref().unwrap_or_default();
-                        let option_values = options
-                            .iter()
-                            .map(|opt| opt.value.as_str())
-                            .collect::<std::collections::HashSet<_>>();
-
-                        let selected_option_values = selected_values
-                            .iter()
-                            .filter_map(|v| {
-                                option_values.contains(v.as_str()).then_some(v.as_str())
-                            })
-                            .collect::<std::collections::HashSet<_>>();
-                        let other_values = selected_values
-                            .iter()
-                            .filter(|v| !option_values.contains(v.as_str()))
-                            .map(|v| v.trim().to_string())
-                            .filter(|v| !v.is_empty())
-                            .collect::<Vec<_>>();
-
-                        if options.is_empty() && selected_values.is_empty() {
-                            out.push_str("  - _No selection_\n");
-                            continue;
-                        }
-
-                        for opt in options {
-                            let checked = if selected_option_values.contains(opt.value.as_str()) {
-                                "x"
-                            } else {
-                                " "
-                            };
-                            let rec = if opt.recommended.unwrap_or(false) {
-                                " (Recommended)"
-                            } else {
-                                ""
-                            };
-                            out.push_str(&format!("  - [{checked}] {}{rec}\n", opt.label));
-                        }
-
-                        let allow_other = q.allow_other.unwrap_or(false);
-                        if allow_other {
-                            let checked = if other_values.is_empty() { " " } else { "x" };
-                            let suffix = if other_values.is_empty() {
-                                String::new()
-                            } else {
-                                format!(": {}", other_values.join(", "))
-                            };
-                            out.push_str(&format!("  - [{checked}] Other…{suffix}\n"));
-                        } else if !other_values.is_empty() {
-                            out.push_str(&format!("  - Answer: {}\n", other_values.join(", ")));
-                        }
-
-                        if options.is_empty() && !other_values.is_empty() {
-                            out.push_str(&format!("  - Answer: {}\n", other_values.join(", ")));
-                        }
-
-                        if !options.is_empty() && selected_values.is_empty() {
-                            out.push_str("  - _No selection_\n");
-                        }
-                    }
-                }
-            }
-
-            out.trim().to_string()
-        };
-
-        let mut detail_lines: Vec<Line<'static>> = Vec::new();
-        if md.is_empty() {
-            detail_lines.push(Line::from("(no questions)".dim().italic()));
-        } else {
-            let inner_width = width.saturating_sub(4) as usize;
-            append_markdown(&md, Some(inner_width.max(1)), &mut detail_lines);
-        }
-
-        lines.extend(prefix_lines(detail_lines, "  └ ".dim(), "    ".into()));
-        lines
-    }
-}
-
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // Use a hair space (U+200A) to create a subtle, near-invisible separation
     // before the text. VS16 is intentionally omitted to keep spacing tighter
@@ -1928,10 +1821,16 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
 }
 
 #[derive(Debug)]
+/// A visual divider between turns, optionally showing how long the assistant "worked for".
+///
+/// This separator is only emitted for turns that performed concrete work (e.g., running commands,
+/// applying patches, making MCP tool calls), so purely conversational turns do not show an empty
+/// divider.
 pub struct FinalMessageSeparator {
     elapsed_seconds: Option<u64>,
 }
 impl FinalMessageSeparator {
+    /// Creates a separator; `elapsed_seconds` typically comes from the status indicator timer.
     pub(crate) fn new(elapsed_seconds: Option<u64>) -> Self {
         Self { elapsed_seconds }
     }
@@ -1989,6 +1888,8 @@ mod tests {
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
     use codex_core::protocol::McpAuthStatus;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::Settings;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
@@ -2445,6 +2346,12 @@ mod tests {
             Some(ReasoningEffortConfig::High),
             std::env::temp_dir(),
             "test",
+            false,
+            CollaborationMode::Custom(Settings {
+                model: "gpt-4o".to_string(),
+                reasoning_effort: Some(ReasoningEffortConfig::High),
+                developer_instructions: None,
+            }),
         );
 
         let lines = render_lines(&cell.display_lines(80));
@@ -2837,6 +2744,8 @@ mod tests {
         let msg = "one two three four five six seven";
         let cell = UserHistoryCell {
             message: msg.to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
         };
 
         // Small width to force wrapping more clearly. Effective wrap width is width-2 due to the ▌ prefix and trailing space.

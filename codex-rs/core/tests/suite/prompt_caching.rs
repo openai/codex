@@ -11,6 +11,8 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::UserInput;
@@ -22,6 +24,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
 fn text_user_input(text: String) -> serde_json::Value {
@@ -88,7 +91,8 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.model = Some("gpt-5.1-codex-max".to_string());
             // Keep tool expectations stable when the default web_search mode changes.
-            config.web_search_mode = WebSearchMode::Cached;
+            config.web_search_mode = Some(WebSearchMode::Cached);
+            config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
         .await?;
@@ -132,7 +136,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "list_mcp_resource_templates",
         "read_mcp_resource",
         "update_plan",
-        "run_subagent",
+        "request_user_input",
         "apply_patch",
         "web_search",
         "view_image",
@@ -174,6 +178,7 @@ async fn codex_mini_latest_tools() -> anyhow::Result<()> {
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.features.disable(Feature::ApplyPatchFreeform);
+            config.features.enable(Feature::CollaborationModes);
             config.model = Some("codex-mini-latest".to_string());
         })
         .build(&server)
@@ -238,6 +243,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let TestCodex { codex, config, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
+            config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
         .await?;
@@ -314,6 +320,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
+            config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
         .await?;
@@ -345,6 +352,8 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
+            collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -376,15 +385,18 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
         "content": [ { "type": "input_text", "text": "hello 2" } ]
     });
     let expected_permissions_msg = body1["input"][0].clone();
-    // After overriding the turn context, emit a new permissions message.
     let body1_input = body1["input"].as_array().expect("input array");
+    // After overriding the turn context, emit two updated permissions messages.
     let expected_permissions_msg_2 = body2["input"][body1_input.len()].clone();
+    let expected_permissions_msg_3 = body2["input"][body1_input.len() + 1].clone();
     assert_ne!(
         expected_permissions_msg_2, expected_permissions_msg,
         "expected updated permissions message after override"
     );
-    let mut expected_body2 = body1["input"].as_array().expect("input array").to_vec();
+    assert_eq!(expected_permissions_msg_2, expected_permissions_msg_3);
+    let mut expected_body2 = body1_input.to_vec();
     expected_body2.push(expected_permissions_msg_2);
+    expected_body2.push(expected_permissions_msg_3);
     expected_body2.push(expected_user_message_2);
     assert_eq!(body2["input"], serde_json::Value::Array(expected_body2));
 
@@ -400,14 +412,22 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
 
     let TestCodex { codex, .. } = test_codex().build(&server).await?;
 
+    let collaboration_mode = CollaborationMode::Custom(Settings {
+        model: "gpt-5.1".to_string(),
+        reasoning_effort: Some(ReasoningEffort::High),
+        developer_instructions: None,
+    });
+
     codex
         .submit(Op::OverrideTurnContext {
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: None,
-            model: None,
-            effort: None,
+            model: Some("gpt-5.1-codex".to_string()),
+            effort: Some(Some(ReasoningEffort::Low)),
             summary: None,
+            collaboration_mode: Some(collaboration_mode),
+            personality: None,
         })
         .await?;
 
@@ -424,6 +444,13 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let body = req.single_request().body_json();
+    assert_eq!(body["model"].as_str(), Some("gpt-5.1"));
+    assert_eq!(
+        body.get("reasoning")
+            .and_then(|reasoning| reasoning.get("effort"))
+            .and_then(|value| value.as_str()),
+        Some("high")
+    );
     let input = body["input"]
         .as_array()
         .expect("input array must be present");
@@ -518,6 +545,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
+            config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
         .await?;
@@ -555,7 +583,9 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
+            collaboration_mode: None,
             final_output_json_schema: None,
+            personality: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -624,6 +654,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
+            config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
         .await?;
@@ -647,7 +678,9 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             model: default_model.clone(),
             effort: default_effort,
             summary: default_summary,
+            collaboration_mode: None,
             final_output_json_schema: None,
+            personality: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -664,7 +697,9 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             model: default_model.clone(),
             effort: default_effort,
             summary: default_summary,
+            collaboration_mode: None,
             final_output_json_schema: None,
+            personality: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -719,6 +754,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
+            config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
         .await?;
@@ -742,7 +778,9 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             model: default_model,
             effort: default_effort,
             summary: default_summary,
+            collaboration_mode: None,
             final_output_json_schema: None,
+            personality: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -759,7 +797,9 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             model: "o3".to_string(),
             effort: Some(ReasoningEffort::High),
             summary: ReasoningSummary::Detailed,
+            collaboration_mode: None,
             final_output_json_schema: None,
+            personality: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
