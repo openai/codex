@@ -2724,7 +2724,11 @@ mod handlers {
             .into_iter()
             .map(|(name, tool)| (name, tool.tool))
             .collect();
-        let builder = build_specs(&turn_context.tools_config, Some(mcp_tools));
+        let builder = build_specs(
+            &turn_context.tools_config,
+            Some(mcp_tools),
+            turn_context.dynamic_tools.as_slice(),
+        );
         let (specs, _registry) = builder.build();
         let mut tools: Vec<String> = specs
             .into_iter()
@@ -3344,7 +3348,11 @@ async fn run_explicit_mcp_tool_calls(
         .map(|(name, tool)| (name, tool.tool))
         .collect::<HashMap<_, _>>();
 
-    let router = ToolRouter::from_config(&turn_context.tools_config, Some(mcp_tools.clone()));
+    let router = ToolRouter::from_config(
+        &turn_context.tools_config,
+        Some(mcp_tools.clone()),
+        turn_context.dynamic_tools.as_slice(),
+    );
     let mut items = Vec::new();
 
     for call in calls {
@@ -3416,7 +3424,11 @@ async fn run_explicit_mcp_tool_calls_via_search(
         .map(|(name, tool)| (name, tool.tool))
         .collect::<HashMap<_, _>>();
 
-    let router = ToolRouter::from_config(&turn_context.tools_config, Some(mcp_tools.clone()));
+    let router = ToolRouter::from_config(
+        &turn_context.tools_config,
+        Some(mcp_tools.clone()),
+        turn_context.dynamic_tools.as_slice(),
+    );
     let mut items = Vec::new();
 
     for call in calls {

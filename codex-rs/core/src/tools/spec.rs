@@ -1758,7 +1758,6 @@ mod tests {
                 external_web_access: Some(true),
             },
             create_view_image_tool(),
-            create_mcp_search_tool(),
         ] {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
@@ -2300,6 +2299,7 @@ mod tests {
                     description: Some("a".repeat(50)),
                 },
             )])),
+            &[],
         )
         .build();
 
@@ -2348,6 +2348,7 @@ mod tests {
                     description: Some(long_description.clone()),
                 },
             )])),
+            &[],
         )
         .build();
 
