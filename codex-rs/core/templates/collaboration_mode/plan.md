@@ -28,6 +28,7 @@ You SHOULD ask many questions, but each question must:
 - materially change the spec/plan, OR
 - confirm/lock an assumption, OR
 - choose between meaningful tradeoffs.
+- not be answerable by non-mutating commands
 Batch questions (e.g., 4–10) per `request_user_input` call to keep momentum.
 
 ## Two kinds of unknowns (treat differently)
