@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/ask_user_question/mod.rs
+assertion_line: 772
+expression: "render_snapshot(&overlay, area)"
+---
+←   ☑  Backend   ☐  Database   ✓  Submit                                               →  
+                                                                                          
+Review your answers                                                                       
+                                                                                          
+Backend: Next.js API Routes                                                               
+Database:                                                                                 
+                                                                                          
+                                                                                          
+[ Submit ]  [ Cancel ]                                                                    
+                                                                                          
+                                                                                          
+──────────────────────────────────────────────────────────────────────────────────────────
+←/→ tabs                                                                                  
+──────────────────────────────────────────────────────────────────────────────────────────
+↑/↓ move | enter select/next | esc cancel                                                 
+──────────────────────────────────────────────────────────────────────────────────────────

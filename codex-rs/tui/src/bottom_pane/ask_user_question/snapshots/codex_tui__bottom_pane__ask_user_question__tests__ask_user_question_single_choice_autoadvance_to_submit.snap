@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/ask_user_question/mod.rs
+assertion_line: 645
+expression: "render_snapshot(&overlay, area)"
+---
+←   ☑  Backend   ✓  Submit                                                             →  
+                                                                                          
+Review your answers                                                                       
+                                                                                          
+Backend: Express.js                                                                       
+                                                                                          
+                                                                                          
+                                                                                          
+[ Submit ]  [ Cancel ]                                                                    
+                                                                                          
+                                                                                          
+──────────────────────────────────────────────────────────────────────────────────────────
+←/→ tabs                                                                                  
+──────────────────────────────────────────────────────────────────────────────────────────
+↑/↓ move | enter select/next | esc cancel                                                 
+──────────────────────────────────────────────────────────────────────────────────────────

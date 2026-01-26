@@ -1,5 +1,6 @@
 use crate::bottom_pane::ApprovalRequest;
 use crate::render::renderable::Renderable;
+use codex_protocol::ask_user_question::AskUserQuestionEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use crossterm::event::KeyEvent;
 
@@ -42,6 +43,14 @@ pub(crate) trait BottomPaneView: Renderable {
         &mut self,
         request: RequestUserInputEvent,
     ) -> Option<RequestUserInputEvent> {
+        Some(request)
+    }
+
+    /// Try to handle ask_user_question; return the original value if not consumed.
+    fn try_consume_ask_user_question_request(
+        &mut self,
+        request: AskUserQuestionEvent,
+    ) -> Option<AskUserQuestionEvent> {
         Some(request)
     }
 }

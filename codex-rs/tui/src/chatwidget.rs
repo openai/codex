@@ -92,6 +92,7 @@ use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
+use codex_protocol::ask_user_question::AskUserQuestionEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
@@ -1311,6 +1312,14 @@ impl ChatWidget {
         );
     }
 
+    fn on_ask_user_question(&mut self, ev: AskUserQuestionEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_ask_user_question(ev),
+            |s| s.handle_ask_user_question_now(ev2),
+        );
+    }
+
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         if is_unified_exec_source(ev.source) {
@@ -1794,6 +1803,12 @@ impl ChatWidget {
     pub(crate) fn handle_request_user_input_now(&mut self, ev: RequestUserInputEvent) {
         self.flush_answer_stream_with_separator();
         self.bottom_pane.push_user_input_request(ev);
+        self.request_redraw();
+    }
+
+    pub(crate) fn handle_ask_user_question_now(&mut self, ev: AskUserQuestionEvent) {
+        self.flush_answer_stream_with_separator();
+        self.bottom_pane.push_ask_user_question_request(ev);
         self.request_redraw();
     }
 
@@ -2982,6 +2997,9 @@ impl ChatWidget {
             }
             EventMsg::RequestUserInput(ev) => {
                 self.on_request_user_input(ev);
+            }
+            EventMsg::AskUserQuestion(ev) => {
+                self.on_ask_user_question(ev);
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),

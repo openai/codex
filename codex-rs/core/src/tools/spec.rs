@@ -618,6 +618,108 @@ fn create_request_user_input_tool() -> ToolSpec {
     })
 }
 
+fn create_ask_user_question_tool() -> ToolSpec {
+    let mut option_props = BTreeMap::new();
+    option_props.insert(
+        "label".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "User-facing label (1-5 words). For custom options, this is shown as a placeholder."
+                    .to_string(),
+            ),
+        },
+    );
+    option_props.insert(
+        "description".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "One short sentence explaining impact/tradeoff if selected.".to_string(),
+            ),
+        },
+    );
+    option_props.insert(
+        "custom".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "When true, this option's label is provided by the user via text entry."
+                    .to_string(),
+            ),
+        },
+    );
+
+    let options_schema = JsonSchema::Array {
+        description: Some(
+            "Selectable options. Include at most one `custom: true` option per question to let the user enter their own choice."
+                .to_string(),
+        ),
+        items: Box::new(JsonSchema::Object {
+            properties: option_props,
+            required: Some(vec!["label".to_string(), "description".to_string()]),
+            additional_properties: Some(false.into()),
+        }),
+    };
+
+    let kind_schema = JsonSchema::String {
+        description: Some("Question kind: `single_choice` or `multiple_choice`.".to_string()),
+    };
+
+    let mut question_props = BTreeMap::new();
+    question_props.insert(
+        "id".to_string(),
+        JsonSchema::String {
+            description: Some("Stable identifier for mapping answers (snake_case).".to_string()),
+        },
+    );
+    question_props.insert(
+        "header".to_string(),
+        JsonSchema::String {
+            description: Some("Short header label shown in the UI tab.".to_string()),
+        },
+    );
+    question_props.insert(
+        "question".to_string(),
+        JsonSchema::String {
+            description: Some("Prompt shown to the user.".to_string()),
+        },
+    );
+    question_props.insert("kind".to_string(), kind_schema);
+    question_props.insert("options".to_string(), options_schema);
+
+    let questions_schema = JsonSchema::Array {
+        description: Some(
+            "Questions to show the user. Each question becomes its own tab, plus a final Submit tab."
+                .to_string(),
+        ),
+        items: Box::new(JsonSchema::Object {
+            properties: question_props,
+            required: Some(vec![
+                "id".to_string(),
+                "header".to_string(),
+                "question".to_string(),
+                "kind".to_string(),
+                "options".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        }),
+    };
+
+    let mut properties = BTreeMap::new();
+    properties.insert("questions".to_string(), questions_schema);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "ask_user_question".to_string(),
+        description:
+            "Ask the user one or more multiple-choice questions and wait for their answers."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["questions".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_close_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -1240,6 +1342,7 @@ pub(crate) fn build_specs(
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
+    use crate::tools::handlers::AskUserQuestionHandler;
     use crate::tools::handlers::CollabHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
@@ -1267,6 +1370,7 @@ pub(crate) fn build_specs(
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
+    let ask_user_question_handler = Arc::new(AskUserQuestionHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
 
     match &config.shell_type {
@@ -1307,6 +1411,9 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+
+    builder.push_spec(create_ask_user_question_tool());
+    builder.register_handler("ask_user_question", ask_user_question_handler);
 
     if config.collaboration_modes_tools {
         builder.push_spec(create_request_user_input_tool());
@@ -1564,6 +1671,7 @@ mod tests {
             create_list_mcp_resource_templates_tool(),
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
+            create_ask_user_question_tool(),
             create_request_user_input_tool(),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
@@ -1624,6 +1732,7 @@ mod tests {
             !tools.iter().any(|t| t.spec.name() == "request_user_input"),
             "request_user_input should be disabled when collaboration_modes feature is off"
         );
+        assert_contains_tool_names(&tools, &["ask_user_question"]);
 
         features.enable(Feature::CollaborationModes);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -1632,7 +1741,7 @@ mod tests {
             web_search_mode: Some(WebSearchMode::Cached),
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
-        assert_contains_tool_names(&tools, &["request_user_input"]);
+        assert_contains_tool_names(&tools, &["ask_user_question", "request_user_input"]);
     }
 
     fn assert_model_tools(
@@ -1711,6 +1820,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "ask_user_question",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -1733,6 +1843,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "ask_user_question",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -1757,6 +1868,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "ask_user_question",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -1781,6 +1893,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "ask_user_question",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -1803,6 +1916,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "ask_user_question",
                 "request_user_input",
                 "web_search",
                 "view_image",
@@ -1824,6 +1938,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "ask_user_question",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -1846,6 +1961,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "ask_user_question",
                 "request_user_input",
                 "web_search",
                 "view_image",
@@ -1867,6 +1983,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "ask_user_question",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -1890,6 +2007,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "ask_user_question",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -1914,6 +2032,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "ask_user_question",
                 "request_user_input",
                 "web_search",
                 "view_image",

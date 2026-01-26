@@ -1,4 +1,5 @@
 pub mod apply_patch;
+mod ask_user_question;
 pub(crate) mod collab;
 mod dynamic;
 mod grep_files;
@@ -18,6 +19,7 @@ use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
 pub use apply_patch::ApplyPatchHandler;
+pub use ask_user_question::AskUserQuestionHandler;
 pub use collab::CollabHandler;
 pub use dynamic::DynamicToolHandler;
 pub use grep_files::GrepFilesHandler;

@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/ask_user_question/mod.rs
+assertion_line: 733
+expression: "render_snapshot(&overlay, area)"
+---
+←   ☑  Features   ✓  Submit                                                            →  
+                                                                                          
+Review your answers                                                                       
+                                                                                          
+Features: Auth, Realtime                                                                  
+                                                                                          
+                                                                                          
+                                                                                          
+[ Submit ]  [ Cancel ]                                                                    
+                                                                                          
+                                                                                          
+──────────────────────────────────────────────────────────────────────────────────────────
+←/→ tabs                                                                                  
+──────────────────────────────────────────────────────────────────────────────────────────
+↑/↓ move | enter select/next | esc cancel                                                 
+──────────────────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/ask_user_question/mod.rs
+assertion_line: 689
+expression: "render_snapshot(&overlay, area)"
+---
+←   ☑  Backend   ✓  Submit                                                             →  
+                                                                                          
+Какой фреймворк ты предпочитаешь для бэкенда?                                             
+                                                                                          
+  1. Next.js API Routes                                                                   
+     Встроенные API routes в Next.js, удобно для full-stack                               
+  2. Express.js                                                                           
+     Классический Node.js фреймворк                                                       
+> 3. FastAPI                                                                              
+                                                                                          
+                                                                                          
+──────────────────────────────────────────────────────────────────────────────────────────
+Select to continue. ←/→ tabs                                                              
+──────────────────────────────────────────────────────────────────────────────────────────
+↑/↓ move | enter select/next | esc cancel                                                 
+──────────────────────────────────────────────────────────────────────────────────────────

@@ -35,6 +35,7 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::ask_user_question::AskUserQuestionArgs;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
@@ -1469,6 +1470,39 @@ impl Session {
             turn_id: turn_context.sub_id.clone(),
             questions: args.questions,
         });
+        self.send_event(turn_context, event).await;
+        rx_response.await.ok()
+    }
+
+    pub async fn ask_user_question(
+        &self,
+        turn_context: &TurnContext,
+        call_id: String,
+        args: AskUserQuestionArgs,
+    ) -> Option<RequestUserInputResponse> {
+        let sub_id = turn_context.sub_id.clone();
+        let (tx_response, rx_response) = oneshot::channel();
+        let event_id = sub_id.clone();
+        let prev_entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_user_input(sub_id, tx_response)
+                }
+                None => None,
+            }
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending user input for sub_id: {event_id}");
+        }
+
+        let event =
+            EventMsg::AskUserQuestion(codex_protocol::ask_user_question::AskUserQuestionEvent {
+                call_id,
+                turn_id: turn_context.sub_id.clone(),
+                questions: args.questions,
+            });
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
     }

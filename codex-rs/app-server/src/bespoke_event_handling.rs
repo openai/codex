@@ -320,6 +320,60 @@ pub(crate) async fn apply_bespoke_event_handling(
                 }
             }
         }
+        EventMsg::AskUserQuestion(request) => {
+            // Older app-server protocol versions only understand request_user_input.
+            // Map ask_user_question to the closest representation by dropping kind/custom details.
+            if matches!(api_version, ApiVersion::V2) {
+                let questions = request
+                    .questions
+                    .into_iter()
+                    .map(|question| ToolRequestUserInputQuestion {
+                        id: question.id,
+                        header: question.header,
+                        question: question.question,
+                        options: (!question.options.is_empty()).then_some(
+                            question
+                                .options
+                                .into_iter()
+                                .map(|option| ToolRequestUserInputOption {
+                                    label: option.label,
+                                    description: option.description,
+                                })
+                                .collect(),
+                        ),
+                    })
+                    .collect();
+                let params = ToolRequestUserInputParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: request.turn_id,
+                    item_id: request.call_id,
+                    questions,
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::ToolRequestUserInput(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_request_user_input_response(event_turn_id, rx, conversation).await;
+                });
+            } else {
+                error!(
+                    "ask_user_question is only supported on api v2 (call_id: {})",
+                    request.call_id
+                );
+                let empty = CoreRequestUserInputResponse {
+                    answers: HashMap::new(),
+                };
+                if let Err(err) = conversation
+                    .submit(Op::UserInputAnswer {
+                        id: event_turn_id,
+                        response: empty,
+                    })
+                    .await
+                {
+                    error!("failed to submit UserInputAnswer: {err}");
+                }
+            }
+        }
         EventMsg::DynamicToolCallRequest(request) => {
             if matches!(api_version, ApiVersion::V2) {
                 let call_id = request.call_id;

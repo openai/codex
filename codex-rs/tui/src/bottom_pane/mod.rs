@@ -28,6 +28,7 @@ use bottom_pane_view::BottomPaneView;
 use codex_core::features::Features;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
+use codex_protocol::ask_user_question::AskUserQuestionEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
@@ -37,9 +38,11 @@ use ratatui::layout::Rect;
 use std::time::Duration;
 
 mod approval_overlay;
+mod ask_user_question;
 mod request_user_input;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
+pub(crate) use ask_user_question::AskUserQuestionOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 mod bottom_pane_view;
 
@@ -629,6 +632,29 @@ impl BottomPane {
         };
 
         let modal = RequestUserInputOverlay::new(request, self.app_event_tx.clone());
+        self.pause_status_timer_for_modal();
+        self.set_composer_input_enabled(
+            false,
+            Some("Answer the questions to continue.".to_string()),
+        );
+        self.push_view(Box::new(modal));
+    }
+
+    /// Called when the agent asks the user one or more questions.
+    pub fn push_ask_user_question_request(&mut self, request: AskUserQuestionEvent) {
+        let request = if let Some(view) = self.view_stack.last_mut() {
+            match view.try_consume_ask_user_question_request(request) {
+                Some(request) => request,
+                None => {
+                    self.request_redraw();
+                    return;
+                }
+            }
+        } else {
+            request
+        };
+
+        let modal = AskUserQuestionOverlay::new(request, self.app_event_tx.clone());
         self.pause_status_timer_for_modal();
         self.set_composer_input_enabled(
             false,

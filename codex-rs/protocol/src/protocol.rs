@@ -49,6 +49,7 @@ pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
+pub use crate::ask_user_question::AskUserQuestionEvent;
 pub use crate::request_user_input::RequestUserInputEvent;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
@@ -760,6 +761,7 @@ pub enum EventMsg {
 
     RequestUserInput(RequestUserInputEvent),
 
+    AskUserQuestion(AskUserQuestionEvent),
     DynamicToolCallRequest(DynamicToolCallRequest),
 
     ElicitationRequest(ElicitationRequestEvent),

@@ -394,6 +394,66 @@ impl HistoryCell for PlainHistoryCell {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct AskUserQuestionAnswersHistoryCell {
+    items: Vec<AskUserQuestionAnswerItem>,
+}
+
+#[derive(Debug)]
+struct AskUserQuestionAnswerItem {
+    question: String,
+    answer: String,
+}
+
+impl AskUserQuestionAnswersHistoryCell {
+    pub(crate) fn new(items: Vec<(String, String)>) -> Self {
+        Self {
+            items: items
+                .into_iter()
+                .map(|(question, answer)| AskUserQuestionAnswerItem { question, answer })
+                .collect(),
+        }
+    }
+}
+
+impl HistoryCell for AskUserQuestionAnswersHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let width = usize::from(width.max(1));
+        let mut out: Vec<Line<'static>> = Vec::new();
+
+        let header = Line::from("User answered:".dim());
+        let header_lines = word_wrap_line(
+            &header,
+            RtOptions::new(width)
+                .initial_indent(Line::from("● ".dim()))
+                .subsequent_indent(Line::from("  ".dim())),
+        );
+        out.extend(header_lines.into_iter().map(|line| line_to_static(&line)));
+
+        let subsequent_indent = "       "; // Align wrapped lines under the question text.
+        for (idx, item) in self.items.iter().enumerate() {
+            let prefix = if idx == 0 { "  ⎿  · " } else { "     · " };
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            spans.push(item.question.clone().dim());
+            spans.push(" → ".dim());
+            if !item.answer.is_empty() {
+                spans.push(item.answer.clone().into());
+            }
+            let line = Line::from(spans);
+
+            let wrapped = word_wrap_line(
+                &line,
+                RtOptions::new(width)
+                    .initial_indent(Line::from(prefix.dim()))
+                    .subsequent_indent(Line::from(subsequent_indent.dim())),
+            );
+            out.extend(wrapped.into_iter().map(|line| line_to_static(&line)));
+        }
+
+        out
+    }
+}
+
 #[cfg_attr(debug_assertions, allow(dead_code))]
 #[derive(Debug)]
 pub(crate) struct UpdateAvailableHistoryCell {

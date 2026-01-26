@@ -1,0 +1,9 @@
+---
+source: tui/src/bottom_pane/ask_user_question/mod.rs
+assertion_line: 850
+expression: "render_history_snapshot(&summary_cell, Rect::new(0, 0, width, height))"
+---
+● User answered:                                                                                              
+  ⎿  · Какой тип инструмента вы хотите реализовать первым? → getBlockingTree                                  
+     · Какие провайдеры нужно поддерживать? → AWS + GCP                                                       
+     · Какие дополнительные функции включить? → Version detection, Token budget, Playbook integration
