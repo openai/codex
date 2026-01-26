@@ -60,5 +60,5 @@ async fn wait_for_final_status(session: &Session, agent_id: ThreadId) -> Option<
 }
 
 fn completion_warning_message(agent_id: ThreadId, status: &AgentStatus) -> String {
-    format!("Sub-agent {agent_id} finished with status {status:?}. Use wait to collect the result.")
+    format!("Sub-agent {agent_id} finished with status {status:?}. Keep working.")
 }
