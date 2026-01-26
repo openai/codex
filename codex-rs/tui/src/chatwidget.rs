@@ -3452,6 +3452,7 @@ impl ChatWidget {
                         effort: None,
                         summary: None,
                         collaboration_mode: None,
+                        windows_sandbox_mode: None,
                         personality: Some(personality),
                     }));
                     tx.send(AppEvent::UpdatePersonality(personality));
