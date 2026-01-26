@@ -15,7 +15,7 @@ pub(crate) fn spawn_collab_completion_warning_watcher(
 ) {
     tokio::spawn(async move {
         if let Some(status) = wait_for_final_status(session.as_ref(), agent_id).await
-            && !crate::agent::is_collab_wait_active(
+            && !crate::agent::is_collab_wait_suppressed(
                 session.as_ref(),
                 &turn_context.sub_id,
                 agent_id,

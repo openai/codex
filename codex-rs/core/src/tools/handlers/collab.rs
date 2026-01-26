@@ -414,11 +414,19 @@ mod wait {
                 results
             };
 
+            let collected_ids = statuses.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+            crate::agent::mark_collab_wait_collected(
+                session.as_ref(),
+                &turn.sub_id,
+                &collected_ids,
+            )
+            .await;
+
             // Convert payload.
-            let statuses_map = statuses.clone().into_iter().collect::<HashMap<_, _>>();
+            let statuses_map = statuses.into_iter().collect::<HashMap<_, _>>();
             let result = WaitResult {
                 status: statuses_map.clone(),
-                timed_out: statuses.is_empty(),
+                timed_out: collected_ids.is_empty(),
             };
 
             // Final event emission.
@@ -995,6 +1003,60 @@ mod tests {
             }
         );
         assert_eq!(success, None);
+    }
+
+    #[tokio::test]
+    async fn wait_marks_missing_agents_as_collected_and_suppressed() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let id = ThreadId::new();
+        let session = Arc::new(session);
+        let turn = Arc::new(turn);
+        let turn_state = {
+            let mut active = session.active_turn.lock().await;
+            let active_turn = active.get_or_insert_with(crate::state::ActiveTurn::default);
+            Arc::clone(&active_turn.turn_state)
+        };
+        let invocation = invocation(
+            session.clone(),
+            turn.clone(),
+            "wait",
+            function_payload(json!({
+                "ids": [id.to_string()],
+                "timeout_ms": 1000
+            })),
+        );
+        let output = CollabHandler
+            .handle(invocation)
+            .await
+            .expect("wait should succeed");
+        let ToolOutput::Function {
+            content, success, ..
+        } = output
+        else {
+            panic!("expected function output");
+        };
+        let result: WaitResult =
+            serde_json::from_str(&content).expect("wait result should be json");
+        assert_eq!(
+            result,
+            WaitResult {
+                status: HashMap::from([(id, AgentStatus::NotFound)]),
+                timed_out: false
+            }
+        );
+        assert_eq!(success, None);
+
+        {
+            let state = turn_state.lock().await;
+            assert_eq!(state.is_waiting_on(&turn.sub_id, id), false);
+            assert_eq!(state.is_wait_collected(&turn.sub_id, id), true);
+        }
+
+        let suppressed =
+            crate::agent::is_collab_wait_suppressed(session.as_ref(), &turn.sub_id, id).await;
+        assert_eq!(suppressed, true);
     }
 
     #[tokio::test]
