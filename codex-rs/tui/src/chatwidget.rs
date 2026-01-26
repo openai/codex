@@ -4690,6 +4690,11 @@ impl ChatWidget {
         }
     }
 
+    /// Set the personality in the widget's config copy.
+    pub(crate) fn set_personality(&mut self, personality: Personality) {
+        self.config.model_personality = Some(personality);
+    }
+
     /// Set the model in the widget's config copy and stored collaboration mode.
     pub(crate) fn set_model(&mut self, model: &str) {
         self.current_collaboration_mode =
