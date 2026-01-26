@@ -59,6 +59,7 @@ mod list_selection_view;
 mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
+mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;

@@ -7,11 +7,15 @@ use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 use crate::key_hint::KeyBinding;
+use crate::render::Insets;
+use crate::render::RectExt as _;
+use crate::style::user_message_style;
 
 use super::scroll_state::ScrollState;
 
@@ -24,6 +28,31 @@ pub(crate) struct GenericDisplayRow {
     pub description: Option<String>,       // optional grey text after the name
     pub disabled_reason: Option<String>,   // optional disabled message
     pub wrap_indent: Option<usize>,        // optional indent for wrapped lines
+}
+
+const MENU_SURFACE_INSET_V: u16 = 1;
+const MENU_SURFACE_INSET_H: u16 = 2;
+
+/// Apply the shared "menu surface" padding used by bottom-pane overlays.
+///
+/// Rendering code should generally call [`render_menu_surface`] and then lay
+/// out content inside the returned inset rect.
+pub(crate) fn menu_surface_inset(area: Rect) -> Rect {
+    area.inset(Insets::vh(MENU_SURFACE_INSET_V, MENU_SURFACE_INSET_H))
+}
+
+/// Paint the shared menu background and return the inset content area.
+///
+/// This keeps the surface treatment consistent across selection-style overlays
+/// (for example `/model`, approvals, and request-user-input).
+pub(crate) fn render_menu_surface(area: Rect, buf: &mut Buffer) -> Rect {
+    if area.is_empty() {
+        return area;
+    }
+    Block::default()
+        .style(user_message_style())
+        .render(area, buf);
+    menu_surface_inset(area)
 }
 
 pub(crate) fn wrap_styled_line<'a>(line: &'a Line<'a>, width: u16) -> Vec<Line<'a>> {
