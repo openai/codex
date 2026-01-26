@@ -265,7 +265,7 @@ impl Codex {
         }
 
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
-            && *depth >= MAX_THREAD_SPAWN_DEPTH
+            && depth >= MAX_THREAD_SPAWN_DEPTH
         {
             config.features.disable(Feature::Collab);
         }
