@@ -15,6 +15,7 @@ use crate::key_hint::KeyBinding;
 use crate::render::line_utils::prefix_lines;
 use crate::status::format_tokens_compact;
 use crate::ui_consts::FOOTER_INDENT_COLS;
+use codex_protocol::config_types::CollaborationModeColor;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -46,18 +47,22 @@ pub(crate) struct FooterProps {
     pub(crate) context_window_used_tokens: Option<i64>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CollaborationModeIndicator {
     Plan,
     Code,
     PairProgramming,
     Execute,
+    Custom {
+        name: String,
+        color: CollaborationModeColor,
+    },
 }
 
 const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
 
 impl CollaborationModeIndicator {
-    fn label(self, show_cycle_hint: bool) -> String {
+    fn label(&self, show_cycle_hint: bool) -> String {
         let suffix = if show_cycle_hint {
             format!(" ({MODE_CYCLE_HINT})")
         } else {
@@ -70,16 +75,23 @@ impl CollaborationModeIndicator {
                 format!("Pair Programming mode{suffix}")
             }
             CollaborationModeIndicator::Execute => format!("Execute mode{suffix}"),
+            CollaborationModeIndicator::Custom { name, .. } => format!("{name} mode{suffix}"),
         }
     }
 
-    fn styled_span(self, show_cycle_hint: bool) -> Span<'static> {
+    fn styled_span(&self, show_cycle_hint: bool) -> Span<'static> {
         let label = self.label(show_cycle_hint);
         match self {
             CollaborationModeIndicator::Plan => Span::from(label).magenta(),
             CollaborationModeIndicator::Code => Span::from(label).cyan(),
             CollaborationModeIndicator::PairProgramming => Span::from(label).cyan(),
             CollaborationModeIndicator::Execute => Span::from(label).dim(),
+            CollaborationModeIndicator::Custom { color, .. } => match color {
+                CollaborationModeColor::Cyan => Span::from(label).cyan(),
+                CollaborationModeColor::Magenta => Span::from(label).magenta(),
+                CollaborationModeColor::Green => Span::from(label).green(),
+                CollaborationModeColor::Red => Span::from(label).red(),
+            },
         }
     }
 }

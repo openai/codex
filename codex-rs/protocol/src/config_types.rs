@@ -162,6 +162,47 @@ pub enum ModeKind {
     Custom,
 }
 
+/// Allowed ANSI colors for collaboration mode presets.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum CollaborationModeColor {
+    Cyan,
+    Magenta,
+    Green,
+    Red,
+}
+
+impl CollaborationModeColor {
+    pub const DEFAULT_PALETTE: [CollaborationModeColor; 4] = [
+        CollaborationModeColor::Cyan,
+        CollaborationModeColor::Magenta,
+        CollaborationModeColor::Green,
+        CollaborationModeColor::Red,
+    ];
+
+    pub fn for_preset_name(name: &str) -> Self {
+        Self::for_preset_name_with_palette(name, &Self::DEFAULT_PALETTE)
+    }
+
+    pub fn for_preset_name_with_palette(name: &str, palette: &[CollaborationModeColor]) -> Self {
+        debug_assert!(!palette.is_empty(), "collaboration mode palette is empty");
+        let hash = fnv1a_64(name.as_bytes());
+        let idx = (hash % palette.len() as u64) as usize;
+        palette[idx]
+    }
+}
+
+fn fnv1a_64(input: &[u8]) -> u64 {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x00000100000001b3;
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in input {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
 /// Collaboration mode for a Codex session.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
@@ -249,6 +290,7 @@ pub struct CollaborationModeMask {
     pub model: Option<String>,
     pub reasoning_effort: Option<Option<ReasoningEffort>>,
     pub developer_instructions: Option<Option<String>>,
+    pub color: Option<CollaborationModeColor>,
 }
 
 #[cfg(test)]
@@ -272,6 +314,7 @@ mod tests {
             model: None,
             reasoning_effort: Some(None),
             developer_instructions: Some(None),
+            color: None,
         };
 
         let expected = CollaborationMode {

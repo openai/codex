@@ -64,6 +64,7 @@ use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ModelPreset;
@@ -1237,8 +1238,11 @@ async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
-    let code_mode = collaboration_modes::code_mask(chat.models_manager.as_ref())
-        .expect("expected code collaboration mode");
+    let code_mode = collaboration_modes::code_mask(
+        chat.models_manager.as_ref(),
+        &chat.config.collaboration_mode_presets,
+    )
+    .expect("expected code collaboration mode");
     chat.submit_user_message_with_mode("Implement the plan.".to_string(), code_mode);
 
     match next_submit_op(&mut op_rx) {
@@ -1261,9 +1265,12 @@ async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
 async fn plan_implementation_popup_skips_replayed_turn_complete() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
-    let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
-            .expect("expected plan collaboration mask");
+    let plan_mask = collaboration_modes::mask_for_kind(
+        chat.models_manager.as_ref(),
+        &chat.config.collaboration_mode_presets,
+        ModeKind::Plan,
+    )
+    .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
     chat.replay_initial_messages(vec![EventMsg::TurnComplete(TurnCompleteEvent {
@@ -1281,9 +1288,12 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
 async fn plan_implementation_popup_skips_when_messages_queued() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
-    let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
-            .expect("expected plan collaboration mask");
+    let plan_mask = collaboration_modes::mask_for_kind(
+        chat.models_manager.as_ref(),
+        &chat.config.collaboration_mode_presets,
+        ModeKind::Plan,
+    )
+    .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
     chat.bottom_pane.set_task_running(true);
     chat.queue_user_message("Queued message".into());
@@ -1301,9 +1311,12 @@ async fn plan_implementation_popup_skips_when_messages_queued() {
 async fn plan_implementation_popup_shows_on_plan_update_without_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
-    let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
-            .expect("expected plan collaboration mask");
+    let plan_mask = collaboration_modes::mask_for_kind(
+        chat.models_manager.as_ref(),
+        &chat.config.collaboration_mode_presets,
+        ModeKind::Plan,
+    )
+    .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
     chat.on_task_started();
@@ -1329,9 +1342,12 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
     chat.auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
-    let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
-            .expect("expected plan collaboration mask");
+    let plan_mask = collaboration_modes::mask_for_kind(
+        chat.models_manager.as_ref(),
+        &chat.config.collaboration_mode_presets,
+        ModeKind::Plan,
+    )
+    .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
     chat.on_task_started();
@@ -2226,6 +2242,24 @@ async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Custom);
 
     chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.config.collaboration_mode_presets = vec![
+        CollaborationModeMask {
+            name: "Research".to_string(),
+            mode: Some(ModeKind::Custom),
+            model: None,
+            reasoning_effort: None,
+            developer_instructions: Some(Some("Focus on evidence.".to_string())),
+            color: None,
+        },
+        CollaborationModeMask {
+            name: "Spec".to_string(),
+            mode: Some(ModeKind::Custom),
+            model: None,
+            reasoning_effort: None,
+            developer_instructions: Some(Some("Write a precise spec.".to_string())),
+            color: None,
+        },
+    ];
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
@@ -2234,6 +2268,24 @@ async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Code);
     assert_eq!(chat.current_collaboration_mode(), &initial);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Custom);
+    let active = chat
+        .active_collaboration_mask
+        .as_ref()
+        .expect("expected custom collaboration mask");
+    assert_eq!(active.name, "Research");
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    let active = chat
+        .active_collaboration_mask
+        .as_ref()
+        .expect("expected custom collaboration mask");
+    assert_eq!(active.name, "Spec");
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
 
     chat.on_task_started();
     let before = chat.active_collaboration_mode_kind();
@@ -2384,9 +2436,12 @@ async fn experimental_mode_plan_applies_on_startup() {
 async fn set_model_updates_active_collaboration_mask() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
-    let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
-            .expect("expected plan collaboration mask");
+    let plan_mask = collaboration_modes::mask_for_kind(
+        chat.models_manager.as_ref(),
+        &chat.config.collaboration_mode_presets,
+        ModeKind::Plan,
+    )
+    .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
     chat.set_model("gpt-5.1-codex-mini");
@@ -2399,9 +2454,12 @@ async fn set_model_updates_active_collaboration_mask() {
 async fn set_reasoning_effort_updates_active_collaboration_mask() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
-    let plan_mask =
-        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
-            .expect("expected plan collaboration mask");
+    let plan_mask = collaboration_modes::mask_for_kind(
+        chat.models_manager.as_ref(),
+        &chat.config.collaboration_mode_presets,
+        ModeKind::Plan,
+    )
+    .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
     chat.set_reasoning_effort(None);

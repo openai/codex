@@ -30,6 +30,7 @@ fn plan_preset() -> CollaborationModeMask {
         model: None,
         reasoning_effort: Some(Some(ReasoningEffort::High)),
         developer_instructions: Some(Some(COLLABORATION_MODE_PLAN.to_string())),
+        color: None,
     }
 }
 
@@ -40,6 +41,7 @@ fn code_preset() -> CollaborationModeMask {
         model: None,
         reasoning_effort: None,
         developer_instructions: Some(Some(COLLABORATION_MODE_CODE.to_string())),
+        color: None,
     }
 }
 
@@ -50,6 +52,7 @@ fn pair_programming_preset() -> CollaborationModeMask {
         model: None,
         reasoning_effort: Some(Some(ReasoningEffort::Medium)),
         developer_instructions: Some(Some(COLLABORATION_MODE_PAIR_PROGRAMMING.to_string())),
+        color: None,
     }
 }
 
@@ -60,5 +63,6 @@ fn execute_preset() -> CollaborationModeMask {
         model: None,
         reasoning_effort: Some(Some(ReasoningEffort::High)),
         developer_instructions: Some(Some(COLLABORATION_MODE_EXECUTE.to_string())),
+        color: None,
     }
 }

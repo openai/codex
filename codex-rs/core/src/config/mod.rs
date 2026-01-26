@@ -41,6 +41,8 @@ use crate::protocol::SandboxPolicy;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_protocol::config_types::AltScreenMode;
+use codex_protocol::config_types::CollaborationModeColor;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
@@ -164,6 +166,9 @@ pub struct Config {
 
     /// Developer instructions override injected as a separate message.
     pub developer_instructions: Option<String>,
+
+    /// User-defined collaboration mode presets loaded from config.toml.
+    pub collaboration_mode_presets: Vec<CollaborationModeMask>,
 
     /// Compact prompt override.
     pub compact_prompt: Option<String>,
@@ -790,6 +795,13 @@ pub struct ConfigToml {
     #[serde(default)]
     pub developer_instructions: Option<String>,
 
+    /// User-defined collaboration mode presets.
+    #[serde(default)]
+    pub collaboration_mode_presets: BTreeMap<String, CollaborationModePresetToml>,
+
+    /// Optional palette used to assign default colors to custom collaboration modes.
+    pub collaboration_mode_palette: Option<Vec<CollaborationModeColor>>,
+
     /// Optional path to a file containing model instructions that will override
     /// the built-in instructions for the selected model. Users are STRONGLY
     /// DISCOURAGED from using this field, as deviating from the instructions
@@ -952,6 +964,16 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio", "ollama", or "ollama-chat".
     pub oss_provider: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct CollaborationModePresetToml {
+    pub developer_instructions: Option<String>,
+    pub developer_instructions_file: Option<AbsolutePathBuf>,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub model: Option<String>,
+    pub color: Option<CollaborationModeColor>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -1272,6 +1294,8 @@ impl Config {
             None => ConfigProfile::default(),
         };
 
+        let collaboration_mode_presets = Self::build_collaboration_mode_presets(&cfg)?;
+
         let feature_overrides = FeatureOverrides {
             include_apply_patch_tool: include_apply_patch_tool_override,
             web_search_request: override_tools_web_search_request,
@@ -1451,7 +1475,7 @@ impl Config {
         let file_base_instructions =
             Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
         let base_instructions = base_instructions.or(file_base_instructions);
-        let developer_instructions = developer_instructions.or(cfg.developer_instructions);
+        let developer_instructions = developer_instructions.or(cfg.developer_instructions.clone());
         let model_personality = model_personality
             .or(config_profile.model_personality)
             .or(cfg.model_personality);
@@ -1506,6 +1530,7 @@ impl Config {
             base_instructions,
             model_personality,
             developer_instructions,
+            collaboration_mode_presets,
             compact_prompt,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
@@ -1626,6 +1651,105 @@ impl Config {
             }
         }
         None
+    }
+
+    fn build_collaboration_mode_presets(
+        cfg: &ConfigToml,
+    ) -> std::io::Result<Vec<CollaborationModeMask>> {
+        const RESERVED_NAMES: [&str; 4] = ["Plan", "Code", "Pair Programming", "Execute"];
+        let palette = match cfg.collaboration_mode_palette.as_deref() {
+            None => CollaborationModeColor::DEFAULT_PALETTE.as_slice(),
+            Some([]) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "collaboration_mode_palette must not be empty",
+                ));
+            }
+            Some(palette) => palette,
+        };
+        if cfg.collaboration_mode_presets.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut presets = Vec::new();
+        for (name, preset) in cfg.collaboration_mode_presets.iter() {
+            let trimmed_name = name.trim();
+            if trimmed_name.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "collaboration_mode_presets contains an empty name",
+                ));
+            }
+            if RESERVED_NAMES
+                .iter()
+                .any(|reserved| reserved.eq_ignore_ascii_case(trimmed_name))
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "collaboration_mode_presets.{trimmed_name} conflicts with a built-in mode"
+                    ),
+                ));
+            }
+            let context_prefix = format!("collaboration_mode_presets.{trimmed_name}");
+            let instructions = match (
+                preset.developer_instructions.as_ref(),
+                preset.developer_instructions_file.as_ref(),
+            ) {
+                (Some(_), Some(_)) | (None, None) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "{context_prefix} must set exactly one of developer_instructions or developer_instructions_file"
+                        ),
+                    ));
+                }
+                (Some(inline), None) => Self::require_non_empty_trimmed(
+                    inline,
+                    &format!("{context_prefix}.developer_instructions"),
+                )?,
+                (None, Some(path)) => {
+                    let context = format!("{context_prefix}.developer_instructions_file");
+                    Self::try_read_non_empty_file(Some(path), &context)?.ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("{context} is empty"),
+                        )
+                    })?
+                }
+            };
+            let model = match preset.model.as_ref() {
+                Some(value) => Some(Self::require_non_empty_trimmed(
+                    value,
+                    &format!("{context_prefix}.model"),
+                )?),
+                None => None,
+            };
+            let reasoning_effort = preset.reasoning_effort.map(Some);
+            let color = preset.color.unwrap_or_else(|| {
+                CollaborationModeColor::for_preset_name_with_palette(trimmed_name, palette)
+            });
+            presets.push(CollaborationModeMask {
+                name: trimmed_name.to_string(),
+                mode: Some(ModeKind::Custom),
+                model,
+                reasoning_effort,
+                developer_instructions: Some(Some(instructions)),
+                color: Some(color),
+            });
+        }
+        Ok(presets)
+    }
+
+    fn require_non_empty_trimmed(value: &str, context: &str) -> std::io::Result<String> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{context} is empty"),
+            ))
+        } else {
+            Ok(trimmed.to_string())
+        }
     }
 
     /// If `path` is `Some`, attempts to read the file at the given path and
@@ -1822,6 +1946,209 @@ persistence = "none"
             }),
             history_no_persistence_cfg.history
         );
+    }
+
+    #[test]
+    fn collaboration_mode_presets_load_inline_instructions() {
+        let codex_home = TempDir::new().expect("temp codex home");
+        let mut config = ConfigToml::default();
+        config.collaboration_mode_presets.insert(
+            "Research".to_string(),
+            CollaborationModePresetToml {
+                developer_instructions: Some("Focus on evidence.".to_string()),
+                developer_instructions_file: None,
+                reasoning_effort: Some(ReasoningEffort::High),
+                model: Some("gpt-5.2-codex".to_string()),
+                color: None,
+            },
+        );
+        let loaded = Config::load_from_base_config_with_overrides(
+            config,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load config");
+        let expected = CollaborationModeMask {
+            name: "Research".to_string(),
+            mode: Some(ModeKind::Custom),
+            model: Some("gpt-5.2-codex".to_string()),
+            reasoning_effort: Some(Some(ReasoningEffort::High)),
+            developer_instructions: Some(Some("Focus on evidence.".to_string())),
+            color: Some(CollaborationModeColor::for_preset_name("Research")),
+        };
+        assert_eq!(vec![expected], loaded.collaboration_mode_presets);
+    }
+
+    #[test]
+    fn collaboration_mode_presets_load_file_instructions() {
+        let codex_home = TempDir::new().expect("temp codex home");
+        let instructions_path = codex_home.path().join("research.md");
+        std::fs::write(&instructions_path, "Write a precise spec.\n")
+            .expect("write instructions file");
+        let mut config = ConfigToml::default();
+        config.collaboration_mode_presets.insert(
+            "Spec".to_string(),
+            CollaborationModePresetToml {
+                developer_instructions: None,
+                developer_instructions_file: Some(
+                    AbsolutePathBuf::try_from(instructions_path)
+                        .expect("absolute instructions path"),
+                ),
+                reasoning_effort: None,
+                model: None,
+                color: None,
+            },
+        );
+        let loaded = Config::load_from_base_config_with_overrides(
+            config,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load config");
+        let expected = CollaborationModeMask {
+            name: "Spec".to_string(),
+            mode: Some(ModeKind::Custom),
+            model: None,
+            reasoning_effort: None,
+            developer_instructions: Some(Some("Write a precise spec.".to_string())),
+            color: Some(CollaborationModeColor::for_preset_name("Spec")),
+        };
+        assert_eq!(vec![expected], loaded.collaboration_mode_presets);
+    }
+
+    #[test]
+    fn collaboration_mode_presets_respect_color_override() {
+        let codex_home = TempDir::new().expect("temp codex home");
+        let mut config = ConfigToml::default();
+        config.collaboration_mode_presets.insert(
+            "Review".to_string(),
+            CollaborationModePresetToml {
+                developer_instructions: Some("Review carefully.".to_string()),
+                developer_instructions_file: None,
+                reasoning_effort: None,
+                model: None,
+                color: Some(CollaborationModeColor::Green),
+            },
+        );
+        let loaded = Config::load_from_base_config_with_overrides(
+            config,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load config");
+
+        let expected = CollaborationModeMask {
+            name: "Review".to_string(),
+            mode: Some(ModeKind::Custom),
+            model: None,
+            reasoning_effort: None,
+            developer_instructions: Some(Some("Review carefully.".to_string())),
+            color: Some(CollaborationModeColor::Green),
+        };
+        assert_eq!(vec![expected], loaded.collaboration_mode_presets);
+    }
+
+    #[test]
+    fn collaboration_mode_presets_use_palette_defaults() {
+        let codex_home = TempDir::new().expect("temp codex home");
+        let palette = vec![CollaborationModeColor::Red, CollaborationModeColor::Green];
+        let mut config = ConfigToml {
+            collaboration_mode_palette: Some(palette.clone()),
+            ..Default::default()
+        };
+        config.collaboration_mode_presets.insert(
+            "Research".to_string(),
+            CollaborationModePresetToml {
+                developer_instructions: Some("Focus on evidence.".to_string()),
+                developer_instructions_file: None,
+                reasoning_effort: None,
+                model: None,
+                color: None,
+            },
+        );
+        let loaded = Config::load_from_base_config_with_overrides(
+            config,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load config");
+        let expected = CollaborationModeMask {
+            name: "Research".to_string(),
+            mode: Some(ModeKind::Custom),
+            model: None,
+            reasoning_effort: None,
+            developer_instructions: Some(Some("Focus on evidence.".to_string())),
+            color: Some(CollaborationModeColor::for_preset_name_with_palette(
+                "Research", &palette,
+            )),
+        };
+        assert_eq!(vec![expected], loaded.collaboration_mode_presets);
+    }
+
+    #[test]
+    fn collaboration_mode_palette_must_not_be_empty() {
+        let codex_home = TempDir::new().expect("temp codex home");
+        let mut config = ConfigToml {
+            collaboration_mode_palette: Some(Vec::new()),
+            ..Default::default()
+        };
+        config.collaboration_mode_presets.insert(
+            "Review".to_string(),
+            CollaborationModePresetToml {
+                developer_instructions: Some("Review carefully.".to_string()),
+                developer_instructions_file: None,
+                reasoning_effort: None,
+                model: None,
+                color: None,
+            },
+        );
+        let err = Config::load_from_base_config_with_overrides(
+            config,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect_err("empty palette should fail");
+        assert!(
+            err.to_string()
+                .contains("collaboration_mode_palette must not be empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn collaboration_mode_presets_reject_invalid_sources() {
+        let codex_home = TempDir::new().expect("temp codex home");
+        let mut missing_instructions = ConfigToml::default();
+        missing_instructions.collaboration_mode_presets.insert(
+            "Research".to_string(),
+            CollaborationModePresetToml::default(),
+        );
+        let err = Config::load_from_base_config_with_overrides(
+            missing_instructions,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect_err("invalid preset should error");
+        assert_eq!(ErrorKind::InvalidData, err.kind());
+
+        let mut conflict_name = ConfigToml::default();
+        conflict_name.collaboration_mode_presets.insert(
+            "Plan".to_string(),
+            CollaborationModePresetToml {
+                developer_instructions: Some("Nope".to_string()),
+                developer_instructions_file: None,
+                reasoning_effort: None,
+                model: None,
+                color: None,
+            },
+        );
+        let err = Config::load_from_base_config_with_overrides(
+            conflict_name,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect_err("built-in preset names should error");
+        assert_eq!(ErrorKind::InvalidData, err.kind());
     }
 
     #[test]
@@ -3731,6 +4058,7 @@ model_verbosity = "high"
                 analytics_enabled: Some(true),
                 feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
+                collaboration_mode_presets: Vec::new(),
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -3813,6 +4141,7 @@ model_verbosity = "high"
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
+            collaboration_mode_presets: Vec::new(),
             otel: OtelConfig::default(),
         };
 
@@ -3910,6 +4239,7 @@ model_verbosity = "high"
             analytics_enabled: Some(false),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
+            collaboration_mode_presets: Vec::new(),
             otel: OtelConfig::default(),
         };
 
@@ -3993,6 +4323,7 @@ model_verbosity = "high"
             analytics_enabled: Some(true),
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
+            collaboration_mode_presets: Vec::new(),
             otel: OtelConfig::default(),
         };
 

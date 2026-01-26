@@ -114,6 +114,37 @@
         }
       ]
     },
+    "CollaborationModeColor": {
+      "description": "Allowed ANSI colors for collaboration mode presets.",
+      "enum": [
+        "cyan",
+        "magenta",
+        "green",
+        "red"
+      ],
+      "type": "string"
+    },
+    "CollaborationModePresetToml": {
+      "additionalProperties": false,
+      "properties": {
+        "color": {
+          "$ref": "#/definitions/CollaborationModeColor"
+        },
+        "developer_instructions": {
+          "type": "string"
+        },
+        "developer_instructions_file": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "model": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        }
+      },
+      "type": "object"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -1099,6 +1130,21 @@
       ],
       "default": null,
       "description": "Preferred backend for storing CLI auth credentials. file (default): Use a file in the Codex home directory. keyring: Use an OS-specific keyring service. auto: Use the keyring if available, otherwise use a file."
+    },
+    "collaboration_mode_palette": {
+      "description": "Optional palette used to assign default colors to custom collaboration modes.",
+      "items": {
+        "$ref": "#/definitions/CollaborationModeColor"
+      },
+      "type": "array"
+    },
+    "collaboration_mode_presets": {
+      "additionalProperties": {
+        "$ref": "#/definitions/CollaborationModePresetToml"
+      },
+      "default": {},
+      "description": "User-defined collaboration mode presets.",
+      "type": "object"
     },
     "compact_prompt": {
       "description": "Compact prompt used for history compaction.",

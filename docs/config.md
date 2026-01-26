@@ -24,6 +24,30 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 - https://developers.openai.com/codex/config-reference
 
+## Collaboration mode presets
+
+You can add custom collaboration modes that are selectable via Shift+Tab in the TUI:
+
+```toml
+collaboration_mode_palette = ["magenta", "cyan", "green", "red"]
+
+[collaboration_mode_presets."Research"]
+developer_instructions = "Focus on evidence and cite sources."
+reasoning_effort = "high"
+color = "magenta"
+
+[collaboration_mode_presets."Spec"]
+developer_instructions_file = "/path/to/spec.md"
+```
+
+Each preset must define exactly one of `developer_instructions` or `developer_instructions_file`.
+Colors are optional; supported values are `cyan`, `magenta`, `green`, and `red`. When a preset
+does not specify a color, Codex assigns a deterministic color based on the preset name and the
+`collaboration_mode_palette`. The palette must be non-empty; if omitted, Codex uses the default
+order shown above so the same mode keeps its color across sessions.
+Custom names cannot conflict with built-in modes (Plan, Code, Pair Programming, Execute). Built-ins
+appear first; custom presets follow in name order.
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

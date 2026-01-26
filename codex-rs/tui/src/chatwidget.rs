@@ -93,6 +93,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeColor;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -936,7 +937,10 @@ impl ChatWidget {
     }
 
     fn open_plan_implementation_prompt(&mut self) {
-        let code_mask = collaboration_modes::code_mask(self.models_manager.as_ref());
+        let code_mask = collaboration_modes::code_mask(
+            self.models_manager.as_ref(),
+            &self.config.collaboration_mode_presets,
+        );
         let (implement_actions, implement_disabled_reason) = match code_mask {
             Some(mask) => {
                 let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
@@ -3577,7 +3581,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_collaboration_modes_popup(&mut self) {
-        let presets = collaboration_modes::presets_for_tui(self.models_manager.as_ref());
+        let presets = collaboration_modes::presets_for_tui(
+            self.models_manager.as_ref(),
+            &self.config.collaboration_mode_presets,
+        );
         if presets.is_empty() {
             self.add_info_message(
                 "No collaboration modes are available right now.".to_string(),
@@ -3591,8 +3598,11 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.mode)
             .or_else(|| {
-                collaboration_modes::default_mask(self.models_manager.as_ref())
-                    .and_then(|mask| mask.mode)
+                collaboration_modes::default_mask(
+                    self.models_manager.as_ref(),
+                    &self.config.collaboration_mode_presets,
+                )
+                .and_then(|mask| mask.mode)
             });
         let items: Vec<SelectionItem> = presets
             .into_iter()
@@ -4679,8 +4689,15 @@ impl ChatWidget {
             return None;
         }
         let mut mask = match config.experimental_mode {
-            Some(kind) => collaboration_modes::mask_for_kind(models_manager, kind)?,
-            None => collaboration_modes::default_mask(models_manager)?,
+            Some(kind) => collaboration_modes::mask_for_kind(
+                models_manager,
+                &config.collaboration_mode_presets,
+                kind,
+            )?,
+            None => collaboration_modes::default_mask(
+                models_manager,
+                &config.collaboration_mode_presets,
+            )?,
         };
         if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
@@ -4753,7 +4770,15 @@ impl ChatWidget {
             ModeKind::Code => Some(CollaborationModeIndicator::Code),
             ModeKind::PairProgramming => Some(CollaborationModeIndicator::PairProgramming),
             ModeKind::Execute => Some(CollaborationModeIndicator::Execute),
-            ModeKind::Custom => None,
+            ModeKind::Custom => self.active_collaboration_mask.as_ref().map(|mask| {
+                let color = mask
+                    .color
+                    .unwrap_or_else(|| CollaborationModeColor::for_preset_name(&mask.name));
+                CollaborationModeIndicator::Custom {
+                    name: mask.name.clone(),
+                    color,
+                }
+            }),
         }
     }
 
@@ -4770,6 +4795,7 @@ impl ChatWidget {
 
         if let Some(next_mask) = collaboration_modes::next_mask(
             self.models_manager.as_ref(),
+            &self.config.collaboration_mode_presets,
             self.active_collaboration_mask.as_ref(),
         ) {
             self.set_collaboration_mask(next_mask);
