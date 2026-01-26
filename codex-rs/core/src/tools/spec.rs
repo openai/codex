@@ -1020,6 +1020,70 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
         },
     })
 }
+
+fn create_install_mcp_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "name".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Name for the MCP server to install (letters, numbers, '-' or '_')."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "description".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Short description of the MCP tool/server being installed.".to_string(),
+                ),
+            },
+        ),
+        (
+            "transport".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Transport type: 'stdio' or 'streamable_http'.".to_string(),
+                ),
+            },
+        ),
+        (
+            "command".to_string(),
+            JsonSchema::Array {
+                items: Box::new(JsonSchema::String { description: None }),
+                description: Some(
+                    "Command and args for stdio transport; first entry is the executable."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "url".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "URL for streamable HTTP MCP servers; required when transport is streamable_http."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "install_mcp_tool".to_string(),
+        description: "Use when the model needs to use an mcp tool but it's not available. You must call this tool instead whenever you want to run the `codex mcp add` command. Before calling this tool, model must search online (if allowed) for the exact mcp config params required to install this mcp, until you are confident it has the correct configuration or it cannot figure it out.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![
+                "name".to_string(),
+                "description".to_string(),
+                "transport".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
 /// TODO(dylan): deprecate once we get rid of json tool
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApplyPatchToolArgs {
@@ -1256,6 +1320,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
+    use crate::tools::handlers::McpInstallHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
@@ -1277,6 +1342,7 @@ pub(crate) fn build_specs(
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
+    let mcp_install_handler = Arc::new(McpInstallHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
 
@@ -1312,9 +1378,11 @@ pub(crate) fn build_specs(
     builder.push_spec_with_parallel_support(create_list_mcp_resources_tool(), true);
     builder.push_spec_with_parallel_support(create_list_mcp_resource_templates_tool(), true);
     builder.push_spec_with_parallel_support(create_read_mcp_resource_tool(), true);
+    builder.push_spec(create_install_mcp_tool());
     builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
     builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
     builder.register_handler("read_mcp_resource", mcp_resource_handler);
+    builder.register_handler("install_mcp_tool", mcp_install_handler);
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
@@ -1574,6 +1642,7 @@ mod tests {
             create_list_mcp_resources_tool(),
             create_list_mcp_resource_templates_tool(),
             create_read_mcp_resource_tool(),
+            create_install_mcp_tool(),
             PLAN_TOOL.clone(),
             create_request_user_input_tool(),
             create_apply_patch_freeform_tool(),
@@ -1721,6 +1790,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
+                "install_mcp_tool",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -1743,6 +1813,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
+                "install_mcp_tool",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -1767,6 +1838,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
+                "install_mcp_tool",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -1791,6 +1863,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
+                "install_mcp_tool",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -1813,6 +1886,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
+                "install_mcp_tool",
                 "update_plan",
                 "request_user_input",
                 "web_search",
@@ -1834,6 +1908,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
+                "install_mcp_tool",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -1856,6 +1931,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
+                "install_mcp_tool",
                 "update_plan",
                 "request_user_input",
                 "web_search",
@@ -1877,6 +1953,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
+                "install_mcp_tool",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -1900,6 +1977,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
+                "install_mcp_tool",
                 "update_plan",
                 "request_user_input",
                 "apply_patch",
@@ -1924,6 +2002,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
+                "install_mcp_tool",
                 "update_plan",
                 "request_user_input",
                 "web_search",

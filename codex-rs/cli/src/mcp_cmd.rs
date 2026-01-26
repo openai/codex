@@ -13,11 +13,12 @@ use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
+use codex_core::mcp::McpServerAuthFlow;
 use codex_core::mcp::auth::compute_auth_statuses;
+use codex_core::mcp::install_mcp_server;
 use codex_core::protocol::McpAuthStatus;
 use codex_rmcp_client::delete_oauth_tokens;
 use codex_rmcp_client::perform_oauth_login;
-use codex_rmcp_client::supports_oauth_login;
 
 /// Subcommands:
 /// - `list`   — list configured servers (with `--json`)
@@ -193,13 +194,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         transport_args,
     } = add_args;
 
-    validate_server_name(&name)?;
-
     let codex_home = find_codex_home().context("failed to resolve CODEX_HOME")?;
-    let mut servers = load_global_mcp_servers(&codex_home)
-        .await
-        .with_context(|| format!("failed to load MCP servers from {}", codex_home.display()))?;
-
     let transport = match transport_args {
         AddMcpTransportArgs {
             stdio: Some(stdio), ..
@@ -238,54 +233,33 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         },
         AddMcpTransportArgs { .. } => bail!("exactly one of --command or --url must be provided"),
     };
-
-    let new_entry = McpServerConfig {
-        transport: transport.clone(),
-        enabled: true,
-        disabled_reason: None,
-        startup_timeout_sec: None,
-        tool_timeout_sec: None,
-        enabled_tools: None,
-        disabled_tools: None,
-    };
-
-    servers.insert(name.clone(), new_entry);
-
-    ConfigEditsBuilder::new(&codex_home)
-        .replace_mcp_servers(&servers)
-        .apply()
-        .await
-        .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
+    let install_result = install_mcp_server(&codex_home, name.clone(), transport).await?;
 
     println!("Added global MCP server '{name}'.");
 
-    if let McpServerTransportConfig::StreamableHttp {
-        url,
-        bearer_token_env_var: None,
-        http_headers,
-        env_http_headers,
-    } = transport
-    {
-        match supports_oauth_login(&url).await {
-            Ok(true) => {
-                println!("Detected OAuth support. Starting OAuth flow…");
-                perform_oauth_login(
-                    &name,
-                    &url,
-                    config.mcp_oauth_credentials_store_mode,
-                    http_headers.clone(),
-                    env_http_headers.clone(),
-                    &Vec::new(),
-                    config.mcp_oauth_callback_port,
-                )
-                .await?;
-                println!("Successfully logged in.");
-            }
-            Ok(false) => {}
-            Err(_) => println!(
-                "MCP server may or may not require login. Run `codex mcp login {name}` to login."
-            ),
+    match install_result.auth_flow {
+        McpServerAuthFlow::OAuth {
+            url,
+            http_headers,
+            env_http_headers,
+        } => {
+            println!("Detected OAuth support. Starting OAuth flow…");
+            perform_oauth_login(
+                &name,
+                &url,
+                config.mcp_oauth_credentials_store_mode,
+                http_headers,
+                env_http_headers,
+                &Vec::new(),
+                config.mcp_oauth_callback_port,
+            )
+            .await?;
+            println!("Successfully logged in.");
         }
+        McpServerAuthFlow::Unknown => println!(
+            "MCP server may or may not require login. Run `codex mcp login {name}` to login."
+        ),
+        McpServerAuthFlow::NotRequired => {}
     }
 
     Ok(())
