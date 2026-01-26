@@ -73,6 +73,10 @@ pub struct McpServerConfig {
     /// Explicit deny-list of tools. These tools will be removed after applying `enabled_tools`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disabled_tools: Option<Vec<String>>,
+
+    /// Optional OAuth scopes to request during MCP login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<String>>,
 }
 
 // Raw MCP config shape used for deserialization and JSON Schema generation.
@@ -113,6 +117,8 @@ pub(crate) struct RawMcpServerConfig {
     pub enabled_tools: Option<Vec<String>>,
     #[serde(default)]
     pub disabled_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
 }
 
 impl<'de> Deserialize<'de> for McpServerConfig {
@@ -134,6 +140,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
         let enabled = raw.enabled.unwrap_or_else(default_enabled);
         let enabled_tools = raw.enabled_tools.clone();
         let disabled_tools = raw.disabled_tools.clone();
+        let scopes = raw.scopes.clone();
 
         fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
         where
@@ -188,6 +195,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             disabled_reason: None,
             enabled_tools,
             disabled_tools,
+            scopes,
         })
     }
 }

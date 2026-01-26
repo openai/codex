@@ -16,7 +16,7 @@ use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::models_manager::test_builtin_collaboration_mode_presets;
-use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
@@ -45,13 +45,23 @@ async fn list_collaboration_modes_returns_presets() -> Result<()> {
     let CollaborationModeListResponse { data: items } =
         to_response::<CollaborationModeListResponse>(response)?;
 
-    let expected = vec![
+    let expected = [
         plan_preset(),
         code_preset(),
         pair_programming_preset(),
         execute_preset(),
     ];
-    assert_eq!(expected, items);
+    assert_eq!(expected.len(), items.len());
+    for (expected_mask, actual_mask) in expected.iter().zip(items.iter()) {
+        assert_eq!(expected_mask.name, actual_mask.name);
+        assert_eq!(expected_mask.mode, actual_mask.mode);
+        assert_eq!(expected_mask.model, actual_mask.model);
+        assert_eq!(expected_mask.reasoning_effort, actual_mask.reasoning_effort);
+        assert_eq!(
+            expected_mask.developer_instructions,
+            actual_mask.developer_instructions
+        );
+    }
     Ok(())
 }
 
@@ -59,11 +69,11 @@ async fn list_collaboration_modes_returns_presets() -> Result<()> {
 ///
 /// If the defaults change in the app server, this helper should be updated alongside the
 /// contract, or the test will fail in ways that imply a regression in the API.
-fn plan_preset() -> CollaborationMode {
+fn plan_preset() -> CollaborationModeMask {
     let presets = test_builtin_collaboration_mode_presets();
     presets
         .into_iter()
-        .find(|p| p.mode == ModeKind::Plan)
+        .find(|p| p.mode == Some(ModeKind::Plan))
         .unwrap()
 }
 
@@ -71,20 +81,20 @@ fn plan_preset() -> CollaborationMode {
 ///
 /// The helper keeps the expected model and reasoning defaults co-located with the test
 /// so that mismatches point directly at the API contract being exercised.
-fn pair_programming_preset() -> CollaborationMode {
+fn pair_programming_preset() -> CollaborationModeMask {
     let presets = test_builtin_collaboration_mode_presets();
     presets
         .into_iter()
-        .find(|p| p.mode == ModeKind::PairProgramming)
+        .find(|p| p.mode == Some(ModeKind::PairProgramming))
         .unwrap()
 }
 
 /// Builds the code preset that the list response is expected to return.
-fn code_preset() -> CollaborationMode {
+fn code_preset() -> CollaborationModeMask {
     let presets = test_builtin_collaboration_mode_presets();
     presets
         .into_iter()
-        .find(|p| p.mode == ModeKind::Code)
+        .find(|p| p.mode == Some(ModeKind::Code))
         .unwrap()
 }
 
@@ -92,10 +102,10 @@ fn code_preset() -> CollaborationMode {
 ///
 /// The execute preset uses a different reasoning effort to capture the higher-effort
 /// execution contract the server currently exposes.
-fn execute_preset() -> CollaborationMode {
+fn execute_preset() -> CollaborationModeMask {
     let presets = test_builtin_collaboration_mode_presets();
     presets
         .into_iter()
-        .find(|p| p.mode == ModeKind::Execute)
+        .find(|p| p.mode == Some(ModeKind::Execute))
         .unwrap()
 }

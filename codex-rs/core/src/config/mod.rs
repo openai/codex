@@ -89,7 +89,7 @@ pub use codex_git::GhostSnapshotConfig;
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
-pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = None;
+pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
@@ -1772,6 +1772,7 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            scopes: None,
         }
     }
 
@@ -1789,6 +1790,7 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            scopes: None,
         }
     }
 
@@ -2614,6 +2616,7 @@ profile = "project"
                 tool_timeout_sec: Some(Duration::from_secs(5)),
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         );
 
@@ -2768,6 +2771,7 @@ bearer_token = "secret"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -2837,6 +2841,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -2886,6 +2891,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -2933,6 +2939,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -2996,6 +3003,7 @@ startup_timeout_sec = 2.0
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
         apply_blocking(
@@ -3071,6 +3079,7 @@ X-Auth = "DOCS_AUTH"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -3099,6 +3108,7 @@ X-Auth = "DOCS_AUTH"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         );
         apply_blocking(
@@ -3165,6 +3175,7 @@ url = "https://example.com/mcp"
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    scopes: None,
                 },
             ),
             (
@@ -3183,6 +3194,7 @@ url = "https://example.com/mcp"
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    scopes: None,
                 },
             ),
         ]);
@@ -3264,6 +3276,7 @@ url = "https://example.com/mcp"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -3307,6 +3320,7 @@ url = "https://example.com/mcp"
                 tool_timeout_sec: None,
                 enabled_tools: Some(vec!["allowed".to_string()]),
                 disabled_tools: Some(vec!["blocked".to_string()]),
+                scopes: None,
             },
         )]);
 
@@ -3693,7 +3707,7 @@ model_verbosity = "high"
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 project_doc_fallback_filenames: Vec::new(),
                 tool_output_token_limit: None,
-                agent_max_threads: None,
+                agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
                 codex_home: fixture.codex_home(),
                 config_layer_stack: Default::default(),
                 history: History::default(),
@@ -3775,7 +3789,7 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
-            agent_max_threads: None,
+            agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
@@ -3872,7 +3886,7 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
-            agent_max_threads: None,
+            agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),
@@ -3955,7 +3969,7 @@ model_verbosity = "high"
             project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
             project_doc_fallback_filenames: Vec::new(),
             tool_output_token_limit: None,
-            agent_max_threads: None,
+            agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             codex_home: fixture.codex_home(),
             config_layer_stack: Default::default(),
             history: History::default(),

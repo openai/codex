@@ -1,70 +1,61 @@
 use codex_core::models_manager::manager::ModelsManager;
-use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
-
-fn mode_kind(mode: &CollaborationMode) -> ModeKind {
-    mode.mode
-}
 
 fn is_tui_mode(kind: ModeKind) -> bool {
     matches!(kind, ModeKind::Plan | ModeKind::Code)
 }
 
-fn filtered_presets(models_manager: &ModelsManager) -> Vec<CollaborationMode> {
+fn filtered_presets(models_manager: &ModelsManager) -> Vec<CollaborationModeMask> {
     models_manager
         .list_collaboration_modes()
         .into_iter()
-        .filter(|preset| is_tui_mode(mode_kind(preset)))
+        .filter(|mask| mask.mode.is_some_and(is_tui_mode))
         .collect()
 }
 
-pub(crate) fn presets_for_tui(models_manager: &ModelsManager) -> Vec<CollaborationMode> {
+pub(crate) fn presets_for_tui(models_manager: &ModelsManager) -> Vec<CollaborationModeMask> {
     filtered_presets(models_manager)
 }
 
-pub(crate) fn default_mode(models_manager: &ModelsManager) -> Option<CollaborationMode> {
+pub(crate) fn default_mask(models_manager: &ModelsManager) -> Option<CollaborationModeMask> {
     let presets = filtered_presets(models_manager);
     presets
         .iter()
-        .find(|preset| preset.mode == ModeKind::Code)
+        .find(|mask| mask.mode == Some(ModeKind::Code))
         .cloned()
         .or_else(|| presets.into_iter().next())
 }
 
-pub(crate) fn mode_for_kind(
+pub(crate) fn mask_for_kind(
     models_manager: &ModelsManager,
     kind: ModeKind,
-) -> Option<CollaborationMode> {
+) -> Option<CollaborationModeMask> {
     if !is_tui_mode(kind) {
         return None;
     }
-    let presets = filtered_presets(models_manager);
-    presets.into_iter().find(|preset| mode_kind(preset) == kind)
-}
-
-pub(crate) fn same_variant(a: &CollaborationMode, b: &CollaborationMode) -> bool {
-    mode_kind(a) == mode_kind(b)
+    filtered_presets(models_manager)
+        .into_iter()
+        .find(|mask| mask.mode == Some(kind))
 }
 
 /// Cycle to the next collaboration mode preset in list order.
-pub(crate) fn next_mode(
+pub(crate) fn next_mask(
     models_manager: &ModelsManager,
-    current: &CollaborationMode,
-) -> Option<CollaborationMode> {
+    current: Option<&CollaborationModeMask>,
+) -> Option<CollaborationModeMask> {
     let presets = filtered_presets(models_manager);
     if presets.is_empty() {
         return None;
     }
-    let current_kind = mode_kind(current);
+    let current_kind = current.and_then(|mask| mask.mode);
     let next_index = presets
         .iter()
-        .position(|preset| mode_kind(preset) == current_kind)
+        .position(|mask| mask.mode == current_kind)
         .map_or(0, |idx| (idx + 1) % presets.len());
     presets.get(next_index).cloned()
 }
 
-pub(crate) fn code_mode(models_manager: &ModelsManager) -> Option<CollaborationMode> {
-    filtered_presets(models_manager)
-        .into_iter()
-        .find(|preset| mode_kind(preset) == ModeKind::Code)
+pub(crate) fn code_mask(models_manager: &ModelsManager) -> Option<CollaborationModeMask> {
+    mask_for_kind(models_manager, ModeKind::Code)
 }

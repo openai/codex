@@ -625,11 +625,13 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
     }
 }
 
-fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
+fn experimental_feature_headers(config: &Config) -> ApiHeaderMap {
     let enabled = FEATURES
         .iter()
         .filter_map(|spec| {
-            if spec.stage.beta_menu_description().is_some() && config.features.enabled(spec.id) {
+            if spec.stage.experimental_menu_description().is_some()
+                && config.features.enabled(spec.id)
+            {
                 Some(spec.key)
             } else {
                 None
@@ -650,7 +652,7 @@ fn build_responses_headers(
     config: &Config,
     turn_state: Option<&Arc<OnceLock<String>>>,
 ) -> ApiHeaderMap {
-    let mut headers = beta_feature_headers(config);
+    let mut headers = experimental_feature_headers(config);
     headers.insert(
         WEB_SEARCH_ELIGIBLE_HEADER,
         HeaderValue::from_static(
