@@ -248,7 +248,12 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
             Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
             Event::FocusGained => {
                 self.terminal_focused.store(true, Ordering::Relaxed);
+                // crossterm queries use the same global stdin reader that EventStream relies on.
+                // Drop/recreate the EventStream around any such query to avoid contention that can
+                // stall the UI on focus changes (e.g. after alt-tabbing back to the terminal).
+                self.broker.pause_events();
                 crate::terminal_palette::requery_default_colors();
+                self.broker.resume_events();
                 Some(TuiEvent::Draw)
             }
             Event::FocusLost => {
@@ -504,6 +509,37 @@ mod tests {
             .expect("timed out waiting for resumed event")
             .expect("join failed");
         match event {
+            Some(TuiEvent::Key(key)) => assert_eq!(key, expected_key),
+            other => panic!("expected key event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn focus_gained_recreates_event_source() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        terminal_focused.store(false, Ordering::Relaxed);
+        let mut stream = make_stream(broker.clone(), draw_rx, terminal_focused.clone());
+
+        handle.send(Ok(Event::FocusGained));
+
+        let first = stream.next().await;
+        assert!(matches!(first, Some(TuiEvent::Draw)));
+        assert!(terminal_focused.load(Ordering::Relaxed));
+
+        {
+            let state = broker
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            assert!(matches!(&*state, EventBrokerState::Start));
+        }
+
+        // Ensure the stream is still usable after the event source is recreated.
+        let expected_key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
+        handle.send(Ok(Event::Key(expected_key)));
+
+        let second = stream.next().await;
+        match second {
             Some(TuiEvent::Key(key)) => assert_eq!(key, expected_key),
             other => panic!("expected key event, got {other:?}"),
         }
