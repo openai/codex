@@ -1615,7 +1615,9 @@ impl App {
                                 let mut code_tag: Option<String> = None;
                                 let mut message_tag: Option<String> = None;
                                 if let Some((code, message)) =
-                                    codex_core::windows_sandbox::elevated_setup_failure_details(&err)
+                                    codex_core::windows_sandbox::elevated_setup_failure_details(
+                                        &err,
+                                    )
                                 {
                                     code_tag = Some(code);
                                     message_tag = Some(message);

@@ -87,7 +87,9 @@ impl SetupErrorCode {
             Self::HelperCapabilitySidFailed => "helper_capability_sid_failed",
             Self::HelperFirewallComInitFailed => "helper_firewall_com_init_failed",
             Self::HelperFirewallPolicyAccessFailed => "helper_firewall_policy_access_failed",
-            Self::HelperFirewallRuleCreateOrAddFailed => "helper_firewall_rule_create_or_add_failed",
+            Self::HelperFirewallRuleCreateOrAddFailed => {
+                "helper_firewall_rule_create_or_add_failed"
+            }
             Self::HelperFirewallRuleVerifyFailed => "helper_firewall_rule_verify_failed",
             Self::HelperReadAclHelperSpawnFailed => "helper_read_acl_helper_spawn_failed",
             Self::HelperSandboxLockFailed => "helper_sandbox_lock_failed",

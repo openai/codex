@@ -39,9 +39,9 @@ use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
-use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupFailure;
+use codex_windows_sandbox::SETUP_VERSION;
 
 pub const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
 const SANDBOX_USERS_GROUP_COMMENT: &str = "Codex sandbox internal group (managed)";
@@ -403,14 +403,20 @@ fn write_secrets(
     std::fs::create_dir_all(&sandbox_dir).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperUsersFileWriteFailed,
-            format!("failed to create sandbox dir {}: {err}", sandbox_dir.display()),
+            format!(
+                "failed to create sandbox dir {}: {err}",
+                sandbox_dir.display()
+            ),
         ))
     })?;
     let secrets_dir = sandbox_secrets_dir(codex_home);
     std::fs::create_dir_all(&secrets_dir).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperUsersFileWriteFailed,
-            format!("failed to create secrets dir {}: {err}", secrets_dir.display()),
+            format!(
+                "failed to create secrets dir {}: {err}",
+                secrets_dir.display()
+            ),
         ))
     })?;
     let offline_blob = dpapi_protect(offline_pwd.as_bytes()).map_err(|err| {
@@ -455,7 +461,10 @@ fn write_secrets(
     std::fs::write(&users_path, users_json).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperUsersFileWriteFailed,
-            format!("write sandbox users file {} failed: {err}", users_path.display()),
+            format!(
+                "write sandbox users file {} failed: {err}",
+                users_path.display()
+            ),
         ))
     })?;
     let marker_json = serde_json::to_vec_pretty(&marker).map_err(|err| {
@@ -467,7 +476,10 @@ fn write_secrets(
     std::fs::write(&marker_path, marker_json).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperSetupMarkerWriteFailed,
-            format!("write setup marker file {} failed: {err}", marker_path.display()),
+            format!(
+                "write setup marker file {} failed: {err}",
+                marker_path.display()
+            ),
         ))
     })?;
     Ok(())

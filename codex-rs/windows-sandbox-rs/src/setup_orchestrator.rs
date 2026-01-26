@@ -332,7 +332,11 @@ fn report_helper_failure(
     }
 }
 
-fn run_setup_exe(payload: &ElevationPayload, needs_elevation: bool, codex_home: &Path) -> Result<()> {
+fn run_setup_exe(
+    payload: &ElevationPayload,
+    needs_elevation: bool,
+    codex_home: &Path,
+) -> Result<()> {
     use windows_sys::Win32::System::Threading::GetExitCodeProcess;
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
     use windows_sys::Win32::System::Threading::INFINITE;
@@ -375,11 +379,17 @@ fn run_setup_exe(payload: &ElevationPayload, needs_elevation: bool, codex_home: 
                 )
             })?;
         if !status.success() {
-            return Err(report_helper_failure(codex_home, cleared_report, status.code()));
+            return Err(report_helper_failure(
+                codex_home,
+                cleared_report,
+                status.code(),
+            ));
         }
         if let Err(err) = clear_setup_error_report(codex_home) {
             log_note(
-                &format!("setup orchestrator: failed to clear setup_error.json after success: {err}"),
+                &format!(
+                    "setup orchestrator: failed to clear setup_error.json after success: {err}"
+                ),
                 Some(&sandbox_dir(codex_home)),
             );
         }

@@ -51,14 +51,12 @@ pub fn ensure_offline_outbound_block(offline_sid: &str, log: &mut File) -> Resul
                         format!("CoCreateInstance NetFwPolicy2 failed: {err:?}"),
                     ))
                 })?;
-            let rules = policy
-                .Rules()
-                .map_err(|err| {
-                    anyhow::Error::new(SetupFailure::new(
-                        SetupErrorCode::HelperFirewallPolicyAccessFailed,
-                        format!("INetFwPolicy2::Rules failed: {err:?}"),
-                    ))
-                })?;
+            let rules = policy.Rules().map_err(|err| {
+                anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperFirewallPolicyAccessFailed,
+                    format!("INetFwPolicy2::Rules failed: {err:?}"),
+                ))
+            })?;
 
             // Block all outbound IP protocols for this user.
             ensure_block_rule(
@@ -91,23 +89,22 @@ fn ensure_block_rule(
 ) -> Result<()> {
     let name = BSTR::from(internal_name);
     let rule: INetFwRule3 = match unsafe { rules.Item(&name) } {
-        Ok(existing) => existing
-            .cast()
-            .map_err(|err| {
-                anyhow::Error::new(SetupFailure::new(
-                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                    format!("cast existing firewall rule to INetFwRule3 failed: {err:?}"),
-                ))
-            })?,
+        Ok(existing) => existing.cast().map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("cast existing firewall rule to INetFwRule3 failed: {err:?}"),
+            ))
+        })?,
         Err(_) => {
             let new_rule: INetFwRule3 =
-                unsafe { CoCreateInstance(&NetFwRule, None, CLSCTX_INPROC_SERVER) }
-                    .map_err(|err| {
+                unsafe { CoCreateInstance(&NetFwRule, None, CLSCTX_INPROC_SERVER) }.map_err(
+                    |err| {
                         anyhow::Error::new(SetupFailure::new(
                             SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
                             format!("CoCreateInstance NetFwRule failed: {err:?}"),
                         ))
-                    })?;
+                    },
+                )?;
             unsafe { new_rule.SetName(&name) }.map_err(|err| {
                 anyhow::Error::new(SetupFailure::new(
                     SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
@@ -159,41 +156,36 @@ fn configure_rule(
                     format!("SetDescription failed: {err:?}"),
                 ))
             })?;
-        rule.SetDirection(NET_FW_RULE_DIR_OUT)
-            .map_err(|err| {
-                anyhow::Error::new(SetupFailure::new(
-                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                    format!("SetDirection failed: {err:?}"),
-                ))
-            })?;
-        rule.SetAction(NET_FW_ACTION_BLOCK)
-            .map_err(|err| {
-                anyhow::Error::new(SetupFailure::new(
-                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                    format!("SetAction failed: {err:?}"),
-                ))
-            })?;
-        rule.SetEnabled(VARIANT_TRUE)
-            .map_err(|err| {
-                anyhow::Error::new(SetupFailure::new(
-                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                    format!("SetEnabled failed: {err:?}"),
-                ))
-            })?;
-        rule.SetProfiles(NET_FW_PROFILE2_ALL.0)
-            .map_err(|err| {
-                anyhow::Error::new(SetupFailure::new(
-                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                    format!("SetProfiles failed: {err:?}"),
-                ))
-            })?;
-        rule.SetProtocol(protocol)
-            .map_err(|err| {
-                anyhow::Error::new(SetupFailure::new(
-                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                    format!("SetProtocol failed: {err:?}"),
-                ))
-            })?;
+        rule.SetDirection(NET_FW_RULE_DIR_OUT).map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("SetDirection failed: {err:?}"),
+            ))
+        })?;
+        rule.SetAction(NET_FW_ACTION_BLOCK).map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("SetAction failed: {err:?}"),
+            ))
+        })?;
+        rule.SetEnabled(VARIANT_TRUE).map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("SetEnabled failed: {err:?}"),
+            ))
+        })?;
+        rule.SetProfiles(NET_FW_PROFILE2_ALL.0).map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("SetProfiles failed: {err:?}"),
+            ))
+        })?;
+        rule.SetProtocol(protocol).map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("SetProtocol failed: {err:?}"),
+            ))
+        })?;
         rule.SetLocalUserAuthorizedList(&BSTR::from(local_user_spec))
             .map_err(|err| {
                 anyhow::Error::new(SetupFailure::new(
@@ -204,13 +196,12 @@ fn configure_rule(
     }
 
     // Read-back verification: ensure we actually wrote the expected SID scope.
-    let actual = unsafe { rule.LocalUserAuthorizedList() }
-        .map_err(|err| {
-            anyhow::Error::new(SetupFailure::new(
-                SetupErrorCode::HelperFirewallRuleVerifyFailed,
-                format!("LocalUserAuthorizedList (read-back) failed: {err:?}"),
-            ))
-        })?;
+    let actual = unsafe { rule.LocalUserAuthorizedList() }.map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperFirewallRuleVerifyFailed,
+            format!("LocalUserAuthorizedList (read-back) failed: {err:?}"),
+        ))
+    })?;
     let actual_str = actual.to_string();
     if !actual_str.contains(offline_sid) {
         return Err(anyhow::Error::new(SetupFailure::new(
