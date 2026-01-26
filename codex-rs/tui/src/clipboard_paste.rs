@@ -22,6 +22,40 @@ impl std::fmt::Display for PasteImageError {
 }
 impl std::error::Error for PasteImageError {}
 
+#[derive(Debug, Clone)]
+pub enum PasteTextError {
+    ClipboardUnavailable(String),
+    NoText(String),
+}
+
+impl std::fmt::Display for PasteTextError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PasteTextError::ClipboardUnavailable(msg) => write!(f, "clipboard unavailable: {msg}"),
+            PasteTextError::NoText(msg) => write!(f, "no text on clipboard: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for PasteTextError {}
+
+/// Capture text from system clipboard.
+#[cfg(not(target_os = "android"))]
+pub fn paste_text_from_clipboard() -> Result<String, PasteTextError> {
+    let mut cb = arboard::Clipboard::new()
+        .map_err(|e| PasteTextError::ClipboardUnavailable(e.to_string()))?;
+    cb.get_text()
+        .map_err(|e| PasteTextError::NoText(e.to_string()))
+}
+
+/// Android/Termux does not support arboard; return a clear error.
+#[cfg(target_os = "android")]
+pub fn paste_text_from_clipboard() -> Result<String, PasteTextError> {
+    Err(PasteTextError::ClipboardUnavailable(
+        "clipboard text paste is unsupported on Android".into(),
+    ))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncodedImageFormat {
     Png,

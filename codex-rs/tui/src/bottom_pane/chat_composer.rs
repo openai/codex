@@ -135,6 +135,7 @@ use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
+use crate::clipboard_paste::paste_text_from_clipboard;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
 use crate::ui_consts::LIVE_PREFIX_COLS;
@@ -144,6 +145,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
@@ -375,6 +377,16 @@ impl ChatComposer {
         self.history.set_metadata(log_id, entry_count);
     }
 
+    fn is_char_subsequence(needle: &str, haystack: &str) -> bool {
+        let mut iter = haystack.chars();
+        for ch in needle.chars() {
+            if !iter.by_ref().any(|hay| hay == ch) {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Integrate an asynchronous response to an on-demand history lookup. If
     /// the entry is present and the offset matches the current cursor we
     /// immediately populate the textarea.
@@ -411,7 +423,21 @@ impl ChatComposer {
     /// In all cases, clears any paste-burst Enter suppression state so a real paste cannot affect
     /// the next user Enter key, then syncs popup state.
     pub fn handle_paste(&mut self, pasted: String) -> bool {
-        let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
+        let mut pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
+        #[cfg(target_os = "macos")]
+        if std::env::var_os("RUST_TEST_THREADS").is_none()
+            && std::io::stdin().is_terminal()
+            && std::io::stdout().is_terminal()
+        {
+            if let Ok(text) = paste_text_from_clipboard() {
+                let clipboard = text.replace("\r\n", "\n").replace('\r', "\n");
+                if clipboard.chars().count() > pasted.chars().count()
+                    && Self::is_char_subsequence(&pasted, &clipboard)
+                {
+                    pasted = clipboard;
+                }
+            }
+        }
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
             let placeholder = self.next_large_paste_placeholder(char_count);
