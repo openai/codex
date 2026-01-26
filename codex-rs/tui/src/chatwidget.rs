@@ -133,12 +133,12 @@ use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
-use crate::bottom_pane::BetaFeatureItem;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::CollaborationModeIndicator;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
+use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
@@ -4029,12 +4029,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_experimental_popup(&mut self) {
-        let features: Vec<BetaFeatureItem> = FEATURES
+        let features: Vec<ExperimentalFeatureItem> = FEATURES
             .iter()
             .filter_map(|spec| {
-                let name = spec.stage.beta_menu_name()?;
-                let description = spec.stage.beta_menu_description()?;
-                Some(BetaFeatureItem {
+                let name = spec.stage.experimental_menu_name()?;
+                let description = spec.stage.experimental_menu_description()?;
+                Some(ExperimentalFeatureItem {
                     feature: spec.id,
                     name: name.to_string(),
                     description: description.to_string(),
