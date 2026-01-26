@@ -175,11 +175,10 @@ mod spawn {
             )
             .await;
         let new_thread_id = result?;
-        crate::agent::spawn_collab_completion_warning_watcher(
-            session.clone(),
-            turn.clone(),
-            new_thread_id,
-        );
+        session
+            .services
+            .agent_control
+            .register_spawn(&turn.sub_id, new_thread_id);
 
         let content = serde_json::to_string(&SpawnAgentResult {
             agent_id: new_thread_id.to_string(),
@@ -342,8 +341,12 @@ mod wait {
             ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
         };
 
-        crate::agent::begin_collab_wait(session.as_ref(), &turn.sub_id, &receiver_thread_ids).await;
-        let result = async {
+        let _wait_guard = session
+            .services
+            .agent_control
+            .wait_guard(&turn.sub_id, &receiver_thread_ids);
+
+        async {
             session
                 .send_event(
                     &turn,
@@ -424,12 +427,10 @@ mod wait {
             };
 
             let collected_ids = statuses.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-            crate::agent::mark_collab_wait_collected(
-                session.as_ref(),
-                &turn.sub_id,
-                &collected_ids,
-            )
-            .await;
+            session
+                .services
+                .agent_control
+                .acknowledge(&turn.sub_id, &collected_ids);
 
             // Convert payload.
             let statuses_map = statuses.into_iter().collect::<HashMap<_, _>>();
@@ -461,9 +462,7 @@ mod wait {
                 content_items: None,
             })
         }
-        .await;
-        crate::agent::end_collab_wait(session.as_ref(), &turn.sub_id, &receiver_thread_ids).await;
-        result
+        .await
     }
 
     async fn wait_for_final_status(
@@ -1022,18 +1021,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wait_marks_missing_agents_as_collected_and_suppressed() {
+    async fn wait_handles_missing_agents() {
         let (mut session, turn) = make_session_and_context().await;
         let manager = thread_manager();
         session.services.agent_control = manager.agent_control();
         let id = ThreadId::new();
         let session = Arc::new(session);
         let turn = Arc::new(turn);
-        let turn_state = {
-            let mut active = session.active_turn.lock().await;
-            let active_turn = active.get_or_insert_with(crate::state::ActiveTurn::default);
-            Arc::clone(&active_turn.turn_state)
-        };
         let invocation = invocation(
             session.clone(),
             turn.clone(),
@@ -1063,16 +1057,6 @@ mod tests {
             }
         );
         assert_eq!(success, None);
-
-        {
-            let state = turn_state.lock().await;
-            assert_eq!(state.is_waiting_on(&turn.sub_id, id), false);
-            assert_eq!(state.is_wait_collected(&turn.sub_id, id), true);
-        }
-
-        let suppressed =
-            crate::agent::is_collab_wait_suppressed(session.as_ref(), &turn.sub_id, id).await;
-        assert_eq!(suppressed, true);
     }
 
     #[tokio::test]

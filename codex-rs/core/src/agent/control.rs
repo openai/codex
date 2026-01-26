@@ -1,14 +1,86 @@
 use crate::agent::AgentStatus;
 use crate::agent::guards::Guards;
+use crate::agent::status::is_final;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::thread_manager::ThreadManagerState;
 use codex_protocol::ThreadId;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use serde_json::json;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::Weak;
 use tokio::sync::watch;
+use uuid::Uuid;
+
+const SYNTHETIC_WAIT_TIMEOUT_MS: i64 = 300_000;
+
+#[derive(Default)]
+struct TurnCollabLedger {
+    spawned: HashSet<ThreadId>,
+    acknowledged: HashSet<ThreadId>,
+    in_flight_waits: HashMap<ThreadId, usize>,
+}
+
+impl TurnCollabLedger {
+    fn is_idle(&self) -> bool {
+        self.in_flight_waits.is_empty()
+            && self
+                .spawned
+                .iter()
+                .all(|agent_id| self.acknowledged.contains(agent_id))
+    }
+}
+
+#[derive(Default)]
+struct CollabLedger {
+    turns: HashMap<String, TurnCollabLedger>,
+}
+
+/// RAII guard that marks a set of agents as being explicitly waited on.
+pub(crate) struct WaitGuard {
+    collab: Arc<Mutex<CollabLedger>>,
+    turn_id: String,
+    agent_ids: Vec<ThreadId>,
+}
+
+impl WaitGuard {
+    fn new(collab: Arc<Mutex<CollabLedger>>, turn_id: &str, agent_ids: &[ThreadId]) -> Self {
+        Self {
+            collab,
+            turn_id: turn_id.to_string(),
+            agent_ids: agent_ids.to_vec(),
+        }
+    }
+}
+
+impl Drop for WaitGuard {
+    fn drop(&mut self) {
+        let mut collab = self
+            .collab
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(turn) = collab.turns.get_mut(&self.turn_id) {
+            for agent_id in &self.agent_ids {
+                if let Some(count) = turn.in_flight_waits.get_mut(agent_id) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        turn.in_flight_waits.remove(agent_id);
+                    }
+                }
+            }
+            if turn.is_idle() {
+                collab.turns.remove(&self.turn_id);
+            }
+        }
+    }
+}
 
 /// Control-plane handle for multi-agent operations.
 /// `AgentControl` is held by each session (via `SessionServices`). It provides capability to
@@ -23,6 +95,7 @@ pub(crate) struct AgentControl {
     /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
     manager: Weak<ThreadManagerState>,
     state: Arc<Guards>,
+    collab: Arc<Mutex<CollabLedger>>,
 }
 
 impl AgentControl {
@@ -129,10 +202,147 @@ impl AgentControl {
         Ok(thread.subscribe_status())
     }
 
+    pub(crate) fn register_spawn(&self, turn_id: &str, agent_id: ThreadId) {
+        let mut collab = self.lock_collab();
+        let turn = collab.turns.entry(turn_id.to_string()).or_default();
+        turn.spawned.insert(agent_id);
+        turn.acknowledged.remove(&agent_id);
+    }
+
+    pub(crate) fn wait_guard(&self, turn_id: &str, agent_ids: &[ThreadId]) -> WaitGuard {
+        let mut collab = self.lock_collab();
+        let turn = collab.turns.entry(turn_id.to_string()).or_default();
+        for agent_id in agent_ids {
+            *turn.in_flight_waits.entry(*agent_id).or_default() += 1;
+        }
+        WaitGuard::new(Arc::clone(&self.collab), turn_id, agent_ids)
+    }
+
+    pub(crate) fn acknowledge(&self, turn_id: &str, agent_ids: &[ThreadId]) {
+        let mut collab = self.lock_collab();
+        if let Some(turn) = collab.turns.get_mut(turn_id) {
+            turn.acknowledged.extend(agent_ids.iter().copied());
+            if turn.is_idle() {
+                collab.turns.remove(turn_id);
+            }
+        }
+    }
+
+    pub(crate) fn clear_turn(&self, turn_id: &str) {
+        let mut collab = self.lock_collab();
+        collab.turns.remove(turn_id);
+    }
+
+    pub(crate) async fn collect_unacknowledged_finals(
+        &self,
+        turn_id: &str,
+    ) -> Vec<(ThreadId, AgentStatus)> {
+        let mut candidates = {
+            let collab = self.lock_collab();
+            collab
+                .turns
+                .get(turn_id)
+                .map(|turn| {
+                    turn.spawned
+                        .iter()
+                        .copied()
+                        .filter(|agent_id| {
+                            !turn.acknowledged.contains(agent_id)
+                                && !turn.in_flight_waits.contains_key(agent_id)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+        candidates.sort_by_key(std::string::ToString::to_string);
+
+        let mut finals = Vec::new();
+        for agent_id in candidates {
+            let status = self.get_status(agent_id).await;
+            if is_final(&status) {
+                finals.push((agent_id, status));
+            }
+        }
+        if finals.is_empty() {
+            return Vec::new();
+        }
+
+        let mut ready = Vec::new();
+        let mut collab = self.lock_collab();
+        if let Some(turn) = collab.turns.get_mut(turn_id) {
+            for (agent_id, status) in finals {
+                if turn.acknowledged.contains(&agent_id)
+                    || turn.in_flight_waits.contains_key(&agent_id)
+                {
+                    continue;
+                }
+                turn.acknowledged.insert(agent_id);
+                ready.push((agent_id, status));
+            }
+            if turn.is_idle() {
+                collab.turns.remove(turn_id);
+            }
+        }
+        ready
+    }
+
+    pub(crate) fn synthetic_wait_items(statuses: &[(ThreadId, AgentStatus)]) -> Vec<ResponseItem> {
+        if statuses.is_empty() {
+            return Vec::new();
+        }
+        let call_id = format!("synthetic-wait-{}", Uuid::new_v4());
+
+        let mut ids = statuses
+            .iter()
+            .map(|(agent_id, _)| agent_id.to_string())
+            .collect::<Vec<_>>();
+        ids.sort();
+        let arguments = json!({
+            "ids": ids,
+            "timeout_ms": SYNTHETIC_WAIT_TIMEOUT_MS,
+        })
+        .to_string();
+
+        let status_map = statuses
+            .iter()
+            .map(|(agent_id, status)| (agent_id.to_string(), status.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let output = json!({
+            "status": status_map,
+            "timed_out": false,
+        })
+        .to_string();
+
+        let call = ResponseItem::FunctionCall {
+            id: None,
+            name: "wait".to_string(),
+            arguments,
+            call_id: call_id.clone(),
+        };
+        let output = ResponseItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: output,
+                ..Default::default()
+            },
+        };
+
+        vec![call, output]
+    }
+
     fn upgrade(&self) -> CodexResult<Arc<ThreadManagerState>> {
         self.manager
             .upgrade()
             .ok_or_else(|| CodexErr::UnsupportedOperation("thread manager dropped".to_string()))
+    }
+
+    fn lock_collab(&self) -> std::sync::MutexGuard<'_, CollabLedger> {
+        self.collab
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

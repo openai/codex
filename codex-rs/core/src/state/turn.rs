@@ -2,7 +2,6 @@
 
 use indexmap::IndexMap;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -17,7 +16,6 @@ use tokio::sync::oneshot;
 use crate::codex::TurnContext;
 use crate::protocol::ReviewDecision;
 use crate::tasks::SessionTask;
-use codex_protocol::ThreadId;
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
@@ -75,8 +73,6 @@ pub(crate) struct TurnState {
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
-    active_waits: HashMap<String, HashMap<ThreadId, usize>>,
-    collected_waits: HashMap<String, HashSet<ThreadId>>,
 }
 
 impl TurnState {
@@ -100,8 +96,6 @@ impl TurnState {
         self.pending_user_input.clear();
         self.pending_dynamic_tools.clear();
         self.pending_input.clear();
-        self.active_waits.clear();
-        self.collected_waits.clear();
     }
 
     pub(crate) fn insert_pending_user_input(
@@ -151,57 +145,6 @@ impl TurnState {
     pub(crate) fn has_pending_input(&self) -> bool {
         !self.pending_input.is_empty()
     }
-
-    pub(crate) fn begin_wait(&mut self, turn_id: &str, agent_ids: &[ThreadId]) {
-        if agent_ids.is_empty() {
-            return;
-        }
-        let waits = self.active_waits.entry(turn_id.to_string()).or_default();
-        for agent_id in agent_ids {
-            *waits.entry(*agent_id).or_default() += 1;
-        }
-    }
-
-    pub(crate) fn end_wait(&mut self, turn_id: &str, agent_ids: &[ThreadId]) {
-        if agent_ids.is_empty() {
-            return;
-        }
-        let mut remove_turn = false;
-        if let Some(waits) = self.active_waits.get_mut(turn_id) {
-            for agent_id in agent_ids {
-                if let Some(count) = waits.get_mut(agent_id) {
-                    *count = count.saturating_sub(1);
-                    if *count == 0 {
-                        waits.remove(agent_id);
-                    }
-                }
-            }
-            remove_turn = waits.is_empty();
-        }
-        if remove_turn {
-            self.active_waits.remove(turn_id);
-        }
-    }
-
-    pub(crate) fn is_waiting_on(&self, turn_id: &str, agent_id: ThreadId) -> bool {
-        self.active_waits
-            .get(turn_id)
-            .is_some_and(|waits| waits.contains_key(&agent_id))
-    }
-
-    pub(crate) fn mark_wait_collected(&mut self, turn_id: &str, agent_ids: &[ThreadId]) {
-        if agent_ids.is_empty() {
-            return;
-        }
-        let collected = self.collected_waits.entry(turn_id.to_string()).or_default();
-        collected.extend(agent_ids.iter().copied());
-    }
-
-    pub(crate) fn is_wait_collected(&self, turn_id: &str, agent_id: ThreadId) -> bool {
-        self.collected_waits
-            .get(turn_id)
-            .is_some_and(|collected| collected.contains(&agent_id))
-    }
 }
 
 impl ActiveTurn {
@@ -209,45 +152,5 @@ impl ActiveTurn {
     pub(crate) async fn clear_pending(&self) {
         let mut ts = self.turn_state.lock().await;
         ts.clear_pending();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    fn thread_id(s: &str) -> ThreadId {
-        ThreadId::from_string(s).expect("valid thread id")
-    }
-
-    #[test]
-    fn wait_tracking_is_turn_scoped_and_reference_counted_and_collected() {
-        let mut state = TurnState::default();
-        let turn_a = "turn-a";
-        let turn_b = "turn-b";
-        let agent = thread_id("00000000-0000-7000-0000-000000000001");
-
-        state.begin_wait(turn_a, &[agent]);
-        state.begin_wait(turn_a, &[agent]);
-        state.begin_wait(turn_b, &[agent]);
-
-        assert_eq!(state.is_waiting_on(turn_a, agent), true);
-        assert_eq!(state.is_waiting_on(turn_b, agent), true);
-
-        state.end_wait(turn_a, &[agent]);
-        assert_eq!(state.is_waiting_on(turn_a, agent), true);
-
-        state.end_wait(turn_a, &[agent]);
-        assert_eq!(state.is_waiting_on(turn_a, agent), false);
-        assert_eq!(state.is_waiting_on(turn_b, agent), true);
-
-        state.mark_wait_collected(turn_a, &[agent]);
-        assert_eq!(state.is_wait_collected(turn_a, agent), true);
-        assert_eq!(state.is_wait_collected(turn_b, agent), false);
-
-        state.clear_pending();
-        assert_eq!(state.is_waiting_on(turn_b, agent), false);
-        assert_eq!(state.is_wait_collected(turn_a, agent), false);
     }
 }

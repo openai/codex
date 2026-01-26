@@ -3006,11 +3006,20 @@ pub(crate) async fn run_turn(
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_input = sess
-            .get_pending_input()
-            .await
+        let collab_ready = sess
+            .services
+            .agent_control
+            .collect_unacknowledged_finals(&turn_context.sub_id)
+            .await;
+        let collab_ready_items = AgentControl::synthetic_wait_items(&collab_ready);
+        let pending_input = collab_ready_items
             .into_iter()
-            .map(ResponseItem::from)
+            .chain(
+                sess.get_pending_input()
+                    .await
+                    .into_iter()
+                    .map(ResponseItem::from),
+            )
             .collect::<Vec<ResponseItem>>();
 
         // Construct the input that we will send to the model.
