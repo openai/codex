@@ -59,6 +59,7 @@ mod list_selection_view;
 mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
+mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
@@ -108,7 +109,7 @@ pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
-pub(crate) use experimental_features_view::BetaFeatureItem;
+pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
@@ -212,6 +213,11 @@ impl BottomPane {
         indicator: Option<CollaborationModeIndicator>,
     ) {
         self.composer.set_collaboration_mode_indicator(indicator);
+        self.request_redraw();
+    }
+
+    pub fn set_personality_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_personality_command_enabled(enabled);
         self.request_redraw();
     }
 

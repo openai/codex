@@ -4,6 +4,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+use codex_utils_string::take_bytes_at_char_boundary;
+
 const LOG_COMMAND_PREVIEW_LIMIT: usize = 200;
 pub const LOG_FILE_NAME: &str = "sandbox.log";
 
@@ -22,7 +24,7 @@ fn preview(command: &[String]) -> String {
     if joined.len() <= LOG_COMMAND_PREVIEW_LIMIT {
         joined
     } else {
-        joined[..LOG_COMMAND_PREVIEW_LIMIT].to_string()
+        take_bytes_at_char_boundary(&joined, LOG_COMMAND_PREVIEW_LIMIT).to_string()
     }
 }
 
@@ -71,4 +73,20 @@ pub fn debug_log(msg: &str, base_dir: Option<&Path>) {
 pub fn log_note(msg: &str, base_dir: Option<&Path>) {
     let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
     append_line(&format!("[{ts} {}] {}", exe_label(), msg), base_dir);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_does_not_panic_on_utf8_boundary() {
+        // Place a 4-byte emoji such that naive (byte-based) truncation would split it.
+        let prefix = "x".repeat(LOG_COMMAND_PREVIEW_LIMIT - 1);
+        let command = vec![format!("{prefix}😀")];
+        let result = std::panic::catch_unwind(|| preview(&command));
+        assert!(result.is_ok());
+        let previewed = result.unwrap();
+        assert!(previewed.len() <= LOG_COMMAND_PREVIEW_LIMIT);
+    }
 }

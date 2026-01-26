@@ -109,6 +109,7 @@ use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use super::skill_popup::SkillPopup;
+use super::slash_commands;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::bottom_pane::prompt_args::expand_custom_prompt;
 use crate::bottom_pane::prompt_args::expand_if_numeric_with_positional_args;
@@ -120,7 +121,6 @@ use crate::render::Insets;
 use crate::render::RectExt;
 use crate::render::renderable::Renderable;
 use crate::slash_command::SlashCommand;
-use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
 use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
@@ -147,13 +147,6 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
-
-fn windows_degraded_sandbox_active() -> bool {
-    cfg!(target_os = "windows")
-        && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-        && codex_core::get_platform_sandbox().is_some()
-        && !codex_core::is_windows_elevated_sandbox_enabled()
-}
 
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
@@ -197,6 +190,30 @@ enum PromptSelectionAction {
     },
 }
 
+/// Feature flags for reusing the chat composer in other bottom-pane surfaces.
+///
+/// The default keeps today's behavior intact. Other call sites can opt out of
+/// specific behaviors by constructing a config with those flags set to `false`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ChatComposerConfig {
+    /// Whether command/file/skill popups are allowed to appear.
+    pub(crate) popups_enabled: bool,
+    /// Whether `/...` input is parsed and dispatched as slash commands.
+    pub(crate) slash_commands_enabled: bool,
+    /// Whether pasting a file path can attach local images.
+    pub(crate) image_paste_enabled: bool,
+}
+
+impl Default for ChatComposerConfig {
+    fn default() -> Self {
+        Self {
+            popups_enabled: true,
+            slash_commands_enabled: true,
+            image_paste_enabled: true,
+        }
+    }
+}
+
 pub(crate) struct ChatComposer {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
@@ -234,7 +251,9 @@ pub(crate) struct ChatComposer {
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
     collaboration_modes_enabled: bool,
+    config: ChatComposerConfig,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    personality_command_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -260,6 +279,28 @@ impl ChatComposer {
         enhanced_keys_supported: bool,
         placeholder_text: String,
         disable_paste_burst: bool,
+    ) -> Self {
+        Self::new_with_config(
+            has_input_focus,
+            app_event_tx,
+            enhanced_keys_supported,
+            placeholder_text,
+            disable_paste_burst,
+            ChatComposerConfig::default(),
+        )
+    }
+
+    /// Construct a composer with explicit feature gating.
+    ///
+    /// This enables reuse in contexts like request-user-input where we want
+    /// the same visuals and editing behavior without slash commands or popups.
+    pub(crate) fn new_with_config(
+        has_input_focus: bool,
+        app_event_tx: AppEventSender,
+        enhanced_keys_supported: bool,
+        placeholder_text: String,
+        disable_paste_burst: bool,
+        config: ChatComposerConfig,
     ) -> Self {
         let use_shift_enter_hint = enhanced_keys_supported;
 
@@ -295,7 +336,9 @@ impl ChatComposer {
             dismissed_skill_popup_token: None,
             steer_enabled: false,
             collaboration_modes_enabled: false,
+            config,
             collaboration_mode_indicator: None,
+            personality_command_enabled: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -327,6 +370,22 @@ impl ChatComposer {
         self.collaboration_mode_indicator = indicator;
     }
 
+    pub fn set_personality_command_enabled(&mut self, enabled: bool) {
+        self.personality_command_enabled = enabled;
+    }
+
+    /// Centralized feature gating keeps config checks out of call sites.
+    fn popups_enabled(&self) -> bool {
+        self.config.popups_enabled
+    }
+
+    fn slash_commands_enabled(&self) -> bool {
+        self.config.slash_commands_enabled
+    }
+
+    fn image_paste_enabled(&self) -> bool {
+        self.config.image_paste_enabled
+    }
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let footer_props = self.footer_props();
         let footer_hint_height = self
@@ -411,7 +470,10 @@ impl ChatComposer {
             let placeholder = self.next_large_paste_placeholder(char_count);
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
-        } else if char_count > 1 && self.handle_paste_image_path(pasted.clone()) {
+        } else if char_count > 1
+            && self.image_paste_enabled()
+            && self.handle_paste_image_path(pasted.clone())
+        {
             self.textarea.insert_str(" ");
         } else {
             self.textarea.insert_str(&pasted);
@@ -1628,12 +1690,17 @@ impl ChatComposer {
         text = text.trim().to_string();
         text_elements = Self::trim_text_elements(&expanded_input, &text, text_elements);
 
-        if let Some((name, _rest, _rest_offset)) = parse_slash_name(&text) {
+        if self.slash_commands_enabled()
+            && let Some((name, _rest, _rest_offset)) = parse_slash_name(&text)
+        {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
             if !treat_as_plain_text {
-                let is_builtin =
-                    Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                        .any(|(command_name, _)| command_name == name);
+                let is_builtin = slash_commands::find_builtin_command(
+                    name,
+                    self.collaboration_modes_enabled,
+                    self.personality_command_enabled,
+                )
+                .is_some();
                 let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
                 let is_known_prompt = name
                     .strip_prefix(&prompt_prefix)
@@ -1662,26 +1729,28 @@ impl ChatComposer {
             }
         }
 
-        let expanded_prompt =
-            match expand_custom_prompt(&text, &text_elements, &self.custom_prompts) {
-                Ok(expanded) => expanded,
-                Err(err) => {
-                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_error_event(err.user_message()),
-                    )));
-                    self.set_text_content(
-                        original_input.clone(),
-                        original_text_elements,
-                        original_local_image_paths,
-                    );
-                    self.pending_pastes.clone_from(&original_pending_pastes);
-                    self.textarea.set_cursor(original_input.len());
-                    return None;
-                }
-            };
-        if let Some(expanded) = expanded_prompt {
-            text = expanded.text;
-            text_elements = expanded.text_elements;
+        if self.slash_commands_enabled() {
+            let expanded_prompt =
+                match expand_custom_prompt(&text, &text_elements, &self.custom_prompts) {
+                    Ok(expanded) => expanded,
+                    Err(err) => {
+                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                            history_cell::new_error_event(err.user_message()),
+                        )));
+                        self.set_text_content(
+                            original_input.clone(),
+                            original_text_elements,
+                            original_local_image_paths,
+                        );
+                        self.pending_pastes.clone_from(&original_pending_pastes);
+                        self.textarea.set_cursor(original_input.len());
+                        return None;
+                    }
+                };
+            if let Some(expanded) = expanded_prompt {
+                text = expanded.text;
+                text_elements = expanded.text_elements;
+            }
         }
         // Custom prompt expansion can remove or rewrite image placeholders, so prune any
         // attachments that no longer have a corresponding placeholder in the expanded text.
@@ -1721,14 +1790,15 @@ impl ChatComposer {
         // If we're in a paste-like burst capture, treat Enter/Ctrl+Shift+Q as part of the burst
         // and accumulate it rather than submitting or inserting immediately.
         // Do not treat as paste inside a slash-command context.
-        let in_slash_context = matches!(self.active_popup, ActivePopup::Command(_))
-            || self
-                .textarea
-                .text()
-                .lines()
-                .next()
-                .unwrap_or("")
-                .starts_with('/');
+        let in_slash_context = self.slash_commands_enabled()
+            && (matches!(self.active_popup, ActivePopup::Command(_))
+                || self
+                    .textarea
+                    .text()
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .starts_with('/'));
         if !self.disable_paste_burst
             && self.paste_burst.is_active()
             && !in_slash_context
@@ -1795,12 +1865,17 @@ impl ChatComposer {
     /// Check if the first line is a bare slash command (no args) and dispatch it.
     /// Returns Some(InputResult) if a command was dispatched, None otherwise.
     fn try_dispatch_bare_slash_command(&mut self) -> Option<InputResult> {
+        if !self.slash_commands_enabled() {
+            return None;
+        }
         let first_line = self.textarea.text().lines().next().unwrap_or("");
         if let Some((name, rest, _rest_offset)) = parse_slash_name(first_line)
             && rest.is_empty()
-            && let Some((_n, cmd)) =
-                Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                    .find(|(n, _)| *n == name)
+            && let Some(cmd) = slash_commands::find_builtin_command(
+                name,
+                self.collaboration_modes_enabled,
+                self.personality_command_enabled,
+            )
         {
             self.textarea.set_text_clearing_elements("");
             Some(InputResult::Command(cmd))
@@ -1812,6 +1887,9 @@ impl ChatComposer {
     /// Check if the input is a slash command with args (e.g., /review args) and dispatch it.
     /// Returns Some(InputResult) if a command was dispatched, None otherwise.
     fn try_dispatch_slash_command_with_args(&mut self) -> Option<InputResult> {
+        if !self.slash_commands_enabled() {
+            return None;
+        }
         let original_input = self.textarea.text().to_string();
         let input_starts_with_space = original_input.starts_with(' ');
 
@@ -1820,9 +1898,11 @@ impl ChatComposer {
             if let Some((name, rest, _rest_offset)) = parse_slash_name(&text)
                 && !rest.is_empty()
                 && !name.contains('/')
-                && let Some((_n, cmd)) =
-                    Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                        .find(|(command_name, _)| *command_name == name)
+                && let Some(cmd) = slash_commands::find_builtin_command(
+                    name,
+                    self.collaboration_modes_enabled,
+                    self.personality_command_enabled,
+                )
                 && cmd == SlashCommand::Review
             {
                 self.textarea.set_text_clearing_elements("");
@@ -2176,6 +2256,10 @@ impl ChatComposer {
     }
 
     fn sync_popups(&mut self) {
+        if !self.popups_enabled() {
+            self.active_popup = ActivePopup::None;
+            return;
+        }
         let file_token = Self::current_at_token(&self.textarea);
         let browsing_history = self
             .history
@@ -2188,7 +2272,8 @@ impl ChatComposer {
         }
         let skill_token = self.current_skill_token();
 
-        let allow_command_popup = file_token.is_none() && skill_token.is_none();
+        let allow_command_popup =
+            self.slash_commands_enabled() && file_token.is_none() && skill_token.is_none();
         self.sync_command_popup(allow_command_popup);
 
         if matches!(self.active_popup, ActivePopup::Command(_)) {
@@ -2249,22 +2334,24 @@ impl ChatComposer {
     /// prefix for any known command (built-in or custom prompt).
     /// Empty names only count when there is no extra content after the '/'.
     fn looks_like_slash_prefix(&self, name: &str, rest_after_name: &str) -> bool {
+        if !self.slash_commands_enabled() {
+            return false;
+        }
         if name.is_empty() {
             return rest_after_name.is_empty();
         }
 
-        let builtin_match =
-            Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
-
-        if builtin_match {
+        if slash_commands::has_builtin_prefix(
+            name,
+            self.collaboration_modes_enabled,
+            self.personality_command_enabled,
+        ) {
             return true;
         }
 
-        let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
-        self.custom_prompts
-            .iter()
-            .any(|p| fuzzy_match(&format!("{prompt_prefix}{}", p.name), name).is_some())
+        self.custom_prompts.iter().any(|prompt| {
+            fuzzy_match(&format!("{PROMPTS_CMD_PREFIX}:{}", prompt.name), name).is_some()
+        })
     }
 
     /// Synchronize `self.command_popup` with the current text in the
@@ -2308,10 +2395,12 @@ impl ChatComposer {
             _ => {
                 if is_editing_slash_command_name {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
+                    let personality_command_enabled = self.personality_command_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
                             collaboration_modes_enabled,
+                            personality_command_enabled,
                         },
                     );
                     command_popup.on_composer_text_change(first_line.to_string());
@@ -2320,17 +2409,6 @@ impl ChatComposer {
             }
         }
     }
-
-    fn built_in_slash_commands_for_input(
-        collaboration_modes_enabled: bool,
-    ) -> impl Iterator<Item = (&'static str, SlashCommand)> {
-        let allow_elevate_sandbox = windows_degraded_sandbox_active();
-        built_in_slash_commands()
-            .into_iter()
-            .filter(move |(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
-            .filter(move |(_, cmd)| collaboration_modes_enabled || *cmd != SlashCommand::Collab)
-    }
-
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.custom_prompts = prompts.clone();
         if let ActivePopup::Command(popup) = &mut self.active_popup {

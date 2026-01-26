@@ -60,6 +60,7 @@ use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::Personality;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -200,7 +201,7 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
                 .disabled_reason
                 .as_ref()
                 .map(ToString::to_string)
-                .unwrap_or_else(|| "Config folder disabled.".to_string()),
+                .unwrap_or_else(|| "config.toml is disabled.".to_string()),
         ));
     }
 
@@ -208,7 +209,11 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
         return;
     }
 
-    let mut message = "The following config folders are disabled:\n".to_string();
+    let mut message = concat!(
+        "Project config.toml files are disabled in the following folders. ",
+        "Settings in those files are ignored, but skills and exec policies still load.\n",
+    )
+    .to_string();
     for (index, (folder, reason)) in disabled_folders.iter().enumerate() {
         let display_index = index + 1;
         message.push_str(&format!("    {display_index}. {folder}\n"));
@@ -932,14 +937,10 @@ impl App {
 
         let auth = auth_manager.auth().await;
         let auth_ref = auth.as_ref();
-        let model_info = thread_manager
-            .get_models_manager()
-            .get_model_info(model.as_str(), &config)
-            .await;
         let otel_manager = OtelManager::new(
             ThreadId::new(),
             model.as_str(),
-            model_info.slug.as_str(),
+            model.as_str(),
             auth_ref.and_then(CodexAuth::get_account_id),
             auth_ref.and_then(CodexAuth::get_account_email),
             auth_ref.map(|auth| auth.mode),
@@ -1505,6 +1506,9 @@ impl App {
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
             }
+            AppEvent::UpdatePersonality(personality) => {
+                self.on_update_personality(personality);
+            }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
@@ -1754,6 +1758,41 @@ impl App {
                         } else {
                             self.chat_widget
                                 .add_error_message(format!("Failed to save default model: {err}"));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistPersonalitySelection { personality } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_model_personality(Some(personality))
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let label = Self::personality_label(personality);
+                        let mut message = format!("Personality set to {label}");
+                        if let Some(profile) = profile {
+                            message.push_str(" for ");
+                            message.push_str(profile);
+                            message.push_str(" profile");
+                        }
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist personality selection"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save personality for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save default personality: {err}"
+                            ));
                         }
                     }
                 }
@@ -2074,9 +2113,23 @@ impl App {
                 return Ok(());
             }
         };
+        let config_snapshot = thread.config_snapshot().await;
         let event = Event {
             id: String::new(),
-            msg: EventMsg::SessionConfigured(self.session_configured_for_thread(thread_id)),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                model: config_snapshot.model,
+                model_provider_id: config_snapshot.model_provider_id,
+                approval_policy: config_snapshot.approval_policy,
+                sandbox_policy: config_snapshot.sandbox_policy,
+                cwd: config_snapshot.cwd,
+                reasoning_effort: config_snapshot.reasoning_effort,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                rollout_path: thread.rollout_path(),
+            }),
         };
         let channel =
             ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
@@ -2106,33 +2159,6 @@ impl App {
         Ok(())
     }
 
-    fn session_configured_for_thread(&self, thread_id: ThreadId) -> SessionConfiguredEvent {
-        let mut session_configured =
-            self.primary_session_configured
-                .clone()
-                .unwrap_or_else(|| SessionConfiguredEvent {
-                    session_id: thread_id,
-                    forked_from_id: None,
-                    model: self.chat_widget.current_model().to_string(),
-                    model_provider_id: self.config.model_provider_id.clone(),
-                    approval_policy: *self.config.approval_policy.get(),
-                    sandbox_policy: self.config.sandbox_policy.get().clone(),
-                    cwd: self.config.cwd.clone(),
-                    reasoning_effort: None,
-                    history_log_id: 0,
-                    history_entry_count: 0,
-                    initial_messages: None,
-                    rollout_path: Some(PathBuf::new()),
-                });
-        session_configured.session_id = thread_id;
-        session_configured.forked_from_id = None;
-        session_configured.history_log_id = 0;
-        session_configured.history_entry_count = 0;
-        session_configured.initial_messages = None;
-        session_configured.rollout_path = Some(PathBuf::new());
-        session_configured
-    }
-
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
         match reasoning_effort {
             Some(ReasoningEffortConfig::Minimal) => "minimal",
@@ -2160,6 +2186,18 @@ impl App {
         // Instead, explicitly pass the stored collaboration mode's effort into new sessions.
         self.config.model_reasoning_effort = effort;
         self.chat_widget.set_reasoning_effort(effort);
+    }
+
+    fn on_update_personality(&mut self, personality: Personality) {
+        self.config.model_personality = Some(personality);
+        self.chat_widget.set_personality(personality);
+    }
+
+    fn personality_label(personality: Personality) -> &'static str {
+        match personality {
+            Personality::Friendly => "Friendly",
+            Personality::Pragmatic => "Pragmatic",
+        }
     }
 
     async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {
