@@ -1,4 +1,5 @@
 pub mod auth;
+mod install;
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
@@ -116,6 +117,10 @@ pub(crate) fn with_codex_apps_mcp(
     }
     servers
 }
+
+pub use install::McpServerAuthFlow;
+pub use install::McpServerInstallResult;
+pub use install::install_mcp_server;
 
 pub(crate) fn effective_mcp_servers(
     config: &Config,

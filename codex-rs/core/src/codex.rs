@@ -1106,12 +1106,17 @@ impl Session {
             .await
     }
 
-    async fn get_config(&self) -> std::sync::Arc<Config> {
+    pub(crate) async fn get_config(&self) -> std::sync::Arc<Config> {
         let state = self.state.lock().await;
         state
             .session_configuration
             .original_config_do_not_use
             .clone()
+    }
+
+    pub(crate) async fn replace_config(&self, config: Config) {
+        let mut state = self.state.lock().await;
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
     }
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {

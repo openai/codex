@@ -311,6 +311,25 @@ pub(crate) struct McpConnectionManager {
     elicitation_requests: ElicitationRequestManager,
 }
 
+pub(crate) struct McpServerStartupHandle {
+    server_name: String,
+    client: AsyncManagedClient,
+    auth_entry: Option<McpAuthStatusEntry>,
+}
+
+impl McpServerStartupHandle {
+    pub async fn wait(self) -> Result<(), String> {
+        match self.client.client().await {
+            Ok(_) => Ok(()),
+            Err(err) => Err(mcp_init_error_display(
+                self.server_name.as_str(),
+                self.auth_entry.as_ref(),
+                &err,
+            )),
+        }
+    }
+}
+
 impl McpConnectionManager {
     pub async fn initialize(
         &mut self,
@@ -414,6 +433,110 @@ impl McpConnectionManager {
                 })
                 .await;
         });
+    }
+
+    pub async fn add_server(
+        &mut self,
+        server_name: String,
+        config: McpServerConfig,
+        store_mode: OAuthCredentialsStoreMode,
+        auth_entry: Option<McpAuthStatusEntry>,
+        tx_event: Sender<Event>,
+        cancel_token: CancellationToken,
+        sandbox_state: SandboxState,
+    ) -> Result<McpServerStartupHandle, String> {
+        if cancel_token.is_cancelled() {
+            return Err("MCP startup was cancelled".to_string());
+        }
+
+        if !config.enabled {
+            return Err(format!("MCP server '{server_name}' is disabled"));
+        }
+
+        let cancel_token = cancel_token.child_token();
+        let _ = emit_update(
+            &tx_event,
+            McpStartupUpdateEvent {
+                server: server_name.clone(),
+                status: McpStartupStatus::Starting,
+            },
+        )
+        .await;
+
+        let async_managed_client = AsyncManagedClient::new(
+            server_name.clone(),
+            config,
+            store_mode,
+            cancel_token,
+            tx_event.clone(),
+            self.elicitation_requests.clone(),
+        );
+        self.clients
+            .insert(server_name.clone(), async_managed_client.clone());
+
+        let async_managed_client_for_task = async_managed_client.clone();
+        let auth_entry_for_task = auth_entry.clone();
+        let server_name_for_task = server_name.clone();
+        let sandbox_state_for_task = sandbox_state.clone();
+        tokio::spawn(async move {
+            let outcome = async_managed_client_for_task.client().await;
+            let status = match &outcome {
+                Ok(_) => {
+                    if let Err(err) = async_managed_client_for_task
+                        .notify_sandbox_state_change(&sandbox_state_for_task)
+                        .await
+                    {
+                        warn!(
+                            "Failed to notify sandbox state to MCP server {server_name_for_task}: {err:#}",
+                        );
+                    }
+                    McpStartupStatus::Ready
+                }
+                Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
+                Err(error) => {
+                    let error_str = mcp_init_error_display(
+                        server_name_for_task.as_str(),
+                        auth_entry_for_task.as_ref(),
+                        error,
+                    );
+                    McpStartupStatus::Failed { error: error_str }
+                }
+            };
+
+            let _ = emit_update(
+                &tx_event,
+                McpStartupUpdateEvent {
+                    server: server_name_for_task.clone(),
+                    status,
+                },
+            )
+            .await;
+
+            let mut summary = McpStartupCompleteEvent::default();
+            match outcome {
+                Ok(_) => summary.ready.push(server_name_for_task),
+                Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name_for_task),
+                Err(StartupOutcomeError::Failed { error }) => {
+                    summary.failed.push(McpStartupFailure {
+                        server: server_name_for_task,
+                        error,
+                    });
+                }
+            }
+
+            let _ = tx_event
+                .send(Event {
+                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    msg: EventMsg::McpStartupComplete(summary),
+                })
+                .await;
+        });
+
+        Ok(McpServerStartupHandle {
+            server_name,
+            client: async_managed_client,
+            auth_entry,
+        })
     }
 
     async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {
