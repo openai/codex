@@ -1,11 +1,16 @@
 use std::collections::VecDeque;
+use std::path::Path;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
 use codex_utils_string::take_bytes_at_char_boundary;
+use dunce::canonicalize as canonicalize_path;
 use serde::Deserialize;
 
+use crate::codex::Session;
+use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::skills::handle_skill_dependencies;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -17,6 +22,7 @@ pub struct ReadFileHandler;
 
 const MAX_LINE_LENGTH: usize = 500;
 const TAB_WIDTH: usize = 4;
+const SKILL_FILE_NAME: &str = "SKILL.md";
 
 // TODO(jif) add support for block comments
 const COMMENT_PREFIXES: &[&str] = &["#", "//", "--"];
@@ -98,7 +104,13 @@ impl ToolHandler for ReadFileHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation {
+            session,
+            turn,
+            call_id,
+            payload,
+            ..
+        } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -145,6 +157,8 @@ impl ToolHandler for ReadFileHandler {
                 indentation::read_block(&path, offset, limit, indentation).await?
             }
         };
+        maybe_prompt_missing_skill_dependencies(session.as_ref(), turn.as_ref(), &call_id, &path)
+            .await;
         Ok(ToolOutput::Function {
             content: collected.join("\n"),
             content_items: None,
@@ -436,6 +450,37 @@ fn format_line(bytes: &[u8]) -> String {
     } else {
         decoded.into_owned()
     }
+}
+
+async fn maybe_prompt_missing_skill_dependencies(
+    session: &Session,
+    turn: &TurnContext,
+    call_id: &str,
+    path: &Path,
+) {
+    if !path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(SKILL_FILE_NAME))
+    {
+        return;
+    }
+
+    let outcome = session
+        .services
+        .skills_manager
+        .skills_for_cwd(&turn.cwd, false)
+        .await;
+    let resolved_path = canonicalize_path(path).unwrap_or_else(|_| path.to_path_buf());
+    let Some(skill) = outcome
+        .skills
+        .iter()
+        .find(|skill| skill.path == resolved_path)
+    else {
+        return;
+    };
+
+    let _ = handle_skill_dependencies(session, turn, format!("{call_id}-mcp-deps"), skill).await;
 }
 
 fn trim_empty_lines(out: &mut VecDeque<&LineRecord>) {

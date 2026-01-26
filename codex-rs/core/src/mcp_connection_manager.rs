@@ -312,6 +312,36 @@ pub(crate) struct McpConnectionManager {
 }
 
 impl McpConnectionManager {
+    pub(crate) fn startup_futures_for(
+        &self,
+        server_names: &[String],
+    ) -> Vec<BoxFuture<'static, (String, Result<(), String>)>> {
+        server_names
+            .iter()
+            .map(|server_name| {
+                if let Some(client) = self.clients.get(server_name) {
+                    let server_name = server_name.clone();
+                    let client = client.clone();
+                    async move {
+                        let outcome = client.client().await;
+                        let result = match outcome {
+                            Ok(_) => Ok(()),
+                            Err(StartupOutcomeError::Cancelled) => {
+                                Err("MCP startup cancelled".to_string())
+                            }
+                            Err(StartupOutcomeError::Failed { error }) => Err(error),
+                        };
+                        (server_name, result)
+                    }
+                    .boxed()
+                } else {
+                    let server_name = server_name.clone();
+                    async move { (server_name, Err("unknown MCP server".to_string())) }.boxed()
+                }
+            })
+            .collect()
+    }
+
     pub async fn initialize(
         &mut self,
         mcp_servers: &HashMap<String, McpServerConfig>,
@@ -414,6 +444,125 @@ impl McpConnectionManager {
                 })
                 .await;
         });
+    }
+
+    pub async fn add_servers(
+        &mut self,
+        mcp_servers: &HashMap<String, McpServerConfig>,
+        store_mode: OAuthCredentialsStoreMode,
+        auth_entries: HashMap<String, McpAuthStatusEntry>,
+        tx_event: Sender<Event>,
+        cancel_token: CancellationToken,
+        sandbox_state: SandboxState,
+    ) {
+        if cancel_token.is_cancelled() {
+            return;
+        }
+
+        let mut join_set = JoinSet::new();
+        let mut started_any = false;
+        let elicitation_requests = self.elicitation_requests.clone();
+
+        for (server_name, cfg) in mcp_servers.iter().filter(|(_, cfg)| cfg.enabled) {
+            if self.clients.contains_key(server_name) {
+                continue;
+            }
+
+            let server_name = server_name.clone();
+            let cancel_token = cancel_token.child_token();
+            let _ = emit_update(
+                &tx_event,
+                McpStartupUpdateEvent {
+                    server: server_name.clone(),
+                    status: McpStartupStatus::Starting,
+                },
+            )
+            .await;
+
+            let async_managed_client = AsyncManagedClient::new(
+                server_name.clone(),
+                cfg.clone(),
+                store_mode,
+                cancel_token.clone(),
+                tx_event.clone(),
+                elicitation_requests.clone(),
+            );
+            self.clients
+                .insert(server_name.clone(), async_managed_client.clone());
+            let tx_event = tx_event.clone();
+            let auth_entry = auth_entries.get(&server_name).cloned();
+            let sandbox_state = sandbox_state.clone();
+            join_set.spawn(async move {
+                let outcome = async_managed_client.client().await;
+                if cancel_token.is_cancelled() {
+                    return (server_name, Err(StartupOutcomeError::Cancelled));
+                }
+                let status = match &outcome {
+                    Ok(_) => {
+                        if let Err(err) = async_managed_client
+                            .notify_sandbox_state_change(&sandbox_state)
+                            .await
+                        {
+                            warn!(
+                                "Failed to notify sandbox state to MCP server {server_name}: {err:#}",
+                            );
+                        }
+                        McpStartupStatus::Ready
+                    }
+                    Err(error) => {
+                        let error_str = mcp_init_error_display(
+                            server_name.as_str(),
+                            auth_entry.as_ref(),
+                            error,
+                        );
+                        McpStartupStatus::Failed { error: error_str }
+                    }
+                };
+
+                let _ = emit_update(
+                    &tx_event,
+                    McpStartupUpdateEvent {
+                        server: server_name.clone(),
+                        status,
+                    },
+                )
+                .await;
+
+                (server_name, outcome)
+            });
+            started_any = true;
+        }
+
+        if !started_any {
+            return;
+        }
+
+        tokio::spawn(async move {
+            let outcomes = join_set.join_all().await;
+            let mut summary = McpStartupCompleteEvent::default();
+            for (server_name, outcome) in outcomes {
+                match outcome {
+                    Ok(_) => summary.ready.push(server_name),
+                    Err(StartupOutcomeError::Cancelled) => summary.cancelled.push(server_name),
+                    Err(StartupOutcomeError::Failed { error }) => {
+                        summary.failed.push(McpStartupFailure {
+                            server: server_name,
+                            error,
+                        })
+                    }
+                }
+            }
+            let _ = tx_event
+                .send(Event {
+                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    msg: EventMsg::McpStartupComplete(summary),
+                })
+                .await;
+        });
+    }
+
+    pub(crate) fn has_server(&self, server_name: &str) -> bool {
+        self.clients.contains_key(server_name)
     }
 
     async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {

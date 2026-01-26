@@ -1101,6 +1101,7 @@ mod tests {
                 description: "test skill".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
             }]),

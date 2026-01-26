@@ -92,12 +92,15 @@ use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
+use codex_protocol::approvals::SkillDependenciesApprovalRequestEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
@@ -263,6 +266,30 @@ fn is_standard_tool_call(parsed_cmd: &[ParsedCommand]) -> bool {
         && parsed_cmd
             .iter()
             .all(|parsed| !matches!(parsed, ParsedCommand::Unknown { .. }))
+}
+
+fn skill_dependencies_to_user_input_request(
+    ev: SkillDependenciesApprovalRequestEvent,
+) -> RequestUserInputEvent {
+    RequestUserInputEvent {
+        call_id: ev.call_id,
+        turn_id: ev.turn_id,
+        questions: vec![RequestUserInputQuestion {
+            id: ev.question_id,
+            header: ev.header,
+            question: ev.question,
+            options: Some(vec![
+                RequestUserInputQuestionOption {
+                    label: ev.run_anyway.label,
+                    description: ev.run_anyway.description,
+                },
+                RequestUserInputQuestionOption {
+                    label: ev.install.label,
+                    description: ev.install.description,
+                },
+            ]),
+        }],
+    }
 }
 
 const RATE_LIMIT_WARNING_THRESHOLDS: [f64; 3] = [75.0, 90.0, 95.0];
@@ -1310,6 +1337,14 @@ impl ChatWidget {
             |q| q.push_user_input(ev),
             |s| s.handle_request_user_input_now(ev2),
         );
+    }
+
+    fn on_skill_dependencies_approval_request(
+        &mut self,
+        ev: SkillDependenciesApprovalRequestEvent,
+    ) {
+        let request = skill_dependencies_to_user_input_request(ev);
+        self.on_request_user_input(request);
     }
 
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
@@ -2959,6 +2994,9 @@ impl ChatWidget {
             EventMsg::RequestUserInput(ev) => {
                 self.on_request_user_input(ev);
             }
+            EventMsg::SkillDependenciesApprovalRequest(ev) => {
+                self.on_skill_dependencies_approval_request(ev);
+            }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
@@ -3019,7 +3057,8 @@ impl ChatWidget {
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ReasoningRawContentDelta(_) => {}
+            | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::SkillRead(_) => {}
         }
     }
 

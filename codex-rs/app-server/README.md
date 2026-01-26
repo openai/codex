@@ -482,6 +482,17 @@ Order of messages:
 
 UI guidance for IDEs: surface an approval dialog as soon as the request arrives. The turn will proceed after the server receives a response to the approval request. The terminal `item/completed` notification will be sent with the appropriate status.
 
+### Skill dependency approvals
+
+When a skill declares missing MCP dependencies, the server sends a request so the client can ask the user whether to install them. The client should present the prompt and reply with the user's decision.
+
+Order of messages:
+
+1. `item/skillDependencies/requestApproval` (request) - includes `threadId`, `turnId`, `itemId`, prompt text, and two options (`runAnyway`, `install`).
+2. Client response - `{ "decision": "install" | "runAnyway" }`.
+
+After a response, the turn resumes. If the user chooses `install`, Codex will attempt to add the MCP server config before continuing.
+
 ## Skills
 
 Invoke a skill by including `$<skill-name>` in the text input. Add a `skill` input item (recommended) so the backend injects full skill instructions instead of relying on the model to resolve the name.

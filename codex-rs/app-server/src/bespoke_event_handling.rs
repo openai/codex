@@ -49,6 +49,10 @@ use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ReasoningTextDeltaNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::SkillDependenciesApprovalDecision;
+use codex_app_server_protocol::SkillDependenciesRequestApprovalOption;
+use codex_app_server_protocol::SkillDependenciesRequestApprovalParams;
+use codex_app_server_protocol::SkillDependenciesRequestApprovalResponse;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadRollbackResponse;
@@ -80,6 +84,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_core::protocol::SkillDependenciesApprovalRequestEvent;
 use codex_core::protocol::TokenCountEvent;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
@@ -88,6 +93,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
+use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -269,8 +275,12 @@ pub(crate) async fn apply_bespoke_event_handling(
         },
         EventMsg::RequestUserInput(request) => {
             if matches!(api_version, ApiVersion::V2) {
-                let questions = request
-                    .questions
+                let RequestUserInputEvent {
+                    call_id,
+                    turn_id,
+                    questions,
+                } = request;
+                let questions = questions
                     .into_iter()
                     .map(|question| ToolRequestUserInputQuestion {
                         id: question.id,
@@ -289,8 +299,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .collect();
                 let params = ToolRequestUserInputParams {
                     thread_id: conversation_id.to_string(),
-                    turn_id: request.turn_id,
-                    item_id: request.call_id,
+                    turn_id,
+                    item_id: call_id,
                     questions,
                 };
                 let rx = outgoing
@@ -302,6 +312,56 @@ pub(crate) async fn apply_bespoke_event_handling(
             } else {
                 error!(
                     "request_user_input is only supported on api v2 (call_id: {})",
+                    request.call_id
+                );
+                let empty = CoreRequestUserInputResponse {
+                    answers: HashMap::new(),
+                };
+                if let Err(err) = conversation
+                    .submit(Op::UserInputAnswer {
+                        id: event_turn_id,
+                        response: empty,
+                    })
+                    .await
+                {
+                    error!("failed to submit UserInputAnswer: {err}");
+                }
+            }
+        }
+        EventMsg::SkillDependenciesApprovalRequest(request) => {
+            if matches!(api_version, ApiVersion::V2) {
+                let params = SkillDependenciesRequestApprovalParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: request.turn_id.clone(),
+                    item_id: request.call_id.clone(),
+                    header: request.header.clone(),
+                    question: request.question.clone(),
+                    run_anyway: SkillDependenciesRequestApprovalOption {
+                        label: request.run_anyway.label.clone(),
+                        description: request.run_anyway.description.clone(),
+                    },
+                    install: SkillDependenciesRequestApprovalOption {
+                        label: request.install.label.clone(),
+                        description: request.install.description.clone(),
+                    },
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::SkillDependenciesRequestApproval(
+                        params,
+                    ))
+                    .await;
+                tokio::spawn(async move {
+                    on_skill_dependencies_request_approval_response(
+                        event_turn_id,
+                        rx,
+                        conversation,
+                        request,
+                    )
+                    .await;
+                });
+            } else {
+                error!(
+                    "skill dependency approvals are only supported on api v2 (call_id: {})",
                     request.call_id
                 );
                 let empty = CoreRequestUserInputResponse {
@@ -1412,6 +1472,55 @@ async fn on_exec_approval_response(
         .await
     {
         error!("failed to submit ExecApproval: {err}");
+    }
+}
+
+async fn on_skill_dependencies_request_approval_response(
+    event_turn_id: String,
+    receiver: oneshot::Receiver<JsonValue>,
+    conversation: Arc<CodexThread>,
+    request: SkillDependenciesApprovalRequestEvent,
+) {
+    let response = receiver.await;
+    let decision = match response {
+        Ok(value) => {
+            serde_json::from_value::<SkillDependenciesRequestApprovalResponse>(value)
+                .unwrap_or_else(|err| {
+                    error!("failed to deserialize SkillDependenciesRequestApprovalResponse: {err}");
+                    SkillDependenciesRequestApprovalResponse {
+                        decision: SkillDependenciesApprovalDecision::RunAnyway,
+                    }
+                })
+                .decision
+        }
+        Err(err) => {
+            error!("request failed: {err:?}");
+            SkillDependenciesApprovalDecision::RunAnyway
+        }
+    };
+
+    let selected_label = match decision {
+        SkillDependenciesApprovalDecision::Install => request.install.label,
+        SkillDependenciesApprovalDecision::RunAnyway => request.run_anyway.label,
+    };
+
+    let mut answers = HashMap::new();
+    answers.insert(
+        request.question_id,
+        CoreRequestUserInputAnswer {
+            answers: vec![selected_label],
+        },
+    );
+    let response = CoreRequestUserInputResponse { answers };
+
+    if let Err(err) = conversation
+        .submit(Op::UserInputAnswer {
+            id: event_turn_id,
+            response,
+        })
+        .await
+    {
+        error!("failed to submit UserInputAnswer: {err}");
     }
 }
 

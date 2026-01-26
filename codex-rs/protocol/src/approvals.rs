@@ -93,3 +93,29 @@ pub struct ApplyPatchApprovalRequestEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_root: Option<PathBuf>,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SkillDependenciesApprovalOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SkillDependenciesApprovalRequestEvent {
+    /// Identifier for the associated dependency prompt, if available.
+    pub call_id: String,
+    /// Turn ID that this request belongs to.
+    /// Uses `#[serde(default)]` for backwards compatibility.
+    #[serde(default)]
+    pub turn_id: String,
+    /// Question ID used to correlate the response.
+    pub question_id: String,
+    /// Header to display for the prompt.
+    pub header: String,
+    /// Prompt text describing the missing dependencies.
+    pub question: String,
+    /// Option to proceed without installing dependencies.
+    pub run_anyway: SkillDependenciesApprovalOption,
+    /// Option to install missing dependencies.
+    pub install: SkillDependenciesApprovalOption,
+}

@@ -12,6 +12,7 @@ use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RequestUserInputEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SkillDependenciesApprovalRequestEvent;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::Submission;
 use codex_protocol::request_user_input::RequestUserInputArgs;
@@ -250,6 +251,20 @@ async fn forward_events(
                         )
                         .await;
                     }
+                    Event {
+                        id,
+                        msg: EventMsg::SkillDependenciesApprovalRequest(event),
+                    } => {
+                        handle_skill_dependencies_approval(
+                            &codex,
+                            id,
+                            &parent_session,
+                            &parent_ctx,
+                            event,
+                            &cancel_token,
+                        )
+                        .await;
+                    }
                     other => {
                         match tx_sub.send(other).or_cancel(&cancel_token).await {
                             Ok(Ok(())) => {}
@@ -368,6 +383,25 @@ async fn handle_request_user_input(
     };
     let response_fut =
         parent_session.request_user_input(parent_ctx, parent_ctx.sub_id.clone(), args);
+    let response = await_user_input_with_cancel(
+        response_fut,
+        parent_session,
+        &parent_ctx.sub_id,
+        cancel_token,
+    )
+    .await;
+    let _ = codex.submit(Op::UserInputAnswer { id, response }).await;
+}
+
+async fn handle_skill_dependencies_approval(
+    codex: &Codex,
+    id: String,
+    parent_session: &Session,
+    parent_ctx: &TurnContext,
+    event: SkillDependenciesApprovalRequestEvent,
+    cancel_token: &CancellationToken,
+) {
+    let response_fut = parent_session.request_skill_dependencies_approval(parent_ctx, event);
     let response = await_user_input_with_cancel(
         response_fut,
         parent_session,

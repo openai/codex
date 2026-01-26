@@ -518,6 +518,13 @@ server_request_definitions! {
         response: v2::FileChangeRequestApprovalResponse,
     },
 
+    /// Sent when approval is requested to install missing skill dependencies.
+    /// This request is used for Turns started via turn/start.
+    SkillDependenciesRequestApproval => "item/skillDependencies/requestApproval" {
+        params: v2::SkillDependenciesRequestApprovalParams,
+        response: v2::SkillDependenciesRequestApprovalResponse,
+    },
+
     /// EXPERIMENTAL - Request input from the user for a tool call.
     ToolRequestUserInput => "item/tool/requestUserInput" {
         params: v2::ToolRequestUserInputParams,

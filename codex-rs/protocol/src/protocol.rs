@@ -47,6 +47,7 @@ pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;
 pub use crate::approvals::ExecApprovalRequestEvent;
 pub use crate::approvals::ExecPolicyAmendment;
+pub use crate::approvals::SkillDependenciesApprovalRequestEvent;
 pub use crate::request_user_input::RequestUserInputEvent;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
@@ -746,11 +747,16 @@ pub enum EventMsg {
     /// Notification that the agent attached a local image via the view_image tool.
     ViewImageToolCall(ViewImageToolCallEvent),
 
+    /// Notification that the read_file tool read a registered SKILL.md file.
+    SkillRead(SkillReadEvent),
+
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
     RequestUserInput(RequestUserInputEvent),
 
     ElicitationRequest(ElicitationRequestEvent),
+
+    SkillDependenciesApprovalRequest(SkillDependenciesApprovalRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
 
@@ -1843,6 +1849,14 @@ pub struct ViewImageToolCallEvent {
     pub call_id: String,
     /// Local filesystem path provided to the tool.
     pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SkillReadEvent {
+    /// Identifier for the originating tool call.
+    pub call_id: String,
+    /// Skill metadata associated with the read SKILL.md file.
+    pub skill: SkillMetadata,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]

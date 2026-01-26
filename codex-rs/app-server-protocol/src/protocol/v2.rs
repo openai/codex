@@ -548,6 +548,16 @@ pub enum FileChangeApprovalDecision {
     Cancel,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum SkillDependenciesApprovalDecision {
+    /// User approved installing missing dependencies.
+    Install,
+    /// User declined installation and chose to continue anyway.
+    RunAnyway,
+}
+
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -2369,6 +2379,34 @@ pub struct FileChangeRequestApprovalParams {
 #[ts(export_to = "v2/")]
 pub struct FileChangeRequestApprovalResponse {
     pub decision: FileChangeApprovalDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillDependenciesRequestApprovalOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillDependenciesRequestApprovalParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub header: String,
+    pub question: String,
+    pub run_anyway: SkillDependenciesRequestApprovalOption,
+    pub install: SkillDependenciesRequestApprovalOption,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillDependenciesRequestApprovalResponse {
+    pub decision: SkillDependenciesApprovalDecision,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

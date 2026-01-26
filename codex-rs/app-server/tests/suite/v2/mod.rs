@@ -9,6 +9,7 @@ mod output_schema;
 mod rate_limits;
 mod request_user_input;
 mod review;
+mod skill_dependencies;
 mod thread_archive;
 mod thread_fork;
 mod thread_list;
