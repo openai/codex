@@ -846,10 +846,7 @@ async fn make_chatwidget_manual(
         quit_shortcut_key: None,
         is_review_mode: false,
         pre_review_token_info: None,
-        needs_final_message_separator: false,
-        had_work_activity: false,
         saw_plan_update_this_turn: false,
-        last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
         current_rollout_path: None,
@@ -878,16 +875,6 @@ fn set_chatgpt_auth(chat: &mut ChatWidget) {
         chat.config.codex_home.clone(),
         chat.auth_manager.clone(),
     ));
-}
-
-#[tokio::test]
-async fn worked_elapsed_from_resets_when_timer_restarts() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    assert_eq!(chat.worked_elapsed_from(5), 5);
-    assert_eq!(chat.worked_elapsed_from(9), 4);
-    // Simulate status timer resetting (e.g., status indicator recreated for a new task).
-    assert_eq!(chat.worked_elapsed_from(3), 3);
-    assert_eq!(chat.worked_elapsed_from(7), 4);
 }
 
 pub(crate) async fn make_chatwidget_manual_with_sender() -> (
@@ -1708,7 +1695,6 @@ async fn streaming_final_answer_keeps_task_running_state() {
     chat.on_commit_tick();
 
     assert!(chat.bottom_pane.is_task_running());
-    assert!(chat.bottom_pane.status_widget().is_none());
 
     chat.bottom_pane
         .set_composer_text("queued submission".to_string(), Vec::new(), Vec::new());
@@ -2482,14 +2468,7 @@ async fn undo_started_hides_interrupt_hint() {
         msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
     });
 
-    let status = chat
-        .bottom_pane
-        .status_widget()
-        .expect("status indicator should be active");
-    assert!(
-        !status.interrupt_hint_visible(),
-        "undo should hide the interrupt hint because the operation cannot be cancelled"
-    );
+    assert_eq!(chat.current_status_header, "Undo in progress...");
 }
 
 /// The commit picker shows only commit subjects (no timestamps).
@@ -4358,12 +4337,9 @@ async fn stream_error_updates_status_indicator() {
         cells.is_empty(),
         "expected no history cell for StreamError event"
     );
-    let status = chat
-        .bottom_pane
-        .status_widget()
-        .expect("status indicator should be visible");
-    assert_eq!(status.header(), msg);
-    assert_eq!(status.details(), Some(details));
+    assert!(chat.bottom_pane.is_task_running());
+    assert_eq!(chat.current_status_header, msg);
+    assert_eq!(chat.retry_status_header.as_deref(), Some("Working"));
 }
 
 #[tokio::test]
@@ -4411,12 +4387,7 @@ async fn stream_recovery_restores_previous_status_header() {
         }),
     });
 
-    let status = chat
-        .bottom_pane
-        .status_widget()
-        .expect("status indicator should be visible");
-    assert_eq!(status.header(), "Working");
-    assert_eq!(status.details(), None);
+    assert_eq!(chat.current_status_header, "Working");
     assert!(chat.retry_status_header.is_none());
 }
 

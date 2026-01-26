@@ -487,25 +487,8 @@ pub(crate) struct ChatWidget {
     is_review_mode: bool,
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
-    // Whether the next streamed assistant content should be preceded by a final message separator.
-    //
-    // This is set whenever we insert a visible history cell that conceptually belongs to a turn.
-    // The separator itself is only rendered if the turn recorded "work" activity (see
-    // `had_work_activity`).
-    needs_final_message_separator: bool,
-    // Whether the current turn performed "work" (exec commands, MCP tool calls, patch applications).
-    //
-    // This gates rendering of the "Worked for …" separator so purely conversational turns don't
-    // show an empty divider. It is reset when the separator is emitted.
-    had_work_activity: bool,
     // Whether the current turn emitted a plan update.
     saw_plan_update_this_turn: bool,
-    // Status-indicator elapsed seconds captured at the last emitted final-message separator.
-    //
-    // This lets the separator show per-chunk work time (since the previous separator) rather than
-    // the total task-running time reported by the status indicator.
-    last_separator_elapsed_secs: Option<u64>,
-
     last_rendered_width: std::cell::Cell<Option<usize>>,
     // Feedback sink for /feedback
     feedback: codex_feedback::CodexFeedback,
@@ -685,7 +668,6 @@ impl ChatWidget {
         let Some(wait) = self.unified_exec_wait_streak.take() else {
             return;
         };
-        self.needs_final_message_separator = true;
         let cell = history_cell::new_unified_exec_interaction(wait.command_display, String::new());
         self.app_event_tx
             .send(AppEvent::InsertHistoryCell(Box::new(cell)));
@@ -1626,21 +1608,6 @@ impl ChatWidget {
         self.flush_active_cell();
 
         if self.stream_controller.is_none() {
-            // If the previous turn inserted non-stream history (exec output, patch status, MCP
-            // calls), render a separator before starting the next streamed assistant message.
-            if self.needs_final_message_separator && self.had_work_activity {
-                let elapsed_seconds = self
-                    .bottom_pane
-                    .status_widget()
-                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
-                    .map(|current| self.worked_elapsed_from(current));
-                self.add_to_history(history_cell::FinalMessageSeparator::new(elapsed_seconds));
-                self.needs_final_message_separator = false;
-                self.had_work_activity = false;
-            } else if self.needs_final_message_separator {
-                // Reset the flag even if we don't show separator (no work was done)
-                self.needs_final_message_separator = false;
-            }
             self.stream_controller = Some(StreamController::new(
                 self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
             ));
@@ -1651,17 +1618,6 @@ impl ChatWidget {
             self.app_event_tx.send(AppEvent::StartCommitAnimation);
         }
         self.request_redraw();
-    }
-
-    fn worked_elapsed_from(&mut self, current_elapsed: u64) -> u64 {
-        let baseline = match self.last_separator_elapsed_secs {
-            Some(last) if current_elapsed < last => 0,
-            Some(last) => last,
-            None => 0,
-        };
-        let elapsed = current_elapsed.saturating_sub(baseline);
-        self.last_separator_elapsed_secs = Some(current_elapsed);
-        elapsed
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
@@ -1719,8 +1675,6 @@ impl ChatWidget {
                 self.request_redraw();
             }
         }
-        // Mark that actual work was done (command executed)
-        self.had_work_activity = true;
     }
 
     pub(crate) fn handle_patch_apply_end_now(
@@ -1732,8 +1686,6 @@ impl ChatWidget {
         if !event.success {
             self.add_to_history(history_cell::new_patch_apply_failure(event.stderr));
         }
-        // Mark that actual work was done (patch applied)
-        self.had_work_activity = true;
     }
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
@@ -1905,8 +1857,6 @@ impl ChatWidget {
         if let Some(extra) = extra_cell {
             self.add_boxed_history(extra);
         }
-        // Mark that actual work was done (MCP tool call)
-        self.had_work_activity = true;
     }
 
     pub(crate) fn new(common: ChatWidgetInit, thread_manager: Arc<ThreadManager>) -> Self {
@@ -2006,10 +1956,7 @@ impl ChatWidget {
             quit_shortcut_key: None,
             is_review_mode: false,
             pre_review_token_info: None,
-            needs_final_message_separator: false,
-            had_work_activity: false,
             saw_plan_update_this_turn: false,
-            last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -2128,9 +2075,6 @@ impl ChatWidget {
             quit_shortcut_key: None,
             is_review_mode: false,
             pre_review_token_info: None,
-            needs_final_message_separator: false,
-            had_work_activity: false,
-            last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -2249,10 +2193,7 @@ impl ChatWidget {
             quit_shortcut_key: None,
             is_review_mode: false,
             pre_review_token_info: None,
-            needs_final_message_separator: false,
-            had_work_activity: false,
             saw_plan_update_this_turn: false,
-            last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
             current_rollout_path: None,
@@ -2718,7 +2659,6 @@ impl ChatWidget {
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.active_cell.take() {
-            self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
     }
@@ -2739,7 +2679,6 @@ impl ChatWidget {
         if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_cell();
-            self.needs_final_message_separator = true;
         }
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
@@ -2853,8 +2792,6 @@ impl ChatWidget {
                 local_image_paths,
             ));
         }
-
-        self.needs_final_message_separator = false;
     }
 
     /// Replay a subset of initial events into the UI to seed the transcript when
@@ -3084,9 +3021,6 @@ impl ChatWidget {
                 event.local_images,
             ));
         }
-
-        // User messages reset separator state so the next agent response doesn't add a stray break.
-        self.needs_final_message_separator = false;
     }
 
     /// Exit the UI immediately without waiting for shutdown.

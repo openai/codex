@@ -1769,42 +1769,6 @@ pub(crate) fn new_reasoning_summary_block(full_reasoning_buffer: String) -> Box<
     ))
 }
 
-#[derive(Debug)]
-/// A visual divider between turns, optionally showing how long the assistant "worked for".
-///
-/// This separator is only emitted for turns that performed concrete work (e.g., running commands,
-/// applying patches, making MCP tool calls), so purely conversational turns do not show an empty
-/// divider.
-pub struct FinalMessageSeparator {
-    elapsed_seconds: Option<u64>,
-}
-impl FinalMessageSeparator {
-    /// Creates a separator; `elapsed_seconds` typically comes from the status indicator timer.
-    pub(crate) fn new(elapsed_seconds: Option<u64>) -> Self {
-        Self { elapsed_seconds }
-    }
-}
-impl HistoryCell for FinalMessageSeparator {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let elapsed_seconds = self
-            .elapsed_seconds
-            .map(super::status_indicator_widget::fmt_elapsed_compact);
-        if let Some(elapsed_seconds) = elapsed_seconds {
-            let worked_for = format!("─ Worked for {elapsed_seconds} ─");
-            let worked_for_width = worked_for.width();
-            vec![
-                Line::from_iter([
-                    worked_for,
-                    "─".repeat((width as usize).saturating_sub(worked_for_width)),
-                ])
-                .dim(),
-            ]
-        } else {
-            vec![Line::from_iter(["─".repeat(width as usize).dim()])]
-        }
-    }
-}
-
 fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
     let args_str = invocation
         .arguments
