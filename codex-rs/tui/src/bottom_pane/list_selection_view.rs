@@ -42,6 +42,7 @@ pub(crate) struct SelectionItem {
     pub selected_description: Option<String>,
     pub is_current: bool,
     pub is_default: bool,
+    pub is_disabled: bool,
     pub actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
     pub search_value: Option<String>,
@@ -217,12 +218,14 @@ impl ListSelectionView {
                         .flatten()
                         .or_else(|| item.description.clone());
                     let wrap_indent = description.is_none().then_some(wrap_prefix_width);
+                    let is_disabled = item.is_disabled || item.disabled_reason.is_some();
                     GenericDisplayRow {
                         name: display_name,
                         display_shortcut: item.display_shortcut,
                         match_indices: None,
                         description,
                         wrap_indent,
+                        is_disabled,
                         disabled_reason: item.disabled_reason.clone(),
                     }
                 })
@@ -247,19 +250,27 @@ impl ListSelectionView {
     }
 
     fn accept(&mut self) {
-        if let Some(idx) = self.state.selected_idx
-            && let Some(actual_idx) = self.filtered_indices.get(idx)
-            && let Some(item) = self.items.get(*actual_idx)
+        let selected_item = self
+            .state
+            .selected_idx
+            .and_then(|idx| self.filtered_indices.get(idx))
+            .and_then(|actual_idx| self.items.get(*actual_idx));
+        if let Some(item) = selected_item
             && item.disabled_reason.is_none()
+            && !item.is_disabled
         {
-            self.last_selected_actual_idx = Some(*actual_idx);
+            if let Some(idx) = self.state.selected_idx
+                && let Some(actual_idx) = self.filtered_indices.get(idx)
+            {
+                self.last_selected_actual_idx = Some(*actual_idx);
+            }
             for act in &item.actions {
                 act(&self.app_event_tx);
             }
             if item.dismiss_on_select {
                 self.complete = true;
             }
-        } else {
+        } else if selected_item.is_none() {
             self.complete = true;
         }
     }
@@ -286,7 +297,7 @@ impl ListSelectionView {
                 && self
                     .items
                     .get(*actual_idx)
-                    .is_some_and(|item| item.disabled_reason.is_some())
+                    .is_some_and(|item| item.disabled_reason.is_some() || item.is_disabled)
             {
                 self.state.move_down_wrap(len);
             } else {
@@ -303,7 +314,7 @@ impl ListSelectionView {
                 && self
                     .items
                     .get(*actual_idx)
-                    .is_some_and(|item| item.disabled_reason.is_some())
+                    .is_some_and(|item| item.disabled_reason.is_some() || item.is_disabled)
             {
                 self.state.move_up_wrap(len);
             } else {
@@ -395,7 +406,7 @@ impl BottomPaneView for ListSelectionView {
                     && self
                         .items
                         .get(idx)
-                        .is_some_and(|item| item.disabled_reason.is_none())
+                        .is_some_and(|item| item.disabled_reason.is_none() && !item.is_disabled)
                 {
                     self.state.selected_idx = Some(idx);
                     self.accept();

@@ -60,6 +60,7 @@ use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::Personality;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -932,14 +933,10 @@ impl App {
 
         let auth = auth_manager.auth().await;
         let auth_ref = auth.as_ref();
-        let model_info = thread_manager
-            .get_models_manager()
-            .get_model_info(model.as_str(), &config)
-            .await;
         let otel_manager = OtelManager::new(
             ThreadId::new(),
             model.as_str(),
-            model_info.slug.as_str(),
+            model.as_str(),
             auth_ref.and_then(CodexAuth::get_account_id),
             auth_ref.and_then(CodexAuth::get_account_email),
             auth_ref.map(|auth| auth.mode),
@@ -1505,6 +1502,9 @@ impl App {
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
             }
+            AppEvent::UpdatePersonality(personality) => {
+                self.on_update_personality(personality);
+            }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
@@ -1754,6 +1754,41 @@ impl App {
                         } else {
                             self.chat_widget
                                 .add_error_message(format!("Failed to save default model: {err}"));
+                        }
+                    }
+                }
+            }
+            AppEvent::PersistPersonalitySelection { personality } => {
+                let profile = self.active_profile.as_deref();
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_profile(profile)
+                    .set_model_personality(Some(personality))
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        let label = Self::personality_label(personality);
+                        let mut message = format!("Personality set to {label}");
+                        if let Some(profile) = profile {
+                            message.push_str(" for ");
+                            message.push_str(profile);
+                            message.push_str(" profile");
+                        }
+                        self.chat_widget.add_info_message(message, None);
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist personality selection"
+                        );
+                        if let Some(profile) = profile {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save personality for profile `{profile}`: {err}"
+                            ));
+                        } else {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to save default personality: {err}"
+                            ));
                         }
                     }
                 }
@@ -2160,6 +2195,18 @@ impl App {
         // Instead, explicitly pass the stored collaboration mode's effort into new sessions.
         self.config.model_reasoning_effort = effort;
         self.chat_widget.set_reasoning_effort(effort);
+    }
+
+    fn on_update_personality(&mut self, personality: Personality) {
+        self.config.model_personality = Some(personality);
+        self.chat_widget.set_personality(personality);
+    }
+
+    fn personality_label(personality: Personality) -> &'static str {
+        match personality {
+            Personality::Friendly => "Friendly",
+            Personality::Pragmatic => "Pragmatic",
+        }
     }
 
     async fn launch_external_editor(&mut self, tui: &mut tui::Tui) {

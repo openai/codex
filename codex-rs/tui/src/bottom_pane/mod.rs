@@ -215,6 +215,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_personality_command_enabled(&mut self, enabled: bool) {
+        self.composer.set_personality_command_enabled(enabled);
+        self.request_redraw();
+    }
+
     pub fn status_widget(&self) -> Option<&StatusIndicatorWidget> {
         self.status.as_ref()
     }
