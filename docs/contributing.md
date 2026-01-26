@@ -8,7 +8,7 @@ If you would like to propose a new feature or a change in behavior, please open 
 
 If you encounter a bug, please open a bug report or verify that an existing report already covers the issue. If you would like to help, we encourage you to contribute by sharing analysis, reproduction details, root-cause hypotheses, or a high-level outline of a potential fix directly in the issue thread.
 
-In limited cases, the Codex team may invite an external contributor to submit a pull request. Invitations are issued only when:
+The Codex team may invite an external contributor to submit a pull request when:
 
 - the problem is well understood,
 - the proposed approach aligns with the team’s intended solution, and
@@ -22,7 +22,7 @@ In the past, the Codex team accepted external pull requests for bug fixes. While
 
 Many contributions were made without full visibility into the architectural context, system-level constraints, or near-term roadmap considerations that guide Codex development. Others focused on issues that were low priority or affected a very small subset of users. Reviewing and iterating on these PRs often took more time than implementing the fix directly, and diverted attention from higher-priority work.
 
-The most valuable contributions consistently came from community members who demonstrated deep understanding of a problem domain. That expertise is most helpful when shared early—through detailed bug reports, analysis, and design discussion in issues. Identifying the right solution is usually the hard part; implementing it is comparatively straightforward with the help of Codex itself.
+The most valuable contributions consistently came from community members who demonstrated deep understanding of a problem domain. That expertise is most helpful when shared early -- through detailed bug reports, analysis, and design discussion in issues. Identifying the right solution is typically the hard part; implementing it is comparatively straightforward with the help of Codex itself.
 
 For these reasons, we focus external contributions on discussion, analysis, and feedback, and reserve code changes for cases where a targeted invitation makes sense.
 
