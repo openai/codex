@@ -252,9 +252,7 @@ impl Session {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
-                    text: format!(
-                        "{TURN_ABORTED_OPEN_TAG}\n  <turn_id>{sub_id}</turn_id>\n  <reason>interrupted</reason>\n  <guidance>{TURN_ABORTED_INTERRUPTED_GUIDANCE}</guidance>\n</turn_aborted>"
-                    ),
+                    text: format!("{TURN_ABORTED_OPEN_TAG}\n{TURN_ABORTED_INTERRUPTED_GUIDANCE}\n</turn_aborted>"),
                 }],
                 end_turn: None,
             };
