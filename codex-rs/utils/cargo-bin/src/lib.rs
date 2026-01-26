@@ -78,25 +78,25 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
         }
     }
 
-    match assert_cmd::Command::cargo_bin(name) {
-        Ok(cmd) => {
-            let abs = absolutize_from_buck_or_cwd(PathBuf::from(cmd.get_program()))?;
-            if abs.exists() {
-                Ok(abs)
-            } else {
-                Err(CargoBinError::ResolvedPathDoesNotExist {
-                    key: "assert_cmd::Command::cargo_bin".to_owned(),
-                    path: abs,
-                })
+    match cargo_bin_via_workspace_build(name) {
+        Ok(bin) => Ok(bin),
+        Err(build_err) => match assert_cmd::Command::cargo_bin(name) {
+            Ok(cmd) => {
+                let abs = absolutize_from_buck_or_cwd(PathBuf::from(cmd.get_program()))?;
+                if abs.exists() {
+                    Ok(abs)
+                } else {
+                    Err(CargoBinError::ResolvedPathDoesNotExist {
+                        key: "assert_cmd::Command::cargo_bin".to_owned(),
+                        path: abs,
+                    })
+                }
             }
-        }
-        Err(err) => match cargo_bin_via_workspace_build(name) {
-            Ok(bin) => Ok(bin),
-            Err(build_err) => Err(CargoBinError::NotFound {
+            Err(err) => Err(CargoBinError::NotFound {
                 name: name.to_owned(),
                 env_keys,
                 fallback: format!(
-                    "assert_cmd fallback failed: {err}; cargo build fallback failed: {build_err}"
+                    "cargo build fallback failed: {build_err}; assert_cmd fallback failed: {err}"
                 ),
             }),
         },
