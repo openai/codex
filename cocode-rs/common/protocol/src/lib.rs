@@ -4,9 +4,11 @@
 //! - Model capabilities and reasoning levels
 //! - Model configuration types
 //! - Shell and truncation policies
+//! - MCP protocol types
 
 pub mod features;
 pub mod model;
+pub mod protocol;
 
 // Model types
 pub use model::Capability;

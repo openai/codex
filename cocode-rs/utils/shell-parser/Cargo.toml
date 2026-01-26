@@ -1,0 +1,21 @@
+[package]
+name = "cocode-shell-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shell command parsing and security analysis"
+
+[dependencies]
+anyhow.workspace = true
+once_cell.workspace = true
+regex.workspace = true
+streaming-iterator.workspace = true
+thiserror.workspace = true
+tree-sitter.workspace = true
+tree-sitter-bash.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

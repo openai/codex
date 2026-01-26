@@ -24,6 +24,13 @@ members = [
     "utils/string",
     "utils/async-utils",
     "utils/keyring-store",
+    "utils/stdio-to-uds",
+    "mcp/mcp-types",
+    "mcp/rmcp-client",
+    "utils/apply-patch",
+    "utils/shell-parser",
+    "retrieval",
+    "lsp",
 ]
 resolver = "2"
 
@@ -66,6 +73,16 @@ cocode-utils-json-to-toml = { path = "utils/json-to-toml" }
 cocode-utils-pty = { path = "utils/pty" }
 cocode-utils-readiness = { path = "utils/readiness" }
 cocode-utils-string = { path = "utils/string" }
+cocode-stdio-to-uds = { path = "utils/stdio-to-uds" }
+cocode-apply-patch = { path = "utils/apply-patch" }
+cocode-shell-parser = { path = "utils/shell-parser" }
+
+# Internal - MCP
+cocode-mcp-types = { path = "mcp/mcp-types" }
+cocode-rmcp-client = { path = "mcp/rmcp-client" }
+
+# Internal - LSP
+cocode-lsp = { path = "lsp" }
 
 # External (only those actually used by existing crates)
 anyhow = "1"
@@ -103,8 +120,10 @@ reqwest = "0.12"
 schemars = "0.8.22"
 serde = "1"
 serde_json = "1"
+similar = "2"
 snafu = "0.8"
 snafu-virtstack = "0.1"
+streaming-iterator = "0.1"
 strum = { version = "0.27", features = ["derive"] }
 sha1 = "0.10.6"
 tempfile = "3.23.0"
@@ -112,6 +131,8 @@ thiserror = "2.0.17"
 time = "0.3"
 tokio = "1"
 tokio-stream = "0.1.18"
+tree-sitter = "0.25"
+tree-sitter-bash = "0.25"
 tonic = "0.12"
 tokio-util = "0.7"
 toml = "0.9.5"
@@ -122,6 +143,35 @@ ts-rs = "11"
 uuid = "1"
 walkdir = "2.5.0"
 wiremock = "0.6"
+uds_windows = "1"
+
+# External - MCP related
+axum = { version = "0.8", default-features = false }
+dirs = "6"
+oauth2 = "5"
+rmcp = { version = "0.12.0", default-features = false }
+serial_test = "3"
+sha2 = "0.10"
+tiny_http = "0.12"
+urlencoding = "2"
+webbrowser = "1"
+which = "7"
+
+# External - retrieval related
+async-stream = "0.3"
+crossterm = "0.28"
+derive_more = "2"
+insta = "1"
+itertools = "0.14"
+ratatui = "0.29"
+ratatui-macros = "0.6"
+textwrap = "0.16"
+tokio-test = "0.4"
+tracing-appender = "0.2"
+tree-sitter-highlight = "0.25"
+unicode-segmentation = "1"
+unicode-width = "0.2"
+vt100 = "0.15"
 
 [workspace.lints]
 rust = {}

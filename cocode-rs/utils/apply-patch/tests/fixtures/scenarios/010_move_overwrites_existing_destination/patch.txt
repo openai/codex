@@ -1,0 +1,7 @@
+*** Begin Patch
+*** Update File: old/name.txt
+*** Move to: renamed/dir/name.txt
+@@
+-from
++new
+*** End Patch

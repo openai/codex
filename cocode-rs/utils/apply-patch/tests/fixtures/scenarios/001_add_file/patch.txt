@@ -1,0 +1,4 @@
+*** Begin Patch
+*** Add File: bar.md
++This is a new file
+*** End Patch
