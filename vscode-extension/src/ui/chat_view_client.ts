@@ -1242,6 +1242,22 @@ function main(): void {
   const tabElBySessionId = new Map<string, HTMLDivElement>();
   let isComposing = false;
 
+  const syncTabGroupLabelWidths = (): void => {
+    const groups = tabsEl.querySelectorAll<HTMLElement>(".tabGroup");
+    for (const groupEl of Array.from(groups)) {
+      const labelEl = groupEl.querySelector<HTMLElement>(".tabGroupLabel");
+      const groupTabsEl = groupEl.querySelector<HTMLElement>(".tabGroupTabs");
+      if (!labelEl || !groupTabsEl) continue;
+      const w = Math.ceil(groupTabsEl.getBoundingClientRect().width);
+      if (w <= 0) continue;
+      const next = `${w}px`;
+      if (labelEl.style.maxWidth !== next) labelEl.style.maxWidth = next;
+    }
+  };
+
+  const tabsResizeObserver = new ResizeObserver(() => syncTabGroupLabelWidths());
+  tabsResizeObserver.observe(tabsEl);
+
   type SettingsResponseResult =
     | { ok: true; data: unknown }
     | { ok: false; error: string };
@@ -3188,6 +3204,7 @@ function main(): void {
         tabElBySessionId.delete(id);
       }
       tabsEl.replaceChildren(frag);
+      window.requestAnimationFrame(() => syncTabGroupLabelWidths());
     }
 
     const nextSessionId = s.activeSession ? s.activeSession.id : null;

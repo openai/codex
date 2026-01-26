@@ -1328,9 +1328,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .footerStatus.clickable { cursor: pointer; }
       .statusPopover { position: absolute; right: 12px; bottom: calc(100% + 6px); max-width: min(520px, calc(100vw - 24px)); background: var(--vscode-editorHoverWidget-background, var(--vscode-input-background)); border: 1px solid rgba(127,127,127,0.35); border-radius: 10px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); padding: 8px 10px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
       .tabs { display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; }
-      .tabGroup { display: flex; flex-direction: column; gap: 6px; padding: 6px; border-radius: 12px; border: 2px solid var(--wt-color); flex: 0 0 auto; }
+      .tabGroup { display: flex; flex-direction: column; gap: 6px; padding: 6px; border-radius: 12px; border: 2px solid var(--wt-color); flex: 0 0 auto; align-items: flex-start; }
       .tabGroupLabel { align-self: flex-start; font-size: 10px; line-height: 1; padding: 3px 6px; border-radius: 999px; background: var(--vscode-editorHoverWidget-background, var(--vscode-input-background)); border: 1px solid rgba(127,127,127,0.35); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-      .tabGroupTabs { display: flex; gap: 6px; }
+      .tabGroupTabs { display: flex; gap: 6px; width: fit-content; }
       .tab { padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(127,127,127,0.35); cursor: pointer; white-space: nowrap; user-select: none; }
       .tab.active { border-color: rgba(0, 120, 212, 0.9); }
       .tab.unread { background: rgba(255, 185, 0, 0.14); }
