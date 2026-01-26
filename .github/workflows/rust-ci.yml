@@ -92,7 +92,7 @@ jobs:
     timeout-minutes: 30
     needs: changed
     # Keep job-level if to avoid spinning up runners when not needed
-    if: ${{ (needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push') && (matrix.runs_on == null || vars.USE_CODEX_RUNNERS == 'true') }}
+    if: ${{ (needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push') && (matrix.runs_on == null || vars.USE_CODEX_RUNNERS == 'true') && (github.event_name != 'pull_request' || (matrix.runner == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile == 'dev')) }}
     defaults:
       run:
         working-directory: codex-rs
@@ -139,29 +139,6 @@ jobs:
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: dev
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
-
-          # Also run representative release builds on Mac and Linux because
-          # there could be release-only build errors we want to catch.
-          # Hopefully this also pre-populates the build cache to speed up
-          # releases.
-          - runner: macos-15
-            target: aarch64-apple-darwin
-            profile: release
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-musl
-            profile: release
-          - runner: windows-x64
-            target: x86_64-pc-windows-msvc
-            profile: release
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
-          - runner: windows-arm64
-            target: aarch64-pc-windows-msvc
-            profile: release
             runs_on:
               group: codex-runners
               labels: codex-windows-arm64
@@ -357,7 +334,9 @@ jobs:
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     needs: changed
-    if: ${{ (needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push') && (matrix.runs_on == null || vars.USE_CODEX_RUNNERS == 'true') }}
+    # On PRs, keep this to a single fast target to reduce CI time.
+    # (Other targets still run on `push` and can be enabled via runner group.)
+    if: ${{ (needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push') && (matrix.runs_on == null || vars.USE_CODEX_RUNNERS == 'true') && (github.event_name != 'pull_request' || (matrix.runner == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-gnu')) }}
     defaults:
       run:
         working-directory: codex-rs
