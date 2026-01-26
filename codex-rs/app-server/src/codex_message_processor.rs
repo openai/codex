@@ -1,6 +1,7 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use crate::find_files_stream::FindFilesStreamSession;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
 use crate::models::supported_models;
 use crate::outgoing_message::OutgoingMessageSender;
@@ -35,6 +36,9 @@ use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
+use codex_app_server_protocol::FindFilesStreamChunkNotification;
+use codex_app_server_protocol::FindFilesStreamParams;
+use codex_app_server_protocol::FindFilesStreamResponse;
 use codex_app_server_protocol::ForkConversationParams;
 use codex_app_server_protocol::ForkConversationResponse;
 use codex_app_server_protocol::FuzzyFileSearchParams;
@@ -257,6 +261,7 @@ pub(crate) struct CodexMessageProcessor {
     pending_rollbacks: PendingRollbacks,
     turn_summary_store: TurnSummaryStore,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    pending_find_files_streams: Arc<Mutex<HashMap<FindFilesStreamKey, FindFilesStreamSession>>>,
     feedback: CodexFeedback,
 }
 
@@ -264,6 +269,12 @@ pub(crate) struct CodexMessageProcessor {
 pub(crate) enum ApiVersion {
     V1,
     V2,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+enum FindFilesStreamKey {
+    Token(String),
+    Request(RequestId),
 }
 
 impl CodexMessageProcessor {
@@ -313,6 +324,7 @@ impl CodexMessageProcessor {
             pending_rollbacks: Arc::new(Mutex::new(HashMap::new())),
             turn_summary_store: Arc::new(Mutex::new(HashMap::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
+            pending_find_files_streams: Arc::new(Mutex::new(HashMap::new())),
             feedback,
         }
     }
@@ -559,6 +571,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::FuzzyFileSearch { request_id, params } => {
                 self.fuzzy_file_search(request_id, params).await;
+            }
+            ClientRequest::FindFilesStream { request_id, params } => {
+                self.find_files_stream(request_id, params).await;
             }
             ClientRequest::OneOffCommandExec { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
@@ -4230,6 +4245,80 @@ impl CodexMessageProcessor {
 
         let response = FuzzyFileSearchResponse { files: results };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn find_files_stream(&mut self, request_id: RequestId, params: FindFilesStreamParams) {
+        let FindFilesStreamParams {
+            query,
+            roots,
+            cancellation_token,
+        } = params;
+
+        if query.is_empty() || roots.is_empty() {
+            if let Some(token) = &cancellation_token {
+                let key = FindFilesStreamKey::Token(token.clone());
+                let mut streams = self.pending_find_files_streams.lock().await;
+                if let Some(stream) = streams.remove(&key) {
+                    stream.cancel();
+                }
+            }
+            self.send_find_files_stream_empty(request_id.clone(), query)
+                .await;
+            self.outgoing
+                .send_response(request_id, FindFilesStreamResponse {})
+                .await;
+            return;
+        }
+
+        let key = cancellation_token
+            .clone()
+            .map(FindFilesStreamKey::Token)
+            .unwrap_or(FindFilesStreamKey::Request(request_id.clone()));
+        let mut streams = self.pending_find_files_streams.lock().await;
+        if let Some(stream) = streams.get(&key) {
+            if stream.roots() == roots {
+                stream.update_request_id(request_id.clone());
+                stream.on_query(query);
+                self.outgoing
+                    .send_response(request_id, FindFilesStreamResponse {})
+                    .await;
+                return;
+            }
+            stream.cancel();
+            streams.remove(&key);
+        }
+
+        let (stream, done_rx) =
+            FindFilesStreamSession::new(roots, request_id.clone(), self.outgoing.clone());
+        stream.on_query(query);
+        streams.insert(key.clone(), stream);
+        drop(streams);
+
+        self.outgoing
+            .send_response(request_id, FindFilesStreamResponse {})
+            .await;
+
+        let streams = Arc::clone(&self.pending_find_files_streams);
+        tokio::spawn(async move {
+            let _ = done_rx.await;
+            let mut streams = streams.lock().await;
+            streams.remove(&key);
+        });
+    }
+
+    async fn send_find_files_stream_empty(&self, request_id: RequestId, query: String) {
+        let notification = FindFilesStreamChunkNotification {
+            request_id,
+            query,
+            files: Vec::new(),
+            total_match_count: 0,
+            chunk_index: 0,
+            chunk_count: 1,
+            running: false,
+        };
+        self.outgoing
+            .send_server_notification(ServerNotification::FindFilesStreamChunk(notification))
+            .await;
     }
 
     async fn upload_feedback(&self, request_id: RequestId, params: FeedbackUploadParams) {

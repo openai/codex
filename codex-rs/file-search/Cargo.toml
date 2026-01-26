@@ -16,6 +16,7 @@ path = "src/lib.rs"
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 ignore = { workspace = true }
+nucleo = "0.5.0"
 nucleo-matcher = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -23,3 +24,4 @@ tokio = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+tempfile = "3.13.0"

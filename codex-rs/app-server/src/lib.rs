@@ -42,6 +42,7 @@ mod codex_message_processor;
 mod config_api;
 mod dynamic_tools;
 mod error_code;
+mod find_files_stream;
 mod fuzzy_file_search;
 mod message_processor;
 mod models;

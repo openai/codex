@@ -331,6 +331,10 @@ client_request_definitions! {
         params: FuzzyFileSearchParams,
         response: FuzzyFileSearchResponse,
     },
+    FindFilesStream => "findFilesStream" {
+        params: FindFilesStreamParams,
+        response: FindFilesStreamResponse,
+    },
     /// Execute a command (argv vector) under the server's sandbox.
     ExecOneOffCommand {
         params: v1::ExecOneOffCommandParams,
@@ -570,6 +574,34 @@ pub struct FuzzyFileSearchResponse {
     pub files: Vec<FuzzyFileSearchResult>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FindFilesStreamParams {
+    pub query: String,
+    pub roots: Vec<String>,
+    // if provided, will cancel any previous request that used the same value
+    pub cancellation_token: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FindFilesStreamResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct FindFilesStreamChunkNotification {
+    pub request_id: RequestId,
+    pub query: String,
+    pub files: Vec<FuzzyFileSearchResult>,
+    pub total_match_count: usize,
+    pub chunk_index: usize,
+    pub chunk_count: usize,
+    pub running: bool,
+}
+
 server_notification_definitions! {
     /// NEW NOTIFICATIONS
     Error => "error" (v2::ErrorNotification),
@@ -597,6 +629,7 @@ server_notification_definitions! {
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
+    FindFilesStreamChunk => "findFilesStream/chunk" (FindFilesStreamChunkNotification),
 
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
