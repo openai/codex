@@ -222,7 +222,7 @@ impl ShellHandler {
         if let Some(output) = intercept_apply_patch(
             &exec_params.command,
             &exec_params.cwd,
-            exec_params.expiration.timeout_ms(),
+            None,
             session.as_ref(),
             turn.as_ref(),
             Some(&tracker),

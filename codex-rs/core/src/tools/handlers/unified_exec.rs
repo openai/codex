@@ -159,7 +159,7 @@ impl ToolHandler for UnifiedExecHandler {
                 if let Some(output) = intercept_apply_patch(
                     &command,
                     &cwd,
-                    Some(yield_time_ms),
+                    None,
                     context.session.as_ref(),
                     context.turn.as_ref(),
                     Some(&tracker),

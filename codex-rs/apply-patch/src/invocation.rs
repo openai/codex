@@ -222,6 +222,7 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
 /// Supported top‑level forms (must be the only top‑level statement):
 /// - `apply_patch <<'EOF'\n...\nEOF`
 /// - `cd <path> && apply_patch <<'EOF'\n...\nEOF`
+/// - `. <snapshot> && apply_patch <<'EOF'\n...\nEOF`
 ///
 /// Notes about matching:
 /// - Parsed with Tree‑sitter Bash and a strict query that uses anchors so the
@@ -295,6 +296,30 @@ fn extract_apply_patch_from_bash(
                                 name: (command_name (word) @apply_name))
                             .)
                     (#eq? @cd_name "cd")
+                    (#any-of? @apply_name "apply_patch" "applypatch")
+                    redirect: (heredoc_redirect
+                                . (heredoc_start)
+                                . (heredoc_body) @heredoc
+                                . (heredoc_end)
+                                .))
+                .)
+
+            (
+              program
+                . (redirected_statement
+                    body: (list
+                            . (command
+                                name: (command_name (word) @source_name) .
+                                argument: [
+                                  (word) @source_path
+                                  (string (string_content) @source_path)
+                                  (raw_string) @source_raw_string
+                                ] .)
+                            "&&"
+                            . (command
+                                name: (command_name (word) @apply_name))
+                            .)
+                    (#eq? @source_name ".")
                     (#any-of? @apply_name "apply_patch" "applypatch")
                     redirect: (heredoc_redirect
                                 . (heredoc_start)
