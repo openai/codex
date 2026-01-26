@@ -78,7 +78,7 @@ impl ToolHandler for CollabHandler {
 mod spawn {
     use super::*;
     use crate::agent::AgentRole;
-    use crate::agent::MAX_THREAD_SPAWN_DEPTH;
+
     use crate::agent::exceeds_thread_spawn_depth_limit;
     use crate::agent::next_thread_spawn_depth;
     use codex_protocol::protocol::SessionSource;
@@ -778,9 +778,9 @@ mod tests {
         };
         assert_eq!(
             err,
-            FunctionCallError::RespondToModel(format!(
-                "agent depth limit reached: max depth is {MAX_THREAD_SPAWN_DEPTH}"
-            ))
+            FunctionCallError::RespondToModel(
+                "Agent depth limit reached. Solve the task yourself.".to_string()
+            )
         );
     }
 
