@@ -1426,6 +1426,7 @@ impl CodexMessageProcessor {
             dynamic_tools,
             experimental_raw_events,
             personality,
+            ephemeral
         } = params;
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
@@ -1437,7 +1438,7 @@ impl CodexMessageProcessor {
             developer_instructions,
             personality,
         );
-        typesafe_overrides.ephemeral = Some(params.ephemeral.unwrap_or_default());
+        typesafe_overrides.ephemeral = ephemeral;
 
         let config = match derive_config_from_params(
             &self.cli_overrides,
