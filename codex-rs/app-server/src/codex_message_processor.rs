@@ -1,5 +1,4 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
-use crate::dynamic_tools::RESERVED_DYNAMIC_TOOL_NAMES;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
@@ -1426,7 +1425,7 @@ impl CodexMessageProcessor {
             dynamic_tools,
             experimental_raw_events,
             personality,
-            ephemeral
+            ephemeral,
         } = params;
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
@@ -4389,11 +4388,6 @@ fn validate_dynamic_tools(
         }
         if name == "mcp" || name.starts_with("mcp__") {
             return Err(format!("dynamic tool name is reserved: {name}"));
-        }
-        if RESERVED_DYNAMIC_TOOL_NAMES.contains(&name) {
-            return Err(format!(
-                "dynamic tool name conflicts with built-in tool: {name}"
-            ));
         }
         if mcp_tool_names.contains(name) {
             return Err(format!("dynamic tool name conflicts with MCP tool: {name}"));

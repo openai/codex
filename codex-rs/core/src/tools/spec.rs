@@ -1,6 +1,7 @@
 use crate::agent::AgentRole;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
+use crate::error::CodexErr;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::tools::handlers::PLAN_TOOL;
@@ -1391,23 +1392,6 @@ pub(crate) fn build_specs(
         builder.register_handler("close_agent", collab_handler);
     }
 
-    if !dynamic_tools.is_empty() {
-        for tool in dynamic_tools {
-            match dynamic_tool_to_openai_tool(tool) {
-                Ok(converted_tool) => {
-                    builder.push_spec(ToolSpec::Function(converted_tool));
-                    builder.register_handler(tool.name.clone(), dynamic_tool_handler.clone());
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to convert dynamic tool {:?} to OpenAI tool: {e:?}",
-                        tool.name
-                    );
-                }
-            }
-        }
-    }
-
     if let Some(mcp_tools) = mcp_tools {
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1420,6 +1404,23 @@ pub(crate) fn build_specs(
                 }
                 Err(e) => {
                     tracing::error!("Failed to convert {name:?} MCP tool to OpenAI tool: {e:?}");
+                }
+            }
+        }
+    }
+
+    if !dynamic_tools.is_empty() {
+        for tool in dynamic_tools {
+            match dynamic_tool_to_openai_tool(tool) {
+                Ok(converted_tool) => {
+                    builder.push_spec(ToolSpec::Function(converted_tool));
+                    builder.register_handler(tool.name.clone(), dynamic_tool_handler.clone());
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to convert dynamic tool {:?} to OpenAI tool: {e:?}",
+                        tool.name
+                    );
                 }
             }
         }
