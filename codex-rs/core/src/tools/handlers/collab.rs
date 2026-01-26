@@ -1,8 +1,11 @@
 use crate::agent::AgentStatus;
+use crate::agent::exceeds_thread_spawn_depth_limit;
+use crate::agent::next_thread_spawn_depth;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -128,8 +131,11 @@ mod spawn {
                 .into(),
             )
             .await;
-        let mut config =
-            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+        let mut config = build_agent_spawn_config(
+            &session.get_base_instructions().await,
+            turn.as_ref(),
+            child_depth,
+        )?;
         agent_role
             .apply_to_config(&mut config)
             .map_err(FunctionCallError::RespondToModel)?;
@@ -582,6 +588,7 @@ fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {
 fn build_agent_spawn_config(
     base_instructions: &BaseInstructions,
     turn: &TurnContext,
+    child_depth: i32,
 ) -> Result<Config, FunctionCallError> {
     let base_config = turn.client.config();
     let mut config = (*base_config).clone();
@@ -607,6 +614,12 @@ fn build_agent_spawn_config(
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("sandbox_policy is invalid: {err}"))
         })?;
+
+    // If the new agent will be at max depth:
+    if exceeds_thread_spawn_depth_limit(child_depth + 1) {
+        config.features.disable(Feature::Collab);
+    }
+
     Ok(config)
 }
 
@@ -1144,7 +1157,7 @@ mod tests {
         turn.approval_policy = AskForApproval::Never;
         turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
 
-        let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
+        let config = build_agent_spawn_config(&base_instructions, &turn, 0).expect("spawn config");
         let mut expected = (*turn.client.config()).clone();
         expected.base_instructions = Some(base_instructions.text);
         expected.model = Some(turn.client.get_model());
@@ -1189,7 +1202,7 @@ mod tests {
             text: "base".to_string(),
         };
 
-        let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
+        let config = build_agent_spawn_config(&base_instructions, &turn, 0).expect("spawn config");
 
         assert_eq!(config.user_instructions, base_config.user_instructions);
     }
