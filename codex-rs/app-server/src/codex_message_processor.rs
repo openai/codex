@@ -1535,6 +1535,11 @@ impl CodexMessageProcessor {
         }
         .await;
 
+        if let Some(thread_for_shutdown) = self.thread_manager.remove_thread(&thread_id).await {
+            // `exec/run` threads are one-shot; shut them down to avoid leaking resources.
+            let _ = thread_for_shutdown.submit(Op::Shutdown).await;
+        }
+
         let thread_ids_to_skip_listener_attachment_for_cleanup =
             thread_ids_to_skip_listener_attachment.clone();
         tokio::spawn(async move {
