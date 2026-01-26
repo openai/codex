@@ -12,6 +12,16 @@ use tokio::process::Command;
 use tokio::time::Duration as TokioDuration;
 use tokio::time::timeout;
 
+/// Controls whether network access is allowed when querying git remotes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NetworkMode {
+    /// Allow network access (e.g., `git remote show <remote>` may contact the remote).
+    Allow,
+    /// Local only - use cached information to avoid network delays
+    /// (e.g., `git remote show -n <remote>`).
+    LocalOnly,
+}
+
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
 ///
@@ -220,7 +230,11 @@ async fn get_git_remotes(cwd: &Path) -> Option<Vec<String>> {
 /// 1) The symbolic ref at `refs/remotes/<remote>/HEAD` for the first remote (origin prioritized)
 /// 2) `git remote show <remote>` parsed for "HEAD branch: <name>"
 /// 3) Local fallback to existing `main` or `master` if present
-async fn get_default_branch(cwd: &Path) -> Option<String> {
+///
+/// The `network` parameter controls whether commands that may contact the
+/// remote are allowed. Use `NetworkMode::LocalOnly` to avoid network delays
+/// in interactive contexts.
+async fn get_default_branch_with_network(cwd: &Path, network: NetworkMode) -> Option<String> {
     // Prefer the first remote (with origin prioritized)
     let remotes = get_git_remotes(cwd).await.unwrap_or_default();
     for remote in remotes {
@@ -243,9 +257,13 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
             }
         }
 
-        // Fall back to parsing `git remote show <remote>` output
-        if let Some(show_output) =
-            run_git_command_with_timeout(&["remote", "show", &remote], cwd).await
+        // Fall back to parsing `git remote show <remote>` output.
+        // Use `-n` flag when LocalOnly to avoid network access.
+        let show_args: Vec<&str> = match network {
+            NetworkMode::Allow => vec!["remote", "show", &remote],
+            NetworkMode::LocalOnly => vec!["remote", "show", "-n", &remote],
+        };
+        if let Some(show_output) = run_git_command_with_timeout(&show_args, cwd).await
             && show_output.status.success()
             && let Ok(text) = String::from_utf8(show_output.stdout)
         {
@@ -263,6 +281,15 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
 
     // No remote-derived default; try common local defaults if they exist
     get_default_branch_local(cwd).await
+}
+
+/// Attempt to determine the repository's default branch name.
+///
+/// This is a convenience wrapper that allows network access. Use
+/// `get_default_branch_with_network` directly if you need to avoid
+/// network delays in interactive contexts.
+async fn get_default_branch(cwd: &Path) -> Option<String> {
+    get_default_branch_with_network(cwd, NetworkMode::Allow).await
 }
 
 /// Determine the repository's default branch name, if available.
@@ -558,8 +585,9 @@ pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
 
 /// Returns a list of local git branches.
 /// Includes the default branch at the beginning of the list, if it exists.
-/// Note: The default branch is determined by consulting remote refs (e.g.,
-/// `refs/remotes/origin/HEAD`) for accuracy, but only local branches are returned.
+/// Note: The default branch is determined by consulting cached remote refs (e.g.,
+/// `refs/remotes/origin/HEAD`) without network access to avoid delays in
+/// interactive contexts. Only local branches are returned.
 pub async fn local_git_branches(cwd: &Path) -> Vec<String> {
     let mut branches: Vec<String> = if let Some(out) =
         run_git_command_with_timeout(&["branch", "--format=%(refname:short)"], cwd).await
@@ -576,7 +604,8 @@ pub async fn local_git_branches(cwd: &Path) -> Vec<String> {
 
     branches.sort_unstable();
 
-    if let Some(base) = get_default_branch(cwd).await
+    // Use LocalOnly to avoid network delays in the interactive branch picker
+    if let Some(base) = get_default_branch_with_network(cwd, NetworkMode::LocalOnly).await
         && let Some(pos) = branches.iter().position(|name| name == &base)
     {
         let base_branch = branches.remove(pos);
