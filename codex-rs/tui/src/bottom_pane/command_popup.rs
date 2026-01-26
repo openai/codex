@@ -39,6 +39,7 @@ pub(crate) struct CommandPopup {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CommandPopupFlags {
     pub(crate) collaboration_modes_enabled: bool,
+    pub(crate) personality_command_enabled: bool,
 }
 
 impl CommandPopup {
@@ -48,6 +49,9 @@ impl CommandPopup {
             .into_iter()
             .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
             .filter(|(_, cmd)| flags.collaboration_modes_enabled || *cmd != SlashCommand::Collab)
+            .filter(|(_, cmd)| {
+                flags.personality_command_enabled || *cmd != SlashCommand::Personality
+            })
             .collect();
         // Exclude prompts that collide with builtin command names and sort by name.
         let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
@@ -216,6 +220,7 @@ impl CommandPopup {
                     display_shortcut: None,
                     description: Some(description),
                     wrap_indent: None,
+                    is_disabled: false,
                     disabled_reason: None,
                 }
             })
@@ -466,6 +471,7 @@ mod tests {
             Vec::new(),
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
+                personality_command_enabled: true,
             },
         );
         popup.on_composer_text_change("/collab".to_string());
@@ -473,6 +479,48 @@ mod tests {
         match popup.selected_item() {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "collab"),
             other => panic!("expected collab to be selected for exact match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn personality_command_hidden_when_disabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                personality_command_enabled: false,
+            },
+        );
+        popup.on_composer_text_change("/pers".to_string());
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+        assert!(
+            !cmds.contains(&"personality"),
+            "expected '/personality' to be hidden when disabled, got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn personality_command_visible_when_enabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                personality_command_enabled: true,
+            },
+        );
+        popup.on_composer_text_change("/personality".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "personality"),
+            other => panic!("expected personality to be selected for exact match, got {other:?}"),
         }
     }
 }

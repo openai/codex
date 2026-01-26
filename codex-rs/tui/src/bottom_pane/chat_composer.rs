@@ -235,6 +235,7 @@ pub(crate) struct ChatComposer {
     steer_enabled: bool,
     collaboration_modes_enabled: bool,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    personality_command_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -296,6 +297,7 @@ impl ChatComposer {
             steer_enabled: false,
             collaboration_modes_enabled: false,
             collaboration_mode_indicator: None,
+            personality_command_enabled: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -325,6 +327,10 @@ impl ChatComposer {
         indicator: Option<CollaborationModeIndicator>,
     ) {
         self.collaboration_mode_indicator = indicator;
+    }
+
+    pub fn set_personality_command_enabled(&mut self, enabled: bool) {
+        self.personality_command_enabled = enabled;
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -1631,9 +1637,11 @@ impl ChatComposer {
         if let Some((name, _rest, _rest_offset)) = parse_slash_name(&text) {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
             if !treat_as_plain_text {
-                let is_builtin =
-                    Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                        .any(|(command_name, _)| command_name == name);
+                let is_builtin = Self::built_in_slash_commands_for_input(
+                    self.collaboration_modes_enabled,
+                    self.personality_command_enabled,
+                )
+                .any(|(command_name, _)| command_name == name);
                 let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
                 let is_known_prompt = name
                     .strip_prefix(&prompt_prefix)
@@ -1798,9 +1806,11 @@ impl ChatComposer {
         let first_line = self.textarea.text().lines().next().unwrap_or("");
         if let Some((name, rest, _rest_offset)) = parse_slash_name(first_line)
             && rest.is_empty()
-            && let Some((_n, cmd)) =
-                Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                    .find(|(n, _)| *n == name)
+            && let Some((_n, cmd)) = Self::built_in_slash_commands_for_input(
+                self.collaboration_modes_enabled,
+                self.personality_command_enabled,
+            )
+            .find(|(n, _)| *n == name)
         {
             self.textarea.set_text_clearing_elements("");
             Some(InputResult::Command(cmd))
@@ -1820,9 +1830,11 @@ impl ChatComposer {
             if let Some((name, rest, _rest_offset)) = parse_slash_name(&text)
                 && !rest.is_empty()
                 && !name.contains('/')
-                && let Some((_n, cmd)) =
-                    Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                        .find(|(command_name, _)| *command_name == name)
+                && let Some((_n, cmd)) = Self::built_in_slash_commands_for_input(
+                    self.collaboration_modes_enabled,
+                    self.personality_command_enabled,
+                )
+                .find(|(command_name, _)| *command_name == name)
                 && cmd == SlashCommand::Review
             {
                 self.textarea.set_text_clearing_elements("");
@@ -2253,9 +2265,11 @@ impl ChatComposer {
             return rest_after_name.is_empty();
         }
 
-        let builtin_match =
-            Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
+        let builtin_match = Self::built_in_slash_commands_for_input(
+            self.collaboration_modes_enabled,
+            self.personality_command_enabled,
+        )
+        .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
 
         if builtin_match {
             return true;
@@ -2308,10 +2322,12 @@ impl ChatComposer {
             _ => {
                 if is_editing_slash_command_name {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
+                    let personality_command_enabled = self.personality_command_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
                             collaboration_modes_enabled,
+                            personality_command_enabled,
                         },
                     );
                     command_popup.on_composer_text_change(first_line.to_string());
@@ -2323,12 +2339,16 @@ impl ChatComposer {
 
     fn built_in_slash_commands_for_input(
         collaboration_modes_enabled: bool,
+        personality_command_enabled: bool,
     ) -> impl Iterator<Item = (&'static str, SlashCommand)> {
         let allow_elevate_sandbox = windows_degraded_sandbox_active();
         built_in_slash_commands()
             .into_iter()
             .filter(move |(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
             .filter(move |(_, cmd)| collaboration_modes_enabled || *cmd != SlashCommand::Collab)
+            .filter(move |(_, cmd)| {
+                personality_command_enabled || *cmd != SlashCommand::Personality
+            })
     }
 
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {

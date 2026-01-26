@@ -65,6 +65,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -788,7 +789,7 @@ async fn make_chatwidget_manual(
         },
     };
     let current_collaboration_mode = base_mode;
-    let widget = ChatWidget {
+    let mut widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
         bottom_pane: bottom,
@@ -800,7 +801,7 @@ async fn make_chatwidget_manual(
         auth_manager,
         models_manager,
         otel_manager,
-        session_header: SessionHeader::new(resolved_model),
+        session_header: SessionHeader::new(resolved_model.clone()),
         initial_user_message: None,
         token_info: None,
         rate_limit_snapshot: None,
@@ -844,6 +845,7 @@ async fn make_chatwidget_manual(
         current_rollout_path: None,
         external_editor_state: ExternalEditorState::Closed,
     };
+    widget.set_model(&resolved_model);
     (widget, rx, op_rx)
 }
 
@@ -2417,6 +2419,25 @@ async fn collab_mode_enabling_keeps_custom_until_selected() {
 }
 
 #[tokio::test]
+async fn user_turn_includes_personality_from_config() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_model("bengalfox");
+    chat.set_personality(Personality::Friendly);
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn {
+            personality: Some(Personality::Friendly),
+            ..
+        } => {}
+        other => panic!("expected Op::UserTurn with friendly personality, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn slash_quit_requests_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -2961,6 +2982,16 @@ async fn model_selection_popup_snapshot() {
 }
 
 #[tokio::test]
+async fn personality_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_personality_popup();
+
+    let popup = render_bottom_popup(&chat, 80);
+    assert_snapshot!("personality_selection_popup", popup);
+}
+
+#[tokio::test]
 async fn model_picker_hides_show_in_picker_false_models_from_cache() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -2974,6 +3005,7 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
             effort: ReasoningEffortConfig::Medium,
             description: "medium".to_string(),
         }],
+        supports_personality: false,
         is_default: false,
         upgrade: None,
         show_in_picker,
@@ -3186,6 +3218,7 @@ async fn single_reasoning_option_skips_selection() {
         description: "".to_string(),
         default_reasoning_effort: ReasoningEffortConfig::High,
         supported_reasoning_efforts: single_effort,
+        supports_personality: false,
         is_default: false,
         upgrade: None,
         show_in_picker: true,

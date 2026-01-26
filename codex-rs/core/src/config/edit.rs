@@ -4,6 +4,7 @@ use crate::config::types::Notice;
 use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
 use anyhow::Context;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::BTreeMap;
@@ -24,6 +25,8 @@ pub enum ConfigEdit {
         model: Option<String>,
         effort: Option<ReasoningEffort>,
     },
+    /// Update the active (or default) model personality.
+    SetModelPersonality { personality: Option<Personality> },
     /// Toggle the acknowledgement flag under `[notice]`.
     SetNoticeHideFullAccessWarning(bool),
     /// Toggle the Windows world-writable directories warning acknowledgement flag.
@@ -269,6 +272,10 @@ impl ConfigDocument {
                 );
                 mutated
             }),
+            ConfigEdit::SetModelPersonality { personality } => Ok(self.write_profile_value(
+                &["model_personality"],
+                personality.map(|personality| value(personality.to_string())),
+            )),
             ConfigEdit::SetNoticeHideFullAccessWarning(acknowledged) => Ok(self.write_value(
                 Scope::Global,
                 &[Notice::TABLE_KEY, "hide_full_access_warning"],
@@ -709,6 +716,12 @@ impl ConfigEditsBuilder {
             model: model.map(ToOwned::to_owned),
             effort,
         });
+        self
+    }
+
+    pub fn set_model_personality(mut self, personality: Option<Personality>) -> Self {
+        self.edits
+            .push(ConfigEdit::SetModelPersonality { personality });
         self
     }
 
