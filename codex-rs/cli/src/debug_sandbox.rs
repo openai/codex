@@ -108,13 +108,19 @@ async fn run_command_under_sandbox(
     sandbox_type: SandboxType,
     log_denials: bool,
 ) -> anyhow::Result<()> {
-    let sandbox_mode = create_sandbox_mode(full_auto);
+    // When --full-auto is specified, force WorkspaceWrite mode as a convenience alias.
+    // Otherwise, respect the sandbox_mode from config.toml (defaults to ReadOnly if not set).
+    let sandbox_mode = if full_auto {
+        Some(SandboxMode::WorkspaceWrite)
+    } else {
+        None
+    };
     let config = Config::load_with_cli_overrides_and_harness_overrides(
         config_overrides
             .parse_overrides()
             .map_err(anyhow::Error::msg)?,
         ConfigOverrides {
-            sandbox_mode: Some(sandbox_mode),
+            sandbox_mode,
             codex_linux_sandbox_exe,
             ..Default::default()
         },
@@ -267,10 +273,3 @@ async fn run_command_under_sandbox(
     handle_exit_status(status);
 }
 
-pub fn create_sandbox_mode(full_auto: bool) -> SandboxMode {
-    if full_auto {
-        SandboxMode::WorkspaceWrite
-    } else {
-        SandboxMode::ReadOnly
-    }
-}
