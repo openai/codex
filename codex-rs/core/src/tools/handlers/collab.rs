@@ -113,9 +113,9 @@ mod spawn {
         let session_source = turn.client.get_session_source();
         let child_depth = next_thread_spawn_depth(&session_source);
         if exceeds_thread_spawn_depth_limit(child_depth) {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "agent depth limit reached: max depth is {MAX_THREAD_SPAWN_DEPTH}"
-            )));
+            return Err(FunctionCallError::RespondToModel(
+                "Agent depth limit reached. Solve the task yourself.".to_string(),
+            ));
         }
         session
             .send_event(
