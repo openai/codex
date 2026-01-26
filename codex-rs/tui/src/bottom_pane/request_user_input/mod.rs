@@ -56,9 +56,6 @@ impl NotesEntry {
             placeholder_text.to_string(),
             false,
         );
-        composer.set_popups_enabled(false);
-        composer.set_footer_enabled(false);
-        composer.set_prompt_inset_enabled(false);
         composer.set_task_running(false);
         Self { composer }
     }

@@ -343,21 +343,6 @@ impl ChatComposer {
         self.collaboration_modes_enabled = enabled;
     }
 
-    pub(crate) fn set_popups_enabled(&mut self, enabled: bool) {
-        self.popups_enabled = enabled;
-        if !enabled {
-            self.active_popup = ActivePopup::None;
-        }
-    }
-
-    pub(crate) fn set_footer_enabled(&mut self, enabled: bool) {
-        self.footer_enabled = enabled;
-    }
-
-    pub(crate) fn set_prompt_inset_enabled(&mut self, enabled: bool) {
-        self.prompt_inset_enabled = enabled;
-    }
-
     pub(crate) fn desired_textarea_height(&self, width: u16) -> u16 {
         let cols_with_margin = if self.prompt_inset_enabled {
             LIVE_PREFIX_COLS + 3

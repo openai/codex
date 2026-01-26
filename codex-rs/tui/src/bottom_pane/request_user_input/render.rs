@@ -11,6 +11,7 @@ use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
 use crate::bottom_pane::selection_popup_common::render_rows;
 use crate::key_hint;
 use crate::render::renderable::Renderable;
+use crate::ui_consts::LIVE_PREFIX_COLS;
 
 use super::RequestUserInputOverlay;
 
@@ -241,13 +242,14 @@ impl RequestUserInputOverlay {
             // Inline notes layout uses a prefix and a single-line text area.
             let prefix = notes_prefix();
             let prefix_width = prefix.len() as u16;
-            if input_area.width <= prefix_width {
+            let min_width = prefix_width.saturating_add(LIVE_PREFIX_COLS);
+            if input_area.width <= min_width {
                 return None;
             }
             let textarea_rect = Rect {
-                x: input_area.x.saturating_add(prefix_width),
+                x: input_area.x.saturating_add(min_width),
                 y: input_area.y,
-                width: input_area.width.saturating_sub(prefix_width),
+                width: input_area.width.saturating_sub(min_width),
                 height: 1,
             };
             return entry.composer.cursor_pos_textarea_only(textarea_rect);
@@ -267,7 +269,8 @@ impl RequestUserInputOverlay {
             // Inline notes field for tight layouts.
             let prefix = notes_prefix();
             let prefix_width = prefix.len() as u16;
-            if area.width <= prefix_width {
+            let min_width = prefix_width.saturating_add(LIVE_PREFIX_COLS);
+            if area.width <= min_width {
                 Paragraph::new(Line::from(prefix.dim())).render(area, buf);
                 return;
             }
@@ -281,9 +284,9 @@ impl RequestUserInputOverlay {
                 buf,
             );
             let textarea_rect = Rect {
-                x: area.x.saturating_add(prefix_width),
+                x: area.x.saturating_add(min_width),
                 y: area.y,
-                width: area.width.saturating_sub(prefix_width),
+                width: area.width.saturating_sub(min_width),
                 height: 1,
             };
             Clear.render(textarea_rect, buf);
