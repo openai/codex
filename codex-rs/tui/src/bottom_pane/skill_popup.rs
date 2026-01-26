@@ -96,6 +96,7 @@ impl SkillPopup {
                     match_indices: indices,
                     display_shortcut: None,
                     description: Some(description),
+                    is_disabled: false,
                     disabled_reason: None,
                     wrap_indent: None,
                 }

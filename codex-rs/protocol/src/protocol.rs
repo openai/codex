@@ -17,6 +17,8 @@ use crate::config_types::CollaborationMode;
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
+use crate::dynamic_tools::DynamicToolCallRequest;
+use crate::dynamic_tools::DynamicToolResponse;
 use crate::items::TurnItem;
 use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
@@ -214,6 +216,14 @@ pub enum Op {
         id: String,
         /// User-provided answers.
         response: RequestUserInputResponse,
+    },
+
+    /// Resolve a dynamic tool call request.
+    DynamicToolResponse {
+        /// Call id for the in-flight request.
+        id: String,
+        /// Tool output payload.
+        response: DynamicToolResponse,
     },
 
     /// Append an entry to the persistent cross-session message history.
@@ -749,6 +759,8 @@ pub enum EventMsg {
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
     RequestUserInput(RequestUserInputEvent),
+
+    DynamicToolCallRequest(DynamicToolCallRequest),
 
     ElicitationRequest(ElicitationRequestEvent),
 
@@ -1518,7 +1530,10 @@ pub enum SessionSource {
 pub enum SubAgentSource {
     Review,
     Compact,
-    ThreadSpawn { parent_thread_id: ThreadId },
+    ThreadSpawn {
+        parent_thread_id: ThreadId,
+        depth: i32,
+    },
     Other(String),
 }
 
@@ -1540,8 +1555,11 @@ impl fmt::Display for SubAgentSource {
         match self {
             SubAgentSource::Review => f.write_str("review"),
             SubAgentSource::Compact => f.write_str("compact"),
-            SubAgentSource::ThreadSpawn { parent_thread_id } => {
-                write!(f, "thread_spawn_{parent_thread_id}")
+            SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth,
+            } => {
+                write!(f, "thread_spawn_{parent_thread_id}_d{depth}")
             }
             SubAgentSource::Other(other) => f.write_str(other),
         }

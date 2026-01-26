@@ -433,7 +433,7 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
 
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.2-codex".to_string()),
+            model: Some("exp-codex-personality".to_string()),
             ..Default::default()
         })
         .await?;
