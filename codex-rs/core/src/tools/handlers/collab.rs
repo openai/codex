@@ -750,7 +750,7 @@ mod tests {
         let manager = thread_manager();
         session.services.agent_control = manager.agent_control();
 
-        let max_depth = session.services.config.agent_max_depth;
+        let max_depth = turn.client.config().agent_max_depth;
         let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id: session.conversation_id,
             depth: max_depth,
