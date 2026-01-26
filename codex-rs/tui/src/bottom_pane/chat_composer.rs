@@ -2345,8 +2345,7 @@ impl ChatComposer {
             name,
             self.collaboration_modes_enabled,
             self.personality_command_enabled,
-        )
-        {
+        ) {
             return true;
         }
 
