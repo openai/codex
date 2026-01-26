@@ -2506,6 +2506,12 @@ impl Renderable for ChatComposer {
             ActivePopup::None => {
                 let footer_props = self.footer_props();
                 let show_cycle_hint = !footer_props.is_task_running;
+                let show_shortcuts_hint = matches!(footer_props.mode, FooterMode::ShortcutSummary)
+                    && self.is_empty()
+                    && !self.is_in_paste_burst();
+                let show_queue_hint = matches!(footer_props.mode, FooterMode::ContextOnly)
+                    && footer_props.is_task_running
+                    && footer_props.steer_enabled;
                 let context_line = context_window_line(
                     footer_props.context_window_percent,
                     footer_props.context_window_used_tokens,
@@ -2534,7 +2540,12 @@ impl Renderable for ChatComposer {
                 } else if let Some(items) = self.footer_hint_override.as_ref() {
                     footer_hint_items_width(items)
                 } else {
-                    footer_line_width(footer_props, indicator, show_cycle_hint)
+                    footer_line_width(
+                        footer_props,
+                        indicator,
+                        show_cycle_hint,
+                        show_shortcuts_hint,
+                    )
                 };
                 let can_show_both =
                     can_show_left_with_context(hint_rect, left_width, context_width);
@@ -2547,6 +2558,18 @@ impl Renderable for ChatComposer {
                             context_width,
                             indicator,
                             show_cycle_hint,
+                            show_shortcuts_hint,
+                        ))
+                    } else if !has_override
+                        && matches!(footer_props.mode, FooterMode::ContextOnly)
+                        && !show_queue_hint
+                    {
+                        Some(shortcut_summary_layout(
+                            hint_rect,
+                            context_width,
+                            indicator,
+                            show_cycle_hint,
+                            false,
                         ))
                     } else {
                         None
@@ -2559,7 +2582,14 @@ impl Renderable for ChatComposer {
                 if let Some((summary_left, _)) = summary_layout {
                     match summary_left {
                         SummaryLeft::Default => {
-                            render_footer(hint_rect, buf, footer_props, indicator, show_cycle_hint);
+                            render_footer(
+                                hint_rect,
+                                buf,
+                                footer_props,
+                                indicator,
+                                show_cycle_hint,
+                                show_shortcuts_hint,
+                            );
                         }
                         SummaryLeft::Custom(line) => {
                             render_footer_line(hint_rect, buf, line);
@@ -2573,7 +2603,14 @@ impl Renderable for ChatComposer {
                 } else if let Some(items) = self.footer_hint_override.as_ref() {
                     render_footer_hint_items(hint_rect, buf, items);
                 } else {
-                    render_footer(hint_rect, buf, footer_props, indicator, show_cycle_hint);
+                    render_footer(
+                        hint_rect,
+                        buf,
+                        footer_props,
+                        indicator,
+                        show_cycle_hint,
+                        show_shortcuts_hint,
+                    );
                 }
 
                 if show_context {
