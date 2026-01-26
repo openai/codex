@@ -1059,7 +1059,7 @@ fn create_install_mcp_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "install_mcp_tool".to_string(),
-        description: "Use when the model needs to use an mcp tool but it's not already available. Also prefer to use this tool instead of calling `codex mcp add`. Before calling this tool, model must search online (if allowed) for the exact mcp config params required to install this mcp, until it's confident it has the correct configuration or it cannot figure it out.".to_string(),
+        description: "Use when the model needs to use an mcp tool but it's not available. You must call this tool instead whenever you want to run the `codex mcp add` command. Before calling this tool, model must search online (if allowed) for the exact mcp config params required to install this mcp, until you are confident it has the correct configuration or it cannot figure it out.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,

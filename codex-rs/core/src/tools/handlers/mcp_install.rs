@@ -18,6 +18,7 @@ use crate::function_tool::FunctionCallError;
 use crate::mcp::McpServerAuthFlow;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::install_mcp_server;
+use crate::mcp_connection_manager::AddServerParams;
 use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::mcp_connection_manager::SandboxState;
 use crate::protocol::SandboxPolicy;
@@ -286,15 +287,15 @@ impl ToolHandler for McpInstallHandler {
         let startup_handle = {
             let mut manager = session.services.mcp_connection_manager.write().await;
             manager
-                .add_server(
-                    name.clone(),
-                    server_config,
-                    config.mcp_oauth_credentials_store_mode,
+                .add_server(AddServerParams {
+                    server_name: name.clone(),
+                    config: server_config,
+                    store_mode: config.mcp_oauth_credentials_store_mode,
                     auth_entry,
-                    session.get_tx_event(),
+                    tx_event: session.get_tx_event(),
                     cancel_token,
                     sandbox_state,
-                )
+                })
                 .await
                 .map_err(FunctionCallError::RespondToModel)?
         };

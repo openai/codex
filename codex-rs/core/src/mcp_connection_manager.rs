@@ -157,6 +157,16 @@ pub(crate) struct ToolInfo {
     pub(crate) connector_name: Option<String>,
 }
 
+pub(crate) struct AddServerParams {
+    pub(crate) server_name: String,
+    pub(crate) config: McpServerConfig,
+    pub(crate) store_mode: OAuthCredentialsStoreMode,
+    pub(crate) auth_entry: Option<McpAuthStatusEntry>,
+    pub(crate) tx_event: Sender<Event>,
+    pub(crate) cancel_token: CancellationToken,
+    pub(crate) sandbox_state: SandboxState,
+}
+
 type ResponderMap = HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>;
 
 #[derive(Clone, Default)]
@@ -437,14 +447,17 @@ impl McpConnectionManager {
 
     pub async fn add_server(
         &mut self,
-        server_name: String,
-        config: McpServerConfig,
-        store_mode: OAuthCredentialsStoreMode,
-        auth_entry: Option<McpAuthStatusEntry>,
-        tx_event: Sender<Event>,
-        cancel_token: CancellationToken,
-        sandbox_state: SandboxState,
+        params: AddServerParams,
     ) -> Result<McpServerStartupHandle, String> {
+        let AddServerParams {
+            server_name,
+            config,
+            store_mode,
+            auth_entry,
+            tx_event,
+            cancel_token,
+            sandbox_state,
+        } = params;
         if cancel_token.is_cancelled() {
             return Err("MCP startup was cancelled".to_string());
         }
