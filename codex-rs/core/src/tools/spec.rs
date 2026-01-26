@@ -8,6 +8,7 @@ use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolRegistryBuilder;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -517,7 +518,7 @@ fn create_wait_tool() -> ToolSpec {
         "timeout_ms".to_string(),
         JsonSchema::Number {
             description: Some(format!(
-                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS} and max {MAX_WAIT_TIMEOUT_MS}."
+                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS}, min {MIN_WAIT_TIMEOUT_MS}, and max {MAX_WAIT_TIMEOUT_MS}. Avoid tight polling loops; prefer longer waits (seconds to minutes)."
             )),
         },
     );
@@ -555,7 +556,7 @@ fn create_request_user_input_tool() -> ToolSpec {
 
     let options_schema = JsonSchema::Array {
         description: Some(
-            "Optional 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Only include \"Other\" option if we want to include a free form option. If the question is free form in nature, please do not have any option."
+            "Optional 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Do not include an \"Other\" option in this list; use isOther on the question to request a free form choice. If the question is free form in nature, please do not have any option."
                 .to_string(),
         ),
         items: Box::new(JsonSchema::Object {
@@ -586,6 +587,15 @@ fn create_request_user_input_tool() -> ToolSpec {
             description: Some("Single-sentence prompt shown to the user.".to_string()),
         },
     );
+    question_props.insert(
+        "isOther".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "True when this question should include a free-form \"Other\" option. Otherwise false."
+                    .to_string(),
+            ),
+        },
+    );
     question_props.insert("options".to_string(), options_schema);
 
     let questions_schema = JsonSchema::Array {
@@ -596,6 +606,7 @@ fn create_request_user_input_tool() -> ToolSpec {
                 "id".to_string(),
                 "header".to_string(),
                 "question".to_string(),
+                "isOther".to_string(),
             ]),
             additional_properties: Some(false.into()),
         }),

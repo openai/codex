@@ -1,20 +1,22 @@
 use crate::config::Config;
 use crate::protocol::SandboxPolicy;
+use codex_protocol::openai_models::ReasoningEffort;
 use serde::Deserialize;
 use serde::Serialize;
 
 /// Base instructions for the orchestrator role.
 const ORCHESTRATOR_PROMPT: &str = include_str!("../../templates/agents/orchestrator.md");
-/// Base instructions for the worker role.
-const WORKER_PROMPT: &str = include_str!("../../gpt-5.2-codex_prompt.md");
-/// Default worker model override used by the worker role.
-const WORKER_MODEL: &str = "gpt-5.2-codex";
+/// Default model override used.
+// TODO(jif) update when we have something smarter.
+const EXPLORER_MODEL: &str = "gpt-5.2-codex";
 
 /// Enumerated list of all supported agent roles.
 const ALL_ROLES: [AgentRole; 3] = [
     AgentRole::Default,
-    AgentRole::Orchestrator,
+    AgentRole::Explorer,
     AgentRole::Worker,
+    // TODO(jif) add when we have stable prompts + models
+    // AgentRole::Orchestrator,
 ];
 
 /// Hard-coded agent role selection used when spawning sub-agents.
@@ -27,6 +29,8 @@ pub enum AgentRole {
     Orchestrator,
     /// Task-executing agent with a fixed model override.
     Worker,
+    /// Task-executing agent with a fixed model override.
+    Explorer,
 }
 
 /// Immutable profile data that drives per-agent configuration overrides.
@@ -36,6 +40,8 @@ pub struct AgentProfile {
     pub base_instructions: Option<&'static str>,
     /// Optional model override.
     pub model: Option<&'static str>,
+    /// Optional reasoning effort override.
+    pub reasoning_effort: Option<ReasoningEffort>,
     /// Whether to force a read-only sandbox policy.
     pub read_only: bool,
 }
@@ -58,8 +64,13 @@ impl AgentRole {
                 ..Default::default()
             },
             AgentRole::Worker => AgentProfile {
-                base_instructions: Some(WORKER_PROMPT),
-                model: Some(WORKER_MODEL),
+                // base_instructions: Some(WORKER_PROMPT),
+                // model: Some(WORKER_MODEL),
+                ..Default::default()
+            },
+            AgentRole::Explorer => AgentProfile {
+                model: Some(EXPLORER_MODEL),
+                reasoning_effort: Some(ReasoningEffort::Low),
                 ..Default::default()
             },
         }
@@ -73,6 +84,9 @@ impl AgentRole {
         }
         if let Some(model) = profile.model {
             config.model = Some(model.to_string());
+        }
+        if let Some(reasoning_effort) = profile.reasoning_effort {
+            config.model_reasoning_effort = Some(reasoning_effort)
         }
         if profile.read_only {
             config

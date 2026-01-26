@@ -2420,6 +2420,8 @@ pub struct ToolRequestUserInputQuestion {
     pub id: String,
     pub header: String,
     pub question: String,
+    #[serde(default)]
+    pub is_other: bool,
     pub options: Option<Vec<ToolRequestUserInputOption>>,
 }
 

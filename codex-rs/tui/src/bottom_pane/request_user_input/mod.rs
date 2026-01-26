@@ -508,6 +508,7 @@ mod tests {
             id: id.to_string(),
             header: header.to_string(),
             question: "Choose an option.".to_string(),
+            is_other: false,
             options: Some(vec![
                 RequestUserInputQuestionOption {
                     label: "Option 1".to_string(),
@@ -530,6 +531,7 @@ mod tests {
             id: id.to_string(),
             header: header.to_string(),
             question: "Share details.".to_string(),
+            is_other: false,
             options: None,
         }
     }
@@ -696,6 +698,7 @@ mod tests {
                     id: "q1".to_string(),
                     header: "Next Step".to_string(),
                     question: "What would you like to do next?".to_string(),
+                    is_other: false,
                     options: Some(vec![
                         RequestUserInputQuestionOption {
                             label: "Discuss a code change (Recommended)".to_string(),
