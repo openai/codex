@@ -763,6 +763,58 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn reset_for_context_clear(
+        &mut self,
+        event: codex_core::protocol::SessionConfiguredEvent,
+    ) {
+        self.active_cell = None;
+        self.active_cell_revision = self.active_cell_revision.wrapping_add(1);
+        self.stream_controller = None;
+        self.running_commands.clear();
+        self.suppressed_exec_calls.clear();
+        self.last_unified_wait = None;
+        self.unified_exec_wait_streak = None;
+        self.task_complete_pending = false;
+        self.clear_unified_exec_processes();
+        self.agent_turn_running = false;
+        self.update_task_running_state();
+        self.interrupts = InterruptManager::default();
+        self.reasoning_buffer.clear();
+        self.full_reasoning_buffer.clear();
+        self.retry_status_header = None;
+        self.queued_user_messages.clear();
+        self.pending_notification = None;
+        self.needs_final_message_separator = false;
+        self.had_work_activity = false;
+        self.saw_plan_update_this_turn = false;
+        self.last_separator_elapsed_secs = None;
+        self.last_rendered_width.set(None);
+        self.clear_token_usage();
+        self.refresh_queued_user_messages();
+
+        self.bottom_pane
+            .set_history_metadata(event.history_log_id, event.history_entry_count);
+        self.thread_id = Some(event.session_id);
+        self.forked_from = event.forked_from_id;
+        self.current_rollout_path = event.rollout_path.clone();
+        let model_for_header = event.model.clone();
+        let reasoning_effort = event
+            .reasoning_effort
+            .clone()
+            .or_else(|| self.current_collaboration_mode.reasoning_effort());
+        self.session_header.set_model(&model_for_header);
+        self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
+            Some(model_for_header.clone()),
+            Some(reasoning_effort),
+            None,
+        );
+        self.refresh_model_display();
+        let session_info_cell =
+            history_cell::new_session_info(&self.config, &model_for_header, event, false);
+        self.apply_session_info_cell(session_info_cell);
+        self.request_redraw();
+    }
+
     fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
         self.bottom_pane.set_skills(skills);
     }
@@ -3025,7 +3077,7 @@ impl ChatWidget {
             EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
             EventMsg::CollabCloseBegin(_) => {}
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
-            EventMsg::ThreadRolledBack(_) => {}
+            EventMsg::ThreadRolledBack(_) | EventMsg::ContextCleared(_) => {}
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)

@@ -163,6 +163,7 @@ pub enum ResponseItem {
     GhostSnapshot {
         ghost_commit: GhostCommit,
     },
+    ContextCleared,
     #[serde(alias = "compaction_summary")]
     Compaction {
         encrypted_content: String,

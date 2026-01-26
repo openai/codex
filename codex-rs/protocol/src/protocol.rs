@@ -265,6 +265,13 @@ pub enum Op {
     /// responsible for undoing any edits on disk.
     ThreadRollback { num_turns: u32 },
 
+    /// Request Codex to clear the effective context while keeping initial context.
+    ///
+    /// This is append-only: a context-cleared marker is recorded alongside a
+    /// fresh copy of the initial context, and prompt construction ignores the
+    /// earlier conversation history.
+    ClearContext,
+
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
@@ -675,6 +682,9 @@ pub enum EventMsg {
     /// Conversation history was compacted (either automatically or manually).
     ContextCompacted(ContextCompactedEvent),
 
+    /// Conversation context was cleared back to the initial context.
+    ContextCleared(ContextClearedEvent),
+
     /// Conversation history was rolled back by dropping the last N user turns.
     ThreadRolledBack(ThreadRolledBackEvent),
 
@@ -927,6 +937,7 @@ pub enum CodexErrorInfo {
         http_status_code: Option<u16>,
     },
     ThreadRollbackFailed,
+    ContextClearFailed,
     Other,
 }
 
@@ -1065,6 +1076,9 @@ pub struct WarningEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ContextCompactedEvent;
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct ContextClearedEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnCompleteEvent {

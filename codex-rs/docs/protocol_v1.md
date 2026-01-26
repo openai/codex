@@ -68,6 +68,7 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
   - `Op::UserTurn` – Any input from the user to kick off a `Turn`
   - `Op::UserInput` – Legacy form of user input
   - `Op::Interrupt` – Interrupts a running turn
+  - `Op::ClearContext` – Reset the conversation back to the initial context boundary
   - `Op::ExecApproval` – Approve or deny code execution
   - `Op::UserInputAnswer` – Provide answers for a `request_user_input` tool call
   - `Op::ListSkills` – Request skills for one or more cwd values (optionally `force_reload`)
@@ -76,6 +77,7 @@ For complete documentation of the `Op` and `EventMsg` variants, refer to [protoc
   - `EventMsg::AgentMessage` – Messages from the `Model`
   - `EventMsg::ExecApprovalRequest` – Request approval from user to execute a command
   - `EventMsg::RequestUserInput` – Request user input for a tool call
+  - `EventMsg::ContextCleared` – Signals that prior conversation history should be cleared
   - `EventMsg::TurnComplete` – A turn completed successfully
   - `EventMsg::Error` – A turn stopped with an error
   - `EventMsg::Warning` – A non-fatal warning that the client should surface to the user

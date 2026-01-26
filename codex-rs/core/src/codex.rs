@@ -1560,7 +1560,7 @@ impl Session {
                     if let Some(replacement) = &compacted.replacement_history {
                         history.replace(replacement.clone());
                     } else {
-                        let user_messages = collect_user_messages(history.raw_items());
+                        let user_messages = collect_user_messages(history.active_items());
                         let rebuilt = compact::build_compacted_history(
                             self.build_initial_context(turn_context).await,
                             &user_messages,
@@ -2184,6 +2184,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ThreadRollback { num_turns } => {
                 handlers::thread_rollback(&sess, sub.id.clone(), num_turns).await;
             }
+            Op::ClearContext => {
+                handlers::clear_context(&sess, sub.id.clone()).await;
+            }
             Op::RunUserShellCommand { command } => {
                 handlers::run_user_shell_command(
                     &sess,
@@ -2232,7 +2235,9 @@ mod handlers {
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
     use codex_protocol::custom_prompts::CustomPrompt;
+    use codex_protocol::models::ResponseItem;
     use codex_protocol::protocol::CodexErrorInfo;
+    use codex_protocol::protocol::ContextClearedEvent;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
@@ -2670,6 +2675,40 @@ mod handlers {
             msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns }),
         })
         .await;
+    }
+
+    pub async fn clear_context(sess: &Arc<Session>, sub_id: String) {
+        let has_active_turn = { sess.active_turn.lock().await.is_some() };
+        if has_active_turn {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: "Cannot clear context while a turn is in progress.".to_string(),
+                    codex_error_info: Some(CodexErrorInfo::ContextClearFailed),
+                }),
+            })
+            .await;
+            return;
+        }
+
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+
+        let mut items = Vec::with_capacity(initial_context.len() + 1);
+        items.push(ResponseItem::ContextCleared);
+        items.extend(initial_context);
+
+        sess.record_into_history(&items, turn_context.as_ref())
+            .await;
+        sess.persist_rollout_response_items(&items).await;
+        sess.send_event_raw_flushed(Event {
+            id: turn_context.sub_id.clone(),
+            msg: EventMsg::ContextCleared(ContextClearedEvent),
+        })
+        .await;
+        sess.recompute_token_usage(turn_context.as_ref()).await;
+        sess.send_raw_response_items(turn_context.as_ref(), &items)
+            .await;
     }
 
     pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
@@ -3910,6 +3949,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clear_context_appends_marker_and_initial_context() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        let turn = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "turn user".to_string(),
+                }],
+                end_turn: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "turn assistant".to_string(),
+                }],
+                end_turn: None,
+            },
+        ];
+        sess.record_into_history(&turn, tc.as_ref()).await;
+
+        handlers::clear_context(&sess, "sub-1".to_string()).await;
+        wait_for_context_cleared(&rx).await;
+
+        let mut expected = Vec::new();
+        expected.extend(initial_context.clone());
+        expected.extend(turn.clone());
+        expected.push(ResponseItem::ContextCleared);
+        expected.extend(initial_context.clone());
+
+        let history = sess.clone_history().await;
+        assert_eq!(expected, history.raw_items());
+        assert_eq!(initial_context, history.active_items());
+    }
+
+    #[tokio::test]
+    async fn clear_context_fails_when_turn_in_progress() {
+        let (sess, tc, rx) = make_session_and_context_with_rx().await;
+
+        let initial_context = sess.build_initial_context(tc.as_ref()).await;
+        sess.record_into_history(&initial_context, tc.as_ref())
+            .await;
+
+        *sess.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+        handlers::clear_context(&sess, "sub-1".to_string()).await;
+
+        let error_event = wait_for_context_clear_failed(&rx).await;
+        assert_eq!(
+            error_event.codex_error_info,
+            Some(CodexErrorInfo::ContextClearFailed)
+        );
+
+        let history = sess.clone_history().await;
+        assert_eq!(initial_context, history.raw_items());
+    }
+
+    #[tokio::test]
     async fn set_rate_limits_retains_previous_credits() {
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = build_test_config(codex_home.path()).await;
@@ -4198,6 +4300,44 @@ mod tests {
             match evt.msg {
                 EventMsg::Error(payload)
                     if payload.codex_error_info == Some(CodexErrorInfo::ThreadRollbackFailed) =>
+                {
+                    return payload;
+                }
+                _ => continue,
+            }
+        }
+    }
+
+    async fn wait_for_context_cleared(
+        rx: &async_channel::Receiver<Event>,
+    ) -> crate::protocol::ContextClearedEvent {
+        let deadline = StdDuration::from_secs(2);
+        let start = std::time::Instant::now();
+        loop {
+            let remaining = deadline.saturating_sub(start.elapsed());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for event")
+                .expect("event");
+            match evt.msg {
+                EventMsg::ContextCleared(payload) => return payload,
+                _ => continue,
+            }
+        }
+    }
+
+    async fn wait_for_context_clear_failed(rx: &async_channel::Receiver<Event>) -> ErrorEvent {
+        let deadline = StdDuration::from_secs(2);
+        let start = std::time::Instant::now();
+        loop {
+            let remaining = deadline.saturating_sub(start.elapsed());
+            let evt = tokio::time::timeout(remaining, rx.recv())
+                .await
+                .expect("timeout waiting for event")
+                .expect("event");
+            match evt.msg {
+                EventMsg::Error(payload)
+                    if payload.codex_error_info == Some(CodexErrorInfo::ContextClearFailed) =>
                 {
                     return payload;
                 }

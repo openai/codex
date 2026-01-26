@@ -71,6 +71,9 @@ impl ContextManager {
     /// Returns the history prepared for sending to the model. This applies a proper
     /// normalization and drop un-suited items.
     pub(crate) fn for_prompt(mut self) -> Vec<ResponseItem> {
+        if let Some(clear_idx) = last_context_cleared_index(&self.items) {
+            self.items.drain(..=clear_idx);
+        }
         self.normalize_history();
         self.items
             .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
@@ -80,6 +83,12 @@ impl ContextManager {
     /// Returns raw items in the history.
     pub(crate) fn raw_items(&self) -> &[ResponseItem] {
         &self.items
+    }
+
+    /// Returns the effective items after the most recent context clear marker.
+    pub(crate) fn active_items(&self) -> &[ResponseItem] {
+        let start_idx = first_active_index(&self.items);
+        &self.items[start_idx..]
     }
 
     // Estimate token usage using byte-based heuristics from the truncation helpers.
@@ -92,7 +101,7 @@ impl ContextManager {
         let base_instructions = model_info.get_model_instructions(personality);
         let base_tokens = i64::try_from(approx_token_count(&base_instructions)).unwrap_or(i64::MAX);
 
-        let items_tokens = self.items.iter().fold(0i64, |acc, item| {
+        let items_tokens = self.active_items().iter().fold(0i64, |acc, item| {
             acc + match item {
                 ResponseItem::GhostSnapshot { .. } => 0,
                 ResponseItem::Reasoning {
@@ -117,10 +126,10 @@ impl ContextManager {
     }
 
     pub(crate) fn remove_first_item(&mut self) {
-        if !self.items.is_empty() {
-            // Remove the oldest item (front of the list). Items are ordered from
-            // oldest → newest, so index 0 is the first entry recorded.
-            let removed = self.items.remove(0);
+        let active_start = first_active_index(&self.items);
+        if active_start < self.items.len() {
+            // Remove the oldest *effective* item after the most recent clear marker.
+            let removed = self.items.remove(active_start);
             // If the removed item participates in a call/output pair, also remove
             // its corresponding counterpart to keep the invariants intact without
             // running a full normalization pass.
@@ -135,12 +144,14 @@ impl ContextManager {
     /// Replace image content in the last turn if it originated from a tool output.
     /// Returns true when a tool image was replaced, false otherwise.
     pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) -> bool {
-        let Some(index) = self.items.iter().rposition(|item| {
+        let start_idx = first_active_index(&self.items);
+        let Some(rel_index) = self.items[start_idx..].iter().rposition(|item| {
             matches!(item, ResponseItem::FunctionCallOutput { .. })
                 || matches!(item, ResponseItem::Message { role, .. } if role == "user")
         }) else {
             return false;
         };
+        let index = start_idx + rel_index;
 
         match &mut self.items[index] {
             ResponseItem::FunctionCallOutput { output, .. } => {
@@ -179,7 +190,11 @@ impl ContextManager {
         }
 
         let snapshot = self.items.clone();
-        let user_positions = user_message_positions(&snapshot);
+        let active_start = first_active_index(&snapshot);
+        let prefix = snapshot[..active_start].to_vec();
+        let active = snapshot[active_start..].to_vec();
+
+        let user_positions = user_message_positions(&active);
         let Some(&first_user_idx) = user_positions.first() else {
             self.replace(snapshot);
             return;
@@ -192,7 +207,9 @@ impl ContextManager {
             user_positions[user_positions.len() - n_from_end]
         };
 
-        self.replace(snapshot[..cut_idx].to_vec());
+        let mut new_items = prefix;
+        new_items.extend(active[..cut_idx].iter().cloned());
+        self.replace(new_items);
     }
 
     pub(crate) fn update_token_info(
@@ -208,17 +225,17 @@ impl ContextManager {
     }
 
     fn get_non_last_reasoning_items_tokens(&self) -> usize {
+        let active_start = first_active_index(&self.items);
+        let active_items = &self.items[active_start..];
         // get reasoning items excluding all the ones after the last user message
-        let Some(last_user_index) = self
-            .items
+        let Some(last_user_index) = active_items
             .iter()
             .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
         else {
             return 0usize;
         };
 
-        let total_reasoning_bytes = self
-            .items
+        let total_reasoning_bytes = active_items
             .iter()
             .take(last_user_index)
             .filter_map(|item| {
@@ -301,13 +318,14 @@ impl ContextManager {
             | ResponseItem::CustomToolCall { .. }
             | ResponseItem::Compaction { .. }
             | ResponseItem::GhostSnapshot { .. }
+            | ResponseItem::ContextCleared
             | ResponseItem::Other => item.clone(),
         }
     }
 }
 
 /// API messages include every non-system item (user/assistant messages, reasoning,
-/// tool calls, tool outputs, shell calls, and web-search calls).
+/// tool calls, tool outputs, shell calls, web-search calls, and context markers).
 fn is_api_message(message: &ResponseItem) -> bool {
     match message {
         ResponseItem::Message { role, .. } => role.as_str() != "system",
@@ -318,10 +336,21 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. }
-        | ResponseItem::Compaction { .. } => true,
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCleared => true,
         ResponseItem::GhostSnapshot { .. } => false,
         ResponseItem::Other => false,
     }
+}
+
+fn last_context_cleared_index(items: &[ResponseItem]) -> Option<usize> {
+    items
+        .iter()
+        .rposition(|item| matches!(item, ResponseItem::ContextCleared))
+}
+
+fn first_active_index(items: &[ResponseItem]) -> usize {
+    last_context_cleared_index(items).map_or(0, |idx| idx.saturating_add(1))
 }
 
 fn estimate_reasoning_length(encoded_len: usize) -> usize {

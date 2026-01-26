@@ -75,6 +75,7 @@ impl<'a> ChatRequestBuilder<'a> {
                 ResponseItem::WebSearchCall { .. } => {}
                 ResponseItem::GhostSnapshot { .. } => {}
                 ResponseItem::Compaction { .. } => {}
+                ResponseItem::ContextCleared => last_emitted_role = None,
             }
         }
 
@@ -280,6 +281,10 @@ impl<'a> ChatRequestBuilder<'a> {
                     }));
                 }
                 ResponseItem::GhostSnapshot { .. } => {
+                    continue;
+                }
+                ResponseItem::ContextCleared => {
+                    last_assistant_text = None;
                     continue;
                 }
                 ResponseItem::Reasoning { .. }

@@ -14,9 +14,10 @@ use codex_protocol::protocol::RolloutItem;
 /// A user message boundary is a `RolloutItem::ResponseItem(ResponseItem::Message { .. })`
 /// whose parsed turn item is `TurnItem::UserMessage`.
 ///
-/// Rollouts can contain `ThreadRolledBack` markers. Those markers indicate that the
-/// last N user turns were removed from the effective thread history; we apply them here so
-/// indexing uses the post-rollback history rather than the raw stream.
+/// Rollouts can contain context reset markers (e.g., `ThreadRolledBack`,
+/// `ContextCleared`). Those markers indicate that older user turns no longer
+/// contribute to the effective thread history; we apply them here so indexing
+/// uses the post-reset history rather than the raw stream.
 pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize> {
     let mut user_positions = Vec::new();
     for (idx, item) in items.iter().enumerate() {
@@ -33,6 +34,9 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
                 let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
                 let new_len = user_positions.len().saturating_sub(num_turns);
                 user_positions.truncate(new_len);
+            }
+            RolloutItem::EventMsg(EventMsg::ContextCleared(_)) => {
+                user_positions.clear();
             }
             _ => {}
         }
@@ -75,6 +79,7 @@ mod tests {
     use assert_matches::assert_matches;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
+    use codex_protocol::protocol::ContextClearedEvent;
     use codex_protocol::protocol::ThreadRolledBackEvent;
     use pretty_assertions::assert_eq;
 
@@ -182,6 +187,26 @@ mod tests {
         // So n_from_start=2 should cut before u4 (not u3).
         let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout_items, 2);
         let expected = rollout_items[..7].to_vec();
+        assert_eq!(
+            serde_json::to_value(&truncated).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn truncates_rollout_from_start_respects_context_cleared_marker() {
+        let rollout_items = vec![
+            RolloutItem::ResponseItem(user_msg("u1")),
+            RolloutItem::ResponseItem(assistant_msg("a1")),
+            RolloutItem::EventMsg(EventMsg::ContextCleared(ContextClearedEvent)),
+            RolloutItem::ResponseItem(user_msg("u2")),
+            RolloutItem::ResponseItem(assistant_msg("a2")),
+            RolloutItem::ResponseItem(user_msg("u3")),
+            RolloutItem::ResponseItem(assistant_msg("a3")),
+        ];
+
+        let truncated = truncate_rollout_before_nth_user_message_from_start(&rollout_items, 1);
+        let expected = rollout_items[..5].to_vec();
         assert_eq!(
             serde_json::to_value(&truncated).unwrap(),
             serde_json::to_value(&expected).unwrap()

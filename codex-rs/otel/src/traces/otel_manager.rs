@@ -503,6 +503,7 @@ impl OtelManager {
             ResponseItem::WebSearchCall { .. } => "web_search_call".into(),
             ResponseItem::GhostSnapshot { .. } => "ghost_snapshot".into(),
             ResponseItem::Compaction { .. } => "compaction".into(),
+            ResponseItem::ContextCleared => "context_cleared".into(),
             ResponseItem::Other => "other".into(),
         }
     }

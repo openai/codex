@@ -28,7 +28,8 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::GhostSnapshot { .. }
-        | ResponseItem::Compaction { .. } => true,
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCleared => true,
         ResponseItem::Other => false,
     }
 }
@@ -43,6 +44,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::AgentReasoningRawContent(_)
         | EventMsg::TokenCount(_)
         | EventMsg::ContextCompacted(_)
+        | EventMsg::ContextCleared(_)
         | EventMsg::EnteredReviewMode(_)
         | EventMsg::ExitedReviewMode(_)
         | EventMsg::ThreadRolledBack(_)

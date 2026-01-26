@@ -66,19 +66,20 @@ impl SessionTask for UndoTask {
 
         let history = sess.clone_history().await;
         let mut items = history.raw_items().to_vec();
+        let active_start = items.len().saturating_sub(history.active_items().len());
         let mut completed = UndoCompletedEvent {
             success: false,
             message: None,
         };
 
         let Some((idx, ghost_commit)) =
-            items
+            items[active_start..]
                 .iter()
                 .enumerate()
                 .rev()
-                .find_map(|(idx, item)| match item {
+                .find_map(|(rel_idx, item)| match item {
                     ResponseItem::GhostSnapshot { ghost_commit } => {
-                        Some((idx, ghost_commit.clone()))
+                        Some((active_start + rel_idx, ghost_commit.clone()))
                     }
                     _ => None,
                 })

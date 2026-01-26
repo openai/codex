@@ -821,13 +821,17 @@ impl App {
         Ok(())
     }
 
-    fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
+    fn reset_transcript_state(&mut self) {
         self.overlay = None;
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
+    }
+
+    fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        self.reset_transcript_state();
         tui.terminal.clear_scrollback()?;
         tui.terminal.clear()?;
         Ok(())
@@ -2050,12 +2054,32 @@ impl App {
         self.chat_widget.handle_codex_event(event);
     }
 
+    fn reset_for_context_clear(&mut self) {
+        self.reset_transcript_state();
+        if let Some(thread_id) = self
+            .active_thread_id
+            .clone()
+            .or_else(|| self.chat_widget.thread_id())
+        {
+            let session_configured = self.session_configured_for_thread(thread_id);
+            self.chat_widget.reset_for_context_clear(session_configured);
+        }
+    }
+
     fn handle_codex_event_replay(&mut self, event: Event) {
+        if matches!(&event.msg, EventMsg::ContextCleared(_)) {
+            self.reset_for_context_clear();
+        }
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event_replay(event);
     }
 
     fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+        if matches!(&event.msg, EventMsg::ContextCleared(_)) {
+            self.reset_for_context_clear();
+            tui.terminal.clear_scrollback()?;
+            tui.terminal.clear()?;
+        }
         self.handle_codex_event_now(event);
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();

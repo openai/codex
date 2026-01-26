@@ -454,6 +454,7 @@ impl App {
     pub(crate) fn handle_backtrack_event(&mut self, event: &EventMsg) {
         match event {
             EventMsg::ThreadRolledBack(_) => self.finish_pending_backtrack(),
+            EventMsg::ContextCleared(_) => self.backtrack.pending_rollback = None,
             EventMsg::Error(ErrorEvent {
                 codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
                 ..
