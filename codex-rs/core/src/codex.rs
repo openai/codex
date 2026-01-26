@@ -12,6 +12,7 @@ use crate::CodexAuth;
 use crate::SandboxState;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
+use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
@@ -52,6 +53,7 @@ use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -240,7 +242,7 @@ impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn(
-        config: Config,
+        mut config: Config,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
         skills_manager: Arc<SkillsManager>,
@@ -260,6 +262,12 @@ impl Codex {
                 err.path.display(),
                 err.message
             );
+        }
+
+        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
+            && depth >= MAX_THREAD_SPAWN_DEPTH
+        {
+            config.features.disable(Feature::Collab);
         }
 
         let enabled_skills = loaded_skills.enabled_skills();
@@ -3587,6 +3595,7 @@ mod tests {
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
 
+    use codex_protocol::ThreadId;
     use codex_protocol::models::FunctionCallOutputPayload;
 
     use crate::protocol::CompactedItem;
