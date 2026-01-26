@@ -11,7 +11,7 @@ pub(crate) fn compute_source_filters(
     };
 
     if source_kinds.is_empty() {
-        return (Vec::new(), None);
+        return (INTERACTIVE_SESSION_SOURCES.to_vec(), None);
     }
 
     let requires_post_filter = source_kinds.iter().any(|kind| {
@@ -97,10 +97,10 @@ mod tests {
     }
 
     #[test]
-    fn compute_source_filters_empty_means_all_sources() {
+    fn compute_source_filters_empty_means_interactive_sources() {
         let (allowed_sources, filter) = compute_source_filters(Some(Vec::new()));
 
-        assert_eq!(allowed_sources, Vec::new());
+        assert_eq!(allowed_sources, INTERACTIVE_SESSION_SOURCES.to_vec());
         assert_eq!(filter, None);
     }
 

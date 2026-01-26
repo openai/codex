@@ -1251,7 +1251,7 @@ pub struct ThreadListParams {
     /// providers are returned. When present but empty, includes all providers.
     pub model_providers: Option<Vec<String>>,
     /// Optional source filter; when set, only sessions from these source kinds
-    /// are returned. When present but empty, includes all sources.
+    /// are returned. When omitted or empty, defaults to interactive sources.
     pub source_kinds: Option<Vec<ThreadSourceKind>>,
     /// Optional archived filter; when set to true, only archived threads are returned.
     /// If false or null, only non-archived threads are returned.
