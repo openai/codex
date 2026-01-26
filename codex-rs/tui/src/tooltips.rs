@@ -104,7 +104,12 @@ pub(crate) mod announcement {
     }
 
     fn blocking_init_announcement_tip() -> Option<String> {
-        let response = reqwest::blocking::Client::new()
+        // Avoid system proxy detection to prevent macOS system-configuration panics (#8912).
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .build()
+            .ok()?;
+        let response = client
             .get(ANNOUNCEMENT_TIP_URL)
             .timeout(Duration::from_millis(2000))
             .send()

@@ -235,6 +235,7 @@ pub(crate) struct ChatComposer {
     steer_enabled: bool,
     collaboration_modes_enabled: bool,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    personality_command_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -296,6 +297,7 @@ impl ChatComposer {
             steer_enabled: false,
             collaboration_modes_enabled: false,
             collaboration_mode_indicator: None,
+            personality_command_enabled: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -325,6 +327,10 @@ impl ChatComposer {
         indicator: Option<CollaborationModeIndicator>,
     ) {
         self.collaboration_mode_indicator = indicator;
+    }
+
+    pub fn set_personality_command_enabled(&mut self, enabled: bool) {
+        self.personality_command_enabled = enabled;
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
@@ -1631,9 +1637,11 @@ impl ChatComposer {
         if let Some((name, _rest, _rest_offset)) = parse_slash_name(&text) {
             let treat_as_plain_text = input_starts_with_space || name.contains('/');
             if !treat_as_plain_text {
-                let is_builtin =
-                    Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                        .any(|(command_name, _)| command_name == name);
+                let is_builtin = Self::built_in_slash_commands_for_input(
+                    self.collaboration_modes_enabled,
+                    self.personality_command_enabled,
+                )
+                .any(|(command_name, _)| command_name == name);
                 let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
                 let is_known_prompt = name
                     .strip_prefix(&prompt_prefix)
@@ -1798,9 +1806,11 @@ impl ChatComposer {
         let first_line = self.textarea.text().lines().next().unwrap_or("");
         if let Some((name, rest, _rest_offset)) = parse_slash_name(first_line)
             && rest.is_empty()
-            && let Some((_n, cmd)) =
-                Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                    .find(|(n, _)| *n == name)
+            && let Some((_n, cmd)) = Self::built_in_slash_commands_for_input(
+                self.collaboration_modes_enabled,
+                self.personality_command_enabled,
+            )
+            .find(|(n, _)| *n == name)
         {
             self.textarea.set_text_clearing_elements("");
             Some(InputResult::Command(cmd))
@@ -1820,9 +1830,11 @@ impl ChatComposer {
             if let Some((name, rest, _rest_offset)) = parse_slash_name(&text)
                 && !rest.is_empty()
                 && !name.contains('/')
-                && let Some((_n, cmd)) =
-                    Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                        .find(|(command_name, _)| *command_name == name)
+                && let Some((_n, cmd)) = Self::built_in_slash_commands_for_input(
+                    self.collaboration_modes_enabled,
+                    self.personality_command_enabled,
+                )
+                .find(|(command_name, _)| *command_name == name)
                 && cmd == SlashCommand::Review
             {
                 self.textarea.set_text_clearing_elements("");
@@ -2039,15 +2051,6 @@ impl ChatComposer {
         {
             self.handle_paste(pasted);
         }
-        // Backspace at the start of an image placeholder should delete that placeholder (rather
-        // than deleting content before it). Do this without scanning the full text by consulting
-        // the textarea's element list.
-        if matches!(input.code, KeyCode::Backspace)
-            && self.try_remove_image_element_at_cursor_start()
-        {
-            return (InputResult::None, true);
-        }
-
         // For non-char inputs (or after flushing), handle normally.
         // Track element removals so we can drop any corresponding placeholders without scanning
         // the full text. (Placeholders are atomic elements; when deleted, the element disappears.)
@@ -2084,29 +2087,6 @@ impl ChatComposer {
         }
 
         (InputResult::None, true)
-    }
-
-    fn try_remove_image_element_at_cursor_start(&mut self) -> bool {
-        if self.attached_images.is_empty() {
-            return false;
-        }
-
-        let p = self.textarea.cursor();
-        let Some(payload) = self.textarea.element_payload_starting_at(p) else {
-            return false;
-        };
-        let Some(idx) = self
-            .attached_images
-            .iter()
-            .position(|img| img.placeholder == payload)
-        else {
-            return false;
-        };
-
-        self.textarea.replace_range(p..p + payload.len(), "");
-        self.attached_images.remove(idx);
-        self.relabel_attached_images_and_update_placeholders();
-        true
     }
 
     fn reconcile_deleted_elements(&mut self, elements_before: Vec<String>) {
@@ -2285,9 +2265,11 @@ impl ChatComposer {
             return rest_after_name.is_empty();
         }
 
-        let builtin_match =
-            Self::built_in_slash_commands_for_input(self.collaboration_modes_enabled)
-                .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
+        let builtin_match = Self::built_in_slash_commands_for_input(
+            self.collaboration_modes_enabled,
+            self.personality_command_enabled,
+        )
+        .any(|(cmd_name, _)| fuzzy_match(cmd_name, name).is_some());
 
         if builtin_match {
             return true;
@@ -2340,10 +2322,12 @@ impl ChatComposer {
             _ => {
                 if is_editing_slash_command_name {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
+                    let personality_command_enabled = self.personality_command_enabled;
                     let mut command_popup = CommandPopup::new(
                         self.custom_prompts.clone(),
                         CommandPopupFlags {
                             collaboration_modes_enabled,
+                            personality_command_enabled,
                         },
                     );
                     command_popup.on_composer_text_change(first_line.to_string());
@@ -2355,12 +2339,16 @@ impl ChatComposer {
 
     fn built_in_slash_commands_for_input(
         collaboration_modes_enabled: bool,
+        personality_command_enabled: bool,
     ) -> impl Iterator<Item = (&'static str, SlashCommand)> {
         let allow_elevate_sandbox = windows_degraded_sandbox_active();
         built_in_slash_commands()
             .into_iter()
             .filter(move |(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
             .filter(move |(_, cmd)| collaboration_modes_enabled || *cmd != SlashCommand::Collab)
+            .filter(move |(_, cmd)| {
+                personality_command_enabled || *cmd != SlashCommand::Personality
+            })
     }
 
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
@@ -4662,8 +4650,7 @@ mod tests {
         assert!(!composer.textarea.text().contains(&placeholder));
         assert!(composer.attached_images.is_empty());
 
-        // Re-add and test backspace in middle: should break the placeholder string
-        // and drop the image mapping (same as text placeholder behavior).
+        // Re-add and ensure backspace at element start does not delete the placeholder.
         composer.attach_image(path);
         let placeholder2 = composer.attached_images[0].placeholder.clone();
         // Move cursor to roughly middle of placeholder
@@ -4671,8 +4658,8 @@ mod tests {
             let mid_pos = start_pos + (placeholder2.len() / 2);
             composer.textarea.set_cursor(mid_pos);
             composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-            assert!(!composer.textarea.text().contains(&placeholder2));
-            assert!(composer.attached_images.is_empty());
+            assert!(composer.textarea.text().contains(&placeholder2));
+            assert_eq!(composer.attached_images.len(), 1);
         } else {
             panic!("Placeholder not found in textarea");
         }
@@ -4852,7 +4839,7 @@ mod tests {
         assert_eq!(composer.textarea.text(), "[Image #1][Image #2]");
         assert_eq!(composer.attached_images.len(), 2);
 
-        // Delete the first element using normal textarea editing (Delete at cursor start).
+        // Delete the first element using normal textarea editing (forward Delete at cursor start).
         composer.textarea.set_cursor(0);
         composer.handle_key_event(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
 
