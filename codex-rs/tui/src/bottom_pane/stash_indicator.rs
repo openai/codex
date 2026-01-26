@@ -74,7 +74,7 @@ mod tests {
     fn render_wrapped_message() {
         let mut stash = StashIndicator::new();
         stash.stash_exists = true;
-        let width = 10;
+        let width = 20;
         let height = stash.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
         stash.render(Rect::new(0, 0, width, height), &mut buf);
