@@ -155,7 +155,7 @@ impl FileSearchSession {
     }
 
     /// Blocks until the walker thread finishes (best-effort for callers that want it).
-    pub fn join(&self) -> anyhow::Result<()> {
+    pub fn join(&self) -> anyhow::Result<FileSearchSnapshot> {
         if let Some(handle) = {
             #[expect(clippy::unwrap_used)]
             self.walker_handle.lock().unwrap().take()
@@ -183,7 +183,7 @@ impl FileSearchSession {
                 Err(_) => anyhow::bail!("matcher thread panicked"),
             }
         }
-        Ok(())
+        Ok(self.snapshot())
     }
 }
 
@@ -197,6 +197,15 @@ pub fn create_session(
     search_directory: &Path,
     options: SessionOptions,
     reporter: Arc<dyn SessionReporter>,
+) -> anyhow::Result<FileSearchSession> {
+    create_session_inner(search_directory, options, reporter, None)
+}
+
+fn create_session_inner(
+    search_directory: &Path,
+    options: SessionOptions,
+    reporter: Arc<dyn SessionReporter>,
+    cancel_flag: Option<Arc<AtomicBool>>,
 ) -> anyhow::Result<FileSearchSession> {
     let SessionOptions {
         limit,
@@ -229,6 +238,8 @@ pub fn create_session(
         walk_complete: false,
     };
 
+    let cancelled = cancel_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+
     let inner = Arc::new(SessionInner {
         search_directory: search_directory.to_path_buf(),
         limit: limit.get(),
@@ -236,7 +247,7 @@ pub fn create_session(
         compute_indices,
         respect_gitignore,
         update_interval,
-        cancelled: AtomicBool::new(false),
+        cancelled: cancelled.clone(),
         walk_complete: AtomicBool::new(false),
         complete_emitted: AtomicBool::new(false),
         completion_mutex: Mutex::new(()),
@@ -352,7 +363,7 @@ pub fn run(
     respect_gitignore: bool,
 ) -> anyhow::Result<FileSearchResults> {
     let reporter = Arc::new(RunReporter::default());
-    let session = create_session(
+    let session = create_session_inner(
         search_directory,
         SessionOptions {
             limit,
@@ -363,37 +374,11 @@ pub fn run(
             update_interval: Duration::from_millis(100),
         },
         reporter.clone(),
+        Some(cancel_flag.clone()),
     )?;
 
-    let done = Arc::new(AtomicBool::new(false));
-    let done_flag = done.clone();
-    let cancel_flag_for_thread = cancel_flag.clone();
-    let session_for_thread = session.inner.clone();
-    thread::spawn(move || {
-        while !done_flag.load(Ordering::Relaxed) {
-            if cancel_flag_for_thread.load(Ordering::Relaxed) {
-                session_for_thread.cancelled.store(true, Ordering::Relaxed);
-                let _ = session_for_thread.work_tx.send(WorkSignal::Cancelled);
-                break;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-    });
-
     session.update_query(pattern_text);
-    let join_result = session.join();
-    done.store(true, Ordering::Relaxed);
-    join_result?;
-
-    // If the cancel flag is set, we return early with an empty result.
-    if cancel_flag.load(Ordering::Relaxed) {
-        return Ok(FileSearchResults {
-            matches: Vec::new(),
-            total_match_count: 0,
-        });
-    }
-
-    let snapshot = reporter.snapshot();
+    let snapshot = session.join()?;
     Ok(FileSearchResults {
         matches: snapshot.matches,
         total_match_count: snapshot.total_match_count,
@@ -443,7 +428,7 @@ struct SessionInner {
     compute_indices: bool,
     respect_gitignore: bool,
     update_interval: Duration,
-    cancelled: AtomicBool,
+    cancelled: Arc<AtomicBool>,
     walk_complete: AtomicBool,
     complete_emitted: AtomicBool,
     completion_mutex: Mutex<()>,
@@ -485,7 +470,10 @@ fn walker_worker(
     override_matcher: Option<ignore::overrides::Override>,
     injector: Injector<Arc<str>>,
 ) {
-    if inner.cancelled.load(Ordering::Relaxed) {
+    let cancel_requested = || inner.cancelled.load(Ordering::Relaxed);
+    if cancel_requested() {
+        inner.cancelled.store(true, Ordering::Relaxed);
+        inner.completion_cv.notify_all();
         return;
     }
 
@@ -529,8 +517,19 @@ fn walker_worker(
             }
         }
 
+        fn cancel_requested(&self) -> bool {
+            self.inner.cancelled.load(Ordering::Relaxed)
+        }
+
+        fn signal_cancel(&self) {
+            self.inner.cancelled.store(true, Ordering::Relaxed);
+            let _ = self.inner.work_tx.send(WorkSignal::Cancelled);
+            self.inner.completion_cv.notify_all();
+        }
+
         fn push(&mut self, path: &str) {
-            if self.inner.cancelled.load(Ordering::Relaxed) {
+            if self.cancel_requested() {
+                self.signal_cancel();
                 return;
             }
             self.buffer.push(Arc::<str>::from(path));
@@ -540,8 +539,12 @@ fn walker_worker(
         }
 
         fn flush(&mut self) {
-            if self.buffer.is_empty() || self.inner.cancelled.load(Ordering::Relaxed) {
+            if self.buffer.is_empty() {
+                return;
+            }
+            if self.cancel_requested() {
                 self.buffer.clear();
+                self.signal_cancel();
                 return;
             }
             let appended = self.buffer.len();
@@ -591,7 +594,10 @@ fn walker_worker(
                 worker_buffer.push(path);
             }
             processed += 1;
-            if processed % CHECK_INTERVAL == 0
+            if processed % CHECK_INTERVAL == 0 && worker_buffer.cancel_requested() {
+                worker_buffer.signal_cancel();
+                ignore::WalkState::Quit
+            } else if processed % CHECK_INTERVAL == 0
                 && worker_buffer.inner.cancelled.load(Ordering::Relaxed)
             {
                 ignore::WalkState::Quit
@@ -601,7 +607,9 @@ fn walker_worker(
         })
     });
 
-    if inner.cancelled.load(Ordering::Relaxed) {
+    if cancel_requested() {
+        inner.cancelled.store(true, Ordering::Relaxed);
+        inner.completion_cv.notify_all();
         return;
     }
 
@@ -618,6 +626,8 @@ fn matcher_worker(
 
     let config = Config::DEFAULT.match_paths();
     let mut indices_matcher = inner.compute_indices.then(|| Matcher::new(config.clone()));
+    let cancel_requested = || inner.cancelled.load(Ordering::Relaxed);
+    let idle_timeout = Duration::from_millis(50);
 
     let mut last_query_generation = inner.query_generation.load(Ordering::Relaxed);
     let mut last_query = String::new();
@@ -627,6 +637,12 @@ fn matcher_worker(
     let mut last_emit_at = Instant::now() - inner.update_interval;
 
     loop {
+        if cancel_requested() {
+            inner.cancelled.store(true, Ordering::Relaxed);
+            let _ = inner.work_tx.send(WorkSignal::Cancelled);
+            inner.completion_cv.notify_all();
+            break;
+        }
         let timeout = if emit_pending {
             let elapsed = last_emit_at.elapsed();
             if elapsed >= inner.update_interval {
@@ -635,7 +651,7 @@ fn matcher_worker(
                 inner.update_interval - elapsed
             }
         } else {
-            Duration::from_secs(1)
+            idle_timeout
         };
 
         let mut saw_signal = false;
@@ -809,13 +825,6 @@ impl Default for RunReporter {
                 walk_complete: false,
             }),
         }
-    }
-}
-
-impl RunReporter {
-    fn snapshot(&self) -> FileSearchSnapshot {
-        #[expect(clippy::unwrap_used)]
-        self.snapshot.read().unwrap().clone()
     }
 }
 
