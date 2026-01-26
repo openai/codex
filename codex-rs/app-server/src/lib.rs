@@ -134,7 +134,7 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
                     .disabled_reason
                     .as_ref()
                     .map(ToString::to_string)
-                    .unwrap_or_else(|| "Config folder disabled.".to_string()),
+                    .unwrap_or_else(|| "config.toml is disabled.".to_string()),
             ));
         }
     }
@@ -143,7 +143,11 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
         return None;
     }
 
-    let mut message = "The following config folders are disabled:\n".to_string();
+    let mut message = concat!(
+        "Project config.toml files are disabled in the following folders. ",
+        "Settings in those files are ignored, but skills and exec policies still load.\n",
+    )
+    .to_string();
     for (index, (folder, reason)) in disabled_folders.iter().enumerate() {
         let display_index = index + 1;
         message.push_str(&format!("    {display_index}. {folder}\n"));
