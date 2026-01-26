@@ -2723,7 +2723,10 @@ mod handlers {
             return;
         };
 
-        let persistence_enabled = sess.services.rollout.lock().await.is_some();
+        let persistence_enabled = {
+            let rollout = sess.services.rollout.lock().await;
+            rollout.is_some()
+        };
         if !persistence_enabled {
             let event = Event {
                 id: sub_id,
