@@ -818,7 +818,7 @@ async fn make_chatwidget_manual(
         unified_exec_wait_streak: None,
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
-        agent_turn_running: false,
+        running_turn_ids: HashSet::new(),
         mcp_startup_status: None,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
@@ -1265,7 +1265,7 @@ async fn plan_implementation_popup_skips_when_messages_queued() {
     chat.bottom_pane.set_task_running(true);
     chat.queue_user_message("Queued message".into());
 
-    chat.on_task_complete(Some("Plan details".to_string()), false);
+    chat.on_task_complete(None, Some("Plan details".to_string()), false);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -1283,7 +1283,7 @@ async fn plan_implementation_popup_shows_on_plan_update_without_message() {
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
-    chat.on_task_started();
+    chat.on_task_started(Some("turn-1"), false);
     chat.on_plan_update(UpdatePlanArgs {
         explanation: None,
         plan: vec![PlanItemArg {
@@ -1291,7 +1291,7 @@ async fn plan_implementation_popup_shows_on_plan_update_without_message() {
             status: StepStatus::Pending,
         }],
     });
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(Some("turn-1"), None, false);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -1311,7 +1311,7 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
             .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
 
-    chat.on_task_started();
+    chat.on_task_started(Some("turn-1"), false);
     chat.on_plan_update(UpdatePlanArgs {
         explanation: None,
         plan: vec![PlanItemArg {
@@ -1320,7 +1320,7 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
         }],
     });
     chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(Some("turn-1"), None, false);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -1678,7 +1678,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
 
-    chat.on_task_started();
+    chat.on_task_started(Some("turn-1"), false);
     chat.on_agent_message_delta("Final answer line\n".to_string());
     chat.on_commit_tick();
 
@@ -1702,6 +1702,41 @@ async fn streaming_final_answer_keeps_task_running_state() {
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+}
+
+#[tokio::test]
+async fn task_running_persists_when_user_shell_turn_completes_first() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "turn-regular".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-shell".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+        }),
+    });
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+
+    chat.handle_codex_event(Event {
+        id: "turn-shell".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    assert_eq!(chat.bottom_pane.is_task_running(), true);
+
+    chat.handle_codex_event(Event {
+        id: "turn-regular".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    assert_eq!(chat.bottom_pane.is_task_running(), false);
 }
 
 #[tokio::test]
@@ -1865,7 +1900,7 @@ async fn exec_end_without_begin_uses_event_command() {
 #[tokio::test]
 async fn exec_history_shows_unified_exec_startup_commands() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.on_task_started();
+    chat.on_task_started(Some("turn-1"), false);
 
     let begin = begin_exec_with_source(
         &mut chat,
@@ -1892,7 +1927,7 @@ async fn exec_history_shows_unified_exec_startup_commands() {
 #[tokio::test]
 async fn exec_history_shows_unified_exec_tool_calls() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.on_task_started();
+    chat.on_task_started(Some("turn-1"), false);
 
     let begin = begin_exec_with_source(
         &mut chat,
@@ -1909,7 +1944,7 @@ async fn exec_history_shows_unified_exec_tool_calls() {
 #[tokio::test]
 async fn unified_exec_end_after_task_complete_is_suppressed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.on_task_started();
+    chat.on_task_started(Some("turn-1"), false);
 
     let begin = begin_exec_with_source(
         &mut chat,
@@ -1919,7 +1954,7 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
     );
     drain_insert_history(&mut rx);
 
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(Some("turn-1"), None, false);
     end_exec(&mut chat, begin, "", "", 0);
 
     let cells = drain_insert_history(&mut rx);
@@ -1932,8 +1967,8 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
 #[tokio::test]
 async fn unified_exec_interaction_after_task_complete_is_suppressed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.on_task_started();
-    chat.on_task_complete(None, false);
+    chat.on_task_started(Some("turn-1"), false);
+    chat.on_task_complete(Some("turn-1"), None, false);
 
     chat.handle_codex_event(Event {
         id: "call-1".to_string(),
@@ -2027,7 +2062,7 @@ async fn unified_exec_wait_before_streamed_agent_message_snapshot() {
 #[tokio::test]
 async fn unified_exec_wait_status_header_updates_on_late_command_display() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.on_task_started();
+    chat.on_task_started(Some("turn-1"), false);
     chat.unified_exec_processes.push(UnifiedExecProcessSummary {
         key: "proc-1".to_string(),
         command_display: "sleep 5".to_string(),
@@ -2049,7 +2084,7 @@ async fn unified_exec_wait_status_header_updates_on_late_command_display() {
 #[tokio::test]
 async fn unified_exec_waiting_multiple_empty_snapshots() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.on_task_started();
+    chat.on_task_started(Some("turn-1"), false);
     begin_unified_exec_startup(&mut chat, "call-wait-1", "proc-1", "just fix");
 
     terminal_interaction(&mut chat, "call-wait-1a", "proc-1", "");
@@ -2077,7 +2112,7 @@ async fn unified_exec_waiting_multiple_empty_snapshots() {
 #[tokio::test]
 async fn unified_exec_empty_then_non_empty_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.on_task_started();
+    chat.on_task_started(Some("turn-1"), false);
     begin_unified_exec_startup(&mut chat, "call-wait-2", "proc-2", "just fix");
 
     terminal_interaction(&mut chat, "call-wait-2a", "proc-2", "");
@@ -2094,7 +2129,7 @@ async fn unified_exec_empty_then_non_empty_snapshot() {
 #[tokio::test]
 async fn unified_exec_non_empty_then_empty_snapshots() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.on_task_started();
+    chat.on_task_started(Some("turn-1"), false);
     begin_unified_exec_startup(&mut chat, "call-wait-3", "proc-3", "just fix");
 
     terminal_interaction(&mut chat, "call-wait-3a", "proc-3", "pwd\n");
@@ -2212,7 +2247,7 @@ async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Code);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
-    chat.on_task_started();
+    chat.on_task_started(Some("turn-1"), false);
     let before = chat.active_collaboration_mode_kind();
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
     assert_eq!(chat.active_collaboration_mode_kind(), before);

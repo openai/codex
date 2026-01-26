@@ -18,7 +18,7 @@
 //! The bottom pane exposes a single "task running" indicator that drives the spinner and interrupt
 //! hints. This module treats that indicator as derived UI-busy state: it is set while an agent turn
 //! is in progress and while MCP server startup is in progress. Those lifecycles are tracked
-//! independently (`agent_turn_running` and `mcp_startup_status`) and synchronized via
+//! independently (`running_turn_ids` and `mcp_startup_status`) and synchronized via
 //! `update_task_running_state`.
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -444,11 +444,11 @@ pub(crate) struct ChatWidget {
     unified_exec_wait_streak: Option<UnifiedExecWaitStreak>,
     task_complete_pending: bool,
     unified_exec_processes: Vec<UnifiedExecProcessSummary>,
-    /// Tracks whether codex-core currently considers an agent turn to be in progress.
+    /// Tracks the set of active turn ids currently running.
     ///
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
     /// can update the status header without accidentally clearing the spinner for an active turn.
-    agent_turn_running: bool,
+    running_turn_ids: HashSet<String>,
     /// Tracks per-server MCP startup state while startup is in progress.
     ///
     /// The map is `Some(_)` from the first `McpStartupUpdate` until `McpStartupComplete`, and the
@@ -671,8 +671,9 @@ impl ChatWidget {
     /// The bottom pane only has one running flag, but this module treats it as a derived state of
     /// both the agent turn lifecycle and MCP startup lifecycle.
     fn update_task_running_state(&mut self) {
+        let turn_running = !self.running_turn_ids.is_empty();
         self.bottom_pane
-            .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+            .set_task_running(turn_running || self.mcp_startup_status.is_some());
     }
 
     fn restore_reasoning_status_header(&mut self) {
@@ -860,8 +861,13 @@ impl ChatWidget {
 
     // Raw reasoning uses the same flow as summarized reasoning
 
-    fn on_task_started(&mut self) {
-        self.agent_turn_running = true;
+    fn on_task_started(&mut self, turn_id: Option<&str>, from_replay: bool) {
+        if turn_id.is_none() && from_replay {
+            return;
+        }
+        if let Some(turn_id) = turn_id {
+            self.running_turn_ids.insert(turn_id.to_string());
+        }
         self.saw_plan_update_this_turn = false;
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
@@ -875,18 +881,29 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+    fn on_task_complete(
+        &mut self,
+        turn_id: Option<&str>,
+        last_agent_message: Option<String>,
+        from_replay: bool,
+    ) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         self.flush_unified_exec_wait_streak();
-        // Mark task stopped and request redraw now that all content is in history.
-        self.agent_turn_running = false;
+        if let Some(turn_id) = turn_id {
+            self.running_turn_ids.remove(turn_id);
+        } else {
+            self.running_turn_ids.clear();
+        }
         self.update_task_running_state();
-        self.running_commands.clear();
-        self.suppressed_exec_calls.clear();
-        self.last_unified_wait = None;
-        self.unified_exec_wait_streak = None;
-        self.clear_unified_exec_processes();
+        if self.running_turn_ids.is_empty() {
+            // Only clear shared command state when all turns are finished.
+            self.running_commands.clear();
+            self.suppressed_exec_calls.clear();
+            self.last_unified_wait = None;
+            self.unified_exec_wait_streak = None;
+            self.clear_unified_exec_processes();
+        }
         self.request_redraw();
 
         if !from_replay && self.queued_user_messages.is_empty() {
@@ -1096,7 +1113,7 @@ impl ChatWidget {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
-        self.agent_turn_running = false;
+        self.running_turn_ids.clear();
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -1991,7 +2008,7 @@ impl ChatWidget {
             unified_exec_wait_streak: None,
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
-            agent_turn_running: false,
+            running_turn_ids: HashSet::new(),
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -2116,7 +2133,7 @@ impl ChatWidget {
             unified_exec_wait_streak: None,
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
-            agent_turn_running: false,
+            running_turn_ids: HashSet::new(),
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -2242,7 +2259,7 @@ impl ChatWidget {
             unified_exec_wait_streak: None,
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
-            agent_turn_running: false,
+            running_turn_ids: HashSet::new(),
             mcp_startup_status: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -2946,9 +2963,9 @@ impl ChatWidget {
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TurnStarted(_) => self.on_task_started(),
+            EventMsg::TurnStarted(_) => self.on_task_started(id.as_deref(), from_replay),
             EventMsg::TurnComplete(TurnCompleteEvent { last_agent_message }) => {
-                self.on_task_complete(last_agent_message, from_replay)
+                self.on_task_complete(id.as_deref(), last_agent_message, from_replay)
             }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);

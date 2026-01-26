@@ -2,6 +2,8 @@ use anyhow::Context;
 use codex_core::NewThread;
 use codex_core::ThreadManager;
 use codex_core::features::Feature;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
@@ -9,6 +11,8 @@ use codex_core::protocol::ExecOutputStream;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TurnAbortReason;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
@@ -23,9 +27,13 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use pretty_assertions::assert_eq;
 use regex_lite::escape;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 use tempfile::TempDir;
+use tokio::time::timeout;
 
 #[tokio::test]
 async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
@@ -125,6 +133,81 @@ async fn user_shell_cmd_can_be_interrupted() {
         unreachable!()
     };
     assert_eq!(ev.reason, TurnAbortReason::Interrupted);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_shell_cmd_does_not_abort_active_turn() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let sse_body = responses::sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]);
+    let response = responses::sse_response(sse_body).set_delay(Duration::from_millis(200));
+    let _mock = responses::mount_response_once(&server, response).await;
+
+    let test = test_codex().build(&server).await?;
+    let codex = test.codex.clone();
+    let session_model = test.session_configured.model.clone();
+    let cwd = test.cwd_path().to_path_buf();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "keep running".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.clone(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let regular_turn_id = loop {
+        let event = timeout(Duration::from_secs(1), codex.next_event()).await??;
+        if matches!(event.msg, EventMsg::TurnStarted(_)) {
+            break event.id;
+        }
+    };
+
+    codex
+        .submit(Op::RunUserShellCommand {
+            command: "true".to_string(),
+        })
+        .await?;
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut replaced_abort_for_regular = false;
+    let mut regular_completed = false;
+    while Instant::now() < deadline && !regular_completed {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let event = timeout(remaining, codex.next_event()).await??;
+        match event {
+            Event {
+                id,
+                msg: EventMsg::TurnAborted(ev),
+            } if id == regular_turn_id && ev.reason == TurnAbortReason::Replaced => {
+                replaced_abort_for_regular = true;
+            }
+            Event {
+                id,
+                msg: EventMsg::TurnComplete(_),
+            } if id == regular_turn_id => {
+                regular_completed = true;
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(regular_completed, true);
+    assert_eq!(replaced_abort_for_regular, false);
+
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

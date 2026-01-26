@@ -52,6 +52,10 @@ impl SessionTask for UserShellCommandTask {
         TaskKind::Regular
     }
 
+    fn accepts_pending_input(&self) -> bool {
+        false
+    }
+
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
