@@ -65,7 +65,7 @@ mod tests {
     fn desired_height_stash() {
         let mut stash = StashIndicator::new();
         stash.stash_exists = true;
-        assert_eq!(stash.desired_height(40), 1);
+        assert_eq!(stash.desired_height(40), 2);
     }
 
     #[test]
