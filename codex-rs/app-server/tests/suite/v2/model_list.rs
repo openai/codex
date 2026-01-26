@@ -72,7 +72,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
                 },
             ],
             default_reasoning_effort: ReasoningEffort::Medium,
-            supports_personality: true,
+            supports_personality: false,
             is_default: true,
         },
         Model {
