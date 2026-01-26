@@ -1,7 +1,6 @@
 use crate::agent::AgentRole;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
-use crate::error::CodexErr;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::tools::handlers::PLAN_TOOL;
