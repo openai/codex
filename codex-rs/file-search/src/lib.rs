@@ -174,7 +174,8 @@ impl FileSearchSession {
             }
         }
         drop(guard);
-        self.cancel();
+        self.inner.shutdown.store(true, Ordering::Relaxed);
+        let _ = self.inner.work_tx.send(WorkSignal::Shutdown);
         if let Some(handle) = {
             #[expect(clippy::unwrap_used)]
             self.matcher_handle.lock().unwrap().take()
@@ -250,6 +251,7 @@ fn create_session_inner(
         respect_gitignore,
         update_interval,
         cancelled: cancelled.clone(),
+        shutdown: AtomicBool::new(false),
         walk_complete: AtomicBool::new(false),
         complete_emitted: AtomicBool::new(false),
         completion_mutex: Mutex::new(()),
@@ -431,6 +433,7 @@ struct SessionInner {
     respect_gitignore: bool,
     update_interval: Duration,
     cancelled: Arc<AtomicBool>,
+    shutdown: AtomicBool,
     walk_complete: AtomicBool,
     complete_emitted: AtomicBool,
     completion_mutex: Mutex<()>,
@@ -449,6 +452,7 @@ enum WorkSignal {
     NucleoNotify,
     WalkComplete,
     Cancelled,
+    Shutdown,
 }
 
 fn build_override_matcher(
@@ -629,6 +633,7 @@ fn matcher_worker(
     let config = Config::DEFAULT.match_paths();
     let mut indices_matcher = inner.compute_indices.then(|| Matcher::new(config.clone()));
     let cancel_requested = || inner.cancelled.load(Ordering::Relaxed);
+    let shutdown_requested = || inner.shutdown.load(Ordering::Relaxed);
     let idle_timeout = Duration::from_millis(50);
 
     let mut last_query_generation = inner.query_generation.load(Ordering::Relaxed);
@@ -643,6 +648,9 @@ fn matcher_worker(
             inner.cancelled.store(true, Ordering::Relaxed);
             let _ = inner.work_tx.send(WorkSignal::Cancelled);
             inner.completion_cv.notify_all();
+            break;
+        }
+        if shutdown_requested() {
             break;
         }
         let timeout = if emit_pending {
@@ -660,6 +668,7 @@ fn matcher_worker(
         let mut saw_walk_complete_signal = false;
         let mut saw_cancel_signal = false;
         let mut saw_nucleo_notify = false;
+        let mut saw_shutdown_signal = false;
 
         match work_rx.recv_timeout(timeout) {
             Ok(signal) => {
@@ -668,6 +677,7 @@ fn matcher_worker(
                     WorkSignal::WalkComplete => saw_walk_complete_signal = true,
                     WorkSignal::Cancelled => saw_cancel_signal = true,
                     WorkSignal::NucleoNotify => saw_nucleo_notify = true,
+                    WorkSignal::Shutdown => saw_shutdown_signal = true,
                     WorkSignal::CorpusAppended | WorkSignal::QueryUpdated => {}
                 }
             }
@@ -681,11 +691,15 @@ fn matcher_worker(
                 WorkSignal::WalkComplete => saw_walk_complete_signal = true,
                 WorkSignal::Cancelled => saw_cancel_signal = true,
                 WorkSignal::NucleoNotify => saw_nucleo_notify = true,
+                WorkSignal::Shutdown => saw_shutdown_signal = true,
                 WorkSignal::CorpusAppended | WorkSignal::QueryUpdated => {}
             }
         }
 
         if saw_cancel_signal || inner.cancelled.load(Ordering::Relaxed) {
+            break;
+        }
+        if saw_shutdown_signal || shutdown_requested() {
             break;
         }
 
