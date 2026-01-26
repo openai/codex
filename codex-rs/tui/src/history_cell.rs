@@ -1347,44 +1347,47 @@ pub(crate) fn new_web_search_call(query: String) -> PrefixedWrappedHistoryCell {
     PrefixedWrappedHistoryCell::new(text, "• ".dim(), "  ")
 }
 
-/// If any content is an image, return a new cell with the image.
+/// If any content is an image, return a new cell with the first decodable image.
 fn try_new_completed_mcp_tool_call_with_image_output(
     result: &Result<mcp_types::CallToolResult, String>,
 ) -> Option<CompletedMcpToolCallWithImageOutput> {
-    let image = match result {
-        Ok(mcp_types::CallToolResult { content, .. }) => {
-            content.iter().find_map(|block| match block {
-                mcp_types::ContentBlock::ImageContent(image) => Some(image),
-                _ => None,
-            })
-        }
-        _ => None,
-    }?;
-
-    let raw_data = match base64::engine::general_purpose::STANDARD.decode(&image.data) {
-        Ok(data) => data,
-        Err(e) => {
-            error!("Failed to decode image data: {e}");
-            return None;
-        }
-    };
-    let reader = match ImageReader::new(Cursor::new(raw_data)).with_guessed_format() {
-        Ok(reader) => reader,
-        Err(e) => {
-            error!("Failed to guess image format: {e}");
-            return None;
-        }
-    };
-
-    let image = match reader.decode() {
-        Ok(image) => image,
-        Err(e) => {
-            error!("Image decoding failed: {e}");
-            return None;
-        }
-    };
+    let image = result
+        .as_ref()
+        .ok()?
+        .content
+        .iter()
+        .find_map(decode_mcp_image)?;
 
     Some(CompletedMcpToolCallWithImageOutput { _image: image })
+}
+
+fn decode_mcp_image(block: &mcp_types::ContentBlock) -> Option<DynamicImage> {
+    let image = match block {
+        mcp_types::ContentBlock::ImageContent(image) => image,
+        _ => return None,
+    };
+    let raw_data = base64::engine::general_purpose::STANDARD
+        .decode(&image.data)
+        .map_err(|e| {
+            error!("Failed to decode image data: {e}");
+            e
+        })
+        .ok()?;
+    let reader = ImageReader::new(Cursor::new(raw_data))
+        .with_guessed_format()
+        .map_err(|e| {
+            error!("Failed to guess image format: {e}");
+            e
+        })
+        .ok()?;
+
+    reader
+        .decode()
+        .map_err(|e| {
+            error!("Image decoding failed: {e}");
+            e
+        })
+        .ok()
 }
 
 #[allow(clippy::disallowed_methods)]
@@ -1850,6 +1853,8 @@ mod tests {
     use mcp_types::TextContent;
     use mcp_types::Tool;
     use mcp_types::ToolInputSchema;
+
+    const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
     async fn test_config() -> Config {
         let codex_home = std::env::temp_dir();
         ConfigBuilder::default()
@@ -1873,6 +1878,15 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines(u16::MAX))
+    }
+
+    fn image_block(data: &str) -> ContentBlock {
+        ContentBlock::ImageContent(ImageContent {
+            annotations: None,
+            data: data.to_string(),
+            mime_type: "image/png".into(),
+            r#type: "image".into(),
+        })
     }
 
     #[test]
@@ -2160,15 +2174,6 @@ mod tests {
             })),
         };
 
-        let png_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
-        let raw_data = base64::engine::general_purpose::STANDARD
-            .decode(png_base64)
-            .expect("decode png");
-        ImageReader::new(Cursor::new(raw_data))
-            .with_guessed_format()
-            .expect("guess png format")
-            .decode()
-            .expect("decode png");
         let result = CallToolResult {
             content: vec![
                 ContentBlock::TextContent(TextContent {
@@ -2176,18 +2181,38 @@ mod tests {
                     text: "Here is the image:".into(),
                     r#type: "text".into(),
                 }),
-                ContentBlock::ImageContent(ImageContent {
-                    annotations: None,
-                    data: png_base64.into(),
-                    mime_type: "image/png".into(),
-                    r#type: "image".into(),
-                }),
+                image_block(SMALL_PNG_BASE64),
             ],
             is_error: None,
             structured_content: None,
         };
 
         let mut cell = new_active_mcp_tool_call("call-image".into(), invocation, true);
+        let extra_cell = cell
+            .complete(Duration::from_millis(25), Ok(result))
+            .expect("expected image cell");
+
+        let rendered = render_lines(&extra_cell.display_lines(80));
+        assert_eq!(rendered, vec!["tool result (image output)"]);
+    }
+
+    #[test]
+    fn completed_mcp_tool_call_skips_invalid_image_blocks() {
+        let invocation = McpInvocation {
+            server: "image".into(),
+            tool: "generate".into(),
+            arguments: Some(json!({
+                "prompt": "tiny image",
+            })),
+        };
+
+        let result = CallToolResult {
+            content: vec![image_block("not-base64"), image_block(SMALL_PNG_BASE64)],
+            is_error: None,
+            structured_content: None,
+        };
+
+        let mut cell = new_active_mcp_tool_call("call-image-2".into(), invocation, true);
         let extra_cell = cell
             .complete(Duration::from_millis(25), Ok(result))
             .expect("expected image cell");
