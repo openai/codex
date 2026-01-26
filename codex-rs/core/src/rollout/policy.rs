@@ -69,6 +69,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ExecApprovalRequest(_)
         | EventMsg::RequestUserInput(_)
         | EventMsg::ElicitationRequest(_)
+        | EventMsg::SkillDependenciesApprovalRequest(_)
         | EventMsg::ApplyPatchApprovalRequest(_)
         | EventMsg::BackgroundEvent(_)
         | EventMsg::StreamError(_)
@@ -85,6 +86,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::PlanUpdate(_)
         | EventMsg::ShutdownComplete
         | EventMsg::ViewImageToolCall(_)
+        | EventMsg::SkillRead(_)
         | EventMsg::DeprecationNotice(_)
         | EventMsg::ItemStarted(_)
         | EventMsg::ItemCompleted(_)

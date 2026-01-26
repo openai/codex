@@ -1,10 +1,12 @@
 use crate::config::Config;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
+use crate::skills::model::SkillDependencies;
 use crate::skills::model::SkillError;
 use crate::skills::model::SkillInterface;
 use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
+use crate::skills::model::SkillToolDependency;
 use crate::skills::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::protocol::SkillScope;
@@ -38,6 +40,8 @@ struct SkillFrontmatterMetadata {
 struct SkillToml {
     #[serde(default)]
     interface: Option<Interface>,
+    #[serde(default)]
+    dependencies: Option<Dependencies>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -48,6 +52,22 @@ struct Interface {
     icon_large: Option<PathBuf>,
     brand_color: Option<String>,
     default_prompt: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Dependencies {
+    #[serde(default)]
+    tools: Vec<ToolDependency>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ToolDependency {
+    #[serde(rename = "type")]
+    tool_type: Option<String>,
+    value: Option<String>,
+    description: Option<String>,
+    transport: Option<String>,
+    url: Option<String>,
 }
 
 const SKILLS_FILENAME: &str = "SKILL.md";
@@ -345,7 +365,10 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         .as_deref()
         .map(sanitize_single_line)
         .filter(|value| !value.is_empty());
-    let interface = load_skill_interface(path);
+    let SkillTomlMetadata {
+        interface,
+        dependencies,
+    } = load_skill_toml(path);
 
     validate_len(&name, MAX_NAME_LEN, "name")?;
     validate_len(&description, MAX_DESCRIPTION_LEN, "description")?;
@@ -364,17 +387,26 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         description,
         short_description,
         interface,
+        dependencies,
         path: resolved_path,
         scope,
     })
 }
 
-fn load_skill_interface(skill_path: &Path) -> Option<SkillInterface> {
+#[derive(Debug, Default)]
+struct SkillTomlMetadata {
+    interface: Option<SkillInterface>,
+    dependencies: Option<SkillDependencies>,
+}
+
+fn load_skill_toml(skill_path: &Path) -> SkillTomlMetadata {
     // Fail open: optional SKILL.toml metadata should not block loading SKILL.md.
-    let skill_dir = skill_path.parent()?;
+    let Some(skill_dir) = skill_path.parent() else {
+        return SkillTomlMetadata::default();
+    };
     let interface_path = skill_dir.join(SKILLS_TOML_FILENAME);
     if !interface_path.exists() {
-        return None;
+        return SkillTomlMetadata::default();
     }
 
     let contents = match fs::read_to_string(&interface_path) {
@@ -384,7 +416,7 @@ fn load_skill_interface(skill_path: &Path) -> Option<SkillInterface> {
                 "ignoring {path}: failed to read SKILL.toml: {error}",
                 path = interface_path.display()
             );
-            return None;
+            return SkillTomlMetadata::default();
         }
     };
     let parsed: SkillToml = match toml::from_str(&contents) {
@@ -394,38 +426,96 @@ fn load_skill_interface(skill_path: &Path) -> Option<SkillInterface> {
                 "ignoring {path}: invalid TOML: {error}",
                 path = interface_path.display()
             );
-            return None;
+            return SkillTomlMetadata::default();
         }
     };
-    let interface = parsed.interface?;
 
-    let interface = SkillInterface {
-        display_name: resolve_str(
-            interface.display_name,
-            MAX_NAME_LEN,
-            "interface.display_name",
-        ),
-        short_description: resolve_str(
-            interface.short_description,
-            MAX_SHORT_DESCRIPTION_LEN,
-            "interface.short_description",
-        ),
-        icon_small: resolve_asset_path(skill_dir, "interface.icon_small", interface.icon_small),
-        icon_large: resolve_asset_path(skill_dir, "interface.icon_large", interface.icon_large),
-        brand_color: resolve_color_str(interface.brand_color, "interface.brand_color"),
-        default_prompt: resolve_str(
-            interface.default_prompt,
-            MAX_DEFAULT_PROMPT_LEN,
-            "interface.default_prompt",
-        ),
-    };
-    let has_fields = interface.display_name.is_some()
-        || interface.short_description.is_some()
-        || interface.icon_small.is_some()
-        || interface.icon_large.is_some()
-        || interface.brand_color.is_some()
-        || interface.default_prompt.is_some();
-    if has_fields { Some(interface) } else { None }
+    let interface = parsed.interface.and_then(|interface| {
+        let interface = SkillInterface {
+            display_name: resolve_str(
+                interface.display_name,
+                MAX_NAME_LEN,
+                "interface.display_name",
+            ),
+            short_description: resolve_str(
+                interface.short_description,
+                MAX_SHORT_DESCRIPTION_LEN,
+                "interface.short_description",
+            ),
+            icon_small: resolve_asset_path(skill_dir, "interface.icon_small", interface.icon_small),
+            icon_large: resolve_asset_path(skill_dir, "interface.icon_large", interface.icon_large),
+            brand_color: resolve_color_str(interface.brand_color, "interface.brand_color"),
+            default_prompt: resolve_str(
+                interface.default_prompt,
+                MAX_DEFAULT_PROMPT_LEN,
+                "interface.default_prompt",
+            ),
+        };
+        let has_fields = interface.display_name.is_some()
+            || interface.short_description.is_some()
+            || interface.icon_small.is_some()
+            || interface.icon_large.is_some()
+            || interface.brand_color.is_some()
+            || interface.default_prompt.is_some();
+        if has_fields { Some(interface) } else { None }
+    });
+
+    let dependencies = resolve_dependencies(parsed.dependencies);
+
+    SkillTomlMetadata {
+        interface,
+        dependencies,
+    }
+}
+
+fn resolve_dependencies(dependencies: Option<Dependencies>) -> Option<SkillDependencies> {
+    let dependencies = dependencies?;
+    let tools = dependencies
+        .tools
+        .into_iter()
+        .filter_map(resolve_tool_dependency)
+        .collect::<Vec<_>>();
+    if tools.is_empty() {
+        None
+    } else {
+        Some(SkillDependencies { tools })
+    }
+}
+
+fn resolve_tool_dependency(dependency: ToolDependency) -> Option<SkillToolDependency> {
+    let tool_type = resolve_required_str(
+        dependency.tool_type,
+        MAX_NAME_LEN,
+        "dependencies.tools.type",
+    )?;
+    let value = resolve_required_str(
+        dependency.value,
+        MAX_DESCRIPTION_LEN,
+        "dependencies.tools.value",
+    )?;
+    let description = resolve_str(
+        dependency.description,
+        MAX_DESCRIPTION_LEN,
+        "dependencies.tools.description",
+    );
+    let transport = resolve_str(
+        dependency.transport,
+        MAX_NAME_LEN,
+        "dependencies.tools.transport",
+    );
+    let url = resolve_str(
+        dependency.url,
+        MAX_DESCRIPTION_LEN,
+        "dependencies.tools.url",
+    );
+
+    Some(SkillToolDependency {
+        tool_type,
+        value,
+        description,
+        transport,
+        url,
+    })
 }
 
 fn resolve_asset_path(
@@ -509,6 +599,18 @@ fn resolve_str(value: Option<String>, max_len: usize, field: &'static str) -> Op
         return None;
     }
     Some(value)
+}
+
+fn resolve_required_str(
+    value: Option<String>,
+    max_len: usize,
+    field: &'static str,
+) -> Option<String> {
+    let Some(value) = value else {
+        tracing::warn!("ignoring {field}: value is missing");
+        return None;
+    };
+    resolve_str(Some(value), max_len, field)
 }
 
 fn resolve_color_str(value: Option<String>, field: &'static str) -> Option<String> {
@@ -795,6 +897,7 @@ default_prompt = "  default   prompt   "
                 name: "ui-skill".to_string(),
                 description: "from toml".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: Some(SkillInterface {
                     display_name: Some("UI Skill".to_string()),
                     short_description: Some("short desc".to_string()),
@@ -803,6 +906,80 @@ default_prompt = "  default   prompt   "
                     brand_color: Some("#3B82F6".to_string()),
                     default_prompt: Some("default prompt".to_string()),
                 }),
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn loads_skill_tool_dependencies_from_toml() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "deps-skill", "deps from toml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+
+        write_skill_interface_at(
+            skill_dir,
+            r#"
+[[dependencies.tools]]
+type = "env_var"
+value = "GITHUB_TOKEN"
+description = "GitHub API token with repo scopes"
+
+[[dependencies.tools]]
+type = "mcp"
+value = "github"
+description = "GitHub MCP server"
+transport = "streamable_http"
+url = "https://example.com/mcp"
+
+[[dependencies.tools]]
+type = "cli"
+value = "gh"
+description = "GitHub CLI"
+"#,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "deps-skill".to_string(),
+                description: "deps from toml".to_string(),
+                short_description: None,
+                dependencies: Some(SkillDependencies {
+                    tools: vec![
+                        SkillToolDependency {
+                            tool_type: "env_var".to_string(),
+                            value: "GITHUB_TOKEN".to_string(),
+                            description: Some("GitHub API token with repo scopes".to_string()),
+                            transport: None,
+                            url: None,
+                        },
+                        SkillToolDependency {
+                            tool_type: "mcp".to_string(),
+                            value: "github".to_string(),
+                            description: Some("GitHub MCP server".to_string()),
+                            transport: Some("streamable_http".to_string()),
+                            url: Some("https://example.com/mcp".to_string()),
+                        },
+                        SkillToolDependency {
+                            tool_type: "cli".to_string(),
+                            value: "gh".to_string(),
+                            description: Some("GitHub CLI".to_string()),
+                            transport: None,
+                            url: None,
+                        },
+                    ],
+                }),
+                interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -840,6 +1017,7 @@ icon_large = "./assets/logo.svg"
                 name: "ui-skill".to_string(),
                 description: "from toml".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: Some(SkillInterface {
                     display_name: Some("UI Skill".to_string()),
                     short_description: None,
@@ -882,6 +1060,7 @@ brand_color = "blue"
                 name: "ui-skill".to_string(),
                 description: "from toml".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
@@ -923,6 +1102,7 @@ default_prompt = "{too_long}"
                 name: "ui-skill".to_string(),
                 description: "from toml".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: Some(SkillInterface {
                     display_name: Some("UI Skill".to_string()),
                     short_description: None,
@@ -966,6 +1146,7 @@ icon_large = "./assets/../logo.svg"
                 name: "ui-skill".to_string(),
                 description: "from toml".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
@@ -1008,6 +1189,7 @@ icon_large = "./assets/../logo.svg"
                 name: "linked-skill".to_string(),
                 description: "from link".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: None,
                 path: normalized(&shared_skill_path),
                 scope: SkillScope::User,
@@ -1066,6 +1248,7 @@ icon_large = "./assets/../logo.svg"
                 name: "cycle-skill".to_string(),
                 description: "still loads".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
@@ -1100,6 +1283,7 @@ icon_large = "./assets/../logo.svg"
                 name: "admin-linked-skill".to_string(),
                 description: "from link".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: None,
                 path: normalized(&shared_skill_path),
                 scope: SkillScope::Admin,
@@ -1138,6 +1322,7 @@ icon_large = "./assets/../logo.svg"
                 name: "repo-linked-skill".to_string(),
                 description: "from link".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: None,
                 path: normalized(&linked_skill_path),
                 scope: SkillScope::Repo,
@@ -1199,6 +1384,7 @@ icon_large = "./assets/../logo.svg"
                 name: "within-depth-skill".to_string(),
                 description: "loads".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: None,
                 path: normalized(&within_depth_path),
                 scope: SkillScope::User,
@@ -1224,6 +1410,7 @@ icon_large = "./assets/../logo.svg"
                 name: "demo-skill".to_string(),
                 description: "does things carefully".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
@@ -1253,6 +1440,7 @@ icon_large = "./assets/../logo.svg"
                 name: "demo-skill".to_string(),
                 description: "long description".to_string(),
                 short_description: Some("short summary".to_string()),
+                dependencies: None,
                 interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
@@ -1363,6 +1551,7 @@ icon_large = "./assets/../logo.svg"
                 name: "repo-skill".to_string(),
                 description: "from repo".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
@@ -1414,6 +1603,7 @@ icon_large = "./assets/../logo.svg"
                     name: "nested-skill".to_string(),
                     description: "from nested".to_string(),
                     short_description: None,
+                    dependencies: None,
                     interface: None,
                     path: normalized(&nested_skill_path),
                     scope: SkillScope::Repo,
@@ -1422,6 +1612,7 @@ icon_large = "./assets/../logo.svg"
                     name: "root-skill".to_string(),
                     description: "from root".to_string(),
                     short_description: None,
+                    dependencies: None,
                     interface: None,
                     path: normalized(&root_skill_path),
                     scope: SkillScope::Repo,
@@ -1459,6 +1650,7 @@ icon_large = "./assets/../logo.svg"
                 name: "local-skill".to_string(),
                 description: "from cwd".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
@@ -1494,6 +1686,7 @@ icon_large = "./assets/../logo.svg"
                 name: "dupe-skill".to_string(),
                 description: "from repo".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
@@ -1533,6 +1726,7 @@ icon_large = "./assets/../logo.svg"
                     name: "dupe-skill".to_string(),
                     description: "from repo".to_string(),
                     short_description: None,
+                    dependencies: None,
                     interface: None,
                     path: normalized(&repo_skill_path),
                     scope: SkillScope::Repo,
@@ -1541,6 +1735,7 @@ icon_large = "./assets/../logo.svg"
                     name: "dupe-skill".to_string(),
                     description: "from user".to_string(),
                     short_description: None,
+                    dependencies: None,
                     interface: None,
                     path: normalized(&user_skill_path),
                     scope: SkillScope::User,
@@ -1603,6 +1798,7 @@ icon_large = "./assets/../logo.svg"
                     name: "dupe-skill".to_string(),
                     description: first_description.to_string(),
                     short_description: None,
+                    dependencies: None,
                     interface: None,
                     path: first_path,
                     scope: SkillScope::Repo,
@@ -1611,6 +1807,7 @@ icon_large = "./assets/../logo.svg"
                     name: "dupe-skill".to_string(),
                     description: second_description.to_string(),
                     short_description: None,
+                    dependencies: None,
                     interface: None,
                     path: second_path,
                     scope: SkillScope::Repo,
@@ -1680,6 +1877,7 @@ icon_large = "./assets/../logo.svg"
                 name: "repo-skill".to_string(),
                 description: "from repo".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
@@ -1736,6 +1934,7 @@ icon_large = "./assets/../logo.svg"
                 name: "system-skill".to_string(),
                 description: "from system".to_string(),
                 short_description: None,
+                dependencies: None,
                 interface: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::System,

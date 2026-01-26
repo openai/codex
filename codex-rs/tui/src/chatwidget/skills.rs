@@ -168,6 +168,7 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
             brand_color: interface.brand_color,
             default_prompt: interface.default_prompt,
         }),
+        dependencies: None,
         path: skill.path.clone(),
         scope: skill.scope,
     }

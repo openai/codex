@@ -360,6 +360,8 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::UndoCompleted(_)
                     | EventMsg::ExitedReviewMode(_)
                     | EventMsg::RequestUserInput(_)
+                    | EventMsg::SkillDependenciesApprovalRequest(_)
+                    | EventMsg::SkillRead(_)
                     | EventMsg::ContextCompacted(_)
                     | EventMsg::ThreadRolledBack(_)
                     | EventMsg::CollabAgentSpawnBegin(_)

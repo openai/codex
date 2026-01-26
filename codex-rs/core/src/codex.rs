@@ -132,6 +132,7 @@ use crate::protocol::RequestUserInputEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
+use crate::protocol::SkillDependenciesApprovalRequestEvent;
 use crate::protocol::SkillErrorInfo;
 use crate::protocol::SkillInterface as ProtocolSkillInterface;
 use crate::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -1106,7 +1107,7 @@ impl Session {
             .await
     }
 
-    async fn get_config(&self) -> std::sync::Arc<Config> {
+    pub(crate) async fn get_config(&self) -> std::sync::Arc<Config> {
         let state = self.state.lock().await;
         state
             .session_configuration
@@ -1466,6 +1467,34 @@ impl Session {
             turn_id: turn_context.sub_id.clone(),
             questions: args.questions,
         });
+        self.send_event(turn_context, event).await;
+        rx_response.await.ok()
+    }
+
+    pub async fn request_skill_dependencies_approval(
+        &self,
+        turn_context: &TurnContext,
+        mut event: SkillDependenciesApprovalRequestEvent,
+    ) -> Option<RequestUserInputResponse> {
+        let sub_id = turn_context.sub_id.clone();
+        let (tx_response, rx_response) = oneshot::channel();
+        let event_id = sub_id.clone();
+        let prev_entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_user_input(sub_id, tx_response)
+                }
+                None => None,
+            }
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending user input for sub_id: {event_id}");
+        }
+
+        event.turn_id = event_id.clone();
+        let event = EventMsg::SkillDependenciesApprovalRequest(event);
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
     }
@@ -2931,7 +2960,14 @@ pub(crate) async fn run_turn(
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
-    } = build_skill_injections(&input, skills_outcome.as_ref(), Some(&otel_manager)).await;
+    } = build_skill_injections(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        &input,
+        skills_outcome.as_ref(),
+        Some(&otel_manager),
+    )
+    .await;
 
     for message in skill_warnings {
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
