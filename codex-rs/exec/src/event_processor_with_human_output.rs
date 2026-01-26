@@ -607,7 +607,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::UndoCompleted(_)
             | EventMsg::UndoStarted(_)
             | EventMsg::ThreadRolledBack(_)
-            | EventMsg::RequestUserInput(_) => {}
+            | EventMsg::RequestUserInput(_)
+            | EventMsg::DynamicToolCallRequest(_) => {}
         }
         CodexStatus::Running
     }
