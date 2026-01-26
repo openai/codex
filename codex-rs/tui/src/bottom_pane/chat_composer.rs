@@ -214,6 +214,20 @@ impl Default for ChatComposerConfig {
     }
 }
 
+impl ChatComposerConfig {
+    /// A minimal preset for plain-text inputs embedded in other surfaces.
+    ///
+    /// This disables popups, slash commands, and image-path attachment behavior
+    /// so the composer behaves like a simple notes field.
+    pub(crate) const fn plain_text() -> Self {
+        Self {
+            popups_enabled: false,
+            slash_commands_enabled: false,
+            image_paste_enabled: false,
+        }
+    }
+}
+
 pub(crate) struct ChatComposer {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
@@ -667,6 +681,16 @@ impl ChatComposer {
 
         self.textarea.set_cursor(0);
         self.sync_popups();
+    }
+
+    /// Update the placeholder text without changing input enablement.
+    pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
+        self.placeholder_text = placeholder;
+    }
+
+    /// Move the cursor to the end of the current text buffer.
+    pub(crate) fn move_cursor_to_end(&mut self) {
+        self.textarea.set_cursor(self.textarea.text().len());
     }
 
     pub(crate) fn clear_for_ctrl_c(&mut self) -> Option<String> {

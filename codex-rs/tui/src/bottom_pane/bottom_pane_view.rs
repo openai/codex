@@ -27,6 +27,16 @@ pub(crate) trait BottomPaneView: Renderable {
         false
     }
 
+    /// Flush any pending paste-burst state. Return true if state changed.
+    fn flush_paste_burst_if_due(&mut self) -> bool {
+        false
+    }
+
+    /// Whether the view is currently holding paste-burst transient state.
+    fn is_in_paste_burst(&self) -> bool {
+        false
+    }
+
     /// Try to handle approval request; return the original value if not
     /// consumed.
     fn try_consume_approval_request(
