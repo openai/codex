@@ -1,6 +1,5 @@
 use crate::agent::AgentStatus;
 use crate::agent::exceeds_thread_spawn_depth_limit;
-use crate::agent::next_thread_spawn_depth;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
