@@ -150,6 +150,8 @@ If you don’t have the tool:
 # Headings
 
 - `codex-mine` の説明、および `codex-mine` 向けの機能・運用ルールは `README_mine.md` に追記していくこと（一般向けドキュメントや共通仕様に混ぜない）。
+- upstream（openai/codex）をマージしたら、`README_mine.md` の「Upstream マージ履歴」を更新して、取り込み対象（tag/branch）とマージコミットを残すこと。
+- VSCode拡張の挙動変更をしたら、`vscode-extension/CHANGELOG.md` の `Unreleased` に追記すること（ローカル開発では `vscode-extension/package.json` の `version` は上げない）。
 
 # Git Subtree (vscode-extension)
 

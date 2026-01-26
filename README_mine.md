@@ -41,6 +41,20 @@ WSL（Ubuntu 等）で `codex-mine` が見つからない場合は、まず `ech
 
 `upstream/main`（openai/codex）に対する `codex-mine` の差分のうち、運用上影響が大きいもの。
 
+### Upstream マージ履歴
+
+`codex-mine` がどの upstream（openai/codex）に追従しているかを追跡するため、upstream を取り込んだらここに追記する。
+
+| 日付 | upstream | マージコミット |
+| --- | --- | --- |
+| 2026-01-26 | rust-v0.89.0（sync PR #30） | c36eb7d6a |
+| 2026-01-24 | rust-v0.89.0 | c49168b89 |
+| 2026-01-16 | rust-v0.85.0 | 294e68601 |
+| 2026-01-05 | upstream/main | 3c64f37b4 |
+| 2025-12-19 | upstream/main | 0f1de7557 |
+| 2025-12-16 | upstream/main | 5e2cf28c0 |
+| 2025-12-14 | upstream/main | ad000712d |
+
 ### バージョニング方針
 
 - CLI の表示バージョンは upstream の Rust リリースタグをベースにし、末尾に `-mine.x` を付ける（例: `0.77.0-mine.0`）。
