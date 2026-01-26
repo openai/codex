@@ -211,7 +211,7 @@ type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
 pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ThreadId, PendingInterruptQueue>>>;
 
 pub(crate) type PendingRollbacks = Arc<Mutex<HashMap<ThreadId, RequestId>>>;
-pub(crate) type AutoAttachExclusions = Arc<Mutex<HashSet<ThreadId>>>;
+pub(crate) type ThreadIdsToSkipListenerAttachment = Arc<Mutex<HashSet<ThreadId>>>;
 
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
@@ -259,7 +259,9 @@ pub(crate) struct CodexMessageProcessor {
     // Queue of pending rollback requests per conversation. We reply when ThreadRollback arrives.
     pending_rollbacks: PendingRollbacks,
     turn_summary_store: TurnSummaryStore,
-    auto_attach_exclusions: AutoAttachExclusions,
+    // `exec/run` consumes events directly; background listeners would drain the
+    // stream and prevent it from detecting completion.
+    thread_ids_to_skip_listener_attachment: ThreadIdsToSkipListenerAttachment,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     feedback: CodexFeedback,
 }
@@ -316,7 +318,7 @@ impl CodexMessageProcessor {
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
             pending_rollbacks: Arc::new(Mutex::new(HashMap::new())),
             turn_summary_store: Arc::new(Mutex::new(HashMap::new())),
-            auto_attach_exclusions: Arc::new(Mutex::new(HashSet::new())),
+            thread_ids_to_skip_listener_attachment: Arc::new(Mutex::new(HashSet::new())),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             feedback,
         }
@@ -1419,7 +1421,7 @@ impl CodexMessageProcessor {
             params.developer_instructions,
             params.personality,
         );
-        typesafe_overrides.ephemeral = Some(params.ephemeral.unwrap_or(true));
+        typesafe_overrides.ephemeral = Some(true);
 
         let config =
             match derive_config_from_params(&self.cli_overrides, params.config, typesafe_overrides)
@@ -1454,10 +1456,14 @@ impl CodexMessageProcessor {
             thread_id, thread, ..
         } = new_thread;
 
-        let auto_attach_exclusions = self.auto_attach_exclusions.clone();
+        let thread_ids_to_skip_listener_attachment =
+            self.thread_ids_to_skip_listener_attachment.clone();
         let thread_id_for_turn = thread_id.clone();
         let thread_id_for_remove = thread_id.clone();
-        auto_attach_exclusions.lock().await.insert(thread_id);
+        thread_ids_to_skip_listener_attachment
+            .lock()
+            .await
+            .insert(thread_id);
 
         let response_result: Result<ExecRunResponse, JSONRPCErrorError> = async {
             let has_turn_overrides = params.effort.is_some()
@@ -1501,10 +1507,11 @@ impl CodexMessageProcessor {
         }
         .await;
 
-        let auto_attach_exclusions_for_cleanup = auto_attach_exclusions.clone();
+        let thread_ids_to_skip_listener_attachment_for_cleanup =
+            thread_ids_to_skip_listener_attachment.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            auto_attach_exclusions_for_cleanup
+            thread_ids_to_skip_listener_attachment_for_cleanup
                 .lock()
                 .await
                 .remove(&thread_id_for_remove);
@@ -2089,7 +2096,7 @@ impl CodexMessageProcessor {
     /// Best-effort: attach a listener for thread_id if missing.
     pub(crate) async fn try_attach_thread_listener(&mut self, thread_id: ThreadId) {
         if self
-            .auto_attach_exclusions
+            .thread_ids_to_skip_listener_attachment
             .lock()
             .await
             .contains(&thread_id)

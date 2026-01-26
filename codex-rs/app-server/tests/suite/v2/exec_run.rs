@@ -50,7 +50,6 @@ async fn exec_run_completes_turn_and_returns_final_message() -> Result<()> {
             base_instructions: None,
             developer_instructions: None,
             output_schema: None,
-            ephemeral: None,
         })
         .await?;
 
@@ -99,7 +98,6 @@ async fn exec_run_rejects_empty_input() -> Result<()> {
             base_instructions: None,
             developer_instructions: None,
             output_schema: None,
-            ephemeral: None,
         })
         .await?;
 

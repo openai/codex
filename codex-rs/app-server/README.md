@@ -396,6 +396,7 @@ Run a single turn to completion without subscribing to streamed turn/item events
 Notes:
 
 - `exec/run` is best for one-off utilities (for example, generating a title) where you just need the final result.
+- `exec/run` always runs ephemerally, so it does not create a rollout and will not appear in `thread/list`.
 - Use `turn/start` when you want streaming events, intermediate items, or a long-lived thread.
 
 ### Example: One-off command execution

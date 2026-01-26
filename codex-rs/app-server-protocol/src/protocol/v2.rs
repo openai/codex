@@ -1101,7 +1101,6 @@ pub struct ExecRunParams {
     pub base_instructions: Option<String>,
     pub developer_instructions: Option<String>,
     pub output_schema: Option<JsonValue>,
-    pub ephemeral: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
