@@ -28,6 +28,7 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+use crate::theme;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -1504,6 +1505,18 @@ impl App {
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
+            }
+            AppEvent::PreviewTheme(theme_name) => {
+                theme::set_theme(theme_name);
+                tui.terminal.clear()?;
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::UpdateTheme(theme_name) => {
+                theme::set_theme(theme_name);
+                tui.terminal.clear()?;
+                self.chat_widget
+                    .add_info_message(format!("Theme set to {}.", theme_name.label()), None);
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);

@@ -4,6 +4,8 @@ use codex_common::ApprovalModeCliArg;
 use codex_common::CliConfigOverrides;
 use std::path::PathBuf;
 
+use crate::theme::ThemeName;
+
 #[derive(Parser, Debug)]
 #[command(version)]
 pub struct Cli {
@@ -101,6 +103,10 @@ pub struct Cli {
     /// Additional directories that should be writable alongside the primary workspace.
     #[arg(long = "add-dir", value_name = "DIR", value_hint = ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
+
+    /// Select a color theme for the TUI. Defaults to `default`.
+    #[arg(long = "theme", value_enum)]
+    pub theme: Option<ThemeName>,
 
     /// Disable alternate screen mode
     ///

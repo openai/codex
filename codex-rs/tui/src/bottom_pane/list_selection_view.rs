@@ -44,6 +44,7 @@ pub(crate) struct SelectionItem {
     pub is_default: bool,
     pub is_disabled: bool,
     pub actions: Vec<SelectionAction>,
+    pub preview_actions: Vec<SelectionAction>,
     pub dismiss_on_select: bool,
     pub search_value: Option<String>,
     pub disabled_reason: Option<String>,
@@ -89,6 +90,7 @@ pub(crate) struct ListSelectionView {
     search_placeholder: Option<String>,
     filtered_indices: Vec<usize>,
     last_selected_actual_idx: Option<usize>,
+    last_preview_actual_idx: Option<usize>,
     header: Box<dyn Renderable>,
     initial_selected_idx: Option<usize>,
 }
@@ -121,6 +123,7 @@ impl ListSelectionView {
             },
             filtered_indices: Vec::new(),
             last_selected_actual_idx: None,
+            last_preview_actual_idx: None,
             header,
             initial_selected_idx: params.initial_selected_idx,
         };
@@ -239,6 +242,7 @@ impl ListSelectionView {
         let visible = Self::max_visible_rows(len);
         self.state.ensure_visible(len, visible);
         self.skip_disabled_up();
+        self.preview_selected();
     }
 
     fn move_down(&mut self) {
@@ -247,6 +251,7 @@ impl ListSelectionView {
         let visible = Self::max_visible_rows(len);
         self.state.ensure_visible(len, visible);
         self.skip_disabled_down();
+        self.preview_selected();
     }
 
     fn accept(&mut self) {
@@ -283,6 +288,26 @@ impl ListSelectionView {
 
     pub(crate) fn take_last_selected_index(&mut self) -> Option<usize> {
         self.last_selected_actual_idx.take()
+    }
+
+    fn preview_selected(&mut self) {
+        let selected_actual_idx = self
+            .state
+            .selected_idx
+            .and_then(|idx| self.filtered_indices.get(idx).copied());
+        if selected_actual_idx == self.last_preview_actual_idx {
+            return;
+        }
+        self.last_preview_actual_idx = selected_actual_idx;
+        if let Some(actual_idx) = selected_actual_idx
+            && let Some(item) = self.items.get(actual_idx)
+            && item.disabled_reason.is_none()
+            && !item.is_disabled
+        {
+            for act in &item.preview_actions {
+                act(&self.app_event_tx);
+            }
+        }
     }
 
     fn rows_width(total_width: u16) -> u16 {
@@ -373,6 +398,7 @@ impl BottomPaneView for ListSelectionView {
             } if self.is_searchable => {
                 self.search_query.pop();
                 self.apply_filter();
+                self.preview_selected();
             }
             KeyEvent {
                 code: KeyCode::Esc, ..
@@ -389,6 +415,7 @@ impl BottomPaneView for ListSelectionView {
             {
                 self.search_query.push(c);
                 self.apply_filter();
+                self.preview_selected();
             }
             KeyEvent {
                 code: KeyCode::Char(c),

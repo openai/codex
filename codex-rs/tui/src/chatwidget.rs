@@ -174,6 +174,7 @@ use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::text_formatting::truncate_text;
+use crate::theme;
 use crate::tui::FrameRequester;
 mod interrupts;
 use self::interrupts::InterruptManager;
@@ -2515,6 +2516,9 @@ impl ChatWidget {
             SlashCommand::Personality => {
                 self.open_personality_popup();
             }
+            SlashCommand::Theme => {
+                self.open_theme_popup();
+            }
             SlashCommand::Collab => {
                 if self.collaboration_modes_enabled() {
                     self.open_collaboration_modes_popup();
@@ -2692,6 +2696,22 @@ impl ChatWidget {
                 let _ = trimmed;
                 if self.collaboration_modes_enabled() {
                     self.open_collaboration_modes_popup();
+                }
+            }
+            SlashCommand::Theme => {
+                if trimmed.is_empty() {
+                    self.open_theme_popup();
+                } else if let Some(theme_name) = theme::parse_theme_name(trimmed) {
+                    if theme_name == theme::current_theme() {
+                        let label = theme_name.label();
+                        self.add_info_message(format!("Theme already set to {label}."), None);
+                    } else {
+                        self.app_event_tx.send(AppEvent::UpdateTheme(theme_name));
+                    }
+                } else {
+                    self.add_error_message(format!(
+                        "Unknown theme '{trimmed}'. Try /theme for options."
+                    ));
                 }
             }
             SlashCommand::Review if !trimmed.is_empty() => {
@@ -3403,6 +3423,41 @@ impl ChatWidget {
             return;
         }
         self.open_personality_popup_for_current_model();
+    }
+
+    pub(crate) fn open_theme_popup(&mut self) {
+        let current_theme = theme::current_theme();
+        let items: Vec<SelectionItem> = theme::all_themes()
+            .iter()
+            .copied()
+            .map(|theme_name| {
+                let name = theme_name.label().to_string();
+                let description = Some(theme_name.description().to_string());
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::UpdateTheme(theme_name));
+                })];
+                let preview_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::PreviewTheme(theme_name));
+                })];
+                SelectionItem {
+                    name,
+                    description,
+                    is_current: theme_name == current_theme,
+                    actions,
+                    preview_actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some("Select Theme".to_string()),
+            subtitle: Some("Apply a color palette to this session.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
     }
 
     fn open_personality_popup_for_current_model(&mut self) {

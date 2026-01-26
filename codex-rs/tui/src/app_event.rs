@@ -27,6 +27,8 @@ use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ReasoningEffort;
 
+use crate::theme::ThemeName;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum WindowsSandboxEnableMode {
@@ -109,6 +111,12 @@ pub(crate) enum AppEvent {
 
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
+
+    /// Update the current theme in the running app and widget.
+    UpdateTheme(ThemeName),
+
+    /// Preview a theme without committing UI messages.
+    PreviewTheme(ThemeName),
 
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {

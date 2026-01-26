@@ -1806,6 +1806,7 @@ impl ChatComposer {
         let first_line = self.textarea.text().lines().next().unwrap_or("");
         if let Some((name, rest, _rest_offset)) = parse_slash_name(first_line)
             && rest.is_empty()
+            && let name = Self::normalize_builtin_command_name(name)
             && let Some((_n, cmd)) = Self::built_in_slash_commands_for_input(
                 self.collaboration_modes_enabled,
                 self.personality_command_enabled,
@@ -1830,12 +1831,13 @@ impl ChatComposer {
             if let Some((name, rest, _rest_offset)) = parse_slash_name(&text)
                 && !rest.is_empty()
                 && !name.contains('/')
+                && let name = Self::normalize_builtin_command_name(name)
                 && let Some((_n, cmd)) = Self::built_in_slash_commands_for_input(
                     self.collaboration_modes_enabled,
                     self.personality_command_enabled,
                 )
                 .find(|(command_name, _)| *command_name == name)
-                && cmd == SlashCommand::Review
+                && matches!(cmd, SlashCommand::Review | SlashCommand::Theme)
             {
                 self.textarea.set_text_clearing_elements("");
                 return Some(InputResult::CommandWithArgs(cmd, rest.to_string()));
@@ -2265,6 +2267,7 @@ impl ChatComposer {
             return rest_after_name.is_empty();
         }
 
+        let name = Self::normalize_builtin_command_name(name);
         let builtin_match = Self::built_in_slash_commands_for_input(
             self.collaboration_modes_enabled,
             self.personality_command_enabled,
@@ -2279,6 +2282,13 @@ impl ChatComposer {
         self.custom_prompts
             .iter()
             .any(|p| fuzzy_match(&format!("{prompt_prefix}{}", p.name), name).is_some())
+    }
+
+    fn normalize_builtin_command_name(name: &str) -> &str {
+        match name {
+            "thame" => "theme",
+            _ => name,
+        }
     }
 
     /// Synchronize `self.command_popup` with the current text in the

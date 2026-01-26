@@ -856,6 +856,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     if !subcommand_cli.add_dir.is_empty() {
         interactive.add_dir.extend(subcommand_cli.add_dir);
     }
+    if let Some(theme) = subcommand_cli.theme {
+        interactive.theme = Some(theme);
+    }
     if let Some(prompt) = subcommand_cli.prompt {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
         interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
