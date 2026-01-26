@@ -118,11 +118,7 @@ export type ChatViewState = {
   reloading: boolean;
   statusText?: string | null;
   statusTooltip?: string | null;
-  modelState?: {
-    model: string | null;
-    provider: string | null;
-    reasoning: string | null;
-  } | null;
+  modelState?: ModelState | null;
   models?: Array<{
     id: string;
     model: string;
@@ -153,19 +149,20 @@ let sessionModelState: {
   reasoning: string | null;
 } = { model: null, provider: null, reasoning: null };
 
-export function getSessionModelState(): {
-  model: string | null;
-  provider: string | null;
-  reasoning: string | null;
-} {
-  return sessionModelState;
+export type ModelState = typeof sessionModelState;
+
+const modelStateBySessionId = new Map<string, ModelState>();
+
+export function getSessionModelState(sessionId: string | null): ModelState {
+  if (!sessionId) return sessionModelState;
+  return modelStateBySessionId.get(sessionId) ?? sessionModelState;
 }
 
-export function setSessionModelState(state: {
-  model: string | null;
-  provider: string | null;
-  reasoning: string | null;
-}): void {
+export function setSessionModelState(sessionId: string, state: ModelState): void {
+  modelStateBySessionId.set(sessionId, state);
+}
+
+export function setDefaultModelState(state: ModelState): void {
   sessionModelState = state;
 }
 
@@ -826,10 +823,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     if (type === "setModel") {
+      const sessionId = anyMsg["sessionId"];
+      if (typeof sessionId !== "string" || !sessionId) return;
       const model = asNullableString(anyMsg["model"]);
       const provider = asNullableString(anyMsg["provider"]);
       const reasoning = asNullableString(anyMsg["reasoning"]);
-      setSessionModelState({ model, provider, reasoning });
+      setSessionModelState(sessionId, { model, provider, reasoning });
       this.refresh();
       return;
     }

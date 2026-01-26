@@ -138,6 +138,7 @@ Codex-Mine では `config.toml` に `[[hooks]]` を定義して、内部イベ�
 ローカル開発では `vscode-extension/package.json` の `version` は上げない（Publish 時のみ更新）。そのため、`vsix:install` でインストールされる拡張の表示バージョン（例: `0.1.16`）と、実際に含まれる機能差分（main の最新）が一致しない場合がある。
 
 - 変更履歴は `vscode-extension/CHANGELOG.md` の `Unreleased` を参照する
+- モデル/推論強度の変更はセッション単位で保持され、他セッションには波及しない（共有 `config.toml` への自動書き戻しはしない）
 
 #### Claude Code 互換: tool 実行のブロック（統合hooks）
 

@@ -28,9 +28,11 @@ import { SessionStore } from "./sessions";
 import {
   ChatViewProvider,
   getSessionModelState,
+  setDefaultModelState,
   setSessionModelState,
   type ChatBlock,
   type ChatViewState,
+  type ModelState,
 } from "./ui/chat_view";
 import { DiffDocumentProvider, makeDiffUri } from "./ui/diff_provider";
 import { SessionPanelManager } from "./ui/session_panel_manager";
@@ -430,12 +432,6 @@ let globalStatusText: string | null = null;
 let globalRateLimitStatusText: string | null = null;
 let globalRateLimitStatusTooltip: string | null = null;
 let customPrompts: CustomPromptSummary[] = [];
-let sessionModelState: {
-  model: string | null;
-  provider: string | null;
-  reasoning: string | null;
-} = { model: null, provider: null, reasoning: null };
-type ModelState = typeof sessionModelState;
 const pendingModelFetchByBackend = new Map<string, Promise<void>>();
 const PROMPTS_CMD_PREFIX = "prompts";
 const loggedAgentScanErrors = new Set<string>();
@@ -763,7 +759,7 @@ export function activate(context: vscode.ExtensionContext): void {
         session,
         expanded.text,
         images,
-        getSessionModelState(),
+        getSessionModelState(session.id),
       );
     },
     async (session) => {
@@ -1134,7 +1130,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await ensureBackendMatchesConfiguredCli(folder, "newSession");
         const session = await backendManager.newSession(
           folder,
-          getSessionModelState(),
+          getSessionModelState(null),
         );
         setActiveSession(session.id);
         void ensureModelsFetched(session);
@@ -1338,7 +1334,7 @@ export function activate(context: vscode.ExtensionContext): void {
       try {
         const res = await backendManager.reloadSession(
           session,
-          getSessionModelState(),
+          getSessionModelState(session.id),
         );
         hydrateRuntimeFromThread(session.id, res.thread, { force: true });
         schedulePersistRuntime(session.id);
@@ -1534,7 +1530,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       const rt = ensureRuntime(session.id);
-      const settings = getSessionModelState();
+      const settings = getSessionModelState(activeSessionId);
 
       let rateLimits: RateLimitSnapshot | null = null;
       try {
@@ -2108,7 +2104,7 @@ export function activate(context: vscode.ExtensionContext): void {
           if (!folder) return;
           session =
             (await backendManager.pickSession(folder)) ??
-            (await backendManager.newSession(folder, getSessionModelState()));
+            (await backendManager.newSession(folder, getSessionModelState(null)));
         }
 
         setActiveSession(session.id);
@@ -2642,7 +2638,7 @@ function expandCustomPromptIfAny(
 }
 
 async function sendUserText(session: Session, text: string): Promise<void> {
-  await sendUserInput(session, text, [], getSessionModelState());
+  await sendUserInput(session, text, [], getSessionModelState(session.id));
 }
 
 async function sendUserInput(
@@ -2782,7 +2778,7 @@ async function handleSlashCommand(
       session,
       expandedPrompt.text,
       [],
-      getSessionModelState(),
+      getSessionModelState(session.id),
     );
     return true;
   }
@@ -2881,7 +2877,7 @@ async function handleSlashCommand(
     }
 
     const prompt = await getInitPrompt(context);
-    await sendUserInput(session, prompt, [], getSessionModelState());
+    await sendUserInput(session, prompt, [], getSessionModelState(session.id));
     return true;
   }
   if (cmd === "compact") {
@@ -3536,7 +3532,7 @@ async function loadInitialModelState(
     );
     return;
   }
-  setSessionModelState(picked.state);
+  setDefaultModelState(picked.state);
   output.appendLine(`[config] Loaded model settings from ${picked.path}`);
   chatView?.refresh();
 }
@@ -4017,7 +4013,7 @@ function buildChatState(): ChatViewState {
         .filter(Boolean)
         .join(" • "),
       statusTooltip: globalRateLimitStatusTooltip,
-      modelState: getSessionModelState(),
+      modelState: getSessionModelState(null),
       models: null,
       approvals: [],
       customPrompts: promptSummaries,
@@ -4047,7 +4043,7 @@ function buildChatState(): ChatViewState {
         .filter(Boolean)
         .join(" • "),
       statusTooltip: globalRateLimitStatusTooltip,
-      modelState: getSessionModelState(),
+      modelState: getSessionModelState(null),
       approvals: [],
       customPrompts: promptSummaries,
     };
@@ -4093,7 +4089,7 @@ function buildChatState(): ChatViewState {
       statusText ??
       [globalStatusText, globalRateLimitStatusText].filter(Boolean).join(" • "),
     statusTooltip: statusTooltipParts || null,
-    modelState: getSessionModelState(),
+    modelState: getSessionModelState(activeRaw.id),
     models: getModelOptionsForSession(activeRaw),
     approvals: [...rt.pendingApprovals.entries()].map(([requestKey, v]) => ({
       requestKey,
@@ -5415,6 +5411,16 @@ function applyGlobalNotification(
     }
     case "sessionConfigured": {
       const p = (n as any).params as Record<string, unknown>;
+      const threadId = typeof (p as any).sessionId === "string" ? ((p as any).sessionId as string) : null;
+      const model = typeof (p as any).model === "string" ? ((p as any).model as string) : null;
+      const reasoning =
+        typeof (p as any).reasoningEffort === "string"
+          ? ((p as any).reasoningEffort as string)
+          : null;
+      const session = threadId && sessions ? sessions.getByThreadId(threadId) : null;
+      if (session && model) {
+        setSessionModelState(session.id, { model, provider: null, reasoning });
+      }
       upsertGlobal({
         id: newLocalId("sessionConfigured"),
         type: "info",

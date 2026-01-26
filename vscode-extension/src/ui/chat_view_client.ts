@@ -878,8 +878,13 @@ function main(): void {
   };
 
   const sendModelState = (): void => {
+    if (!domSessionId) {
+      showToast("error", "No session selected.");
+      return;
+    }
     vscode.postMessage({
       type: "setModel",
+      sessionId: domSessionId,
       model: modelSelect.value === "default" ? null : modelSelect.value,
       reasoning:
         reasoningSelect.value === "default" ? null : reasoningSelect.value,
