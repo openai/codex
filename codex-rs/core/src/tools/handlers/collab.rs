@@ -333,114 +333,120 @@ mod wait {
             ms => ms.min(MAX_WAIT_TIMEOUT_MS),
         };
 
-        session
-            .send_event(
-                &turn,
-                CollabWaitingBeginEvent {
-                    sender_thread_id: session.conversation_id,
-                    receiver_thread_ids: receiver_thread_ids.clone(),
-                    call_id: call_id.clone(),
-                }
-                .into(),
-            )
-            .await;
-
-        let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
-        let mut initial_final_statuses = Vec::new();
-        for id in &receiver_thread_ids {
-            match session.services.agent_control.subscribe_status(*id).await {
-                Ok(rx) => {
-                    let status = rx.borrow().clone();
-                    if is_final(&status) {
-                        initial_final_statuses.push((*id, status));
+        crate::agent::begin_collab_wait(session.as_ref(), &turn.sub_id, &receiver_thread_ids).await;
+        let result = async {
+            session
+                .send_event(
+                    &turn,
+                    CollabWaitingBeginEvent {
+                        sender_thread_id: session.conversation_id,
+                        receiver_thread_ids: receiver_thread_ids.clone(),
+                        call_id: call_id.clone(),
                     }
-                    status_rxs.push((*id, rx));
-                }
-                Err(CodexErr::ThreadNotFound(_)) => {
-                    initial_final_statuses.push((*id, AgentStatus::NotFound));
-                }
-                Err(err) => {
-                    let mut statuses = HashMap::with_capacity(1);
-                    statuses.insert(*id, session.services.agent_control.get_status(*id).await);
-                    session
-                        .send_event(
-                            &turn,
-                            CollabWaitingEndEvent {
-                                sender_thread_id: session.conversation_id,
-                                call_id: call_id.clone(),
-                                statuses,
-                            }
-                            .into(),
-                        )
-                        .await;
-                    return Err(collab_agent_error(*id, err));
-                }
-            }
-        }
+                    .into(),
+                )
+                .await;
 
-        let statuses = if !initial_final_statuses.is_empty() {
-            initial_final_statuses
-        } else {
-            // Wait for the first agent to reach a final status.
-            let mut futures = FuturesUnordered::new();
-            for (id, rx) in status_rxs.into_iter() {
-                let session = session.clone();
-                futures.push(wait_for_final_status(session, id, rx));
-            }
-            let mut results = Vec::new();
-            let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-            loop {
-                match timeout_at(deadline, futures.next()).await {
-                    Ok(Some(Some(result))) => {
-                        results.push(result);
-                        break;
+            let mut status_rxs = Vec::with_capacity(receiver_thread_ids.len());
+            let mut initial_final_statuses = Vec::new();
+            for id in &receiver_thread_ids {
+                match session.services.agent_control.subscribe_status(*id).await {
+                    Ok(rx) => {
+                        let status = rx.borrow().clone();
+                        if is_final(&status) {
+                            initial_final_statuses.push((*id, status));
+                        }
+                        status_rxs.push((*id, rx));
                     }
-                    Ok(Some(None)) => continue,
-                    Ok(None) | Err(_) => break,
+                    Err(CodexErr::ThreadNotFound(_)) => {
+                        initial_final_statuses.push((*id, AgentStatus::NotFound));
+                    }
+                    Err(err) => {
+                        let mut statuses = HashMap::with_capacity(1);
+                        statuses.insert(*id, session.services.agent_control.get_status(*id).await);
+                        session
+                            .send_event(
+                                &turn,
+                                CollabWaitingEndEvent {
+                                    sender_thread_id: session.conversation_id,
+                                    call_id: call_id.clone(),
+                                    statuses,
+                                }
+                                .into(),
+                            )
+                            .await;
+                        Err(collab_agent_error(*id, err))?;
+                    }
                 }
             }
-            if !results.is_empty() {
-                // Drain the unlikely last elements to prevent race.
+
+            let statuses = if !initial_final_statuses.is_empty() {
+                initial_final_statuses
+            } else {
+                // Wait for the first agent to reach a final status.
+                let mut futures = FuturesUnordered::new();
+                for (id, rx) in status_rxs.into_iter() {
+                    let session = session.clone();
+                    futures.push(wait_for_final_status(session, id, rx));
+                }
+                let mut results = Vec::new();
+                let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
                 loop {
-                    match futures.next().now_or_never() {
-                        Some(Some(Some(result))) => results.push(result),
-                        Some(Some(None)) => continue,
-                        Some(None) | None => break,
+                    match timeout_at(deadline, futures.next()).await {
+                        Ok(Some(Some(result))) => {
+                            results.push(result);
+                            break;
+                        }
+                        Ok(Some(None)) => continue,
+                        Ok(None) | Err(_) => break,
                     }
                 }
-            }
-            results
-        };
-
-        // Convert payload.
-        let statuses_map = statuses.clone().into_iter().collect::<HashMap<_, _>>();
-        let result = WaitResult {
-            status: statuses_map.clone(),
-            timed_out: statuses.is_empty(),
-        };
-
-        // Final event emission.
-        session
-            .send_event(
-                &turn,
-                CollabWaitingEndEvent {
-                    sender_thread_id: session.conversation_id,
-                    call_id,
-                    statuses: statuses_map,
+                if !results.is_empty() {
+                    // Drain the unlikely last elements to prevent race.
+                    loop {
+                        match futures.next().now_or_never() {
+                            Some(Some(Some(result))) => results.push(result),
+                            Some(Some(None)) => continue,
+                            Some(None) | None => break,
+                        }
+                    }
                 }
-                .into(),
-            )
-            .await;
+                results
+            };
 
-        let content = serde_json::to_string(&result).map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to serialize wait result: {err}"))
-        })?;
+            // Convert payload.
+            let statuses_map = statuses.clone().into_iter().collect::<HashMap<_, _>>();
+            let result = WaitResult {
+                status: statuses_map.clone(),
+                timed_out: statuses.is_empty(),
+            };
 
-        Ok(ToolOutput::Function {
-            content,
-            success: None,
-            content_items: None,
-        })
+            // Final event emission.
+            session
+                .send_event(
+                    &turn,
+                    CollabWaitingEndEvent {
+                        sender_thread_id: session.conversation_id,
+                        call_id,
+                        statuses: statuses_map,
+                    }
+                    .into(),
+                )
+                .await;
+
+            let content = serde_json::to_string(&result).map_err(|err| {
+                FunctionCallError::Fatal(format!("failed to serialize wait result: {err}"))
+            })?;
+
+            Ok(ToolOutput::Function {
+                content,
+                success: None,
+                content_items: None,
+            })
+        }
+        .await;
+        crate::agent::end_collab_wait(session.as_ref(), &turn.sub_id, &receiver_thread_ids).await;
+        result
     }
 
     async fn wait_for_final_status(

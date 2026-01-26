@@ -14,7 +14,14 @@ pub(crate) fn spawn_collab_completion_warning_watcher(
     agent_id: ThreadId,
 ) {
     tokio::spawn(async move {
-        if let Some(status) = wait_for_final_status(session.as_ref(), agent_id).await {
+        if let Some(status) = wait_for_final_status(session.as_ref(), agent_id).await
+            && !crate::agent::is_collab_wait_active(
+                session.as_ref(),
+                &turn_context.sub_id,
+                agent_id,
+            )
+            .await
+        {
             let message = completion_warning_message(agent_id, &status);
             session.record_model_warning(message, &turn_context).await;
         }
