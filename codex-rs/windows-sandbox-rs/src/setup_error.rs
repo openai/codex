@@ -182,7 +182,8 @@ pub fn read_setup_error_report(codex_home: &Path) -> Result<Option<SetupErrorRep
 /// only ASCII alphanumeric, '.', '_', '-', and '/' are allowed.
 pub fn sanitize_tag_value(value: &str) -> String {
     const MAX_LEN: usize = 256;
-    let sanitized: String = value
+    let redacted = redact_home_paths(value);
+    let sanitized: String = redacted
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-' | '/') {
@@ -200,5 +201,96 @@ pub fn sanitize_tag_value(value: &str) -> String {
         trimmed.to_string()
     } else {
         trimmed[..MAX_LEN].to_string()
+    }
+}
+
+fn redact_home_paths(value: &str) -> String {
+    let mut usernames: Vec<String> = Vec::new();
+    if let Ok(username) = std::env::var("USERNAME") {
+        if !username.trim().is_empty() {
+            usernames.push(username);
+        }
+    }
+    if let Ok(user) = std::env::var("USER") {
+        if !user.trim().is_empty() && !usernames.iter().any(|v| v.eq_ignore_ascii_case(&user)) {
+            usernames.push(user);
+        }
+    }
+
+    redact_username_segments(value, &usernames)
+}
+
+fn redact_username_segments(value: &str, usernames: &[String]) -> String {
+    if usernames.is_empty() {
+        return value.to_string();
+    }
+
+    let mut segments: Vec<String> = Vec::new();
+    let mut separators: Vec<char> = Vec::new();
+    let mut current = String::new();
+
+    for ch in value.chars() {
+        if ch == '\\' || ch == '/' {
+            segments.push(std::mem::take(&mut current));
+            separators.push(ch);
+        } else {
+            current.push(ch);
+        }
+    }
+    segments.push(current);
+
+    for segment in &mut segments {
+        let matches = if cfg!(windows) {
+            usernames
+                .iter()
+                .any(|name| segment.eq_ignore_ascii_case(name))
+        } else {
+            usernames.iter().any(|name| segment == name)
+        };
+        if matches {
+            *segment = "<user>".to_string();
+        }
+    }
+
+    let mut out = String::new();
+    for (idx, segment) in segments.iter().enumerate() {
+        out.push_str(segment);
+        if let Some(sep) = separators.get(idx) {
+            out.push(*sep);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn sanitize_tag_value_redacts_username_segments() {
+        let usernames = vec!["Alice".to_string(), "Bob".to_string()];
+        let msg = "failed to write C:\\Users\\Alice\\file.txt; fallback D:\\Profiles\\Bob\\x";
+        let redacted = redact_username_segments(msg, &usernames);
+        assert_eq!(
+            redacted,
+            "failed to write C:\\Users\\<user>\\file.txt; fallback D:\\Profiles\\<user>\\x"
+        );
+    }
+
+    #[test]
+    fn sanitize_tag_value_leaves_unknown_segments() {
+        let usernames = vec!["Alice".to_string()];
+        let msg = "failed to write E:\\data\\file.txt";
+        let redacted = redact_username_segments(msg, &usernames);
+        assert_eq!(redacted, msg);
+    }
+
+    #[test]
+    fn sanitize_tag_value_redacts_multiple_occurrences() {
+        let usernames = vec!["Alice".to_string()];
+        let msg = "C:\\Users\\Alice\\a and C:\\Users\\Alice\\b";
+        let redacted = redact_username_segments(msg, &usernames);
+        assert_eq!(redacted, "C:\\Users\\<user>\\a and C:\\Users\\<user>\\b");
     }
 }
