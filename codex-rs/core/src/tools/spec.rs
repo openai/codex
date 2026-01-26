@@ -3,6 +3,7 @@ use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::protocol::SessionSource;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
@@ -29,10 +30,12 @@ pub(crate) struct ToolsConfig {
     pub web_search_mode: Option<WebSearchMode>,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
+    pub interactive_tools: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
+    pub(crate) session_source: SessionSource,
     pub(crate) model_info: &'a ModelInfo,
     pub(crate) features: &'a Features,
     pub(crate) web_search_mode: Option<WebSearchMode>,
@@ -41,6 +44,7 @@ pub(crate) struct ToolsConfigParams<'a> {
 impl ToolsConfig {
     pub fn new(params: &ToolsConfigParams) -> Self {
         let ToolsConfigParams {
+            session_source,
             model_info,
             features,
             web_search_mode,
@@ -48,6 +52,8 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
+        let interactive_tools =
+            matches!(session_source, SessionSource::Cli | SessionSource::VSCode);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -80,6 +86,7 @@ impl ToolsConfig {
             web_search_mode: *web_search_mode,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
+            interactive_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
     }
@@ -1412,11 +1419,15 @@ pub(crate) fn build_specs(
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
 
-    builder.push_spec(create_ask_user_question_tool());
+    if config.interactive_tools {
+        builder.push_spec(create_ask_user_question_tool());
+    }
     builder.register_handler("ask_user_question", ask_user_question_handler);
 
     if config.collaboration_modes_tools {
-        builder.push_spec(create_request_user_input_tool());
+        if config.interactive_tools {
+            builder.push_spec(create_request_user_input_tool());
+        }
         builder.register_handler("request_user_input", request_user_input_handler);
     }
 
@@ -1640,6 +1651,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::CollaborationModes);
         let config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
@@ -1705,6 +1717,7 @@ mod tests {
         features.enable(Feature::Collab);
         features.enable(Feature::CollaborationModes);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
@@ -1723,6 +1736,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.disable(Feature::CollaborationModes);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
@@ -1736,12 +1750,37 @@ mod tests {
 
         features.enable(Feature::CollaborationModes);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(&tools, &["ask_user_question", "request_user_input"]);
+    }
+
+    #[test]
+    fn human_input_tools_disabled_in_exec_sessions() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Exec,
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
+
+        assert!(
+            !tools.iter().any(|t| t.spec.name() == "ask_user_question"),
+            "ask_user_question should be disabled in exec sessions"
+        );
+        assert!(
+            !tools.iter().any(|t| t.spec.name() == "request_user_input"),
+            "request_user_input should be disabled in exec sessions"
+        );
     }
 
     fn assert_model_tools(
@@ -1753,6 +1792,7 @@ mod tests {
         let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline(model_slug, &config);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features,
             web_search_mode,
@@ -1769,6 +1809,7 @@ mod tests {
         let features = Features::with_defaults();
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
@@ -1791,6 +1832,7 @@ mod tests {
         let features = Features::with_defaults();
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
@@ -2047,6 +2089,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
@@ -2069,6 +2112,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
@@ -2088,6 +2132,7 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline("test-gpt-5-codex", &config);
         let features = Features::with_defaults();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
@@ -2119,6 +2164,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
@@ -2215,6 +2261,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
@@ -2292,6 +2339,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
@@ -2350,6 +2398,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
@@ -2405,6 +2454,7 @@ mod tests {
         features.enable(Feature::UnifiedExec);
         features.enable(Feature::ApplyPatchFreeform);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
@@ -2462,6 +2512,7 @@ mod tests {
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
@@ -2575,6 +2626,7 @@ Examples of valid command strings:
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            session_source: SessionSource::Cli,
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),

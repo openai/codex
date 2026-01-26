@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use crate::function_tool::FunctionCallError;
+use crate::protocol::SessionSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -25,6 +26,13 @@ impl ToolHandler for AskUserQuestionHandler {
             payload,
             ..
         } = invocation;
+
+        let session_source = turn.client.get_session_source();
+        if !matches!(session_source, SessionSource::Cli | SessionSource::VSCode) {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "ask_user_question is unavailable in non-interactive mode (session source: {session_source})"
+            )));
+        }
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
