@@ -3597,7 +3597,7 @@ mod tests {
 
     use codex_protocol::ThreadId;
     use codex_protocol::models::FunctionCallOutputPayload;
-    use codex_protocol::protocol::SubAgentSource;
+    
 
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
