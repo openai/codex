@@ -379,7 +379,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 query,
                 action,
             }) => {
-                let detail = web_search_detail(Some(action), query);
+                let detail = web_search_detail(Some(&action), &query);
                 if detail.is_empty() {
                     ts_msg!(self, "🌐 Searched the web");
                 } else {
