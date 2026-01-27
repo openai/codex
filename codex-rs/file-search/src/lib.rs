@@ -157,6 +157,7 @@ impl FileSearchSession {
 
     /// Blocks until the walker thread finishes (best-effort for callers that want it).
     pub fn join(&self) -> anyhow::Result<FileSearchSnapshot> {
+        let shutdown_requested = || self.inner.shutdown.load(Ordering::Relaxed);
         if let Some(handle) = {
             #[expect(clippy::unwrap_used)]
             self.walker_handle.lock().unwrap().take()
@@ -167,6 +168,7 @@ impl FileSearchSession {
         let mut guard = self.inner.completion_mutex.lock().unwrap();
         while !self.inner.complete_emitted.load(Ordering::Relaxed)
             && !self.inner.cancelled.load(Ordering::Relaxed)
+            && !shutdown_requested()
         {
             #[expect(clippy::unwrap_used)]
             {
@@ -191,7 +193,9 @@ impl FileSearchSession {
 
 impl Drop for FileSearchSession {
     fn drop(&mut self) {
-        self.cancel();
+        self.inner.shutdown.store(true, Ordering::Relaxed);
+        let _ = self.inner.work_tx.send(WorkSignal::Shutdown);
+        self.inner.completion_cv.notify_all();
     }
 }
 
@@ -477,8 +481,13 @@ fn walker_worker(
     injector: Injector<Arc<str>>,
 ) {
     let cancel_requested = || inner.cancelled.load(Ordering::Relaxed);
+    let shutdown_requested = || inner.shutdown.load(Ordering::Relaxed);
     if cancel_requested() {
         inner.cancelled.store(true, Ordering::Relaxed);
+        inner.completion_cv.notify_all();
+        return;
+    }
+    if shutdown_requested() {
         inner.completion_cv.notify_all();
         return;
     }
@@ -527,6 +536,10 @@ fn walker_worker(
             self.inner.cancelled.load(Ordering::Relaxed)
         }
 
+        fn shutdown_requested(&self) -> bool {
+            self.inner.shutdown.load(Ordering::Relaxed)
+        }
+
         fn signal_cancel(&self) {
             self.inner.cancelled.store(true, Ordering::Relaxed);
             let _ = self.inner.work_tx.send(WorkSignal::Cancelled);
@@ -536,6 +549,10 @@ fn walker_worker(
         fn push(&mut self, path: &str) {
             if self.cancel_requested() {
                 self.signal_cancel();
+                return;
+            }
+            if self.shutdown_requested() {
+                self.buffer.clear();
                 return;
             }
             self.buffer.push(Arc::<str>::from(path));
@@ -551,6 +568,10 @@ fn walker_worker(
             if self.cancel_requested() {
                 self.buffer.clear();
                 self.signal_cancel();
+                return;
+            }
+            if self.shutdown_requested() {
+                self.buffer.clear();
                 return;
             }
             let appended = self.buffer.len();
@@ -600,21 +621,26 @@ fn walker_worker(
                 worker_buffer.push(path);
             }
             processed += 1;
-            if processed % CHECK_INTERVAL == 0 && worker_buffer.cancel_requested() {
-                worker_buffer.signal_cancel();
-                ignore::WalkState::Quit
-            } else if processed % CHECK_INTERVAL == 0
-                && worker_buffer.inner.cancelled.load(Ordering::Relaxed)
-            {
-                ignore::WalkState::Quit
-            } else {
-                ignore::WalkState::Continue
+            if processed % CHECK_INTERVAL == 0 {
+                if worker_buffer.cancel_requested() {
+                    worker_buffer.signal_cancel();
+                    return ignore::WalkState::Quit;
+                }
+                if worker_buffer.shutdown_requested() {
+                    worker_buffer.inner.completion_cv.notify_all();
+                    return ignore::WalkState::Quit;
+                }
             }
+            ignore::WalkState::Continue
         })
     });
 
     if cancel_requested() {
         inner.cancelled.store(true, Ordering::Relaxed);
+        inner.completion_cv.notify_all();
+        return;
+    }
+    if shutdown_requested() {
         inner.completion_cv.notify_all();
         return;
     }
@@ -870,6 +896,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Condvar;
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicBool;
     use std::thread;
     use std::time::Duration;
     use std::time::Instant;
@@ -1089,6 +1116,48 @@ mod tests {
 
         let complete_times = reporter.complete_times();
         assert!(complete_times.iter().all(|time| *time <= cancel_time));
+    }
+
+    #[test]
+    fn dropping_session_does_not_cancel_siblings_with_shared_cancel_flag() {
+        let root_a = create_temp_tree(200);
+        let root_b = create_temp_tree(4_000);
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+
+        let reporter_a = Arc::new(RecordingReporter::default());
+        let session_a = create_session_inner(
+            root_a.path(),
+            SessionOptions {
+                update_interval: Duration::from_millis(1),
+                ..SessionOptions::default()
+            },
+            reporter_a,
+            Some(cancel_flag.clone()),
+        )
+        .expect("session_a");
+
+        let reporter_b = Arc::new(RecordingReporter::default());
+        let session_b = create_session_inner(
+            root_b.path(),
+            SessionOptions {
+                update_interval: Duration::from_millis(1),
+                ..SessionOptions::default()
+            },
+            reporter_b.clone(),
+            Some(cancel_flag),
+        )
+        .expect("session_b");
+
+        session_a.update_query("file-0");
+        session_b.update_query("file-1");
+
+        thread::sleep(Duration::from_millis(5));
+        drop(session_a);
+
+        let completed = reporter_b.wait_for_complete(Duration::from_secs(5));
+        let _ = session_b.join();
+
+        assert_eq!(completed, true);
     }
 
     #[test]

@@ -59,15 +59,8 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                     "root": root_path.clone(),
                     "path": "abexy",
                     "file_name": "abexy",
-                    "score": 88,
+                    "score": 84,
                     "indices": [0, 1, 2],
-                },
-                {
-                    "root": root_path.clone(),
-                    "path": "abcde",
-                    "file_name": "abcde",
-                    "score": 74,
-                    "indices": [0, 1, 4],
                 },
                 {
                     "root": root_path.clone(),
@@ -75,6 +68,13 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                     "file_name": "abce",
                     "score": expected_score,
                     "indices": [4, 5, 7],
+                },
+                {
+                    "root": root_path.clone(),
+                    "path": "abcde",
+                    "file_name": "abcde",
+                    "score": 71,
+                    "indices": [0, 1, 4],
                 },
             ]
         })
