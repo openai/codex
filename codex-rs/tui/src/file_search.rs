@@ -10,16 +10,12 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 
 const MAX_FILE_SEARCH_RESULTS: NonZeroUsize = NonZeroUsize::new(20).unwrap();
 const NUM_FILE_SEARCH_THREADS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
-
-/// Maximum update rate for streamed results from the session.
-const FILE_SEARCH_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) struct FileSearchManager {
     state: Arc<Mutex<SearchState>>,
@@ -57,9 +53,7 @@ impl FileSearchManager {
         st.latest_query.push_str(&query);
 
         if query.is_empty() {
-            if let Some(session) = st.session.take() {
-                session.cancel();
-            }
+            st.session.take();
             return;
         }
 
@@ -87,7 +81,6 @@ impl FileSearchManager {
                 threads: NUM_FILE_SEARCH_THREADS,
                 compute_indices: true,
                 respect_gitignore: true,
-                update_interval: FILE_SEARCH_UPDATE_INTERVAL,
             },
             reporter,
         );
@@ -131,7 +124,5 @@ impl file_search::SessionReporter for TuiSessionReporter {
         self.send_snapshot(snapshot);
     }
 
-    fn on_complete(&self, snapshot: &file_search::FileSearchSnapshot) {
-        self.send_snapshot(snapshot);
-    }
+    fn on_complete(&self) {}
 }

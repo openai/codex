@@ -1,5 +1,8 @@
 use crossbeam_channel::Receiver;
 use crossbeam_channel::Sender;
+use crossbeam_channel::after;
+use crossbeam_channel::never;
+use crossbeam_channel::select;
 use crossbeam_channel::unbounded;
 use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
@@ -19,13 +22,11 @@ use std::sync::Condvar;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::thread;
+#[cfg(test)]
 use std::thread::JoinHandle;
 use std::time::Duration;
-use std::time::Instant;
 use tokio::process::Command;
 
 #[cfg(test)]
@@ -71,7 +72,7 @@ pub struct FileSearchResults {
     pub total_match_count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
 pub struct FileSearchSnapshot {
     pub query: String,
     pub matches: Vec<FileMatch>,
@@ -87,8 +88,6 @@ pub struct SessionOptions {
     pub threads: NonZero<usize>,
     pub compute_indices: bool,
     pub respect_gitignore: bool,
-    /// Minimum interval between streamed updates.
-    pub update_interval: Duration,
 }
 
 impl Default for SessionOptions {
@@ -101,7 +100,6 @@ impl Default for SessionOptions {
             threads: NonZero::new(2).unwrap(),
             compute_indices: false,
             respect_gitignore: true,
-            update_interval: Duration::from_millis(100),
         }
     }
 }
@@ -110,8 +108,8 @@ pub trait SessionReporter: Send + Sync + 'static {
     /// Called when the debounced top-N changes.
     fn on_update(&self, snapshot: &FileSearchSnapshot);
 
-    /// Called once when the walk completes (after a final update if needed).
-    fn on_complete(&self, snapshot: &FileSearchSnapshot);
+    /// Called when the session becomes idle.
+    fn on_complete(&self);
 
     /// Optional hook for non-fatal errors.
     fn on_error(&self, _error: &anyhow::Error) {}
@@ -119,75 +117,28 @@ pub trait SessionReporter: Send + Sync + 'static {
 
 pub struct FileSearchSession {
     inner: Arc<SessionInner>,
+    #[cfg(test)]
     walker_handle: Mutex<Option<JoinHandle<()>>>,
+    #[cfg(test)]
     matcher_handle: Mutex<Option<JoinHandle<anyhow::Result<()>>>>,
 }
 
 impl FileSearchSession {
     /// Update the query. This should be cheap relative to re-walking.
     pub fn update_query(&self, pattern_text: &str) {
-        if self.inner.cancelled.load(Ordering::Relaxed) {
-            return;
-        }
-        {
-            #[expect(clippy::unwrap_used)]
-            let mut query = self.inner.query.write().unwrap();
-            query.clear();
-            query.push_str(pattern_text);
-        }
-        self.inner.query_generation.fetch_add(1, Ordering::Relaxed);
-        let _ = self.inner.work_tx.send(WorkSignal::QueryUpdated);
+        let _ = self
+            .inner
+            .work_tx
+            .send(WorkSignal::QueryUpdated(pattern_text.to_string()));
     }
 
-    /// Cancel the session. After cancellation, no further updates are delivered.
-    pub fn cancel(&self) {
-        let was_cancelled = self.inner.cancelled.swap(true, Ordering::Relaxed);
-        if was_cancelled {
-            return;
-        }
-        let _ = self.inner.work_tx.send(WorkSignal::Cancelled);
-        self.inner.completion_cv.notify_all();
-    }
-
-    /// Return the latest snapshot without forcing an update.
-    pub fn snapshot(&self) -> FileSearchSnapshot {
-        #[expect(clippy::unwrap_used)]
-        self.inner.latest_snapshot.read().unwrap().clone()
-    }
-
-    /// Blocks until the walker thread finishes (best-effort for callers that want it).
-    pub fn join(&self) -> anyhow::Result<FileSearchSnapshot> {
-        let shutdown_requested = || self.inner.shutdown.load(Ordering::Relaxed);
-        if let Some(handle) = {
-            #[expect(clippy::unwrap_used)]
-            self.walker_handle.lock().unwrap().take()
-        } {
-            let _ = handle.join();
-        }
-        #[expect(clippy::unwrap_used)]
-        let mut guard = self.inner.completion_mutex.lock().unwrap();
-        while !self.inner.complete_emitted.load(Ordering::Relaxed)
-            && !self.inner.cancelled.load(Ordering::Relaxed)
-            && !shutdown_requested()
-        {
-            #[expect(clippy::unwrap_used)]
-            {
-                guard = self.inner.completion_cv.wait(guard).unwrap();
-            }
-        }
-        drop(guard);
-        self.inner.shutdown.store(true, Ordering::Relaxed);
-        let _ = self.inner.work_tx.send(WorkSignal::Shutdown);
-        if let Some(handle) = {
-            #[expect(clippy::unwrap_used)]
-            self.matcher_handle.lock().unwrap().take()
-        } {
-            match handle.join() {
-                Ok(result) => result?,
-                Err(_) => anyhow::bail!("matcher thread panicked"),
-            }
-        }
-        Ok(self.snapshot())
+    #[cfg(test)]
+    fn join(&self) -> anyhow::Result<()> {
+        let walker_handle = self.walker_handle.lock().unwrap().take().unwrap();
+        let matcher_handle = self.matcher_handle.lock().unwrap().take().unwrap();
+        walker_handle.join().unwrap();
+        let _ = matcher_handle.join().unwrap();
+        Ok(())
     }
 }
 
@@ -195,7 +146,6 @@ impl Drop for FileSearchSession {
     fn drop(&mut self) {
         self.inner.shutdown.store(true, Ordering::Relaxed);
         let _ = self.inner.work_tx.send(WorkSignal::Shutdown);
-        self.inner.completion_cv.notify_all();
     }
 }
 
@@ -219,7 +169,6 @@ fn create_session_inner(
         threads,
         compute_indices,
         respect_gitignore,
-        update_interval,
     } = options;
 
     let override_matcher = build_override_matcher(search_directory, &exclude)?;
@@ -237,14 +186,6 @@ fn create_session_inner(
     );
     let injector = nucleo.injector();
 
-    let latest_snapshot = FileSearchSnapshot {
-        query: String::new(),
-        matches: Vec::new(),
-        total_match_count: 0,
-        scanned_file_count: 0,
-        walk_complete: false,
-    };
-
     let cancelled = cancel_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
 
     let inner = Arc::new(SessionInner {
@@ -253,17 +194,8 @@ fn create_session_inner(
         threads: threads.get(),
         compute_indices,
         respect_gitignore,
-        update_interval,
         cancelled: cancelled.clone(),
-        shutdown: AtomicBool::new(false),
-        walk_complete: AtomicBool::new(false),
-        complete_emitted: AtomicBool::new(false),
-        completion_mutex: Mutex::new(()),
-        completion_cv: Condvar::new(),
-        scanned_file_count: AtomicUsize::new(0),
-        query_generation: AtomicU64::new(0),
-        query: RwLock::new(String::new()),
-        latest_snapshot: RwLock::new(latest_snapshot),
+        shutdown: Arc::new(AtomicBool::new(false)),
         reporter,
         work_tx: work_tx.clone(),
     });
@@ -274,10 +206,17 @@ fn create_session_inner(
     let walker_inner = inner.clone();
     let walker_handle =
         thread::spawn(move || walker_worker(walker_inner, override_matcher, injector));
+    #[cfg(not(test))]
+    {
+        let _ = walker_handle;
+        let _ = matcher_handle;
+    }
 
     Ok(FileSearchSession {
         inner,
+        #[cfg(test)]
         walker_handle: Mutex::new(Some(walker_handle)),
+        #[cfg(test)]
         matcher_handle: Mutex::new(Some(matcher_handle)),
     })
 }
@@ -379,14 +318,14 @@ pub fn run(
             threads,
             compute_indices,
             respect_gitignore,
-            update_interval: Duration::from_millis(100),
         },
         reporter.clone(),
-        Some(cancel_flag.clone()),
+        Some(cancel_flag),
     )?;
 
     session.update_query(pattern_text);
-    let snapshot = session.join()?;
+
+    let snapshot = reporter.wait_for_complete();
     Ok(FileSearchResults {
         matches: snapshot.matches,
         total_match_count: snapshot.total_match_count,
@@ -435,27 +374,16 @@ struct SessionInner {
     threads: usize,
     compute_indices: bool,
     respect_gitignore: bool,
-    update_interval: Duration,
     cancelled: Arc<AtomicBool>,
-    shutdown: AtomicBool,
-    walk_complete: AtomicBool,
-    complete_emitted: AtomicBool,
-    completion_mutex: Mutex<()>,
-    completion_cv: Condvar,
-    scanned_file_count: AtomicUsize,
-    query_generation: AtomicU64,
-    query: RwLock<String>,
-    latest_snapshot: RwLock<FileSearchSnapshot>,
+    shutdown: Arc<AtomicBool>,
     reporter: Arc<dyn SessionReporter>,
     work_tx: Sender<WorkSignal>,
 }
 
 enum WorkSignal {
-    CorpusAppended,
-    QueryUpdated,
+    QueryUpdated(String),
     NucleoNotify,
     WalkComplete,
-    Cancelled,
     Shutdown,
 }
 
@@ -480,18 +408,6 @@ fn walker_worker(
     override_matcher: Option<ignore::overrides::Override>,
     injector: Injector<Arc<str>>,
 ) {
-    let cancel_requested = || inner.cancelled.load(Ordering::Relaxed);
-    let shutdown_requested = || inner.shutdown.load(Ordering::Relaxed);
-    if cancel_requested() {
-        inner.cancelled.store(true, Ordering::Relaxed);
-        inner.completion_cv.notify_all();
-        return;
-    }
-    if shutdown_requested() {
-        inner.completion_cv.notify_all();
-        return;
-    }
-
     let mut walk_builder = WalkBuilder::new(&inner.search_directory);
     walk_builder
         .threads(inner.threads)
@@ -515,82 +431,6 @@ fn walker_worker(
 
     let walker = walk_builder.build_parallel();
 
-    struct WorkerBuffer {
-        buffer: Vec<Arc<str>>,
-        inner: Arc<SessionInner>,
-        injector: Injector<Arc<str>>,
-    }
-
-    impl WorkerBuffer {
-        const BATCH_SIZE: usize = 256;
-
-        fn new(inner: Arc<SessionInner>, injector: Injector<Arc<str>>) -> Self {
-            Self {
-                buffer: Vec::with_capacity(Self::BATCH_SIZE),
-                inner,
-                injector,
-            }
-        }
-
-        fn cancel_requested(&self) -> bool {
-            self.inner.cancelled.load(Ordering::Relaxed)
-        }
-
-        fn shutdown_requested(&self) -> bool {
-            self.inner.shutdown.load(Ordering::Relaxed)
-        }
-
-        fn signal_cancel(&self) {
-            self.inner.cancelled.store(true, Ordering::Relaxed);
-            let _ = self.inner.work_tx.send(WorkSignal::Cancelled);
-            self.inner.completion_cv.notify_all();
-        }
-
-        fn push(&mut self, path: &str) {
-            if self.cancel_requested() {
-                self.signal_cancel();
-                return;
-            }
-            if self.shutdown_requested() {
-                self.buffer.clear();
-                return;
-            }
-            self.buffer.push(Arc::<str>::from(path));
-            if self.buffer.len() >= Self::BATCH_SIZE {
-                self.flush();
-            }
-        }
-
-        fn flush(&mut self) {
-            if self.buffer.is_empty() {
-                return;
-            }
-            if self.cancel_requested() {
-                self.buffer.clear();
-                self.signal_cancel();
-                return;
-            }
-            if self.shutdown_requested() {
-                self.buffer.clear();
-                return;
-            }
-            let appended = self.buffer.len();
-            self.injector.extend(self.buffer.drain(..), |path, cols| {
-                cols[0] = Utf32String::from(path.as_ref());
-            });
-            self.inner
-                .scanned_file_count
-                .fetch_add(appended, Ordering::Relaxed);
-            let _ = self.inner.work_tx.send(WorkSignal::CorpusAppended);
-        }
-    }
-
-    impl Drop for WorkerBuffer {
-        fn drop(&mut self) {
-            self.flush();
-        }
-    }
-
     fn get_file_path<'a>(
         entry_result: &'a Result<ignore::DirEntry, ignore::Error>,
         search_directory: &Path,
@@ -610,42 +450,29 @@ fn walker_worker(
     }
 
     walker.run(|| {
-        let mut worker_buffer = WorkerBuffer::new(inner.clone(), injector.clone());
-        // Each worker keeps a local counter so we only read the atomic flag
-        // every N entries which is cheaper than checking on every file.
         const CHECK_INTERVAL: usize = 1024;
-        let mut processed = 0;
+        let mut n = 0;
+        let search_directory = inner.search_directory.clone();
+        let injector = injector.clone();
+        let cancelled = inner.cancelled.clone();
+        let shutdown = inner.shutdown.clone();
 
         Box::new(move |entry| {
-            if let Some(path) = get_file_path(&entry, &worker_buffer.inner.search_directory) {
-                worker_buffer.push(path);
+            if let Some(path) = get_file_path(&entry, &search_directory) {
+                injector.push(Arc::from(path), |path, cols| {
+                    cols[0] = Utf32String::from(path.as_ref());
+                });
             }
-            processed += 1;
-            if processed % CHECK_INTERVAL == 0 {
-                if worker_buffer.cancel_requested() {
-                    worker_buffer.signal_cancel();
+            n += 1;
+            if n >= CHECK_INTERVAL {
+                if cancelled.load(Ordering::Relaxed) || shutdown.load(Ordering::Relaxed) {
                     return ignore::WalkState::Quit;
                 }
-                if worker_buffer.shutdown_requested() {
-                    worker_buffer.inner.completion_cv.notify_all();
-                    return ignore::WalkState::Quit;
-                }
+                n = 0;
             }
             ignore::WalkState::Continue
         })
     });
-
-    if cancel_requested() {
-        inner.cancelled.store(true, Ordering::Relaxed);
-        inner.completion_cv.notify_all();
-        return;
-    }
-    if shutdown_requested() {
-        inner.completion_cv.notify_all();
-        return;
-    }
-
-    inner.walk_complete.store(true, Ordering::Relaxed);
     let _ = inner.work_tx.send(WorkSignal::WalkComplete);
 }
 
@@ -655,242 +482,111 @@ fn matcher_worker(
     mut nucleo: Nucleo<Arc<str>>,
 ) -> anyhow::Result<()> {
     const TICK_TIMEOUT_MS: u64 = 10;
-
     let config = Config::DEFAULT.match_paths();
     let mut indices_matcher = inner.compute_indices.then(|| Matcher::new(config.clone()));
     let cancel_requested = || inner.cancelled.load(Ordering::Relaxed);
     let shutdown_requested = || inner.shutdown.load(Ordering::Relaxed);
-    let idle_timeout = Duration::from_millis(50);
 
-    let mut last_query_generation = inner.query_generation.load(Ordering::Relaxed);
     let mut last_query = String::new();
-    let mut last_matches: Vec<FileMatch> = Vec::new();
-
-    let mut emit_pending = false;
-    let mut last_emit_at = Instant::now() - inner.update_interval;
+    let mut next_notify = never();
+    let mut will_notify = false;
+    let mut walk_complete = false;
 
     loop {
-        if cancel_requested() {
-            inner.cancelled.store(true, Ordering::Relaxed);
-            let _ = inner.work_tx.send(WorkSignal::Cancelled);
-            inner.completion_cv.notify_all();
-            break;
-        }
-        if shutdown_requested() {
-            break;
-        }
-        let timeout = if emit_pending {
-            let elapsed = last_emit_at.elapsed();
-            if elapsed >= inner.update_interval {
-                Duration::ZERO
-            } else {
-                inner.update_interval - elapsed
-            }
-        } else {
-            idle_timeout
-        };
-
-        let mut saw_signal = false;
-        let mut saw_walk_complete_signal = false;
-        let mut saw_cancel_signal = false;
-        let mut saw_nucleo_notify = false;
-        let mut saw_shutdown_signal = false;
-
-        match work_rx.recv_timeout(timeout) {
-            Ok(signal) => {
-                saw_signal = true;
-                match signal {
-                    WorkSignal::WalkComplete => saw_walk_complete_signal = true,
-                    WorkSignal::Cancelled => saw_cancel_signal = true,
-                    WorkSignal::NucleoNotify => saw_nucleo_notify = true,
-                    WorkSignal::Shutdown => saw_shutdown_signal = true,
-                    WorkSignal::CorpusAppended | WorkSignal::QueryUpdated => {}
-                }
-            }
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
-        }
-
-        for signal in work_rx.try_iter() {
-            saw_signal = true;
-            match signal {
-                WorkSignal::WalkComplete => saw_walk_complete_signal = true,
-                WorkSignal::Cancelled => saw_cancel_signal = true,
-                WorkSignal::NucleoNotify => saw_nucleo_notify = true,
-                WorkSignal::Shutdown => saw_shutdown_signal = true,
-                WorkSignal::CorpusAppended | WorkSignal::QueryUpdated => {}
-            }
-        }
-
-        if saw_cancel_signal || inner.cancelled.load(Ordering::Relaxed) {
-            break;
-        }
-        if saw_shutdown_signal || shutdown_requested() {
-            break;
-        }
-
-        let walk_complete = inner.walk_complete.load(Ordering::Relaxed) || saw_walk_complete_signal;
-        if !saw_signal && !emit_pending {
-            continue;
-        }
-
-        let current_query = {
-            #[expect(clippy::unwrap_used)]
-            inner.query.read().unwrap().clone()
-        };
-        let current_generation = inner.query_generation.load(Ordering::Relaxed);
-        let query_changed =
-            current_generation != last_query_generation || current_query != last_query;
-        if query_changed {
-            let append = current_query.starts_with(&last_query);
-            nucleo.pattern.reparse(
-                0,
-                &current_query,
-                CaseMatching::Smart,
-                Normalization::Smart,
-                append,
-            );
-            last_query_generation = current_generation;
-            last_query = current_query.clone();
-        }
-
-        let query_is_empty = current_query.is_empty();
-        let mut nucleo_running = false;
-        if !query_is_empty && (query_changed || saw_signal || saw_nucleo_notify || emit_pending) {
-            let status = nucleo.tick(TICK_TIMEOUT_MS);
-            nucleo_running = status.running;
-        }
-
-        let matches = if query_is_empty {
-            Vec::new()
-        } else {
-            let snapshot = nucleo.snapshot();
-            let limit = inner.limit.min(snapshot.matched_item_count() as usize);
-            let pattern = snapshot.pattern().column_pattern(0);
-            snapshot
-                .matches()
-                .iter()
-                .take(limit)
-                .filter_map(|match_| {
-                    let item = snapshot.get_item(match_.idx)?;
-                    let indices = if let Some(indices_matcher) = indices_matcher.as_mut() {
-                        let mut idx_vec = Vec::<u32>::new();
-                        let haystack = item.matcher_columns[0].slice(..);
-                        let _ = pattern.indices(haystack, indices_matcher, &mut idx_vec);
-                        idx_vec.sort_unstable();
-                        idx_vec.dedup();
-                        Some(idx_vec)
-                    } else {
-                        None
-                    };
-                    Some(FileMatch {
-                        score: match_.score,
-                        path: item.data.as_ref().to_string(),
-                        indices,
-                    })
-                })
-                .collect()
-        };
-
-        let total_match_count = if query_is_empty {
-            0
-        } else {
-            nucleo.snapshot().matched_item_count() as usize
-        };
-
-        let snapshot = FileSearchSnapshot {
-            query: current_query.clone(),
-            matches: matches.clone(),
-            total_match_count,
-            scanned_file_count: inner.scanned_file_count.load(Ordering::Relaxed),
-            walk_complete,
-        };
-        {
-            #[expect(clippy::unwrap_used)]
-            let mut latest_snapshot = inner.latest_snapshot.write().unwrap();
-            *latest_snapshot = snapshot.clone();
-        }
-
-        let top_changed = matches != last_matches;
-        if top_changed {
-            last_matches = matches;
-        }
-
-        let now = Instant::now();
-        let throttle_ready = now.duration_since(last_emit_at) >= inner.update_interval;
-        let query_changed_after_complete =
-            query_changed && inner.complete_emitted.load(Ordering::Relaxed);
-        if top_changed && (throttle_ready || walk_complete) {
-            if inner.cancelled.load(Ordering::Relaxed) {
-                break;
-            }
-            inner.reporter.on_update(&snapshot);
-            last_emit_at = now;
-            emit_pending = false;
-        } else if top_changed {
-            emit_pending = true;
-        } else if query_changed_after_complete && throttle_ready {
-            if inner.cancelled.load(Ordering::Relaxed) {
-                break;
-            }
-            inner.reporter.on_update(&snapshot);
-            last_emit_at = now;
-            emit_pending = false;
-        } else if query_changed_after_complete {
-            emit_pending = true;
-        } else if emit_pending && throttle_ready {
-            if inner.cancelled.load(Ordering::Relaxed) {
-                break;
-            }
-            inner.reporter.on_update(&snapshot);
-            last_emit_at = now;
-            emit_pending = false;
-        }
-
-        if walk_complete && nucleo_running {
-            // The walk may complete before the matcher has processed all injected items.
-            // Keep ticking until nucleo reports that it is no longer running to avoid
-            // emitting an incomplete "complete" snapshot.
-            emit_pending |= top_changed || query_changed_after_complete;
-            continue;
-        }
-
-        if walk_complete && !inner.complete_emitted.load(Ordering::Relaxed) {
-            if emit_pending {
-                if inner.cancelled.load(Ordering::Relaxed) {
+        select! {
+            recv(work_rx) -> signal => {
+                let Ok(signal) = signal else {
                     break;
+                };
+                match signal {
+                    WorkSignal::QueryUpdated(query) => {
+                        let append = query.starts_with(&last_query);
+                        nucleo.pattern.reparse(
+                            0,
+                            &query,
+                            CaseMatching::Smart,
+                            Normalization::Smart,
+                            append,
+                        );
+                        last_query = query;
+                        will_notify = true;
+                        next_notify = after(Duration::from_millis(0));
+                    }
+                    WorkSignal::NucleoNotify => {
+                        if !will_notify {
+                            will_notify = true;
+                            next_notify = after(Duration::from_millis(TICK_TIMEOUT_MS));
+                        }
+                    }
+                    WorkSignal::WalkComplete => {
+                        walk_complete = true;
+                    }
+                    WorkSignal::Shutdown => {
+                        break;
+                    }
                 }
-                inner.reporter.on_update(&snapshot);
-                emit_pending = false;
             }
-            if inner.cancelled.load(Ordering::Relaxed) {
-                break;
+            recv(next_notify) -> _ => {
+                will_notify = false;
+                let status = nucleo.tick(TICK_TIMEOUT_MS);
+                if status.changed {
+                    let snapshot = nucleo.snapshot();
+                    let limit = inner.limit.min(snapshot.matched_item_count() as usize);
+                    let pattern = snapshot.pattern().column_pattern(0);
+                    let matches: Vec<_> = snapshot
+                        .matches()
+                        .iter()
+                        .take(limit)
+                        .filter_map(|match_| {
+                            let item = snapshot.get_item(match_.idx)?;
+                            let indices = if let Some(indices_matcher) = indices_matcher.as_mut() {
+                                let mut idx_vec = Vec::<u32>::new();
+                                let haystack = item.matcher_columns[0].slice(..);
+                                let _ = pattern.indices(haystack, indices_matcher, &mut idx_vec);
+                                idx_vec.sort_unstable();
+                                idx_vec.dedup();
+                                Some(idx_vec)
+                            } else {
+                                None
+                            };
+                            Some(FileMatch {
+                                score: match_.score,
+                                path: item.data.as_ref().to_string(),
+                                indices,
+                            })
+                        })
+                        .collect();
+
+                    let snapshot = FileSearchSnapshot {
+                        query: last_query.clone(),
+                        matches,
+                        total_match_count: snapshot.matched_item_count() as usize,
+                        scanned_file_count: snapshot.item_count() as usize,
+                        walk_complete,
+                    };
+                    inner.reporter.on_update(&snapshot);
+                }
+                if !status.running && walk_complete {
+                    inner.reporter.on_complete();
+                }
             }
-            inner.reporter.on_complete(&snapshot);
-            inner.complete_emitted.store(true, Ordering::Relaxed);
-            inner.completion_cv.notify_all();
+            default(Duration::from_millis(100)) => {
+                // Occasionally check the cancel flag.
+            }
+        }
+
+        if cancel_requested() || shutdown_requested() {
+            break;
         }
     }
 
     Ok(())
 }
 
+#[derive(Default)]
 struct RunReporter {
     snapshot: RwLock<FileSearchSnapshot>,
-}
-
-impl Default for RunReporter {
-    fn default() -> Self {
-        Self {
-            snapshot: RwLock::new(FileSearchSnapshot {
-                query: String::new(),
-                matches: Vec::new(),
-                total_match_count: 0,
-                scanned_file_count: 0,
-                walk_complete: false,
-            }),
-        }
-    }
+    completed: (Condvar, Mutex<bool>),
 }
 
 impl SessionReporter for RunReporter {
@@ -900,10 +596,22 @@ impl SessionReporter for RunReporter {
         *guard = snapshot.clone();
     }
 
-    fn on_complete(&self, snapshot: &FileSearchSnapshot) {
-        #[expect(clippy::unwrap_used)]
-        let mut guard = self.snapshot.write().unwrap();
-        *guard = snapshot.clone();
+    fn on_complete(&self) {
+        let (cv, mutex) = &self.completed;
+        let mut completed = mutex.lock().unwrap();
+        *completed = true;
+        cv.notify_all();
+    }
+}
+
+impl RunReporter {
+    fn wait_for_complete(&self) -> FileSearchSnapshot {
+        let (cv, mutex) = &self.completed;
+        let mut completed = mutex.lock().unwrap();
+        while !*completed {
+            completed = cv.wait(completed).unwrap();
+        }
+        self.snapshot.read().unwrap().clone()
     }
 }
 
@@ -967,7 +675,6 @@ mod tests {
     #[derive(Default)]
     struct RecordingReporter {
         updates: Mutex<Vec<FileSearchSnapshot>>,
-        completes: Mutex<Vec<FileSearchSnapshot>>,
         complete_times: Mutex<Vec<Instant>>,
         complete_cv: Condvar,
         update_cv: Condvar,
@@ -975,12 +682,16 @@ mod tests {
 
     impl RecordingReporter {
         fn wait_for_complete(&self, timeout: Duration) -> bool {
-            let completes = self.completes.lock().unwrap();
+            let completes = self.complete_times.lock().unwrap();
             if !completes.is_empty() {
                 return true;
             }
             let (completes, _) = self.complete_cv.wait_timeout(completes, timeout).unwrap();
             !completes.is_empty()
+        }
+        fn clear(&self) {
+            self.updates.lock().unwrap().clear();
+            self.complete_times.lock().unwrap().clear();
         }
 
         fn updates(&self) -> Vec<FileSearchSnapshot> {
@@ -999,6 +710,15 @@ mod tests {
         fn complete_times(&self) -> Vec<Instant> {
             self.complete_times.lock().unwrap().clone()
         }
+
+        fn snapshot(&self) -> FileSearchSnapshot {
+            self.updates
+                .lock()
+                .unwrap()
+                .last()
+                .cloned()
+                .unwrap_or_default()
+        }
     }
 
     impl SessionReporter for RecordingReporter {
@@ -1008,11 +728,7 @@ mod tests {
             self.update_cv.notify_all();
         }
 
-        fn on_complete(&self, snapshot: &FileSearchSnapshot) {
-            {
-                let mut completes = self.completes.lock().unwrap();
-                completes.push(snapshot.clone());
-            }
+        fn on_complete(&self) {
             {
                 let mut complete_times = self.complete_times.lock().unwrap();
                 complete_times.push(Instant::now());
@@ -1034,45 +750,31 @@ mod tests {
     fn session_scanned_file_count_is_monotonic_across_queries() {
         let dir = create_temp_tree(200);
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session(
-            dir.path(),
-            SessionOptions {
-                update_interval: Duration::from_millis(5),
-                ..SessionOptions::default()
-            },
-            reporter.clone(),
-        )
-        .expect("session");
+        let session = create_session(dir.path(), SessionOptions::default(), reporter.clone())
+            .expect("session");
 
         session.update_query("file-00");
         thread::sleep(Duration::from_millis(20));
-        let first_snapshot = session.snapshot();
+        let first_snapshot = reporter.snapshot();
         session.update_query("file-01");
         thread::sleep(Duration::from_millis(20));
-        let second_snapshot = session.snapshot();
-        let _ = session.join();
+        let second_snapshot = reporter.snapshot();
+        let _ = reporter.wait_for_complete(Duration::from_secs(5));
+        let completed_snapshot = reporter.snapshot();
 
         assert!(second_snapshot.scanned_file_count >= first_snapshot.scanned_file_count);
-        assert!(session.snapshot().scanned_file_count >= second_snapshot.scanned_file_count);
+        assert!(completed_snapshot.scanned_file_count >= second_snapshot.scanned_file_count);
     }
 
     #[test]
     fn session_streams_updates_before_walk_complete() {
         let dir = create_temp_tree(600);
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session(
-            dir.path(),
-            SessionOptions {
-                update_interval: Duration::from_millis(1),
-                ..SessionOptions::default()
-            },
-            reporter.clone(),
-        )
-        .expect("session");
+        let session = create_session(dir.path(), SessionOptions::default(), reporter.clone())
+            .expect("session");
 
         session.update_query("file-0");
         let completed = reporter.wait_for_complete(Duration::from_secs(5));
-        let _ = session.join();
 
         assert!(completed);
         let updates = reporter.updates();
@@ -1085,15 +787,8 @@ mod tests {
         fs::write(dir.path().join("alpha.txt"), "alpha").unwrap();
         fs::write(dir.path().join("beta.txt"), "beta").unwrap();
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session(
-            dir.path(),
-            SessionOptions {
-                update_interval: Duration::from_millis(1),
-                ..SessionOptions::default()
-            },
-            reporter.clone(),
-        )
-        .expect("session");
+        let session = create_session(dir.path(), SessionOptions::default(), reporter.clone())
+            .expect("session");
 
         session.update_query("alpha");
         assert!(reporter.wait_for_complete(Duration::from_secs(5)));
@@ -1110,61 +805,53 @@ mod tests {
                 .iter()
                 .any(|file_match| file_match.path.contains("beta.txt"))
         );
-
-        session.cancel();
-        let _ = session.join();
     }
 
     #[test]
-    fn session_emits_update_when_query_changes_with_no_matches() {
+    fn session_emits_complete_when_query_changes_with_no_matches() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("alpha.txt"), "alpha").unwrap();
         fs::write(dir.path().join("beta.txt"), "beta").unwrap();
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session(
+        let session = create_session_inner(
             dir.path(),
-            SessionOptions {
-                update_interval: Duration::from_millis(1),
-                ..SessionOptions::default()
-            },
+            SessionOptions::default(),
             reporter.clone(),
+            None,
         )
         .expect("session");
 
         session.update_query("asdf");
         assert!(reporter.wait_for_complete(Duration::from_secs(5)));
 
-        let completed_snapshot = session.snapshot();
+        let completed_snapshot = reporter.snapshot();
         assert_eq!(completed_snapshot.matches, Vec::new());
         assert_eq!(completed_snapshot.total_match_count, 0);
-        assert!(completed_snapshot.walk_complete);
 
-        let updates_before = reporter.updates().len();
+        reporter.clear();
+
         session.update_query("asdfa");
-        assert!(reporter.wait_for_updates_at_least(updates_before + 1, Duration::from_secs(5),));
-
-        session.cancel();
-        let _ = session.join();
+        assert!(reporter.wait_for_complete(Duration::from_secs(5)));
+        assert!(!reporter.updates().is_empty());
     }
 
     #[test]
     fn session_cancellation_skips_completion_callback() {
         let dir = create_temp_tree(800);
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session(
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let session = create_session_inner(
             dir.path(),
-            SessionOptions {
-                update_interval: Duration::from_millis(5),
-                ..SessionOptions::default()
-            },
+            SessionOptions::default(),
             reporter.clone(),
+            Some(cancel_flag.clone()),
         )
         .expect("session");
 
         session.update_query("file-");
         thread::sleep(Duration::from_millis(10));
         let cancel_time = Instant::now();
-        session.cancel();
+        cancel_flag.store(true, Ordering::Relaxed);
         let _ = session.join();
 
         let complete_times = reporter.complete_times();
@@ -1180,10 +867,7 @@ mod tests {
         let reporter_a = Arc::new(RecordingReporter::default());
         let session_a = create_session_inner(
             root_a.path(),
-            SessionOptions {
-                update_interval: Duration::from_millis(1),
-                ..SessionOptions::default()
-            },
+            SessionOptions::default(),
             reporter_a,
             Some(cancel_flag.clone()),
         )
@@ -1192,10 +876,7 @@ mod tests {
         let reporter_b = Arc::new(RecordingReporter::default());
         let session_b = create_session_inner(
             root_b.path(),
-            SessionOptions {
-                update_interval: Duration::from_millis(1),
-                ..SessionOptions::default()
-            },
+            SessionOptions::default(),
             reporter_b.clone(),
             Some(cancel_flag),
         )
@@ -1208,30 +889,27 @@ mod tests {
         drop(session_a);
 
         let completed = reporter_b.wait_for_complete(Duration::from_secs(5));
-        let _ = session_b.join();
-
         assert_eq!(completed, true);
     }
 
     #[test]
-    fn session_does_not_emit_updates_when_top_n_is_unchanged() {
+    fn session_emits_updates_when_query_changes() {
         let dir = create_temp_tree(200);
         let reporter = Arc::new(RecordingReporter::default());
-        let session = create_session(
-            dir.path(),
-            SessionOptions {
-                update_interval: Duration::from_millis(1),
-                ..SessionOptions::default()
-            },
-            reporter.clone(),
-        )
-        .expect("session");
+        let session = create_session(dir.path(), SessionOptions::default(), reporter.clone())
+            .expect("session");
 
         session.update_query("zzzzzzzz");
-        let _ = reporter.wait_for_complete(Duration::from_secs(5));
-        let _ = session.join();
+        let completed = reporter.wait_for_complete(Duration::from_secs(5));
+        assert!(completed);
+
+        reporter.clear();
+
+        session.update_query("zzzzzzzzq");
+        let completed = reporter.wait_for_complete(Duration::from_secs(5));
+        assert!(completed);
 
         let updates = reporter.updates();
-        assert!(updates.is_empty());
+        assert_eq!(updates.len(), 1);
     }
 }
