@@ -2,7 +2,6 @@
 // Unified entry point for the Codex CLI.
 
 import { spawn } from "node:child_process";
-import { constants as osConstants } from "node:os";
 import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -60,8 +59,7 @@ if (!targetTriple) {
   throw new Error(`Unsupported platform: ${platform} (${arch})`);
 }
 
-const vendorRoot =
-  process.env.CODEX_CLI_VENDOR_ROOT || path.join(__dirname, "..", "vendor");
+const vendorRoot = path.join(__dirname, "..", "vendor");
 const archRoot = path.join(vendorRoot, targetTriple);
 const codexBinaryName = process.platform === "win32" ? "codex.exe" : "codex";
 const binaryPath = path.join(archRoot, "codex", codexBinaryName);
@@ -150,21 +148,9 @@ const forwardSignal = (signal) => {
   }
 };
 
-const signalHandlers = new Map();
-
-function registerSignalHandler(signal) {
-  const handler = () => forwardSignal(signal);
-  signalHandlers.set(signal, handler);
-  process.on(signal, handler);
-}
-
-function stopSignalForwarding() {
-  for (const [signal, handler] of signalHandlers.entries()) {
-    process.off(signal, handler);
-  }
-}
-
-["SIGINT", "SIGTERM", "SIGHUP"].forEach(registerSignalHandler);
+["SIGINT", "SIGTERM", "SIGHUP"].forEach((sig) => {
+  process.on(sig, () => forwardSignal(sig));
+});
 
 // When the child exits, mirror its termination reason in the parent so that
 // shell scripts and other tooling observe the correct exit status.
@@ -184,19 +170,7 @@ const childResult = await new Promise((resolve) => {
 if (childResult.type === "signal") {
   // Re-emit the same signal so that the parent terminates with the expected
   // semantics (this also sets the correct exit code of 128 + n).
-  stopSignalForwarding();
-  const signalNumber = osConstants.signals[childResult.signal];
-  const fallbackExitCode =
-    typeof signalNumber === "number" ? 128 + signalNumber : 1;
-  const fallbackTimer = setTimeout(() => {
-    process.exit(fallbackExitCode);
-  }, 250);
-  try {
-    process.kill(process.pid, childResult.signal);
-  } catch {
-    clearTimeout(fallbackTimer);
-    process.exit(1);
-  }
+  process.kill(process.pid, childResult.signal);
 } else {
   process.exit(childResult.exitCode);
 }

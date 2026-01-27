@@ -511,29 +511,27 @@ fn aggregate_output(
     stderr: &StreamOutput<Vec<u8>>,
 ) -> StreamOutput<Vec<u8>> {
     let total_len = stdout.text.len().saturating_add(stderr.text.len());
-    let mut aggregated = Vec::with_capacity(total_len.min(EXEC_OUTPUT_MAX_BYTES));
+    let max_bytes = EXEC_OUTPUT_MAX_BYTES;
+    let mut aggregated = Vec::with_capacity(total_len.min(max_bytes));
 
-    if total_len <= EXEC_OUTPUT_MAX_BYTES {
-        append_capped(&mut aggregated, &stdout.text, EXEC_OUTPUT_MAX_BYTES);
-        append_capped(&mut aggregated, &stderr.text, EXEC_OUTPUT_MAX_BYTES);
+    if total_len <= max_bytes {
+        aggregated.extend_from_slice(&stdout.text);
+        aggregated.extend_from_slice(&stderr.text);
         return StreamOutput {
             text: aggregated,
             truncated_after_lines: None,
         };
     }
 
-    let stdout_cap = EXEC_OUTPUT_MAX_BYTES / 3;
-    let mut stdout_take = stdout.text.len().min(stdout_cap);
-    let stderr_cap = EXEC_OUTPUT_MAX_BYTES.saturating_sub(stdout_take);
-    let stderr_take = stderr.text.len().min(stderr_cap);
-    let remaining = stderr_cap.saturating_sub(stderr_take);
-    if remaining > 0 && stdout.text.len() > stdout_take {
-        stdout_take = stdout_take.saturating_add(remaining.min(stdout.text.len() - stdout_take));
-    }
+    // Under contention, reserve 1/3 for stdout and 2/3 for stderr; rebalance unused stderr to stdout.
+    let want_stdout = stdout.text.len().min(max_bytes / 3);
+    let want_stderr = stderr.text.len();
+    let stderr_take = want_stderr.min(max_bytes.saturating_sub(want_stdout));
+    let remaining = max_bytes.saturating_sub(want_stdout + stderr_take);
+    let stdout_take = want_stdout + remaining.min(stdout.text.len().saturating_sub(want_stdout));
 
-    let total_take = stdout_take.saturating_add(stderr_take);
-    append_capped(&mut aggregated, &stdout.text, stdout_take);
-    append_capped(&mut aggregated, &stderr.text, total_take);
+    aggregated.extend_from_slice(&stdout.text[..stdout_take]);
+    aggregated.extend_from_slice(&stderr.text[..stderr_take]);
 
     StreamOutput {
         text: aggregated,
