@@ -755,7 +755,7 @@ mod tests {
         path
     }
 
-    fn write_skill_interface_json_at(skill_dir: &Path, contents: &str) -> PathBuf {
+    fn write_skill_interface_at(skill_dir: &Path, contents: &str) -> PathBuf {
         let path = skill_dir.join(SKILLS_JSON_FILENAME);
         fs::write(&path, contents).unwrap();
         path
@@ -768,7 +768,7 @@ mod tests {
         let skill_dir = skill_path.parent().expect("skill dir");
         let normalized_skill_dir = normalized(skill_dir);
 
-        write_skill_interface_json_at(
+        write_skill_interface_at(
             skill_dir,
             r##"
 {
@@ -819,7 +819,7 @@ mod tests {
         let skill_dir = skill_path.parent().expect("skill dir");
         let normalized_skill_dir = normalized(skill_dir);
 
-        write_skill_interface_json_at(
+        write_skill_interface_at(
             skill_dir,
             r#"
 {
@@ -866,7 +866,7 @@ mod tests {
         let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from json");
         let skill_dir = skill_path.parent().expect("skill dir");
 
-        write_skill_interface_json_at(
+        write_skill_interface_at(
             skill_dir,
             r#"
 {
@@ -906,7 +906,7 @@ mod tests {
         let normalized_skill_dir = normalized(skill_dir);
         let too_long = "x".repeat(MAX_DEFAULT_PROMPT_LEN + 1);
 
-        write_skill_interface_json_at(
+        write_skill_interface_at(
             skill_dir,
             &format!(
                 r##"
@@ -955,7 +955,7 @@ mod tests {
         let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from json");
         let skill_dir = skill_path.parent().expect("skill dir");
 
-        write_skill_interface_json_at(
+        write_skill_interface_at(
             skill_dir,
             r#"
 {
