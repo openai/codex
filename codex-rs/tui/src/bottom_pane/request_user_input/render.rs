@@ -1,4 +1,3 @@
-use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -13,11 +12,11 @@ use crate::bottom_pane::selection_popup_common::menu_surface_inset;
 use crate::bottom_pane::selection_popup_common::menu_surface_padding_height;
 use crate::bottom_pane::selection_popup_common::render_menu_surface;
 use crate::bottom_pane::selection_popup_common::render_rows;
-use crate::key_hint;
 use crate::render::renderable::Renderable;
 
 use super::DESIRED_SPACERS_WHEN_NOTES_HIDDEN;
 use super::RequestUserInputOverlay;
+use super::TIP_SEPARATOR;
 
 impl Renderable for RequestUserInputOverlay {
     fn desired_height(&self, width: u16) -> u16 {
@@ -42,7 +41,7 @@ impl Renderable for RequestUserInputOverlay {
         } else {
             0
         };
-        let footer_height = 1usize;
+        let footer_height = self.footer_required_height(inner_width) as usize;
 
         // Tight minimum height: progress + header + question + (optional) titles/options
         // + notes composer + footer + menu padding.
@@ -187,67 +186,42 @@ impl RequestUserInputOverlay {
             .notes_area
             .y
             .saturating_add(sections.notes_area.height);
-        let hint_y = footer_y.saturating_add(sections.footer_lines.saturating_sub(1));
-        // Footer hints (selection index + navigation keys).
-        let mut hint_spans = Vec::new();
-        if self.has_options() {
-            let options_len = self.options_len();
-            if let Some(selected_idx) = self.selected_option_index() {
-                let option_index = selected_idx + 1;
-                hint_spans.extend(vec![
-                    format!("Option {option_index} of {options_len}").into(),
-                    " | ".into(),
-                ]);
-            } else {
-                hint_spans.extend(vec!["No option selected".into(), " | ".into()]);
-            }
-            hint_spans.extend(vec![
-                key_hint::plain(KeyCode::Up).into(),
-                "/".into(),
-                key_hint::plain(KeyCode::Down).into(),
-                " scroll | ".into(),
-            ]);
-            if self.selected_option_index().is_some() && !notes_visible {
-                hint_spans.extend(vec!["Tab".blue().bold().not_dim(), ": add notes | ".into()]);
-            }
-        }
-        let question_count = self.question_count();
-        let is_last_question = question_count > 0 && self.current_index() + 1 >= question_count;
-        let enter_hint = if question_count > 1 && is_last_question {
-            "Enter: submit all answers"
-        } else {
-            "Enter: submit answer"
+        let footer_area = Rect {
+            x: content_area.x,
+            y: footer_y,
+            width: content_area.width,
+            height: sections.footer_lines,
         };
-        hint_spans.extend(vec![enter_hint.dim(), " | ".into()]);
-        if question_count > 1 {
-            hint_spans.extend(vec![
-                ctrl_hint('p'),
-                " prev | ".into(),
-                ctrl_hint('n'),
-                " next | ".into(),
-            ]);
+        if footer_area.height == 0 {
+            return;
         }
-        if self.has_options() && notes_visible && self.focus_is_notes() {
-            hint_spans.extend(vec!["Notes optional | ".dim()]);
-        }
-        let esc_hint = if self.has_options() && notes_visible && self.focus_is_notes() {
-            "Esc: change answer"
-        } else {
-            "Esc: interrupt"
-        };
-        hint_spans.extend(vec![esc_hint.dim()]);
-        let hint_line = Line::from(hint_spans).dim();
-        let hint_line =
-            truncate_line_word_boundary_with_ellipsis(hint_line, content_area.width as usize);
-        Paragraph::new(hint_line).render(
-            Rect {
-                x: content_area.x,
-                y: hint_y,
-                width: content_area.width,
+        let tip_lines = self.footer_tip_lines(footer_area.width);
+        for (row_idx, tips) in tip_lines
+            .into_iter()
+            .take(footer_area.height as usize)
+            .enumerate()
+        {
+            let mut spans = Vec::new();
+            for (tip_idx, tip) in tips.into_iter().enumerate() {
+                if tip_idx > 0 {
+                    spans.push(TIP_SEPARATOR.into());
+                }
+                if tip.highlight {
+                    spans.push(tip.text.cyan().bold().not_dim());
+                } else {
+                    spans.push(tip.text.into());
+                }
+            }
+            let line = Line::from(spans).dim();
+            let line = truncate_line_word_boundary_with_ellipsis(line, footer_area.width as usize);
+            let row_area = Rect {
+                x: footer_area.x,
+                y: footer_area.y.saturating_add(row_idx as u16),
+                width: footer_area.width,
                 height: 1,
-            },
-            buf,
-        );
+            };
+            Paragraph::new(line).render(row_area, buf);
+        }
     }
 
     /// Return the cursor position when editing notes, if visible.
@@ -284,20 +258,12 @@ impl RequestUserInputOverlay {
         }
         self.composer.render(area, buf);
     }
-
-    fn focus_is_notes(&self) -> bool {
-        matches!(self.focus, super::Focus::Notes)
-    }
 }
 
 fn line_width(line: &Line<'_>) -> usize {
     line.iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum()
-}
-
-fn ctrl_hint(key: char) -> Span<'static> {
-    format!("Ctrl+{key}").dim()
 }
 
 fn truncate_line_word_boundary_with_ellipsis(

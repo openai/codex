@@ -34,12 +34,14 @@ use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::TextElement;
+use unicode_width::UnicodeWidthStr;
 
 const NOTES_PLACEHOLDER: &str = "Add notes (optional)";
 const ANSWER_PLACEHOLDER: &str = "Type your answer (optional)";
 // Keep in sync with ChatComposer's minimum composer height.
 const MIN_COMPOSER_HEIGHT: u16 = 3;
 const SELECT_OPTION_PLACEHOLDER: &str = "Select an option to add notes (optional)";
+pub(super) const TIP_SEPARATOR: &str = " | ";
 pub(super) const MAX_VISIBLE_OPTION_ROWS: usize = 4;
 pub(super) const DESIRED_SPACERS_WHEN_NOTES_HIDDEN: u16 = 2;
 
@@ -65,6 +67,28 @@ struct AnswerState {
     draft: ComposerDraft,
     // Whether the notes UI has been explicitly opened for this question.
     notes_visible: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct FooterTip {
+    pub(super) text: String,
+    pub(super) highlight: bool,
+}
+
+impl FooterTip {
+    fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            highlight: false,
+        }
+    }
+
+    fn highlighted(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            highlight: true,
+        }
+    }
 }
 
 pub(crate) struct RequestUserInputOverlay {
@@ -199,6 +223,10 @@ impl RequestUserInputOverlay {
             .unwrap_or_default()
     }
 
+    fn focus_is_notes(&self) -> bool {
+        matches!(self.focus, Focus::Notes)
+    }
+
     pub(super) fn option_rows(&self) -> Vec<GenericDisplayRow> {
         self.current_question()
             .and_then(|question| question.options.as_ref())
@@ -325,6 +353,90 @@ impl RequestUserInputOverlay {
             .set_placeholder_text(self.notes_placeholder().to_string());
     }
 
+    fn footer_tips(&self) -> Vec<FooterTip> {
+        let mut tips = Vec::new();
+        let notes_visible = self.notes_ui_visible();
+        if self.has_options() {
+            let options_len = self.options_len();
+            if let Some(selected_idx) = self.selected_option_index() {
+                let option_index = selected_idx + 1;
+                tips.push(FooterTip::new(format!(
+                    "Option {option_index} of {options_len}"
+                )));
+            } else {
+                tips.push(FooterTip::new("No option selected"));
+            }
+            tips.push(FooterTip::new("\u{2191}/\u{2193} scroll"));
+            if self.selected_option_index().is_some() && !notes_visible {
+                tips.push(FooterTip::highlighted("Tab: add notes"));
+            }
+        }
+
+        let question_count = self.question_count();
+        let is_last_question = question_count > 0 && self.current_index() + 1 >= question_count;
+        let enter_tip = if question_count > 1 && is_last_question {
+            "Enter: submit all answers"
+        } else {
+            "Enter: submit answer"
+        };
+        tips.push(FooterTip::new(enter_tip));
+        if question_count > 1 {
+            tips.push(FooterTip::new("Ctrl+p prev"));
+            tips.push(FooterTip::new("Ctrl+n next"));
+        }
+        if self.has_options() && notes_visible && self.focus_is_notes() {
+            tips.push(FooterTip::new("Notes optional"));
+        }
+        tips.push(FooterTip::new("Esc: interrupt"));
+        tips
+    }
+
+    pub(super) fn footer_tip_lines(&self, width: u16) -> Vec<Vec<FooterTip>> {
+        let max_width = width.max(1) as usize;
+        let separator_width = UnicodeWidthStr::width(TIP_SEPARATOR);
+        let tips = self.footer_tips();
+        if tips.is_empty() {
+            return vec![Vec::new()];
+        }
+
+        let mut lines: Vec<Vec<FooterTip>> = Vec::new();
+        let mut current: Vec<FooterTip> = Vec::new();
+        let mut used = 0usize;
+
+        for tip in tips {
+            let tip_width = UnicodeWidthStr::width(tip.text.as_str()).min(max_width);
+            let extra = if current.is_empty() {
+                tip_width
+            } else {
+                separator_width.saturating_add(tip_width)
+            };
+            if !current.is_empty() && used.saturating_add(extra) > max_width {
+                lines.push(current);
+                current = Vec::new();
+                used = 0;
+            }
+            if current.is_empty() {
+                used = tip_width;
+            } else {
+                used = used
+                    .saturating_add(separator_width)
+                    .saturating_add(tip_width);
+            }
+            current.push(tip);
+        }
+
+        if current.is_empty() {
+            lines.push(Vec::new());
+        } else {
+            lines.push(current);
+        }
+        lines
+    }
+
+    pub(super) fn footer_required_height(&self, width: u16) -> u16 {
+        self.footer_tip_lines(width).len() as u16
+    }
+
     /// Ensure the focus mode is valid for the current question.
     fn ensure_focus_available(&mut self) {
         if self.question_count() == 0 {
@@ -378,8 +490,8 @@ impl RequestUserInputOverlay {
         self.save_current_draft();
         let offset = if next { 1 } else { len.saturating_sub(1) };
         self.current_idx = (self.current_idx + offset) % len;
-        self.ensure_focus_available();
         self.restore_current_draft();
+        self.ensure_focus_available();
     }
 
     /// Synchronize selection state to the currently focused option.
@@ -398,6 +510,23 @@ impl RequestUserInputOverlay {
         if updated {
             self.sync_composer_placeholder();
         }
+    }
+
+    /// Clear the current option selection and hide notes when empty.
+    fn clear_selection(&mut self) {
+        if !self.has_options() {
+            return;
+        }
+        self.save_current_draft();
+        let notes_empty = self.composer.current_text_with_pending().trim().is_empty();
+        if let Some(answer) = self.current_answer_mut() {
+            answer.selected = None;
+            answer.option_state.reset();
+            if notes_empty {
+                answer.notes_visible = false;
+            }
+        }
+        self.sync_composer_placeholder();
     }
 
     /// Ensure there is a selection before allowing notes entry.
@@ -633,6 +762,9 @@ impl BottomPaneView for RequestUserInputOverlay {
                     KeyCode::Char(' ') => {
                         self.select_current_option();
                     }
+                    KeyCode::Backspace => {
+                        self.clear_selection();
+                    }
                     KeyCode::Tab => {
                         if self.selected_option_index().is_some() {
                             self.focus = Focus::Notes;
@@ -647,7 +779,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                         }
                         self.go_next_or_submit();
                     }
-                    KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete => {
+                    KeyCode::Char(_) => {
                         // Any typing while in options switches to notes for fast freeform input.
                         self.focus = Focus::Notes;
                         self.ensure_selected_for_notes();
@@ -658,6 +790,17 @@ impl BottomPaneView for RequestUserInputOverlay {
                 }
             }
             Focus::Notes => {
+                let notes_empty = self.composer.current_text_with_pending().trim().is_empty();
+                if self.has_options() && matches!(key_event.code, KeyCode::Backspace) && notes_empty
+                {
+                    self.save_current_draft();
+                    if let Some(answer) = self.current_answer_mut() {
+                        answer.notes_visible = false;
+                    }
+                    self.focus = Focus::Options;
+                    self.sync_composer_placeholder();
+                    return;
+                }
                 if matches!(key_event.code, KeyCode::Enter) {
                     self.ensure_selected_for_notes();
                     let (result, _) = self.composer.handle_key_event(key_event);
@@ -755,6 +898,7 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
+    use unicode_width::UnicodeWidthStr;
 
     fn test_sender() -> (
         AppEventSender,
@@ -971,6 +1115,45 @@ mod tests {
     }
 
     #[test]
+    fn switching_from_freeform_with_text_resets_focus_and_keeps_last_option_empty() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_without_options("q1", "Notes"),
+                    question_with_options("q2", "Pick one"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay
+            .composer
+            .set_text_content("freeform notes".to_string(), Vec::new(), Vec::new());
+        overlay.composer.move_cursor_to_end();
+
+        overlay.move_question(true);
+
+        let answer = overlay.current_answer().expect("answer missing");
+        assert!(matches!(overlay.focus, Focus::Options));
+        assert_eq!(overlay.notes_ui_visible(), false);
+        assert_eq!(answer.selected, None);
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let answer = response.answers.get("q2").expect("answer missing");
+        assert_eq!(answer.answers, Vec::<String>::new());
+    }
+
+    #[test]
     fn esc_in_notes_mode_without_options_does_not_interrupt() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
@@ -1052,6 +1235,56 @@ mod tests {
 
         assert!(matches!(overlay.focus, Focus::Options));
         assert_eq!(overlay.notes_ui_visible(), true);
+    }
+
+    #[test]
+    fn backspace_in_options_clears_selection() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let answer = overlay.current_answer_mut().expect("answer missing");
+        answer.option_state.selected_idx = Some(1);
+        answer.selected = Some(1);
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Backspace));
+
+        let answer = overlay.current_answer().expect("answer missing");
+        assert_eq!(answer.selected, None);
+        assert_eq!(answer.option_state.selected_idx, None);
+        assert_eq!(overlay.notes_ui_visible(), false);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn backspace_on_empty_notes_closes_notes_ui() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let answer = overlay.current_answer_mut().expect("answer missing");
+        answer.option_state.selected_idx = Some(0);
+        answer.selected = Some(0);
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        assert!(matches!(overlay.focus, Focus::Notes));
+        assert_eq!(overlay.notes_ui_visible(), true);
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Backspace));
+
+        let answer = overlay.current_answer().expect("answer missing");
+        assert!(matches!(overlay.focus, Focus::Options));
+        assert_eq!(overlay.notes_ui_visible(), false);
+        assert_eq!(answer.selected, Some(0));
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
@@ -1268,10 +1501,13 @@ mod tests {
         let width = 48u16;
         let question_height = overlay.wrapped_question_lines(width).len() as u16;
         let options_height = overlay.options_required_height(width);
-        let height = 1u16
-            .saturating_add(question_height)
+        let extras = 1u16 // header
+            .saturating_add(1) // progress
+            .saturating_add(DESIRED_SPACERS_WHEN_NOTES_HIDDEN)
+            .saturating_add(overlay.footer_required_height(width));
+        let height = question_height
             .saturating_add(options_height)
-            .saturating_add(4);
+            .saturating_add(extras);
         let sections = overlay.layout_sections(Rect::new(0, 0, width, height));
 
         assert_eq!(sections.options_area.height, options_height);
@@ -1307,6 +1543,44 @@ mod tests {
     }
 
     #[test]
+    fn footer_wraps_tips_without_splitting_individual_tips() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "Pick one"),
+                    question_with_options("q2", "Pick two"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let answer = overlay.current_answer_mut().expect("answer missing");
+        answer.option_state.selected_idx = Some(0);
+        answer.selected = Some(0);
+
+        let width = 36u16;
+        let lines = overlay.footer_tip_lines(width);
+        assert!(lines.len() > 1);
+        let separator_width = UnicodeWidthStr::width(TIP_SEPARATOR);
+        for tips in lines {
+            let used = tips.iter().enumerate().fold(0usize, |acc, (idx, tip)| {
+                let tip_width = UnicodeWidthStr::width(tip.text.as_str()).min(width as usize);
+                let extra = if idx == 0 {
+                    tip_width
+                } else {
+                    separator_width.saturating_add(tip_width)
+                };
+                acc.saturating_add(extra)
+            });
+            assert!(used <= width as usize);
+        }
+    }
+
+    #[test]
     fn request_user_input_wrapped_options_snapshot() {
         let (tx, _rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
@@ -1336,6 +1610,35 @@ mod tests {
         let area = Rect::new(0, 0, width, height);
         insta::assert_snapshot!(
             "request_user_input_wrapped_options",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn request_user_input_footer_wrap_snapshot() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "Pick one"),
+                    question_with_options("q2", "Pick two"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let answer = overlay.current_answer_mut().expect("answer missing");
+        answer.option_state.selected_idx = Some(1);
+        answer.selected = Some(1);
+
+        let width = 52u16;
+        let height = overlay.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        insta::assert_snapshot!(
+            "request_user_input_footer_wrap",
             render_snapshot(&overlay, area)
         );
     }

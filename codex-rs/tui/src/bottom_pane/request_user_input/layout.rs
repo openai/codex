@@ -21,7 +21,7 @@ impl RequestUserInputOverlay {
     pub(super) fn layout_sections(&self, area: Rect) -> LayoutSections {
         let has_options = self.has_options();
         let notes_visible = !has_options || self.notes_ui_visible();
-        let footer_pref = 1;
+        let footer_pref = self.footer_required_height(area.width);
         let notes_pref_height = self.notes_input_height(area.width);
         let mut question_lines = self.wrapped_question_lines(area.width);
         let question_height = question_lines.len() as u16;

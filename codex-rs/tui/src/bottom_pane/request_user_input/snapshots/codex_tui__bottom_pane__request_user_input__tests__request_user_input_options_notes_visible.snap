@@ -16,4 +16,4 @@ expression: "render_snapshot(&overlay, area)"
                                                                                                                         
                                                                                                                         
                                                                                                                         
-  Option 1 of 3 | ↑/↓ scroll | Enter: submit answer | Notes optional | Esc: change answer
+  Option 1 of 3 | ↑/↓ scroll | Enter: submit answer | Notes optional | Esc: interrupt
