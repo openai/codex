@@ -740,6 +740,30 @@ mod tests {
     }
 
     #[test]
+    fn large_paste_is_preserved_when_switching_questions() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_without_options("q1", "First"),
+                    question_without_options("q2", "Second"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        let large = "x".repeat(1_500);
+        overlay.composer.handle_paste(large.clone());
+        overlay.move_question(true);
+
+        assert_eq!(overlay.answers[0].draft.text, large);
+    }
+
+    #[test]
     fn request_user_input_options_snapshot() {
         let (tx, _rx) = test_sender();
         let overlay = RequestUserInputOverlay::new(
