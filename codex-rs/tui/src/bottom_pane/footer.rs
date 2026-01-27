@@ -92,10 +92,14 @@ impl CollaborationModeIndicator {
 pub(crate) enum FooterMode {
     /// Transient "press again to quit" reminder (Ctrl+C/Ctrl+D).
     QuitShortcutReminder,
+    /// Default single-line summary when the composer is idle/empty.
     ShortcutSummary,
+    /// Multi-line shortcut overlay shown after pressing `?`.
     ShortcutOverlay,
+    /// Transient "press Esc again" hint shown after the first Esc while idle.
     EscHint,
-    ContextOnly,
+    /// The composer contains a draft, so shortcut hints are suppressed.
+    ComposerHasDraft,
 }
 
 pub(crate) fn toggle_shortcut_mode(current: FooterMode, ctrl_c_hint: bool) -> FooterMode {
@@ -124,13 +128,27 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
         FooterMode::EscHint
         | FooterMode::ShortcutOverlay
         | FooterMode::QuitShortcutReminder
-        | FooterMode::ContextOnly => FooterMode::ShortcutSummary,
+        | FooterMode::ComposerHasDraft => FooterMode::ShortcutSummary,
         other => other,
     }
 }
 
 pub(crate) fn footer_height(props: FooterProps) -> u16 {
-    footer_lines(props, None, false, true, false).len() as u16
+    let show_shortcuts_hint = match props.mode {
+        FooterMode::ShortcutSummary => true,
+        FooterMode::QuitShortcutReminder
+        | FooterMode::ShortcutOverlay
+        | FooterMode::EscHint
+        | FooterMode::ComposerHasDraft => false,
+    };
+    let show_queue_hint = match props.mode {
+        FooterMode::ComposerHasDraft => props.is_task_running && props.steer_enabled,
+        FooterMode::QuitShortcutReminder
+        | FooterMode::ShortcutSummary
+        | FooterMode::ShortcutOverlay
+        | FooterMode::EscHint => false,
+    };
+    footer_lines(props, None, false, show_shortcuts_hint, show_queue_hint).len() as u16
 }
 
 pub(crate) fn render_footer(
@@ -468,7 +486,7 @@ fn footer_lines(
             shortcut_overlay_lines(state)
         }
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
-        FooterMode::ContextOnly => {
+        FooterMode::ComposerHasDraft => {
             let spec = SummarySpec {
                 hint: if show_queue_hint {
                     SummaryHintKind::QueueMessage
@@ -876,10 +894,20 @@ mod tests {
                 );
                 let context_width = context_line.width() as u16;
                 let show_cycle_hint = !props.is_task_running;
-                let show_shortcuts_hint = matches!(props.mode, FooterMode::ShortcutSummary);
-                let show_queue_hint = matches!(props.mode, FooterMode::ContextOnly)
-                    && props.is_task_running
-                    && props.steer_enabled;
+                let show_shortcuts_hint = match props.mode {
+                    FooterMode::ShortcutSummary => true,
+                    FooterMode::QuitShortcutReminder
+                    | FooterMode::ShortcutOverlay
+                    | FooterMode::EscHint
+                    | FooterMode::ComposerHasDraft => false,
+                };
+                let show_queue_hint = match props.mode {
+                    FooterMode::ComposerHasDraft => props.is_task_running && props.steer_enabled,
+                    FooterMode::QuitShortcutReminder
+                    | FooterMode::ShortcutSummary
+                    | FooterMode::ShortcutOverlay
+                    | FooterMode::EscHint => false,
+                };
                 let left_width = footer_line_width(
                     props,
                     None,
@@ -890,7 +918,7 @@ mod tests {
                 let can_show_both = can_show_left_with_context(area, left_width, context_width);
                 if matches!(
                     props.mode,
-                    FooterMode::ShortcutSummary | FooterMode::ContextOnly
+                    FooterMode::ShortcutSummary | FooterMode::ComposerHasDraft
                 ) {
                     let (summary_left, show_context) = shortcut_summary_layout(
                         area,
@@ -963,10 +991,20 @@ mod tests {
                 );
                 let context_width = context_line.width() as u16;
                 let show_cycle_hint = !props.is_task_running;
-                let show_shortcuts_hint = matches!(props.mode, FooterMode::ShortcutSummary);
-                let show_queue_hint = matches!(props.mode, FooterMode::ContextOnly)
-                    && props.is_task_running
-                    && props.steer_enabled;
+                let show_shortcuts_hint = match props.mode {
+                    FooterMode::ShortcutSummary => true,
+                    FooterMode::QuitShortcutReminder
+                    | FooterMode::ShortcutOverlay
+                    | FooterMode::EscHint
+                    | FooterMode::ComposerHasDraft => false,
+                };
+                let show_queue_hint = match props.mode {
+                    FooterMode::ComposerHasDraft => props.is_task_running && props.steer_enabled,
+                    FooterMode::QuitShortcutReminder
+                    | FooterMode::ShortcutSummary
+                    | FooterMode::ShortcutOverlay
+                    | FooterMode::EscHint => false,
+                };
                 let left_width = footer_line_width(
                     props,
                     indicator,
@@ -977,7 +1015,7 @@ mod tests {
                 let can_show_both = can_show_left_with_context(area, left_width, context_width);
                 if matches!(
                     props.mode,
-                    FooterMode::ShortcutSummary | FooterMode::ContextOnly
+                    FooterMode::ShortcutSummary | FooterMode::ComposerHasDraft
                 ) {
                     let (summary_left, show_context) = shortcut_summary_layout(
                         area,
@@ -1171,9 +1209,9 @@ mod tests {
         );
 
         snapshot_footer(
-            "footer_context_only_queue_hint_disabled",
+            "footer_composer_has_draft_queue_hint_disabled",
             FooterProps {
-                mode: FooterMode::ContextOnly,
+                mode: FooterMode::ComposerHasDraft,
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: true,
@@ -1186,9 +1224,9 @@ mod tests {
         );
 
         snapshot_footer(
-            "footer_context_only_queue_hint_enabled",
+            "footer_composer_has_draft_queue_hint_enabled",
             FooterProps {
-                mode: FooterMode::ContextOnly,
+                mode: FooterMode::ComposerHasDraft,
                 esc_backtrack_hint: false,
                 use_shift_enter_hint: false,
                 is_task_running: true,

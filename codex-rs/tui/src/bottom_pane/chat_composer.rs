@@ -2167,6 +2167,12 @@ impl ChatComposer {
         }
     }
 
+    /// Resolve the effective footer mode via a small priority waterfall.
+    ///
+    /// The stored mode (`self.footer_mode`) is treated as a base mode with
+    /// sticky transient overrides (Esc hint, overlay, quit reminder). Only
+    /// the default summary mode is demoted to `ComposerHasDraft` when the
+    /// buffer is non-empty.
     fn footer_mode(&self) -> FooterMode {
         match self.footer_mode {
             FooterMode::EscHint => FooterMode::EscHint,
@@ -2178,7 +2184,7 @@ impl ChatComposer {
             FooterMode::ShortcutSummary if self.quit_shortcut_hint_visible() => {
                 FooterMode::QuitShortcutReminder
             }
-            FooterMode::ShortcutSummary if !self.is_empty() => FooterMode::ContextOnly,
+            FooterMode::ShortcutSummary if !self.is_empty() => FooterMode::ComposerHasDraft,
             other => other,
         }
     }
@@ -2508,12 +2514,22 @@ impl Renderable for ChatComposer {
             ActivePopup::None => {
                 let footer_props = self.footer_props();
                 let show_cycle_hint = !footer_props.is_task_running;
-                let show_shortcuts_hint = matches!(footer_props.mode, FooterMode::ShortcutSummary)
-                    && self.is_empty()
-                    && !self.is_in_paste_burst();
-                let show_queue_hint = matches!(footer_props.mode, FooterMode::ContextOnly)
-                    && footer_props.is_task_running
-                    && footer_props.steer_enabled;
+                let show_shortcuts_hint = match footer_props.mode {
+                    FooterMode::ShortcutSummary => self.is_empty() && !self.is_in_paste_burst(),
+                    FooterMode::QuitShortcutReminder
+                    | FooterMode::ShortcutOverlay
+                    | FooterMode::EscHint
+                    | FooterMode::ComposerHasDraft => false,
+                };
+                let show_queue_hint = match footer_props.mode {
+                    FooterMode::ComposerHasDraft => {
+                        footer_props.is_task_running && footer_props.steer_enabled
+                    }
+                    FooterMode::QuitShortcutReminder
+                    | FooterMode::ShortcutSummary
+                    | FooterMode::ShortcutOverlay
+                    | FooterMode::EscHint => false,
+                };
                 let context_line = context_window_line(
                     footer_props.context_window_percent,
                     footer_props.context_window_used_tokens,
@@ -2557,7 +2573,7 @@ impl Renderable for ChatComposer {
                 let summary_layout = if !has_override
                     && matches!(
                         footer_props.mode,
-                        FooterMode::ShortcutSummary | FooterMode::ContextOnly
+                        FooterMode::ShortcutSummary | FooterMode::ComposerHasDraft
                     ) {
                     Some(shortcut_summary_layout(
                         hint_rect,
@@ -3159,7 +3175,7 @@ mod tests {
 
         type_chars_humanlike(&mut composer, &['h']);
         assert_eq!(composer.textarea.text(), "h");
-        assert_eq!(composer.footer_mode(), FooterMode::ContextOnly);
+        assert_eq!(composer.footer_mode(), FooterMode::ComposerHasDraft);
 
         let (result, needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
@@ -3168,7 +3184,7 @@ mod tests {
         let _ = flush_after_paste_burst(&mut composer);
         assert_eq!(composer.textarea.text(), "h?");
         assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
-        assert_eq!(composer.footer_mode(), FooterMode::ContextOnly);
+        assert_eq!(composer.footer_mode(), FooterMode::ComposerHasDraft);
     }
 
     /// Behavior: while a paste-like burst is being captured, `?` must not toggle the shortcut
