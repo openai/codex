@@ -34,7 +34,7 @@ struct SkillFrontmatterMetadata {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct SkillToml {
+struct SkillInterfaceFile {
     #[serde(default)]
     interface: Option<Interface>,
 }
@@ -391,7 +391,7 @@ fn load_skill_interface(skill_path: &Path) -> Option<SkillInterface> {
                 continue;
             }
         };
-        let parsed: SkillToml = match format.parse(&contents) {
+        let parsed: SkillInterfaceFile = match format.parse(&contents) {
             Ok(parsed) => parsed,
             Err(error) => {
                 tracing::warn!(
@@ -453,7 +453,7 @@ impl InterfaceFormat {
         }
     }
 
-    fn parse(self, contents: &str) -> Result<SkillToml, String> {
+    fn parse(self, contents: &str) -> Result<SkillInterfaceFile, String> {
         match self {
             InterfaceFormat::Json => serde_json::from_str(contents).map_err(|err| err.to_string()),
             InterfaceFormat::Toml => toml::from_str(contents).map_err(|err| err.to_string()),
