@@ -235,7 +235,7 @@ impl RequestUserInputOverlay {
             .current_answer()
             .is_some_and(|answer| answer.selected.is_some());
 
-        if !self.focus_is_notes() && !(has_options && has_selected_option) {
+        if !(self.focus_is_notes() || has_options && has_selected_option) {
             return None;
         }
         // When options exist, only show the cursor after a concrete selection.
