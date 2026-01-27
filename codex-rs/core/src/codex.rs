@@ -600,7 +600,7 @@ impl Session {
         let mut rx = self.services.file_watcher.subscribe();
         let agents_changed = Arc::clone(&self.agents_changed);
         let agents_watch_dirs = self.agents_watch_dirs.clone();
-        let sess = Arc::clone(self);
+        let weak_sess = Arc::downgrade(self);
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
@@ -617,6 +617,9 @@ impl Session {
                         }
                     }
                     Ok(FileWatcherEvent::SkillsChanged { .. }) => {
+                        let Some(sess) = weak_sess.upgrade() else {
+                            break;
+                        };
                         let event = Event {
                             id: sess.next_internal_sub_id_with_prefix("skills-update"),
                             msg: EventMsg::SkillsUpdateAvailable,
