@@ -3079,11 +3079,11 @@ function main(): void {
     attachBtn.disabled = !s.activeSession;
     const variant = s.capabilities?.selectedCliVariant ?? "auto";
     reloadBtn.disabled =
-      !s.activeSession || s.sending || s.reloading || variant !== "codez";
+      !s.activeSession || s.sending || s.reloading;
     reloadBtn.title =
       variant === "codez"
         ? "Reload session (re-read config.toml, agents, etc.)"
-        : "Reload session (codez only)";
+        : "Reload session (codez only — select codez in Settings)";
     settingsBtn.disabled = false;
     settingsBtn.title =
       variant === "codez"
@@ -3624,14 +3624,20 @@ function main(): void {
           const editBtn = document.createElement("button");
           editBtn.className = "msgActionBtn";
           editBtn.textContent = "Edit";
-          editBtn.disabled = Boolean(state.sending) || variant !== "codez";
+          editBtn.disabled = Boolean(state.sending);
           editBtn.title =
             variant === "codez"
               ? "Edit this turn (rewind)"
-              : "Edit (codez only)";
+              : "Edit (codez only — select codez in Settings)";
           editBtn.addEventListener("click", () => {
             if (state.sending) return;
-            if (variant !== "codez") return;
+            if (variant !== "codez") {
+              showToast(
+                "info",
+                "Edit/Rewind は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
+              );
+              return;
+            }
             setEditMode(userTurnIndex, block.text);
             inputEl.focus();
           });
@@ -3979,10 +3985,10 @@ function main(): void {
   function setEditMode(next: number | null, presetText?: string): void {
     const variant = state.capabilities?.selectedCliVariant ?? "auto";
     if (next !== null && variant !== "codez") {
-      vscode.postMessage({
-        type: "uiError",
-        message: "Edit/Rewind is only supported when using codez backend.",
-      });
+      showToast(
+        "info",
+        "Edit/Rewind は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
+      );
       return;
     }
     rewindTurnIndex = next;
@@ -4188,7 +4194,19 @@ function main(): void {
     vscode.postMessage({ type: "resumeFromHistory" }),
   );
   reloadBtn.addEventListener("click", () =>
-    state.reloading ? undefined : vscode.postMessage({ type: "reloadSession" }),
+    state.reloading
+      ? undefined
+      : (() => {
+          const variant = state.capabilities?.selectedCliVariant ?? "auto";
+          if (variant !== "codez") {
+            showToast(
+              "info",
+              "Reload は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
+            );
+            return;
+          }
+          vscode.postMessage({ type: "reloadSession" });
+        })(),
   );
   if (statusBtn) {
     statusBtn.addEventListener("click", () =>

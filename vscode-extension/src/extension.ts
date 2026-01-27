@@ -649,7 +649,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
       if (rewind) {
         if (!isMineSelectedForBackendKey(session.backendKey)) {
-          void vscode.window.showErrorMessage(
+          void vscode.window.showInformationMessage(
             "Rewind は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
           );
           return;
@@ -1295,6 +1295,17 @@ export function activate(context: vscode.ExtensionContext): void {
         ? sessions.getById(activeSessionId)
         : null;
       if (!session) return;
+
+      if (!isMineSelectedForBackendKey(session.backendKey)) {
+        void vscode.window.showInformationMessage(
+          "Reload は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
+        );
+        chatView?.toast(
+          "info",
+          "Reload は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
+        );
+        return;
+      }
 
       const folder = resolveWorkspaceFolderForSession(session);
       if (!folder) {
@@ -2897,8 +2908,8 @@ async function handleSlashCommand(
     if (!isMineSelectedForBackendKey(session.backendKey)) {
       upsertBlock(session.id, {
         id: newLocalId("compactUnsupported"),
-        type: "error",
-        title: "Compact unsupported",
+        type: "info",
+        title: "Compact (codez only)",
         text: "/compact は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
       });
       chatView?.refresh();
