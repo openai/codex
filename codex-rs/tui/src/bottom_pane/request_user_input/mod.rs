@@ -166,7 +166,7 @@ impl RequestUserInputOverlay {
 
     fn capture_composer_draft(&self) -> ComposerDraft {
         ComposerDraft {
-            text: self.composer.current_text(),
+            text: self.composer.current_text_with_pending(),
             text_elements: self.composer.text_elements(),
             local_image_paths: self
                 .composer
