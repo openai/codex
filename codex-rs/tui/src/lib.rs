@@ -30,6 +30,7 @@ use codex_core::get_platform_sandbox;
 use codex_core::path_utils;
 use codex_core::protocol::AskForApproval;
 use codex_core::read_session_meta_line;
+use codex_core::state_db;
 use codex_core::terminal::Multiplexer;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
@@ -652,6 +653,7 @@ pub(crate) async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
     // mutating the SessionMeta line when the session cwd changes, but the rollout
     // is an append-only JSONL log and rewriting the head would be error-prone.
     // When rollouts move to SQLite, we can drop this scan.
+    state_db::compare_rollout(path, "read_session_cwd").await;
     if let Some(cwd) = parse_latest_turn_context_cwd(path).await {
         return Some(cwd);
     }

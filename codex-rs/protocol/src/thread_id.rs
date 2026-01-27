@@ -28,6 +28,28 @@ impl ThreadId {
     }
 }
 
+impl TryFrom<&str> for ThreadId {
+    type Error = uuid::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::from_string(value)
+    }
+}
+
+impl TryFrom<String> for ThreadId {
+    type Error = uuid::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::from_string(value.as_str())
+    }
+}
+
+impl From<ThreadId> for String {
+    fn from(value: ThreadId) -> Self {
+        value.to_string()
+    }
+}
+
 impl Default for ThreadId {
     fn default() -> Self {
         Self::new()

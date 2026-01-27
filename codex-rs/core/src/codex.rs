@@ -160,6 +160,7 @@ use crate::skills::build_skill_injections;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
+use crate::state_db;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
@@ -795,6 +796,9 @@ impl Session {
             config.active_profile.clone(),
         );
 
+        let state_db_enabled = state_db::init_if_enabled(&config, &otel_manager)
+            .await
+            .is_some();
         let mut default_shell = shell::default_user_shell();
         // Create the mutable state for the Session.
         if config.features.enabled(Feature::ShellSnapshot) {
@@ -823,6 +827,17 @@ impl Session {
             skills_manager,
             agent_control,
         };
+
+        if state_db_enabled {
+            let mut rollout_for_state = {
+                let guard = services.rollout.lock().await;
+                guard.clone()
+            };
+            if let Some(rollout_for_state) = rollout_for_state.as_mut() {
+                state_db::reconcile_rollout(rollout_for_state.rollout_path()).await;
+            }
+            state_db::startup_summary(&config).await;
+        }
 
         let sess = Arc::new(Session {
             conversation_id,

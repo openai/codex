@@ -169,6 +169,7 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_core::state_db;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
@@ -1774,6 +1775,7 @@ impl CodexMessageProcessor {
                     message: format!("failed to unarchive thread: {err}"),
                     data: None,
                 })?;
+            state_db::mark_unarchived(thread_id, restored_path.as_path()).await;
             let summary =
                 read_summary_from_rollout(restored_path.as_path(), fallback_provider.as_str())
                     .await
@@ -3561,7 +3563,9 @@ impl CodexMessageProcessor {
                 .codex_home
                 .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
             tokio::fs::create_dir_all(&archive_folder).await?;
-            tokio::fs::rename(&canonical_rollout_path, &archive_folder.join(&file_name)).await?;
+            let archived_path = archive_folder.join(&file_name);
+            tokio::fs::rename(&canonical_rollout_path, &archived_path).await?;
+            state_db::mark_archived(thread_id, archived_path.as_path()).await;
             Ok(())
         }
         .await;
@@ -4666,6 +4670,7 @@ pub(crate) async fn read_summary_from_rollout(
         fallback_provider,
         updated_at.clone(),
     ) {
+        state_db::compare_rollout(path, "read_summary_from_rollout").await;
         return Ok(summary);
     }
 
@@ -4681,7 +4686,7 @@ pub(crate) async fn read_summary_from_rollout(
     let git_info = git.as_ref().map(map_git_info);
     let updated_at = updated_at.or_else(|| timestamp.clone());
 
-    Ok(ConversationSummary {
+    let summary = ConversationSummary {
         conversation_id: session_meta.id,
         timestamp,
         updated_at,
@@ -4692,7 +4697,9 @@ pub(crate) async fn read_summary_from_rollout(
         cli_version: session_meta.cli_version,
         source: session_meta.source,
         git_info,
-    })
+    };
+    state_db::compare_rollout(path, "read_summary_from_rollout").await;
+    Ok(summary)
 }
 
 pub(crate) async fn read_event_msgs_from_rollout(

@@ -198,6 +198,9 @@
             "shell_tool": {
               "type": "boolean"
             },
+            "sqlite": {
+              "type": "boolean"
+            },
             "steer": {
               "type": "boolean"
             },
@@ -1189,6 +1192,9 @@
           "type": "boolean"
         },
         "shell_tool": {
+          "type": "boolean"
+        },
+        "sqlite": {
           "type": "boolean"
         },
         "steer": {

@@ -1,5 +1,7 @@
 //! Persist Codex session rollouts (.jsonl) so sessions can be replayed or inspected later.
 
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs::File;
 use std::fs::{self};
 use std::io::Error as IoError;
@@ -33,6 +35,7 @@ use crate::config::Config;
 use crate::default_client::originator;
 use crate::git_info::collect_git_info;
 use crate::path_utils;
+use crate::state_db;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
@@ -111,7 +114,7 @@ impl RolloutRecorder {
         model_providers: Option<&[String]>,
         default_provider: &str,
     ) -> std::io::Result<ThreadsPage> {
-        get_threads(
+        let page = get_threads(
             codex_home,
             page_size,
             cursor,
@@ -120,7 +123,21 @@ impl RolloutRecorder {
             model_providers,
             default_provider,
         )
-        .await
+        .await?;
+        compare_threads_page_with_db(
+            codex_home,
+            &page,
+            CompareThreadsDbQuery {
+                cursor,
+                sort_key,
+                allowed_sources,
+                model_providers,
+                archived_only: false,
+                stage: "list_threads",
+            },
+        )
+        .await;
+        Ok(page)
     }
 
     /// List archived threads (rollout files) under the archived sessions directory.
@@ -134,7 +151,7 @@ impl RolloutRecorder {
         default_provider: &str,
     ) -> std::io::Result<ThreadsPage> {
         let root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
-        get_threads_in_root(
+        let page = get_threads_in_root(
             root,
             page_size,
             cursor,
@@ -146,7 +163,21 @@ impl RolloutRecorder {
                 layout: ThreadListLayout::Flat,
             },
         )
-        .await
+        .await?;
+        compare_threads_page_with_db(
+            codex_home,
+            &page,
+            CompareThreadsDbQuery {
+                cursor,
+                sort_key,
+                allowed_sources,
+                model_providers,
+                archived_only: true,
+                stage: "list_archived_threads",
+            },
+        )
+        .await;
+        Ok(page)
     }
 
     /// Find the newest recorded thread path, optionally filtering to a matching cwd.
@@ -246,9 +277,13 @@ impl RolloutRecorder {
         // Spawn a Tokio task that owns the file handle and performs async
         // writes. Using `tokio::fs::File` keeps everything on the async I/O
         // driver instead of blocking the runtime.
-        tokio::task::spawn(rollout_writer(file, rx, meta, cwd));
+        tokio::task::spawn(rollout_writer(file, rx, meta, cwd, rollout_path.clone()));
 
         Ok(Self { tx, rollout_path })
+    }
+
+    pub fn rollout_path(&self) -> &Path {
+        self.rollout_path.as_path()
     }
 
     pub(crate) async fn record_items(&self, items: &[RolloutItem]) -> std::io::Result<()> {
@@ -344,6 +379,7 @@ impl RolloutRecorder {
             return Ok(InitialHistory::New);
         }
 
+        state_db::compare_rollout(path, "get_rollout_history").await;
         info!("Resumed rollout successfully from {path:?}");
         Ok(InitialHistory::Resumed(ResumedHistory {
             conversation_id,
@@ -422,6 +458,7 @@ async fn rollout_writer(
     mut rx: mpsc::Receiver<RolloutCmd>,
     mut meta: Option<SessionMeta>,
     cwd: std::path::PathBuf,
+    rollout_path: PathBuf,
 ) -> std::io::Result<()> {
     let mut writer = JsonlWriter { file };
 
@@ -437,17 +474,25 @@ async fn rollout_writer(
         writer
             .write_rollout_item(RolloutItem::SessionMeta(session_meta_line))
             .await?;
+        state_db::reconcile_rollout(rollout_path.as_path()).await;
     }
 
     // Process rollout commands
     while let Some(cmd) = rx.recv().await {
         match cmd {
             RolloutCmd::AddItems(items) => {
+                let mut persisted_items = Vec::new();
                 for item in items {
                     if is_persisted_response_item(&item) {
+                        persisted_items.push(item.clone());
                         writer.write_rollout_item(item).await?;
                     }
                 }
+                if persisted_items.is_empty() {
+                    continue;
+                }
+                state_db::apply_rollout_items(rollout_path.as_path(), persisted_items.as_slice())
+                    .await;
             }
             RolloutCmd::Flush { ack } => {
                 // Ensure underlying file is flushed and then ack.
@@ -464,6 +509,93 @@ async fn rollout_writer(
     }
 
     Ok(())
+}
+
+struct CompareThreadsDbQuery<'a> {
+    cursor: Option<&'a Cursor>,
+    sort_key: ThreadSortKey,
+    allowed_sources: &'a [SessionSource],
+    model_providers: Option<&'a [String]>,
+    archived_only: bool,
+    stage: &'a str,
+}
+
+async fn compare_threads_page_with_db(
+    codex_home: &Path,
+    canonical_page: &ThreadsPage,
+    query: CompareThreadsDbQuery<'_>,
+) {
+    let CompareThreadsDbQuery {
+        cursor,
+        sort_key,
+        allowed_sources,
+        model_providers,
+        archived_only,
+        stage,
+    } = query;
+    let query_stage = format!("{stage}_query");
+    let Some(db_page) = state_db::list_threads_db(
+        codex_home,
+        state_db::ListThreadsDbQuery {
+            page_size: canonical_page.items.len(),
+            cursor,
+            sort_key,
+            allowed_sources,
+            model_providers,
+            archived_only,
+            stage: query_stage.as_str(),
+        },
+    )
+    .await
+    else {
+        return;
+    };
+
+    let mut canonical_by_id = HashMap::new();
+    for item in canonical_page.items.iter() {
+        if let Some(id_str) = state_db::rollout_id_from_path(item.path.as_path())
+            && let Ok(thread_id) = ThreadId::from_string(id_str.as_str())
+        {
+            canonical_by_id.insert(thread_id, item);
+        }
+    }
+
+    let db_ids: HashSet<ThreadId> = db_page.items.iter().map(|item| item.id).collect();
+
+    for db_item in db_page.items.iter() {
+        if let Some(canonical_item) = canonical_by_id.get(&db_item.id) {
+            if let Some(rollout_metadata) =
+                state_db::extract_rollout_metadata(canonical_item.path.as_path()).await
+            {
+                let diffs = rollout_metadata.diff_fields(db_item);
+                if !diffs.is_empty() {
+                    let diffs_display = diffs.join(", ");
+                    warn!(
+                        "state db discrepancy for thread {} during {stage}: {diffs_display}",
+                        db_item.id
+                    );
+                    state_db::record_discrepancy(stage, "field_mismatch");
+                }
+            }
+        } else {
+            warn!(
+                "state db has extra thread {} during {stage} compare",
+                db_item.id
+            );
+            state_db::record_discrepancy(stage, "extra_db_row");
+        }
+    }
+
+    for (thread_id, canonical_item) in canonical_by_id {
+        if db_ids.contains(&thread_id) {
+            continue;
+        }
+        warn!(
+            "state db missing thread {thread_id} during {stage} compare at {}",
+            canonical_item.path.display()
+        );
+        state_db::record_discrepancy(stage, "missing_db_row");
+    }
 }
 
 struct JsonlWriter {

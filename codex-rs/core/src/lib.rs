@@ -91,6 +91,7 @@ pub mod shell;
 pub mod shell_snapshot;
 pub mod skills;
 pub mod spawn;
+pub mod state_db;
 pub mod terminal;
 mod tools;
 pub mod turn_diff_tracker;
