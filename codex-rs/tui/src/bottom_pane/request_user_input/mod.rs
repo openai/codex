@@ -924,7 +924,7 @@ mod tests {
             false,
         );
 
-        let width = 48u16;
+        let width = 52u16;
         let question_height = overlay.wrapped_question_lines(width).len() as u16;
         let options_height = overlay.options_required_height(width);
         let height = 1u16
