@@ -1226,6 +1226,13 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
+        if matches!(event, TuiEvent::Draw) {
+            let size = tui.terminal.size()?;
+            if size != tui.terminal.last_known_screen_size {
+                self.refresh_status_line();
+            }
+        }
+
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {

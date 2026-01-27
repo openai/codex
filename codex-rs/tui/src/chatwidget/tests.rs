@@ -896,7 +896,8 @@ async fn make_chatwidget_manual(
         current_rollout_path: None,
         current_cwd: None,
         external_editor_state: ExternalEditorState::Closed,
-        status_line_value: None,
+        total_lines_added: 0,
+        total_lines_removed: 0,
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)

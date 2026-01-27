@@ -1313,6 +1313,42 @@ mod tests {
             &props,
             Some(CollaborationModeIndicator::Plan),
         );
+
+        let props = FooterProps {
+            mode: FooterMode::ShortcutSummary,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            steer_enabled: false,
+            collaboration_modes_enabled: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: None,
+            context_window_used_tokens: None,
+            status_line_value: Some(StatusLineValue {
+                text: "Status line content".to_string(),
+                spans: None,
+            }),
+        };
+
+        snapshot_footer("footer_status_line_overrides_shortcuts", props);
+
+        let props = FooterProps {
+            mode: FooterMode::ContextOnly,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            steer_enabled: false,
+            collaboration_modes_enabled: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: None,
+            context_window_used_tokens: None,
+            status_line_value: Some(StatusLineValue {
+                text: "".to_string(),
+                spans: Some(vec![Span::from("Italic text").italic()]),
+            }),
+        };
+
+        snapshot_footer("footer_status_line_overrides_context", props);
     }
 
     #[test]

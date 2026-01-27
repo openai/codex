@@ -29,6 +29,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::diff_render::calculate_add_remove_from_diff;
 use crate::status_line::StatusLineValue;
 use crate::version::CODEX_CLI_VERSION;
 use codex_backend_client::Client as BackendClient;
@@ -523,8 +524,6 @@ pub(crate) struct ChatWidget {
     full_reasoning_buffer: String,
     // Current status header shown in the status indicator.
     current_status_header: String,
-    // Latest status line value from external command (if any).
-    status_line_value: Option<StatusLineValue>,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     thread_id: Option<ThreadId>,
@@ -586,6 +585,8 @@ pub(crate) struct ChatWidget {
     // Current working directory (if known)
     current_cwd: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
+    total_lines_added: usize,
+    total_lines_removed: usize,
 }
 
 /// Snapshot of active-cell state that affects transcript overlay rendering.
@@ -797,7 +798,6 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_status_line(&mut self, status_line: Option<StatusLineValue>) {
-        self.status_line_value = status_line.clone();
         self.bottom_pane.set_status_line(status_line);
         self.request_redraw();
     }
@@ -1812,6 +1812,9 @@ impl ChatWidget {
 
     fn on_turn_diff(&mut self, unified_diff: String) {
         debug!("TurnDiffEvent: {unified_diff}");
+        let diff = calculate_add_remove_from_diff(&unified_diff);
+        self.total_lines_added = diff.0;
+        self.total_lines_removed = diff.1;
     }
 
     fn on_deprecation_notice(&mut self, event: DeprecationNoticeEvent) {
@@ -2319,7 +2322,6 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
-            status_line_value: None,
             retry_status_header: None,
             thread_id: None,
             thread_name: None,
@@ -2345,6 +2347,8 @@ impl ChatWidget {
             current_rollout_path: None,
             current_cwd,
             external_editor_state: ExternalEditorState::Closed,
+            total_lines_added: 0,
+            total_lines_removed: 0,
         };
 
         widget.prefetch_rate_limits();
@@ -2468,7 +2472,6 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
-            status_line_value: None,
             retry_status_header: None,
             thread_id: None,
             thread_name: None,
@@ -2494,6 +2497,8 @@ impl ChatWidget {
             current_rollout_path: None,
             current_cwd,
             external_editor_state: ExternalEditorState::Closed,
+            total_lines_added: 0,
+            total_lines_removed: 0,
         };
 
         widget.prefetch_rate_limits();
@@ -2606,7 +2611,6 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
-            status_line_value: None,
             retry_status_header: None,
             thread_id: None,
             thread_name: None,
@@ -2632,6 +2636,8 @@ impl ChatWidget {
             current_rollout_path: None,
             current_cwd,
             external_editor_state: ExternalEditorState::Closed,
+            total_lines_added: 0,
+            total_lines_removed: 0,
         };
 
         widget.prefetch_rate_limits();
@@ -6427,6 +6433,13 @@ pub fn build_status_line_payload(chat: &ChatWidget, config: &Config) -> serde_js
 
     payload.insert("model".to_string(), model);
     payload.insert("version".to_string(), CODEX_CLI_VERSION.into());
+
+    let cost = serde_json::json!({
+        "total_lines_added": chat.total_lines_added,
+        "total_lines_removed": chat.total_lines_removed,
+    });
+
+    payload.insert("cost".to_string(), cost);
 
     let context_window_size = chat
         .token_info
