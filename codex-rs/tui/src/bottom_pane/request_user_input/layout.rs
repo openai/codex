@@ -172,9 +172,6 @@ impl RequestUserInputOverlay {
             remaining = remaining.saturating_add(reduce_by);
         }
 
-        let footer_lines = footer_pref.min(remaining);
-        remaining = remaining.saturating_sub(footer_lines);
-
         let mut progress_height = 0;
         if remaining > 0 {
             progress_height = 1;
@@ -182,14 +179,16 @@ impl RequestUserInputOverlay {
         }
 
         if !notes_visible {
+            let mut spacer_after_options = 0;
+            if remaining > footer_pref {
+                spacer_after_options = 1;
+                remaining = remaining.saturating_sub(1);
+            }
+            let footer_lines = footer_pref.min(remaining);
+            remaining = remaining.saturating_sub(footer_lines);
             let mut spacer_after_question = 0;
             if remaining > 0 {
                 spacer_after_question = 1;
-                remaining = remaining.saturating_sub(1);
-            }
-            let mut spacer_after_options = 0;
-            if remaining > 0 {
-                spacer_after_options = 1;
             }
             return (
                 question_height,
@@ -202,6 +201,9 @@ impl RequestUserInputOverlay {
                 footer_lines,
             );
         }
+
+        let footer_lines = footer_pref.min(remaining);
+        remaining = remaining.saturating_sub(footer_lines);
 
         // Prefer notes next, then labels, with any leftover rows expanding notes.
         let spacer_after_question = 0;
