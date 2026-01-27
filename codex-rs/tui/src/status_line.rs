@@ -131,7 +131,7 @@ impl StatusLineRunner {
     }
 }
 
-const DEFAULT_STATUS_LINE_TIMEOUT: Duration = Duration::from_millis(300);
+const DEFAULT_STATUS_LINE_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusLineRequest {
