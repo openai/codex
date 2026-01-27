@@ -3,14 +3,11 @@ source: tui/src/bottom_pane/request_user_input/mod.rs
 expression: "render_snapshot(&overlay, area)"
 ---
                                                                                                               
+  Question 1/1                                                                                                
   Next Step                                                                                                   
   Choose the next step for this task.                                                                         
   Answer                                                                                                      
   (x) Discuss a code change  Walk through a plan, then implement it together with careful checks.             
   ( ) Run targeted tests     Pick the most relevant crate and validate the current behavior first.            
   ( ) Review the diff        Summarize the changes and highlight the most important risks and gaps.           
-  Notes for Discuss a code change (optional)                                                                  
-                                                                                                              
-  › Select an option to add notes (optional)                                                                  
-                                                                                                              
-  Option 1 of 3 | ↑/↓ scroll | Enter to submit answer | Esc to interrupt
+  Option 1 of 3 | ↑/↓ scroll | tab add notes | Enter to submit answer | Esc to interrupt

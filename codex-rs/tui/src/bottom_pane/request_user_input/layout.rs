@@ -20,6 +20,7 @@ impl RequestUserInputOverlay {
     /// Compute layout sections, collapsing notes and hints as space shrinks.
     pub(super) fn layout_sections(&self, area: Rect) -> LayoutSections {
         let has_options = self.has_options();
+        let notes_visible = !has_options || self.notes_ui_visible();
         let footer_pref = if self.unanswered_count() > 0 { 2 } else { 1 };
         let notes_pref_height = self.notes_input_height(area.width);
         let mut question_lines = self.wrapped_question_lines(area.width);
@@ -40,6 +41,7 @@ impl RequestUserInputOverlay {
                 question_height,
                 notes_pref_height,
                 footer_pref,
+                notes_visible,
                 &mut question_lines,
             )
         } else {
@@ -98,6 +100,7 @@ impl RequestUserInputOverlay {
         question_height: u16,
         notes_pref_height: u16,
         footer_pref: u16,
+        notes_visible: bool,
         question_lines: &mut Vec<String>,
     ) -> (u16, u16, u16, u16, u16, u16, u16) {
         let options_required_height = self.options_required_height(width);
@@ -120,6 +123,7 @@ impl RequestUserInputOverlay {
                 options_required_height,
                 notes_pref_height,
                 footer_pref,
+                notes_visible,
             )
         }
     }
@@ -143,8 +147,8 @@ impl RequestUserInputOverlay {
         (adjusted_question_height, 0, 0, 0, 0, options_height, 0)
     }
 
-    /// Normal layout for options case: allocate space for all elements with
-    /// preference order: notes, footer, labels, then progress.
+    /// Normal layout for options case: allocate footer + labels first, then
+    /// progress, and only allocate notes when explicitly visible.
     fn layout_with_options_normal(
         &self,
         available_height: u16,
@@ -152,16 +156,13 @@ impl RequestUserInputOverlay {
         options_required_height: u16,
         notes_pref_height: u16,
         footer_pref: u16,
+        notes_visible: bool,
     ) -> (u16, u16, u16, u16, u16, u16, u16) {
         let options_height = options_required_height;
         let used = 1u16
             .saturating_add(question_height)
             .saturating_add(options_height);
         let mut remaining = available_height.saturating_sub(used);
-
-        // Prefer notes next, then footer, then labels, with progress last.
-        let mut notes_height = notes_pref_height.min(remaining);
-        remaining = remaining.saturating_sub(notes_height);
 
         let footer_lines = footer_pref.min(remaining);
         remaining = remaining.saturating_sub(footer_lines);
@@ -172,19 +173,34 @@ impl RequestUserInputOverlay {
             remaining = remaining.saturating_sub(1);
         }
 
-        let mut notes_title_height = 0;
-        if remaining > 0 {
-            notes_title_height = 1;
-            remaining = remaining.saturating_sub(1);
-        }
-
         let mut progress_height = 0;
         if remaining > 0 {
             progress_height = 1;
             remaining = remaining.saturating_sub(1);
         }
 
-        // Expand the notes composer with any leftover rows.
+        if !notes_visible {
+            return (
+                question_height,
+                progress_height,
+                answer_title_height,
+                0,
+                0,
+                options_height,
+                footer_lines,
+            );
+        }
+
+        // Prefer notes next, then labels, with any leftover rows expanding notes.
+        let mut notes_height = notes_pref_height.min(remaining);
+        remaining = remaining.saturating_sub(notes_height);
+
+        let mut notes_title_height = 0;
+        if remaining > 0 {
+            notes_title_height = 1;
+            remaining = remaining.saturating_sub(1);
+        }
+
         notes_height = notes_height.saturating_add(remaining);
 
         (

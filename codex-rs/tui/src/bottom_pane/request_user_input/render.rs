@@ -25,7 +25,12 @@ impl Renderable for RequestUserInputOverlay {
         let inner_width = inner.width.max(1);
         let question_height = self.wrapped_question_lines(inner_width).len();
         let options_height = self.options_required_height(inner_width) as usize;
-        let notes_height = self.notes_input_height(inner_width) as usize;
+        let notes_visible = !self.has_options() || self.notes_ui_visible();
+        let notes_height = if notes_visible {
+            self.notes_input_height(inner_width) as usize
+        } else {
+            0
+        };
         let footer_height = if self.unanswered_count() > 0 { 2 } else { 1 };
 
         // Tight minimum height: progress + header + question + (optional) titles/options
@@ -36,9 +41,10 @@ impl Renderable for RequestUserInputOverlay {
             .saturating_add(footer_height)
             .saturating_add(2); // progress + header
         if self.has_options() {
-            height = height
-                .saturating_add(1) // answer title
-                .saturating_add(1); // notes title
+            height = height.saturating_add(1); // answer title
+            if notes_visible {
+                height = height.saturating_add(1); // notes title
+            }
         }
         height = height.saturating_add(menu_surface_padding_height() as usize);
         height.max(8) as u16
@@ -66,6 +72,7 @@ impl RequestUserInputOverlay {
             return;
         }
         let sections = self.layout_sections(content_area);
+        let notes_visible = self.notes_ui_visible();
 
         // Progress header keeps the user oriented across multiple questions.
         let progress_line = if self.question_count() > 0 {
@@ -131,7 +138,7 @@ impl RequestUserInputOverlay {
             }
         }
 
-        if sections.notes_title_area.height > 0 {
+        if notes_visible && sections.notes_title_area.height > 0 {
             let notes_label = if self.has_options()
                 && self
                     .current_answer()
@@ -161,7 +168,7 @@ impl RequestUserInputOverlay {
             Paragraph::new(Line::from(notes_title)).render(sections.notes_title_area, buf);
         }
 
-        if sections.notes_area.height > 0 {
+        if notes_visible && sections.notes_area.height > 0 {
             self.render_notes_input(sections.notes_area, buf);
         }
 
@@ -202,6 +209,12 @@ impl RequestUserInputOverlay {
                 key_hint::plain(KeyCode::Down).into(),
                 " scroll | ".into(),
             ]);
+            if self.selected_option_index().is_some() && !notes_visible {
+                hint_spans.extend(vec![
+                    key_hint::plain(KeyCode::Tab).into(),
+                    " add notes | ".into(),
+                ]);
+            }
         }
         let question_count = self.question_count();
         let is_last_question = question_count > 0 && self.current_index() + 1 >= question_count;
@@ -219,7 +232,15 @@ impl RequestUserInputOverlay {
                 " next | ".into(),
             ]);
         }
-        hint_spans.extend(vec!["Esc to interrupt".dim()]);
+        if self.has_options() && notes_visible && self.focus_is_notes() {
+            hint_spans.extend(vec!["Notes optional | ".dim()]);
+        }
+        let esc_hint = if self.has_options() && notes_visible && self.focus_is_notes() {
+            "Esc to change answer"
+        } else {
+            "Esc to interrupt"
+        };
+        hint_spans.extend(vec![esc_hint.dim()]);
         let hint_line = Line::from(hint_spans).dim();
         let hint_line =
             truncate_line_word_boundary_with_ellipsis(hint_line, content_area.width as usize);
@@ -237,15 +258,16 @@ impl RequestUserInputOverlay {
     /// Return the cursor position when editing notes, if visible.
     pub(super) fn cursor_pos_impl(&self, area: Rect) -> Option<(u16, u16)> {
         let has_options = self.has_options();
+        let notes_visible = self.notes_ui_visible();
         let has_selected_option = self
             .current_answer()
             .is_some_and(|answer| answer.selected.is_some());
 
-        if !(self.focus_is_notes() || has_options && has_selected_option) {
+        if !self.focus_is_notes() {
             return None;
         }
         // When options exist, only show the cursor after a concrete selection.
-        if has_options && !has_selected_option {
+        if has_options && (!notes_visible || !has_selected_option) {
             return None;
         }
         let content_area = menu_surface_inset(area);

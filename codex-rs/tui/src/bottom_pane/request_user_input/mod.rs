@@ -61,6 +61,8 @@ struct AnswerState {
     option_state: ScrollState,
     // Per-question notes draft.
     draft: ComposerDraft,
+    // Whether the notes UI has been explicitly opened for this question.
+    notes_visible: bool,
 }
 
 pub(crate) struct RequestUserInputOverlay {
@@ -167,6 +169,23 @@ impl RequestUserInputOverlay {
             .map(|option| option.label.as_str())
     }
 
+    fn notes_has_content(&self, idx: usize) -> bool {
+        if idx == self.current_index() {
+            !self.composer.current_text_with_pending().trim().is_empty()
+        } else {
+            !self.answers[idx].draft.text.trim().is_empty()
+        }
+    }
+
+    pub(super) fn notes_ui_visible(&self) -> bool {
+        if !self.has_options() {
+            return true;
+        }
+        let idx = self.current_index();
+        self.current_answer()
+            .is_some_and(|answer| answer.notes_visible || self.notes_has_content(idx))
+    }
+
     pub(super) fn wrapped_question_lines(&self, width: u16) -> Vec<String> {
         self.current_question()
             .map(|q| {
@@ -238,8 +257,12 @@ impl RequestUserInputOverlay {
 
     fn save_current_draft(&mut self) {
         let draft = self.capture_composer_draft();
+        let notes_empty = draft.text.trim().is_empty();
         if let Some(answer) = self.current_answer_mut() {
             answer.draft = draft;
+            if !notes_empty {
+                answer.notes_visible = true;
+            }
         }
     }
 
@@ -285,6 +308,9 @@ impl RequestUserInputOverlay {
         }
         if !self.has_options() {
             self.focus = Focus::Notes;
+            if let Some(answer) = self.current_answer_mut() {
+                answer.notes_visible = true;
+            }
         }
     }
 
@@ -294,12 +320,16 @@ impl RequestUserInputOverlay {
             .request
             .questions
             .iter()
-            .map(|_| {
-                let option_state = ScrollState::new();
+            .map(|question| {
+                let has_options = question
+                    .options
+                    .as_ref()
+                    .is_some_and(|options| !options.is_empty());
                 AnswerState {
                     selected: None,
-                    option_state,
+                    option_state: ScrollState::new(),
                     draft: ComposerDraft::default(),
+                    notes_visible: !has_options,
                 }
             })
             .collect();
@@ -349,6 +379,9 @@ impl RequestUserInputOverlay {
                 .is_some_and(|answer| answer.selected.is_none())
         {
             self.select_current_option();
+        }
+        if let Some(answer) = self.current_answer_mut() {
+            answer.notes_visible = true;
         }
         self.sync_composer_placeholder();
     }
@@ -496,6 +529,21 @@ impl BottomPaneView for RequestUserInputOverlay {
         }
 
         if matches!(key_event.code, KeyCode::Esc) {
+            if self.has_options() && matches!(self.focus, Focus::Notes) {
+                // Let the composer flush any pending paste-burst state (e.g., held first char).
+                let _ = self
+                    .composer
+                    .handle_key_event(KeyEvent::from(KeyCode::Left));
+                self.composer.move_cursor_to_end();
+                let notes_empty = self.composer.current_text_with_pending().trim().is_empty();
+                self.save_current_draft();
+                if notes_empty && let Some(answer) = self.current_answer_mut() {
+                    answer.notes_visible = false;
+                }
+                self.focus = Focus::Options;
+                self.sync_composer_placeholder();
+                return;
+            }
             self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
             self.done = true;
             return;
@@ -553,6 +601,12 @@ impl BottomPaneView for RequestUserInputOverlay {
                     }
                     KeyCode::Char(' ') => {
                         self.select_current_option();
+                    }
+                    KeyCode::Tab => {
+                        if self.selected_option_index().is_some() {
+                            self.focus = Focus::Notes;
+                            self.ensure_selected_for_notes();
+                        }
                     }
                     KeyCode::Enter => {
                         let is_last_question = self.current_index() + 1 >= self.question_count();
@@ -839,6 +893,71 @@ mod tests {
     }
 
     #[test]
+    fn tab_opens_notes_when_option_selected() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let answer = overlay.current_answer_mut().expect("answer missing");
+        answer.option_state.selected_idx = Some(1);
+        answer.selected = Some(1);
+
+        assert_eq!(overlay.notes_ui_visible(), false);
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(overlay.notes_ui_visible(), true);
+        assert!(matches!(overlay.focus, Focus::Notes));
+    }
+
+    #[test]
+    fn esc_in_notes_mode_returns_to_options_without_interrupt() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let answer = overlay.current_answer_mut().expect("answer missing");
+        answer.option_state.selected_idx = Some(0);
+        answer.selected = Some(0);
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+        assert!(matches!(overlay.focus, Focus::Options));
+        assert_eq!(overlay.notes_ui_visible(), false);
+        assert_eq!(overlay.done, false);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn esc_keeps_notes_visible_when_notes_present() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let answer = overlay.current_answer_mut().expect("answer missing");
+        answer.option_state.selected_idx = Some(0);
+        answer.selected = Some(0);
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Char('a')));
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+        assert!(matches!(overlay.focus, Focus::Options));
+        assert_eq!(overlay.notes_ui_visible(), true);
+    }
+
+    #[test]
     fn skipped_option_questions_count_as_unanswered() {
         let (tx, _rx) = test_sender();
         let overlay = RequestUserInputOverlay::new(
@@ -963,6 +1082,30 @@ mod tests {
         let area = Rect::new(0, 0, 120, 16);
         insta::assert_snapshot!(
             "request_user_input_options",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn request_user_input_options_notes_visible_snapshot() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Area")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+        {
+            let answer = overlay.current_answer_mut().expect("answer missing");
+            answer.option_state.selected_idx = Some(0);
+            answer.selected = Some(0);
+        }
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
+
+        let area = Rect::new(0, 0, 120, 16);
+        insta::assert_snapshot!(
+            "request_user_input_options_notes_visible",
             render_snapshot(&overlay, area)
         );
     }
