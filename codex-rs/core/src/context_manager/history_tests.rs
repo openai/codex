@@ -139,13 +139,14 @@ fn test_turn_context() -> TurnContext {
         tools_config: ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: None,
+            web_search_mode: config.web_search_mode,
         }),
         ghost_snapshot: Default::default(),
         final_output_json_schema: None,
         codex_linux_sandbox_exe: None,
         tool_call_gate: Arc::new(ReadinessFlag::new()),
         truncation_policy: TruncationPolicy::Tokens(10_000),
+        dynamic_tools: vec![],
     }
 }
 
