@@ -152,6 +152,7 @@ impl McpToolPopup {
                     description,
                     selected_description,
                     disabled_reason: None,
+                    is_disabled: false,
                     wrap_indent: None,
                 }
             })

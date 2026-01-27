@@ -771,6 +771,13 @@
         "message_url": {
           "type": "string"
         },
+        "scopes": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "sse_url": {
           "type": "string"
         },

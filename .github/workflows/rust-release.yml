@@ -303,7 +303,9 @@ jobs:
                   cp "$dest/$base" "$bundle_dir/$base"
                   cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
                   cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
-                  (cd "$bundle_dir" && 7z a "$dest/${base}.zip" .)
+                  # Use an absolute path so bundle zips land in the real dist
+                  # dir even when 7z runs from a temp directory.
+                  (cd "$bundle_dir" && 7z a "$(pwd)/$dest/${base}.zip" .)
                 else
                   echo "warning: missing sandbox binaries; falling back to single-binary zip"
                   echo "warning: expected $runner_src and $setup_src"

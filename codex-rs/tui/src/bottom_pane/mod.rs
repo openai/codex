@@ -67,6 +67,7 @@ mod prompt_args;
 mod prompt_suggestions_view;
 mod skill_popup;
 mod skills_toggle_view;
+mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::SelectionViewParams;
 pub(crate) use mcp_search_toggle_view::McpSearchToggleView;

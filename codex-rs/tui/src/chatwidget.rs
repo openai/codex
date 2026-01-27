@@ -138,7 +138,6 @@ use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BackgroundTerminalsState;
 use crate::bottom_pane::BackgroundTerminalsView;
-use crate::bottom_pane::BetaFeatureItem;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
@@ -3555,10 +3554,15 @@ impl ChatWidget {
                         approval_policy: None,
                         sandbox_policy: None,
                         model: None,
+                        subagent_model: None,
+                        subagent_effort: None,
                         effort: None,
                         summary: None,
+                        max_output_tokens: None,
+                        history_depth: None,
                         collaboration_mode: None,
                         personality: Some(personality),
+                        disallowed_tools: None,
                     }));
                     tx.send(AppEvent::UpdatePersonality(personality));
                     tx.send(AppEvent::PersistPersonalitySelection { personality });
@@ -3590,65 +3594,63 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
-        pub(crate) fn open_subagent_model_popup(&mut self) {
-            if !self.is_session_configured() {
+    }
+
+    pub(crate) fn open_subagent_model_popup(&mut self) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Subagent model selection is disabled until startup completes.".to_string(),
+                None,
+            );
+            return;
+        }
+
+        let presets: Vec<ModelPreset> = match self.models_manager.try_list_models(&self.config) {
+            Ok(models) => models,
+            Err(_) => {
                 self.add_info_message(
-                    "Subagent model selection is disabled until startup completes.".to_string(),
+                    "Models are being updated; please try /subagent-model again in a moment."
+                        .to_string(),
                     None,
                 );
                 return;
             }
+        };
 
-            let presets: Vec<ModelPreset> = match self.models_manager.try_list_models(&self.config)
-            {
-                Ok(models) => models,
-                Err(_) => {
-                    self.add_info_message(
-                        "Models are being updated; please try /subagent-model again in a moment."
-                            .to_string(),
-                        None,
-                    );
+        self.open_subagent_model_popup_with_presets(presets);
+    }
+
+    pub(crate) fn open_subagent_model_prompt(&mut self, initial: Option<String>) {
+        let session_label = self.model_display_name().to_string();
+        let initial_text = initial.or_else(|| self.config.subagent_model.clone());
+        let models_manager = Arc::clone(&self.models_manager);
+        let config = self.config.clone();
+        let tx = self.app_event_tx.clone();
+        let view = CustomPromptView::new(
+            "Set subagent model".to_string(),
+            "Type a model slug and press Enter".to_string(),
+            Some(format!("Session model: {session_label}")),
+            initial_text,
+            Box::new(move |model: String| {
+                let trimmed = model.trim();
+                if trimmed.is_empty() {
+                    tx.send(AppEvent::UpdateSubagentModel { model: None });
+                    tx.send(AppEvent::UpdateSubagentReasoningEffort(None));
                     return;
                 }
-            };
 
-            self.open_subagent_model_popup_with_presets(presets);
-        }
-
-        pub(crate) fn open_subagent_model_prompt(&mut self, initial: Option<String>) {
-            let session_label = self.model_display_name().to_string();
-            let initial_text = initial.or_else(|| self.config.subagent_model.clone());
-            let models_manager = Arc::clone(&self.models_manager);
-            let config = self.config.clone();
-            let tx = self.app_event_tx.clone();
-            let view = CustomPromptView::new(
-                "Set subagent model".to_string(),
-                "Type a model slug and press Enter".to_string(),
-                Some(format!("Session model: {session_label}")),
-                initial_text,
-                Box::new(move |model: String| {
-                    let trimmed = model.trim();
-                    if trimmed.is_empty() {
-                        tx.send(AppEvent::UpdateSubagentModel { model: None });
-                        tx.send(AppEvent::UpdateSubagentReasoningEffort(None));
-                        return;
-                    }
-
-                    let preset = models_manager
-                        .try_list_models(&config)
-                        .ok()
-                        .and_then(|models| {
-                            models.into_iter().find(|preset| preset.model == trimmed)
-                        })
-                        .unwrap_or_else(|| Self::fallback_subagent_preset(trimmed));
-                    tx.send(AppEvent::OpenSubagentReasoningPopup {
-                        preset,
-                        model_override: Some(trimmed.to_string()),
-                    });
-                }),
-            );
-            self.bottom_pane.show_view(Box::new(view));
-        }
+                let preset = models_manager
+                    .try_list_models(&config)
+                    .ok()
+                    .and_then(|models| models.into_iter().find(|preset| preset.model == trimmed))
+                    .unwrap_or_else(|| Self::fallback_subagent_preset(trimmed));
+                tx.send(AppEvent::OpenSubagentReasoningPopup {
+                    preset,
+                    model_override: Some(trimmed.to_string()),
+                });
+            }),
+        );
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
@@ -4041,6 +4043,7 @@ impl ChatWidget {
             description: String::new(),
             default_reasoning_effort: ReasoningEffortConfig::Medium,
             supported_reasoning_efforts,
+            supports_personality: false,
             is_default: false,
             upgrade: None,
             show_in_picker: false,

@@ -97,6 +97,7 @@ fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> Mc
         tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
+        scopes: None,
     }
 }
 

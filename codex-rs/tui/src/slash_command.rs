@@ -76,7 +76,6 @@ impl SlashCommand {
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::Experimental => "toggle experimental features",
-            SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::McpSearch => "toggle MCPSearch tool aggregation",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Tools => "list available tools",

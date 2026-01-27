@@ -609,6 +609,7 @@ mod tests {
             id: id.to_string(),
             header: "Clarify".to_string(),
             question: "What should the modal title be?".to_string(),
+            is_other: false,
             options: None,
         }
     }
@@ -618,6 +619,7 @@ mod tests {
             id: id.to_string(),
             header: "Clarify".to_string(),
             question: text.to_string(),
+            is_other: false,
             options: None,
         }
     }
