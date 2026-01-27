@@ -2,12 +2,14 @@ use crate::config::NetworkMode;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::network_policy::NetworkPolicyRequest;
+use crate::network_policy::NetworkPolicyRequestArgs;
 use crate::network_policy::NetworkProtocol;
 use crate::network_policy::evaluate_host_policy;
 use crate::policy::normalize_host;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
 use crate::reasons::REASON_PROXY_DISABLED;
 use crate::state::BlockedRequest;
+use crate::state::BlockedRequestArgs;
 use crate::state::NetworkProxyState;
 use anyhow::Context as _;
 use anyhow::Result;
@@ -122,14 +124,14 @@ async fn handle_socks5_tcp(
         Ok(true) => {}
         Ok(false) => {
             let _ = app_state
-                .record_blocked(BlockedRequest::new(
-                    host.clone(),
-                    REASON_PROXY_DISABLED.to_string(),
-                    client.clone(),
-                    None,
-                    None,
-                    "socks5".to_string(),
-                ))
+                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                    host: host.clone(),
+                    reason: REASON_PROXY_DISABLED.to_string(),
+                    client: client.clone(),
+                    method: None,
+                    mode: None,
+                    protocol: "socks5".to_string(),
+                }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
             warn!("SOCKS blocked; proxy disabled (client={client}, host={host})");
@@ -144,14 +146,14 @@ async fn handle_socks5_tcp(
     match app_state.network_mode().await {
         Ok(NetworkMode::Limited) => {
             let _ = app_state
-                .record_blocked(BlockedRequest::new(
-                    host.clone(),
-                    REASON_METHOD_NOT_ALLOWED.to_string(),
-                    client.clone(),
-                    None,
-                    Some(NetworkMode::Limited),
-                    "socks5".to_string(),
-                ))
+                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                    host: host.clone(),
+                    reason: REASON_METHOD_NOT_ALLOWED.to_string(),
+                    client: client.clone(),
+                    method: None,
+                    mode: Some(NetworkMode::Limited),
+                    protocol: "socks5".to_string(),
+                }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
             warn!(
@@ -166,27 +168,27 @@ async fn handle_socks5_tcp(
         }
     }
 
-    let request = NetworkPolicyRequest::new(
-        NetworkProtocol::Socks5Tcp,
-        host.clone(),
+    let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
+        protocol: NetworkProtocol::Socks5Tcp,
+        host: host.clone(),
         port,
-        client.clone(),
-        None,
-        None,
-        None,
-    );
+        client_addr: client.clone(),
+        method: None,
+        command: None,
+        exec_policy_hint: None,
+    });
 
     match evaluate_host_policy(&app_state, policy_decider.as_ref(), &request).await {
         Ok(NetworkDecision::Deny { reason }) => {
             let _ = app_state
-                .record_blocked(BlockedRequest::new(
-                    host.clone(),
-                    reason.clone(),
-                    client.clone(),
-                    None,
-                    None,
-                    "socks5".to_string(),
-                ))
+                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                    host: host.clone(),
+                    reason: reason.clone(),
+                    client: client.clone(),
+                    method: None,
+                    mode: None,
+                    protocol: "socks5".to_string(),
+                }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
             warn!("SOCKS blocked (client={client}, host={host}, reason={reason})");
@@ -231,14 +233,14 @@ async fn inspect_socks5_udp(
         Ok(true) => {}
         Ok(false) => {
             let _ = state
-                .record_blocked(BlockedRequest::new(
-                    host.clone(),
-                    REASON_PROXY_DISABLED.to_string(),
-                    client.clone(),
-                    None,
-                    None,
-                    "socks5-udp".to_string(),
-                ))
+                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                    host: host.clone(),
+                    reason: REASON_PROXY_DISABLED.to_string(),
+                    client: client.clone(),
+                    method: None,
+                    mode: None,
+                    protocol: "socks5-udp".to_string(),
+                }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
             warn!("SOCKS UDP blocked; proxy disabled (client={client}, host={host})");
@@ -256,14 +258,14 @@ async fn inspect_socks5_udp(
     match state.network_mode().await {
         Ok(NetworkMode::Limited) => {
             let _ = state
-                .record_blocked(BlockedRequest::new(
-                    host.clone(),
-                    REASON_METHOD_NOT_ALLOWED.to_string(),
-                    client.clone(),
-                    None,
-                    Some(NetworkMode::Limited),
-                    "socks5-udp".to_string(),
-                ))
+                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                    host: host.clone(),
+                    reason: REASON_METHOD_NOT_ALLOWED.to_string(),
+                    client: client.clone(),
+                    method: None,
+                    mode: Some(NetworkMode::Limited),
+                    protocol: "socks5-udp".to_string(),
+                }))
                 .await;
             return Ok(RelayResponse {
                 maybe_payload: None,
@@ -277,27 +279,27 @@ async fn inspect_socks5_udp(
         }
     }
 
-    let request = NetworkPolicyRequest::new(
-        NetworkProtocol::Socks5Udp,
-        host.clone(),
+    let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
+        protocol: NetworkProtocol::Socks5Udp,
+        host: host.clone(),
         port,
-        client.clone(),
-        None,
-        None,
-        None,
-    );
+        client_addr: client.clone(),
+        method: None,
+        command: None,
+        exec_policy_hint: None,
+    });
 
     match evaluate_host_policy(&state, policy_decider.as_ref(), &request).await {
         Ok(NetworkDecision::Deny { reason }) => {
             let _ = state
-                .record_blocked(BlockedRequest::new(
-                    host.clone(),
-                    reason.clone(),
-                    client.clone(),
-                    None,
-                    None,
-                    "socks5-udp".to_string(),
-                ))
+                .record_blocked(BlockedRequest::new(BlockedRequestArgs {
+                    host: host.clone(),
+                    reason: reason.clone(),
+                    client: client.clone(),
+                    method: None,
+                    mode: None,
+                    protocol: "socks5-udp".to_string(),
+                }))
                 .await;
             let client = client.as_deref().unwrap_or_default();
             warn!("SOCKS UDP blocked (client={client}, host={host}, reason={reason})");
