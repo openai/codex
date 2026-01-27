@@ -103,36 +103,12 @@ impl ModelsManager {
         Ok(self.build_available_models(remote_models))
     }
 
-    /// Determine whether a model supports personalities, with a local fallback when
-    /// remote metadata omits the instructions template.
+    /// Determine whether a model supports personalities based on remote metadata.
     pub fn supports_personality(&self, model: &str, config: &Config) -> bool {
-        let remote_supports = self
-            .try_get_remote_models(config)
+        self.try_get_remote_models(config)
             .ok()
             .and_then(|remote_models| remote_models.into_iter().find(|info| info.slug == model))
-            .is_some_and(|info| info.supports_personality());
-        if remote_supports {
-            return true;
-        }
-
-        if self
-            .local_models
-            .iter()
-            .find(|preset| preset.model == model)
-            .is_some_and(|preset| preset.supports_personality)
-        {
-            return true;
-        }
-
-        self.try_list_models(config)
-            .ok()
-            .and_then(|models| {
-                models
-                    .into_iter()
-                    .find(|preset| preset.model == model)
-                    .map(|preset| preset.supports_personality)
-            })
-            .unwrap_or(false)
+            .is_some_and(|info| info.supports_personality())
     }
 
     // todo(aibrahim): should be visible to core only and sent on session_configured event
@@ -174,14 +150,7 @@ impl ModelsManager {
             .await
             .into_iter()
             .find(|m| m.slug == model);
-        let model = if let Some(mut remote) = remote {
-            if !remote.supports_personality() && local.supports_personality() {
-                remote.model_instructions_template = local.model_instructions_template.clone();
-            }
-            remote
-        } else {
-            local
-        };
+        let model = remote.unwrap_or(local);
         model_info::with_config_overrides(model, config)
     }
 
@@ -358,6 +327,12 @@ impl ModelsManager {
             cache_manager,
             provider,
         }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    /// Override remote model metadata for tests.
+    pub async fn set_remote_models_for_testing(&self, models: Vec<ModelInfo>) {
+        *self.remote_models.write().await = models;
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -737,7 +712,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn supports_personality_falls_back_to_local_presets() {
+    async fn supports_personality_requires_remote_metadata() {
         let codex_home = tempdir().expect("temp dir");
         let mut config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
@@ -751,7 +726,7 @@ mod tests {
         let manager =
             ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
 
-        // Remote metadata without personality messages should not disable local support.
+        // Remote metadata must explicitly include personality support.
         let mut remote = remote_model("gpt-5.2-codex", "Remote gpt-5.2-codex", 0);
         remote.model_instructions_template = Some(ModelInstructionsTemplate {
             template: "{{ personality_message }}".to_string(),
@@ -759,9 +734,9 @@ mod tests {
         });
         *manager.remote_models.write().await = vec![remote];
 
-        assert!(manager.supports_personality("gpt-5.2-codex", &config));
+        assert!(!manager.supports_personality("gpt-5.2-codex", &config));
         let model = manager.get_model_info("gpt-5.2-codex", &config).await;
-        assert!(model.supports_personality());
+        assert!(!model.supports_personality());
     }
 
     #[test]

@@ -67,7 +67,10 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelInstructionsTemplate;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::PersonalityMessages;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
@@ -82,8 +85,10 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 #[cfg(target_os = "windows")]
 use serial_test::serial;
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -122,6 +127,58 @@ fn snapshot(percent: f64) -> RateLimitSnapshot {
         credits: None,
         plan_type: None,
     }
+}
+
+fn personality_template() -> ModelInstructionsTemplate {
+    ModelInstructionsTemplate {
+        template: "Base instructions\n{{ personality_message }}\n".to_string(),
+        personality_messages: Some(PersonalityMessages(BTreeMap::from([
+            (Personality::Friendly, "Friendly message".to_string()),
+            (Personality::Pragmatic, "Pragmatic message".to_string()),
+        ]))),
+    }
+}
+
+fn remote_model_with_personality(slug: &str) -> ModelInfo {
+    let mut model: ModelInfo = serde_json::from_value(json!({
+        "slug": slug,
+        "display_name": slug,
+        "description": format!("{slug} description"),
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": [
+            {"effort": "low", "description": "low"},
+            {"effort": "medium", "description": "medium"}
+        ],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supported_in_api": true,
+        "priority": 0,
+        "upgrade": null,
+        "base_instructions": "base instructions",
+        "supports_reasoning_summaries": false,
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "apply_patch_tool_type": null,
+        "truncation_policy": {"mode": "bytes", "limit": 10_000},
+        "supports_parallel_tool_calls": false,
+        "context_window": 128_000,
+        "experimental_supported_tools": [],
+    }))
+    .expect("valid model");
+    model.model_instructions_template = Some(personality_template());
+    model
+}
+
+async fn enable_personality_support(chat: &mut ChatWidget, models: &[&str]) {
+    chat.set_feature_enabled(Feature::RemoteModels, true);
+    let remote_models = models
+        .iter()
+        .copied()
+        .map(remote_model_with_personality)
+        .collect();
+    chat.models_manager
+        .set_remote_models_for_testing(remote_models)
+        .await;
 }
 
 #[tokio::test]
@@ -1151,6 +1208,7 @@ fn session_configured_event_for(model: &str) -> Event {
 #[tokio::test]
 async fn personality_nudge_respects_hidden_notice() {
     let (mut chat, _rx, _) = make_chatwidget_manual(Some("bengalfox")).await;
+    enable_personality_support(&mut chat, &["bengalfox"]).await;
     chat.config.notices.hide_personality_nudge = Some(true);
 
     chat.handle_codex_event(session_configured_event_for("bengalfox"));
@@ -1165,6 +1223,7 @@ async fn personality_nudge_respects_hidden_notice() {
 #[tokio::test]
 async fn personality_nudge_shows_once_and_hides_after_seen() {
     let (mut chat, mut rx, _) = make_chatwidget_manual(Some("bengalfox")).await;
+    enable_personality_support(&mut chat, &["bengalfox"]).await;
 
     chat.handle_codex_event(session_configured_event_for("bengalfox"));
     assert!(matches!(
@@ -1200,6 +1259,7 @@ async fn personality_nudge_shows_once_and_hides_after_seen() {
 #[tokio::test]
 async fn personality_nudge_escape_does_not_persist_hidden() {
     let (mut chat, mut rx, _) = make_chatwidget_manual(Some("bengalfox")).await;
+    enable_personality_support(&mut chat, &["bengalfox"]).await;
 
     chat.handle_codex_event(session_configured_event_for("bengalfox"));
     assert!(matches!(
@@ -1233,13 +1293,15 @@ async fn personality_nudge_escape_does_not_persist_hidden() {
 
 #[tokio::test]
 async fn gpt_52_codex_supports_personality_command() {
-    let (chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    enable_personality_support(&mut chat, &["gpt-5.2-codex"]).await;
     assert!(chat.current_model_supports_personality());
 }
 
 #[tokio::test]
 async fn personality_nudge_shows_on_model_switch_after_escape() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+    enable_personality_support(&mut chat, &["bengalfox"]).await;
 
     chat.handle_codex_event(session_configured_event_for("bengalfox"));
     assert!(matches!(
@@ -2551,6 +2613,7 @@ async fn collab_mode_enabling_keeps_custom_until_selected() {
 #[tokio::test]
 async fn user_turn_includes_personality_from_config() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+    enable_personality_support(&mut chat, &["bengalfox"]).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_personality_nudge_hidden(true);
     chat.set_model("bengalfox");
@@ -3115,6 +3178,7 @@ async fn model_selection_popup_snapshot() {
 #[tokio::test]
 async fn personality_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+    enable_personality_support(&mut chat, &["bengalfox"]).await;
     chat.thread_id = Some(ThreadId::new());
     chat.open_personality_popup();
 
@@ -3125,6 +3189,7 @@ async fn personality_selection_popup_snapshot() {
 #[tokio::test]
 async fn personality_nudge_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+    enable_personality_support(&mut chat, &["bengalfox"]).await;
     chat.handle_codex_event(session_configured_event_for("bengalfox"));
 
     let popup = render_bottom_popup(&chat, 80);
