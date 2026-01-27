@@ -182,15 +182,22 @@ impl Session {
         last_agent_message: Option<String>,
     ) {
         let mut active = self.active_turn.lock().await;
-        let should_close_processes = if let Some(at) = active.as_mut()
+        let (should_close_processes, pending_follow_up) = if let Some(at) = active.as_mut()
             && at.remove_task(&turn_context.sub_id)
         {
+            let pending_follow_up = {
+                let mut ts = at.turn_state.lock().await;
+                ts.take_pending_input()
+            };
             *active = None;
-            true
+            (true, pending_follow_up)
         } else {
-            false
+            (false, Vec::new())
         };
         drop(active);
+        if should_close_processes && !pending_follow_up.is_empty() {
+            self.push_follow_up_items(pending_follow_up).await;
+        }
         if should_close_processes {
             self.close_unified_exec_processes().await;
         }
