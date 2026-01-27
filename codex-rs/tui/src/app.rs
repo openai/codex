@@ -1,4 +1,5 @@
 use crate::app_backtrack::BacktrackState;
+use crate::app_backtrack::UserTurnRecord;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 #[cfg(target_os = "windows")]
@@ -519,6 +520,7 @@ pub(crate) struct App {
     pub(crate) file_search: FileSearchManager,
 
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
+    pub(crate) user_turns: Vec<UserTurnRecord>,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -845,6 +847,7 @@ impl App {
     fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
         self.overlay = None;
         self.transcript_cells.clear();
+        self.user_turns.clear();
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
         self.backtrack = BacktrackState::default();
@@ -1067,6 +1070,7 @@ impl App {
             file_search,
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
+            user_turns: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -1268,6 +1272,7 @@ impl App {
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 self.reset_thread_event_state();
+                self.user_turns.clear();
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
@@ -1448,6 +1453,13 @@ impl App {
                         tui.insert_history_lines(display);
                     }
                 }
+            }
+            AppEvent::RecordUserTurn { items } => {
+                let transcript_cut_index = self.transcript_cells.len();
+                self.user_turns.push(UserTurnRecord {
+                    items,
+                    transcript_cut_index,
+                });
             }
             AppEvent::StartCommitAnimation => {
                 if self
@@ -1696,18 +1708,6 @@ impl App {
                                     },
                                 );
                             } else {
-                                self.app_event_tx.send(AppEvent::CodexOp(
-                                    Op::OverrideTurnContext {
-                                        cwd: None,
-                                        approval_policy: Some(preset.approval),
-                                        sandbox_policy: Some(preset.sandbox.clone()),
-                                        model: None,
-                                        effort: None,
-                                        summary: None,
-                                        collaboration_mode: None,
-                                        personality: None,
-                                    },
-                                ));
                                 self.app_event_tx
                                     .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
                                 self.app_event_tx
@@ -2387,7 +2387,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::app_backtrack::BacktrackState;
-    use crate::app_backtrack::user_count;
+    use crate::app_backtrack::UserTurnRecord;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::file_search::FileSearchManager;
     use crate::history_cell::AgentMessageCell;
@@ -2409,6 +2409,7 @@ mod tests {
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
     use codex_protocol::user_input::TextElement;
+    use codex_protocol::user_input::UserInput;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
@@ -2505,6 +2506,7 @@ mod tests {
             runtime_sandbox_policy_override: None,
             file_search,
             transcript_cells: Vec::new(),
+            user_turns: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -2557,6 +2559,7 @@ mod tests {
                 runtime_sandbox_policy_override: None,
                 file_search,
                 transcript_cells: Vec::new(),
+                user_turns: Vec::new(),
                 overlay: None,
                 deferred_history_lines: Vec::new(),
                 has_emitted_history_lines: false,
@@ -2843,7 +2846,29 @@ mod tests {
             agent_cell("answer edited"),
         ];
 
-        assert_eq!(user_count(&app.transcript_cells), 2);
+        app.user_turns = vec![
+            UserTurnRecord {
+                items: vec![UserInput::Text {
+                    text: "first question".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                transcript_cut_index: 6,
+            },
+            UserTurnRecord {
+                items: vec![
+                    UserInput::LocalImage {
+                        path: edited_local_image_paths[0].clone(),
+                    },
+                    UserInput::Text {
+                        text: edited_text.clone(),
+                        text_elements: edited_text_elements.clone(),
+                    },
+                ],
+                transcript_cut_index: 8,
+            },
+        ];
+
+        assert_eq!(app.user_turns.len(), 2);
 
         let base_id = ThreadId::new();
         app.chat_widget.handle_codex_event(Event {
@@ -2866,7 +2891,7 @@ mod tests {
 
         app.backtrack.base_id = Some(base_id);
         app.backtrack.primed = true;
-        app.backtrack.nth_user_message = user_count(&app.transcript_cells).saturating_sub(1);
+        app.backtrack.nth_user_message = app.user_turns.len().saturating_sub(1);
 
         let selection = app
             .confirm_backtrack_from_main()

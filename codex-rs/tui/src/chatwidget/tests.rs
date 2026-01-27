@@ -3444,22 +3444,14 @@ async fn approvals_popup_navigation_skips_disabled() {
     assert!(
         app_events.iter().any(|ev| matches!(
             ev,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
-                approval_policy: Some(AskForApproval::OnRequest),
-                personality: None,
-                ..
-            })
+            AppEvent::UpdateAskForApprovalPolicy(AskForApproval::OnRequest)
         )),
         "enter should select an enabled preset"
     );
     assert!(
         !app_events.iter().any(|ev| matches!(
             ev,
-            AppEvent::CodexOp(Op::OverrideTurnContext {
-                approval_policy: Some(AskForApproval::Never),
-                personality: None,
-                ..
-            })
+            AppEvent::UpdateAskForApprovalPolicy(AskForApproval::Never)
         )),
         "disabled preset should not be selected"
     );

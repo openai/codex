@@ -33,6 +33,10 @@ use codex_core::read_session_meta_line;
 use codex_core::terminal::Multiplexer;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
+use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -647,12 +651,12 @@ async fn run_ratatui_app(
 }
 
 pub(crate) async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
-    // Prefer the latest TurnContext cwd so resume/fork reflects the most recent
-    // session directory (for the changed-cwd prompt). The alternative would be
-    // mutating the SessionMeta line when the session cwd changes, but the rollout
-    // is an append-only JSONL log and rewriting the head would be error-prone.
-    // When rollouts move to SQLite, we can drop this scan.
-    if let Some(cwd) = parse_latest_turn_context_cwd(path).await {
+    // Prefer the latest environment_context cwd so resume/fork reflects the most recent
+    // session directory (for the changed-cwd prompt). The alternative would be mutating the
+    // SessionMeta line when the session cwd changes, but the rollout is an append-only JSONL log
+    // and rewriting the head would be error-prone. When rollouts move to SQLite, we can drop
+    // this scan.
+    if let Some(cwd) = parse_latest_environment_context_cwd(path).await {
         return Some(cwd);
     }
     match read_session_meta_line(path).await {
@@ -669,7 +673,7 @@ pub(crate) async fn read_session_cwd(path: &Path) -> Option<PathBuf> {
     }
 }
 
-async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
+async fn parse_latest_environment_context_cwd(path: &Path) -> Option<PathBuf> {
     let text = tokio::fs::read_to_string(path).await.ok()?;
     for line in text.lines().rev() {
         let trimmed = line.trim();
@@ -679,11 +683,40 @@ async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
         let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
             continue;
         };
-        if let RolloutItem::TurnContext(item) = rollout_line.item {
-            return Some(item.cwd);
+        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) =
+            rollout_line.item
+            && role == "user"
+        {
+            for content_item in content {
+                if let ContentItem::InputText { text } = content_item
+                    && let Some(cwd) = extract_environment_context_cwd(&text)
+                {
+                    return Some(cwd);
+                }
+            }
         }
     }
     None
+}
+
+fn extract_environment_context_cwd(text: &str) -> Option<PathBuf> {
+    let env_block = extract_between(
+        text,
+        ENVIRONMENT_CONTEXT_OPEN_TAG,
+        ENVIRONMENT_CONTEXT_CLOSE_TAG,
+    )?;
+    let cwd_text = extract_between(env_block, "<cwd>", "</cwd>")?;
+    let cwd_text = cwd_text.trim();
+    if cwd_text.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(cwd_text))
+}
+
+fn extract_between<'a>(text: &'a str, start: &str, end: &str) -> Option<&'a str> {
+    let start_idx = text.find(start)? + start.len();
+    let end_idx = text[start_idx..].find(end)? + start_idx;
+    Some(&text[start_idx..end_idx])
 }
 
 pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
@@ -857,11 +890,14 @@ mod tests {
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ProjectConfig;
     use codex_core::protocol::AskForApproval;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
+    use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SessionMeta;
     use codex_protocol::protocol::SessionMetaLine;
-    use codex_protocol::protocol::TurnContextItem;
     use serial_test::serial;
     use tempfile::TempDir;
 
@@ -936,31 +972,22 @@ mod tests {
         Ok(())
     }
 
-    fn build_turn_context(config: &Config, cwd: PathBuf) -> TurnContextItem {
-        let model = config
-            .model
-            .clone()
-            .unwrap_or_else(|| "gpt-5.1".to_string());
-        TurnContextItem {
-            cwd,
-            approval_policy: config.approval_policy.value(),
-            sandbox_policy: config.sandbox_policy.get().clone(),
-            model,
-            personality: None,
-            collaboration_mode: None,
-            effort: config.model_reasoning_effort,
-            summary: config.model_reasoning_summary,
-            user_instructions: None,
-            developer_instructions: None,
-            final_output_json_schema: None,
-            truncation_policy: None,
-        }
+    fn build_environment_context_response(cwd: PathBuf) -> RolloutItem {
+        let cwd_display = cwd.display();
+        let text = format!(
+            "{ENVIRONMENT_CONTEXT_OPEN_TAG}\n  <cwd>{cwd_display}</cwd>\n  <shell>bash</shell>\n{ENVIRONMENT_CONTEXT_CLOSE_TAG}"
+        );
+        RolloutItem::ResponseItem(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText { text }],
+            end_turn: None,
+        })
     }
 
     #[tokio::test]
-    async fn read_session_cwd_prefers_latest_turn_context() -> std::io::Result<()> {
+    async fn read_session_cwd_prefers_latest_environment_context() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
-        let config = build_config(&temp_dir).await?;
         let first = temp_dir.path().join("first");
         let second = temp_dir.path().join("second");
         std::fs::create_dir_all(&first)?;
@@ -970,11 +997,11 @@ mod tests {
         let lines = vec![
             RolloutLine {
                 timestamp: "t0".to_string(),
-                item: RolloutItem::TurnContext(build_turn_context(&config, first)),
+                item: build_environment_context_response(first),
             },
             RolloutLine {
                 timestamp: "t1".to_string(),
-                item: RolloutItem::TurnContext(build_turn_context(&config, second.clone())),
+                item: build_environment_context_response(second.clone()),
             },
         ];
         let mut text = String::new();
@@ -993,7 +1020,6 @@ mod tests {
     async fn should_prompt_when_meta_matches_current_but_latest_turn_differs() -> std::io::Result<()>
     {
         let temp_dir = TempDir::new()?;
-        let config = build_config(&temp_dir).await?;
         let current = temp_dir.path().join("current");
         let latest = temp_dir.path().join("latest");
         std::fs::create_dir_all(&current)?;
@@ -1014,7 +1040,7 @@ mod tests {
             },
             RolloutLine {
                 timestamp: "t1".to_string(),
-                item: RolloutItem::TurnContext(build_turn_context(&config, latest.clone())),
+                item: build_environment_context_response(latest.clone()),
             },
         ];
         let mut text = String::new();

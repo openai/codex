@@ -23,13 +23,10 @@
 //! `TranscriptOverlay::sync_live_tail`. This preserves the invariant that the overlay reflects
 //! both committed history and in-flight activity without changing flush or coalescing behavior.
 
-use std::any::TypeId;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::App;
-use crate::history_cell::SessionInfoCell;
-use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
@@ -39,6 +36,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_protocol::ThreadId;
 use codex_protocol::user_input::TextElement;
+use codex_protocol::user_input::UserInput;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -94,6 +92,17 @@ pub(crate) struct BacktrackSelection {
 pub(crate) struct PendingBacktrackRollback {
     pub(crate) selection: BacktrackSelection,
     pub(crate) thread_id: Option<ThreadId>,
+}
+
+/// Local record of a submitted user turn.
+#[derive(Debug, Clone)]
+pub(crate) struct UserTurnRecord {
+    /// Items sent to core for this turn.
+    pub(crate) items: Vec<UserInput>,
+    /// Transcript length at the moment this turn started.
+    ///
+    /// When rolling back to this turn, we truncate the transcript to this index.
+    pub(crate) transcript_cut_index: usize,
 }
 
 impl App {
@@ -186,7 +195,7 @@ impl App {
     /// The composer prefill is applied immediately as a UX convenience; it does not imply that
     /// core has accepted the rollback.
     pub(crate) fn apply_backtrack_rollback(&mut self, selection: BacktrackSelection) {
-        let user_total = user_count(&self.transcript_cells);
+        let user_total = self.user_turns.len();
         if user_total == 0 {
             return;
         }
@@ -273,7 +282,7 @@ impl App {
         self.backtrack.primed = true;
         self.backtrack.base_id = self.chat_widget.thread_id();
         self.backtrack.overlay_preview_active = true;
-        let count = user_count(&self.transcript_cells);
+        let count = self.user_turns.len();
         if let Some(last) = count.checked_sub(1) {
             self.apply_backtrack_selection_internal(last);
         }
@@ -282,7 +291,7 @@ impl App {
 
     /// Step selection to the next older user message and update overlay.
     fn step_backtrack_and_highlight(&mut self, tui: &mut tui::Tui) {
-        let count = user_count(&self.transcript_cells);
+        let count = self.user_turns.len();
         if count == 0 {
             return;
         }
@@ -305,7 +314,7 @@ impl App {
 
     /// Step selection to the next newer user message and update overlay.
     fn step_forward_backtrack_and_highlight(&mut self, tui: &mut tui::Tui) {
-        let count = user_count(&self.transcript_cells);
+        let count = self.user_turns.len();
         if count == 0 {
             return;
         }
@@ -326,16 +335,19 @@ impl App {
 
     /// Apply a computed backtrack selection to the overlay and internal counter.
     fn apply_backtrack_selection_internal(&mut self, nth_user_message: usize) {
-        if let Some(cell_idx) = nth_user_position(&self.transcript_cells, nth_user_message) {
-            self.backtrack.nth_user_message = nth_user_message;
-            if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                t.set_highlight_cell(Some(cell_idx));
-            }
-        } else {
+        let Some(record) = self.user_turns.get(nth_user_message) else {
             self.backtrack.nth_user_message = usize::MAX;
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                 t.set_highlight_cell(None);
             }
+            return;
+        };
+
+        let cell_idx = (record.transcript_cut_index < self.transcript_cells.len())
+            .then_some(record.transcript_cut_index);
+        self.backtrack.nth_user_message = nth_user_message;
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
+            t.set_highlight_cell(cell_idx);
         }
     }
 
@@ -487,18 +499,8 @@ impl App {
             return None;
         }
 
-        let (prefill, text_elements, local_image_paths) =
-            nth_user_position(&self.transcript_cells, nth_user_message)
-                .and_then(|idx| self.transcript_cells.get(idx))
-                .and_then(|cell| cell.as_any().downcast_ref::<UserHistoryCell>())
-                .map(|cell| {
-                    (
-                        cell.message.clone(),
-                        cell.text_elements.clone(),
-                        cell.local_image_paths.clone(),
-                    )
-                })
-                .unwrap_or_else(|| (String::new(), Vec::new(), Vec::new()));
+        let record = self.user_turns.get(nth_user_message)?;
+        let (prefill, text_elements, local_image_paths) = prefill_from_items(&record.items);
 
         Some(BacktrackSelection {
             nth_user_message,
@@ -510,53 +512,48 @@ impl App {
 
     /// Trim `transcript_cells` to preserve only content before the selected user message.
     fn trim_transcript_for_backtrack(&mut self, nth_user_message: usize) {
-        trim_transcript_cells_to_nth_user(&mut self.transcript_cells, nth_user_message);
+        if nth_user_message == usize::MAX {
+            return;
+        }
+        let Some(record) = self.user_turns.get(nth_user_message) else {
+            return;
+        };
+        trim_transcript_cells_to_cut_index(&mut self.transcript_cells, record.transcript_cut_index);
+        self.user_turns.truncate(nth_user_message);
     }
 }
 
-fn trim_transcript_cells_to_nth_user(
+fn trim_transcript_cells_to_cut_index(
     transcript_cells: &mut Vec<Arc<dyn crate::history_cell::HistoryCell>>,
-    nth_user_message: usize,
+    cut_index: usize,
 ) {
-    if nth_user_message == usize::MAX {
-        return;
+    let cut_index = cut_index.min(transcript_cells.len());
+    transcript_cells.truncate(cut_index);
+}
+
+fn prefill_from_items(items: &[UserInput]) -> (String, Vec<TextElement>, Vec<PathBuf>) {
+    let mut prefill = String::new();
+    let mut text_elements = Vec::new();
+    let mut local_image_paths = Vec::new();
+
+    for item in items {
+        match item {
+            UserInput::Text {
+                text,
+                text_elements: elements,
+            } => {
+                if prefill.is_empty() {
+                    prefill = text.clone();
+                    text_elements = elements.clone();
+                }
+            }
+            UserInput::LocalImage { path } => local_image_paths.push(path.clone()),
+            UserInput::Image { .. } | UserInput::Skill { .. } => {}
+            _ => {}
+        }
     }
 
-    if let Some(cut_idx) = nth_user_position(transcript_cells, nth_user_message) {
-        transcript_cells.truncate(cut_idx);
-    }
-}
-
-pub(crate) fn user_count(cells: &[Arc<dyn crate::history_cell::HistoryCell>]) -> usize {
-    user_positions_iter(cells).count()
-}
-
-fn nth_user_position(
-    cells: &[Arc<dyn crate::history_cell::HistoryCell>],
-    nth: usize,
-) -> Option<usize> {
-    user_positions_iter(cells)
-        .enumerate()
-        .find_map(|(i, idx)| (i == nth).then_some(idx))
-}
-
-fn user_positions_iter(
-    cells: &[Arc<dyn crate::history_cell::HistoryCell>],
-) -> impl Iterator<Item = usize> + '_ {
-    let session_start_type = TypeId::of::<SessionInfoCell>();
-    let user_type = TypeId::of::<UserHistoryCell>();
-    let type_of = |cell: &Arc<dyn crate::history_cell::HistoryCell>| cell.as_any().type_id();
-
-    let start = cells
-        .iter()
-        .rposition(|cell| type_of(cell) == session_start_type)
-        .map_or(0, |idx| idx + 1);
-
-    cells
-        .iter()
-        .enumerate()
-        .skip(start)
-        .filter_map(move |(idx, cell)| (type_of(cell) == user_type).then_some(idx))
+    (prefill, text_elements, local_image_paths)
 }
 
 #[cfg(test)]
@@ -564,39 +561,32 @@ mod tests {
     use super::*;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
+    use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     #[test]
-    fn trim_transcript_for_first_user_drops_user_and_newer_cells() {
-        let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
-            Arc::new(UserHistoryCell {
-                message: "first user".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
-            Arc::new(AgentMessageCell::new(vec![Line::from("assistant")], true))
-                as Arc<dyn HistoryCell>,
-        ];
-        trim_transcript_cells_to_nth_user(&mut cells, 0);
+    fn trim_transcript_to_zero_clears_all_cells() {
+        let mut cells: Vec<Arc<dyn HistoryCell>> =
+            vec![
+                Arc::new(AgentMessageCell::new(vec![Line::from("assistant")], true))
+                    as Arc<dyn HistoryCell>,
+            ];
+        trim_transcript_cells_to_cut_index(&mut cells, 0);
 
         assert!(cells.is_empty());
     }
 
     #[test]
-    fn trim_transcript_preserves_cells_before_selected_user() {
+    fn trim_transcript_preserves_cells_before_cut_index() {
         let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
             Arc::new(AgentMessageCell::new(vec![Line::from("intro")], true))
                 as Arc<dyn HistoryCell>,
-            Arc::new(UserHistoryCell {
-                message: "first".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("after")], false))
                 as Arc<dyn HistoryCell>,
         ];
-        trim_transcript_cells_to_nth_user(&mut cells, 0);
+        trim_transcript_cells_to_cut_index(&mut cells, 1);
 
         assert_eq!(cells.len(), 1);
         let agent = cells[0]
@@ -614,26 +604,16 @@ mod tests {
     }
 
     #[test]
-    fn trim_transcript_for_later_user_keeps_prior_history() {
+    fn trim_transcript_keeps_prior_history_up_to_cut_index() {
         let mut cells: Vec<Arc<dyn HistoryCell>> = vec![
             Arc::new(AgentMessageCell::new(vec![Line::from("intro")], true))
                 as Arc<dyn HistoryCell>,
-            Arc::new(UserHistoryCell {
-                message: "first".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("between")], false))
                 as Arc<dyn HistoryCell>,
-            Arc::new(UserHistoryCell {
-                message: "second".to_string(),
-                text_elements: Vec::new(),
-                local_image_paths: Vec::new(),
-            }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(vec![Line::from("tail")], false))
                 as Arc<dyn HistoryCell>,
         ];
-        trim_transcript_cells_to_nth_user(&mut cells, 1);
+        trim_transcript_cells_to_cut_index(&mut cells, 3);
 
         assert_eq!(cells.len(), 3);
         let agent_intro = cells[0]
@@ -647,14 +627,7 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert_eq!(intro_text, "• intro");
-
-        let user_first = cells[1]
-            .as_any()
-            .downcast_ref::<UserHistoryCell>()
-            .expect("first user");
-        assert_eq!(user_first.message, "first");
-
-        let agent_between = cells[2]
+        let agent_between = cells[1]
             .as_any()
             .downcast_ref::<AgentMessageCell>()
             .expect("between agent");
@@ -665,5 +638,17 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert_eq!(between_text, "  between");
+    }
+
+    #[test]
+    fn prefill_from_items_handles_image_only_turns() {
+        let items = vec![UserInput::LocalImage {
+            path: PathBuf::from("/tmp/image.png"),
+        }];
+        let (prefill, text_elements, local_image_paths) = prefill_from_items(&items);
+
+        assert_eq!(prefill, String::new());
+        assert_eq!(text_elements, Vec::new());
+        assert_eq!(local_image_paths, vec![PathBuf::from("/tmp/image.png")]);
     }
 }

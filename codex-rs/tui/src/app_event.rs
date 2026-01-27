@@ -26,6 +26,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::user_input::UserInput;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -93,6 +94,11 @@ pub(crate) enum AppEvent {
     DiffResult(String),
 
     InsertHistoryCell(Box<dyn HistoryCell>),
+
+    /// Record a submitted user turn for local backtrack state.
+    RecordUserTurn {
+        items: Vec<UserInput>,
+    },
 
     StartCommitAnimation,
     StopCommitAnimation,
