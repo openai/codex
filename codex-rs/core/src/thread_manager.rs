@@ -34,6 +34,8 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use tempfile::TempDir;
 use tokio::runtime::Handle;
+#[cfg(test)]
+use tokio::runtime::RuntimeFlavor;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 use tracing::warn;
@@ -41,6 +43,16 @@ use tracing::warn;
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
 
 fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -> Arc<FileWatcher> {
+    #[cfg(test)]
+    if let Ok(handle) = Handle::try_current()
+        && handle.runtime_flavor() == RuntimeFlavor::CurrentThread
+    {
+        // The real watcher spins background tasks that can starve the
+        // current-thread test runtime and cause event waits to time out.
+        warn!("using noop file watcher under current-thread test runtime");
+        return Arc::new(FileWatcher::noop());
+    }
+
     let file_watcher = match FileWatcher::new(codex_home) {
         Ok(file_watcher) => Arc::new(file_watcher),
         Err(err) => {
