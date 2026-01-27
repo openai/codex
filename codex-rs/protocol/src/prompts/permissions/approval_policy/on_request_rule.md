@@ -20,7 +20,7 @@ This is treated as two command segments:
 ## How to request escalation
 IMPORTANT: To request approval to execute a command that will require escalated privileges:
   - Provide the `sandbox_permissions` parameter with the value `"require_escalated"`
-  - Include a short, 1 sentence explanation for why you need escalated permissions in the `justification` parameter
+  - Include a short question asking the user if they want to allow the action in `justification` parameter. e.g. "Do you want to download and install dependencies for this project?"
   - Suggest a `prefix_rule` - this will be shown to the user with an option to persist the rule approval for future sessions.
 
 If you run a command that is important to solving the user's query, but it fails because of sandboxing, rerun the command with "require_escalated". ALWAYS proceed to use the `justification` and `prefix_rule` parameters - do not message the user before requesting approval for the command.

@@ -82,7 +82,6 @@ pub(crate) struct ExecCommandRequest {
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub justification: Option<String>,
-    pub request_approval: Option<String>,
     pub prefix_rule: Option<Vec<String>>,
 }
 
@@ -207,7 +206,6 @@ mod tests {
                     tty: true,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     justification: None,
-                    request_approval: None,
                     prefix_rule: None,
                 },
                 &context,

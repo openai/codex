@@ -10,7 +10,6 @@ use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
-use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -33,7 +32,6 @@ pub struct ShellCommandHandler;
 struct RunExecLikeArgs {
     tool_name: String,
     exec_params: ExecParams,
-    request_approval: Option<String>,
     prefix_rule: Option<Vec<String>>,
     session: Arc<crate::codex::Session>,
     turn: Arc<TurnContext>,
@@ -122,13 +120,11 @@ impl ToolHandler for ShellHandler {
         match payload {
             ToolPayload::Function { arguments } => {
                 let params: ShellToolCallParams = parse_arguments(&arguments)?;
-                let request_approval = params.request_approval.clone();
                 let prefix_rule = params.prefix_rule.clone();
                 let exec_params = Self::to_exec_params(&params, turn.as_ref());
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.clone(),
                     exec_params,
-                    request_approval,
                     prefix_rule,
                     session,
                     turn,
@@ -143,7 +139,6 @@ impl ToolHandler for ShellHandler {
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.clone(),
                     exec_params,
-                    request_approval: None,
                     prefix_rule: None,
                     session,
                     turn,
@@ -201,13 +196,11 @@ impl ToolHandler for ShellCommandHandler {
         };
 
         let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
-        let request_approval = params.request_approval.clone();
         let prefix_rule = params.prefix_rule.clone();
         let exec_params = Self::to_exec_params(&params, session.as_ref(), turn.as_ref());
         ShellHandler::run_exec_like(RunExecLikeArgs {
             tool_name,
             exec_params,
-            request_approval,
             prefix_rule,
             session,
             turn,
@@ -224,7 +217,6 @@ impl ShellHandler {
         let RunExecLikeArgs {
             tool_name,
             exec_params,
-            request_approval,
             prefix_rule,
             session,
             turn,
@@ -232,37 +224,14 @@ impl ShellHandler {
             call_id,
             freeform,
         } = args;
-        let mut exec_params = exec_params;
 
         let features = session.features();
         let request_rule_enabled = features.enabled(crate::features::Feature::RequestRule);
-        let mut prefix_rule = if request_rule_enabled {
+        let prefix_rule = if request_rule_enabled {
             prefix_rule
         } else {
             None
         };
-        // Normalize early so empty/whitespace request_approval does not trigger
-        // escalated permissions and bypass sandbox without a real approval prompt.
-        let request_approval = normalize_request_approval(request_approval);
-
-        if request_approval.is_some() {
-            if !request_rule_enabled {
-                return Err(FunctionCallError::RespondToModel(
-                    "request_approval is not supported unless the request_rule feature is enabled"
-                        .to_string(),
-                ));
-            }
-            if !matches!(
-                turn.approval_policy,
-                codex_protocol::protocol::AskForApproval::OnRequest
-            ) {
-                let approval_policy = turn.approval_policy;
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "approval policy is {approval_policy:?}; reject command — you should not request approval if the approval policy is {approval_policy:?}"
-                )));
-            }
-            exec_params.sandbox_permissions = SandboxPermissions::RequireEscalated;
-        }
 
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params
@@ -277,10 +246,6 @@ impl ShellHandler {
             return Err(FunctionCallError::RespondToModel(format!(
                 "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
             )));
-        }
-
-        if !request_rule_enabled || request_approval.is_none() {
-            prefix_rule = None;
         }
 
         // Intercept apply_patch if present.
@@ -318,7 +283,6 @@ impl ShellHandler {
                 approval_policy: turn.approval_policy,
                 sandbox_policy: &turn.sandbox_policy,
                 sandbox_permissions: exec_params.sandbox_permissions,
-                request_approval,
                 prefix_rule,
             })
             .await;
@@ -351,17 +315,6 @@ impl ShellHandler {
             success: Some(true),
         })
     }
-}
-
-fn normalize_request_approval(request_approval: Option<String>) -> Option<String> {
-    request_approval.and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
 }
 
 #[cfg(test)]
@@ -452,7 +405,6 @@ mod tests {
             login,
             timeout_ms,
             sandbox_permissions: Some(sandbox_permissions),
-            request_approval: None,
             prefix_rule: None,
             justification: justification.clone(),
         };
@@ -492,18 +444,6 @@ mod tests {
         assert_eq!(
             non_login_command,
             shell.derive_exec_args("echo non login shell", false)
-        );
-    }
-
-    #[test]
-    fn normalize_request_approval_trims_and_drops_empty_values() {
-        assert_eq!(
-            super::normalize_request_approval(Some("   ".to_string())),
-            None
-        );
-        assert_eq!(
-            super::normalize_request_approval(Some("  ok?  ".to_string())),
-            Some("ok?".to_string())
         );
     }
 }

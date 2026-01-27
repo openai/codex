@@ -44,8 +44,6 @@ struct ExecCommandArgs {
     #[serde(default)]
     justification: Option<String>,
     #[serde(default)]
-    request_approval: Option<String>,
-    #[serde(default)]
     prefix_rule: Option<Vec<String>>,
 }
 
@@ -75,17 +73,6 @@ fn default_login() -> bool {
 
 fn default_tty() -> bool {
     false
-}
-
-fn normalize_request_approval(request_approval: Option<String>) -> Option<String> {
-    request_approval.and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
 }
 
 #[async_trait]
@@ -151,40 +138,9 @@ impl ToolHandler for UnifiedExecHandler {
                     max_output_tokens,
                     sandbox_permissions,
                     justification,
-                    request_approval,
                     prefix_rule,
                     ..
                 } = args;
-
-                // Normalize early so empty/whitespace request_approval does not trigger
-                // escalated permissions and bypass sandbox without a real approval prompt.
-                let request_approval = normalize_request_approval(request_approval);
-
-                let features = session.features();
-                let request_rule_enabled = features.enabled(crate::features::Feature::RequestRule);
-                tracing::warn!("request_rule_enabled: {request_rule_enabled}");
-                let sandbox_permissions = if request_approval.is_some() {
-                    if !request_rule_enabled {
-                        manager.release_process_id(&process_id).await;
-                        return Err(FunctionCallError::RespondToModel(
-                            "request_approval is not supported unless the request_rule feature is enabled"
-                                .to_string(),
-                        ));
-                    }
-                    if !matches!(
-                        context.turn.approval_policy,
-                        codex_protocol::protocol::AskForApproval::OnRequest
-                    ) {
-                        let approval_policy = context.turn.approval_policy;
-                        manager.release_process_id(&process_id).await;
-                        return Err(FunctionCallError::RespondToModel(format!(
-                            "approval policy is {approval_policy:?}; reject command — you should not request approval if the approval policy is {approval_policy:?}"
-                        )));
-                    }
-                    SandboxPermissions::RequireEscalated
-                } else {
-                    sandbox_permissions
-                };
 
                 if sandbox_permissions.requires_escalated_permissions()
                     && !matches!(
@@ -198,15 +154,6 @@ impl ToolHandler for UnifiedExecHandler {
                         "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
                     )));
                 }
-
-                tracing::warn!("prefix_rule: {prefix_rule:?}");
-                tracing::warn!("request_approval: {request_approval:?}");
-                let prefix_rule = if request_rule_enabled && request_approval.is_some() {
-                    prefix_rule
-                } else {
-                    None
-                };
-                tracing::warn!("post prefix_rule: {prefix_rule:?}");
 
                 let workdir = workdir.filter(|value| !value.is_empty());
 
@@ -240,7 +187,6 @@ impl ToolHandler for UnifiedExecHandler {
                             tty,
                             sandbox_permissions,
                             justification,
-                            request_approval,
                             prefix_rule,
                         },
                         &context,
@@ -400,14 +346,5 @@ mod tests {
 
         assert_eq!(command[2], "echo hello");
         Ok(())
-    }
-
-    #[test]
-    fn normalize_request_approval_trims_and_drops_empty_values() {
-        assert_eq!(normalize_request_approval(Some("   ".to_string())), None);
-        assert_eq!(
-            normalize_request_approval(Some("  ok?  ".to_string())),
-            Some("ok?".to_string())
-        );
     }
 }

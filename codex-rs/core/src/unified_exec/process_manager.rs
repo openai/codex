@@ -497,7 +497,6 @@ impl UnifiedExecProcessManager {
                 approval_policy: context.turn.approval_policy,
                 sandbox_policy: &context.turn.sandbox_policy,
                 sandbox_permissions: request.sandbox_permissions,
-                request_approval: request.request_approval.clone(),
                 prefix_rule: request.prefix_rule.clone(),
             })
             .await;
