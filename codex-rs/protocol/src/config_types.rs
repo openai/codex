@@ -94,8 +94,8 @@ pub enum Personality {
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum WebSearchMode {
-    #[default]
     Disabled,
+    #[default]
     Cached,
     Live,
 }

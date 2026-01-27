@@ -167,6 +167,11 @@ mod document_helpers {
         {
             entry["disabled_tools"] = array_from_iter(disabled_tools.iter().cloned());
         }
+        if let Some(scopes) = &config.scopes
+            && !scopes.is_empty()
+        {
+            entry["scopes"] = array_from_iter(scopes.iter().cloned());
+        }
 
         entry
     }
@@ -1373,6 +1378,7 @@ gpt-5 = "gpt-5.1"
                 tool_timeout_sec: None,
                 enabled_tools: Some(vec!["one".to_string(), "two".to_string()]),
                 disabled_tools: None,
+                scopes: None,
             },
         );
 
@@ -1395,6 +1401,7 @@ gpt-5 = "gpt-5.1"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: Some(vec!["forbidden".to_string()]),
+                scopes: None,
             },
         );
 
@@ -1460,6 +1467,7 @@ foo = { command = "cmd" }
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         );
 
@@ -1504,6 +1512,7 @@ foo = { command = "cmd" } # keep me
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         );
 
@@ -1547,6 +1556,7 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         );
 
@@ -1591,6 +1601,7 @@ foo = { command = "cmd" }
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         );
 
