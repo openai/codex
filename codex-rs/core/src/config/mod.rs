@@ -1570,7 +1570,9 @@ impl Config {
             use_experimental_unified_exec_tool,
             ghost_snapshot,
             features,
-            suppress_unstable_features_warning: cfg.suppress_unstable_features_warning.unwrap_or(false),
+            suppress_unstable_features_warning: cfg
+                .suppress_unstable_features_warning
+                .unwrap_or(false),
             active_profile: active_profile_name,
             active_project,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),

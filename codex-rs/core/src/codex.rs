@@ -20,9 +20,9 @@ use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
-use crate::features::maybe_push_unstable_features_warning;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::features::maybe_push_unstable_features_warning;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -238,7 +238,6 @@ fn maybe_push_chat_wire_api_deprecation(
         }),
     });
 }
-
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
