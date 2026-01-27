@@ -772,9 +772,8 @@ impl BottomPaneView for RequestUserInputOverlay {
                         }
                     }
                     KeyCode::Enter => {
-                        let is_last_question = self.current_index() + 1 >= self.question_count();
                         let has_selection = self.selected_option_index().is_some();
-                        if !is_last_question || has_selection {
+                        if has_selection {
                             self.select_current_option();
                         }
                         self.go_next_or_submit();
@@ -1060,6 +1059,39 @@ mod tests {
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let answer = response.answers.get("q1").expect("answer missing");
+        assert_eq!(answer.answers, Vec::<String>::new());
+    }
+
+    #[test]
+    fn enter_without_selection_does_not_auto_select_non_last_option_question() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "Pick one"),
+                    question_with_options("q2", "Pick two"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(overlay.current_index(), 1);
+        let first_answer = &overlay.answers[0];
+        assert_eq!(first_answer.selected, None);
+        assert_eq!(first_answer.option_state.selected_idx, None);
+        assert!(rx.try_recv().is_err());
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
         let event = rx.try_recv().expect("expected AppEvent");
         let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");

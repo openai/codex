@@ -155,12 +155,12 @@ impl RequestUserInputOverlay {
                     .is_some_and(|answer| answer.selected.is_some())
             {
                 if let Some(label) = self.current_option_label() {
-                    format!("Notes for {label} (optional)")
+                    format!("Notes for {label}")
                 } else {
-                    "Notes (optional)".to_string()
+                    "Notes".to_string()
                 }
             } else {
-                "Notes (optional)".to_string()
+                "Notes".to_string()
             };
             let notes_active = if self.has_options() {
                 self.focus_is_notes()
