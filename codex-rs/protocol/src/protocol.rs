@@ -1419,6 +1419,12 @@ pub struct ResumedHistory {
     pub history: Vec<RolloutItem>,
     pub rollout_path: PathBuf,
     /// Whether to persist the initial context when resuming this rollout.
+    /// When true, the resumed session's initial context (instructions and environment)
+    /// is appended to the rollout file. When false, it is only added to in-memory history.
+    ///
+    /// This helps avoid duplicating unchanged context on resume without overrides, and
+    /// unnecessarily changing the rollout file's mtime which is used as the Thread's updated_at
+    /// timestamp.
     ///
     /// Defaults to true to preserve existing behavior for older serialized data.
     #[serde(default = "resumed_history_default_persist_initial_context")]
