@@ -882,7 +882,7 @@ mod tests {
         let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_globally(false);
+        config.set_windows_sandbox_enabled(false);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {
@@ -905,7 +905,7 @@ mod tests {
         let mut config = build_config(&temp_dir).await?;
         config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_globally(true);
+        config.set_windows_sandbox_enabled(true);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {

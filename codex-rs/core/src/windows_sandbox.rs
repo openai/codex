@@ -23,13 +23,13 @@ impl WindowsSandboxLevelExt for WindowsSandboxLevel {
     }
 
     fn from_features(features: &Features) -> WindowsSandboxLevel {
-        if !features.enabled(Feature::WindowsSandbox) {
-            return WindowsSandboxLevel::Disabled;
-        }
         if features.enabled(Feature::WindowsSandboxElevated) {
-            WindowsSandboxLevel::Elevated
-        } else {
+            return WindowsSandboxLevel::Elevated;
+        }
+        if features.enabled(Feature::WindowsSandbox) {
             WindowsSandboxLevel::RestrictedToken
+        } else {
+            WindowsSandboxLevel::Disabled
         }
     }
 }
@@ -40,6 +40,57 @@ pub fn windows_sandbox_level_from_config(config: &Config) -> WindowsSandboxLevel
 
 pub fn windows_sandbox_level_from_features(features: &Features) -> WindowsSandboxLevel {
     WindowsSandboxLevel::from_features(features)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::features::Features;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn elevated_flag_works_by_itself() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::WindowsSandboxElevated);
+
+        assert_eq!(
+            WindowsSandboxLevel::from_features(&features),
+            WindowsSandboxLevel::Elevated
+        );
+    }
+
+    #[test]
+    fn restricted_token_flag_works_by_itself() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::WindowsSandbox);
+
+        assert_eq!(
+            WindowsSandboxLevel::from_features(&features),
+            WindowsSandboxLevel::RestrictedToken
+        );
+    }
+
+    #[test]
+    fn no_flags_means_no_sandbox() {
+        let features = Features::with_defaults();
+
+        assert_eq!(
+            WindowsSandboxLevel::from_features(&features),
+            WindowsSandboxLevel::Disabled
+        );
+    }
+
+    #[test]
+    fn elevated_wins_when_both_flags_are_enabled() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::WindowsSandbox);
+        features.enable(Feature::WindowsSandboxElevated);
+
+        assert_eq!(
+            WindowsSandboxLevel::from_features(&features),
+            WindowsSandboxLevel::Elevated
+        );
+    }
 }
 
 #[cfg(target_os = "windows")]

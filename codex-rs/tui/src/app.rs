@@ -1670,23 +1670,29 @@ impl App {
                     let feature_key = Feature::WindowsSandbox.key();
                     let elevated_key = Feature::WindowsSandboxElevated.key();
                     let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
-                    match ConfigEditsBuilder::new(&self.config.codex_home)
-                        .with_profile(profile)
-                        .set_feature_enabled(feature_key, true)
-                        .set_feature_enabled(elevated_key, elevated_enabled)
-                        .apply()
-                        .await
-                    {
+                    let mut builder =
+                        ConfigEditsBuilder::new(&self.config.codex_home).with_profile(profile);
+                    if elevated_enabled {
+                        builder = builder.set_feature_enabled(elevated_key, true);
+                    } else {
+                        builder = builder
+                            .set_feature_enabled(feature_key, true)
+                            .set_feature_enabled(elevated_key, false);
+                    }
+                    match builder.apply().await {
                         Ok(()) => {
-                            self.config.set_windows_sandbox_globally(true);
-                            self.config
-                                .set_windows_elevated_sandbox_globally(elevated_enabled);
-                            self.chat_widget
-                                .set_feature_enabled(Feature::WindowsSandbox, true);
-                            self.chat_widget.set_feature_enabled(
-                                Feature::WindowsSandboxElevated,
-                                elevated_enabled,
-                            );
+                            if elevated_enabled {
+                                self.config.set_windows_elevated_sandbox_enabled(true);
+                                self.chat_widget
+                                    .set_feature_enabled(Feature::WindowsSandboxElevated, true);
+                            } else {
+                                self.config.set_windows_sandbox_enabled(true);
+                                self.config.set_windows_elevated_sandbox_enabled(false);
+                                self.chat_widget
+                                    .set_feature_enabled(Feature::WindowsSandbox, true);
+                                self.chat_widget
+                                    .set_feature_enabled(Feature::WindowsSandboxElevated, false);
+                            }
                             self.chat_widget.clear_forced_auto_mode_downgrade();
                             let windows_sandbox_level =
                                 WindowsSandboxLevel::from_config(&self.config);

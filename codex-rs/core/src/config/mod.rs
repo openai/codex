@@ -1671,18 +1671,19 @@ impl Config {
         }
     }
 
-    pub fn set_windows_sandbox_globally(&mut self, value: bool) {
+    pub fn set_windows_sandbox_enabled(&mut self, value: bool) {
         if value {
             self.features.enable(Feature::WindowsSandbox);
+            self.forced_auto_mode_downgraded_on_windows = false;
         } else {
             self.features.disable(Feature::WindowsSandbox);
         }
-        self.forced_auto_mode_downgraded_on_windows = !value;
     }
 
-    pub fn set_windows_elevated_sandbox_globally(&mut self, value: bool) {
+    pub fn set_windows_elevated_sandbox_enabled(&mut self, value: bool) {
         if value {
             self.features.enable(Feature::WindowsSandboxElevated);
+            self.forced_auto_mode_downgraded_on_windows = false;
         } else {
             self.features.disable(Feature::WindowsSandboxElevated);
         }
