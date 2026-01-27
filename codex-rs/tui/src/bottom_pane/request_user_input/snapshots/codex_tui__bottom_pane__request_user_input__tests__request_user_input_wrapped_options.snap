@@ -11,4 +11,4 @@ expression: "render_snapshot(&overlay, area)"
   ( ) Run targeted tests     Pick the most relevant crate and validate the current behavior first.            
   ( ) Review the diff        Summarize the changes and highlight the most important risks and gaps.           
                                                                                                               
-  Option 1 of 3 | ↑/↓ scroll | Tab: add notes | Enter: submit answer | Esc: interrupt
+  Option 1 of 3 | tab to add notes | enter to submit answer | esc to interrupt

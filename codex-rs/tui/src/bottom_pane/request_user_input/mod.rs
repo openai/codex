@@ -393,27 +393,20 @@ impl RequestUserInputOverlay {
             } else {
                 tips.push(FooterTip::new("No option selected"));
             }
-            tips.push(FooterTip::new("\u{2191}/\u{2193} scroll"));
             if self.selected_option_index().is_some() && !notes_visible {
-                tips.push(FooterTip::highlighted("Tab: add notes"));
+                tips.push(FooterTip::highlighted("tab to add notes"));
             }
             if self.selected_option_index().is_some() && notes_visible && self.focus_is_notes() {
-                tips.push(FooterTip::new("Tab: clear notes"));
+                tips.push(FooterTip::new("tab to clear notes"));
             }
         }
 
         let question_count = self.question_count();
-        let is_last_question = question_count > 0 && self.current_index() + 1 >= question_count;
-        let enter_tip = if question_count > 1 && is_last_question {
-            "Enter: submit all answers"
-        } else {
-            "Enter: submit answer"
-        };
-        tips.push(FooterTip::new(enter_tip));
+        tips.push(FooterTip::new("enter to submit answer"));
         if question_count > 1 {
-            tips.push(FooterTip::new("Ctrl+n next"));
+            tips.push(FooterTip::new("ctrl + n next"));
         }
-        tips.push(FooterTip::new("Esc: interrupt"));
+        tips.push(FooterTip::new("esc to interrupt"));
         tips
     }
 
