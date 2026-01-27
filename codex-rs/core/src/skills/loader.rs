@@ -35,7 +35,7 @@ struct SkillFrontmatterMetadata {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct SkillToml {
+struct SkillMetadataFile {
     #[serde(default)]
     interface: Option<Interface>,
 }
@@ -51,6 +51,7 @@ struct Interface {
 }
 
 const SKILLS_FILENAME: &str = "SKILL.md";
+const SKILLS_JSON_FILENAME: &str = "SKILL.json";
 const SKILLS_TOML_FILENAME: &str = "SKILL.toml";
 const SKILLS_DIR_NAME: &str = "skills";
 const MAX_NAME_LEN: usize = 64;
@@ -370,62 +371,94 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
 }
 
 fn load_skill_interface(skill_path: &Path) -> Option<SkillInterface> {
-    // Fail open: optional SKILL.toml metadata should not block loading SKILL.md.
+    // Fail open: optional interface metadata should not block loading SKILL.md.
     let skill_dir = skill_path.parent()?;
-    let interface_path = skill_dir.join(SKILLS_TOML_FILENAME);
-    if !interface_path.exists() {
-        return None;
+    let interface_paths = [
+        (skill_dir.join(SKILLS_JSON_FILENAME), InterfaceFormat::Json),
+        (skill_dir.join(SKILLS_TOML_FILENAME), InterfaceFormat::Toml),
+    ];
+
+    for (interface_path, format) in interface_paths {
+        if !interface_path.exists() {
+            continue;
+        }
+
+        let contents = match fs::read_to_string(&interface_path) {
+            Ok(contents) => contents,
+            Err(error) => {
+                tracing::warn!(
+                    "ignoring {path}: failed to read {label}: {error}",
+                    path = interface_path.display(),
+                    label = format.label()
+                );
+                continue;
+            }
+        };
+        let parsed: SkillMetadataFile = match format.parse(&contents) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                tracing::warn!(
+                    "ignoring {path}: invalid {label}: {error}",
+                    path = interface_path.display(),
+                    label = format.label()
+                );
+                continue;
+            }
+        };
+        let interface = parsed.interface?;
+
+        let interface = SkillInterface {
+            display_name: resolve_str(
+                interface.display_name,
+                MAX_NAME_LEN,
+                "interface.display_name",
+            ),
+            short_description: resolve_str(
+                interface.short_description,
+                MAX_SHORT_DESCRIPTION_LEN,
+                "interface.short_description",
+            ),
+            icon_small: resolve_asset_path(skill_dir, "interface.icon_small", interface.icon_small),
+            icon_large: resolve_asset_path(skill_dir, "interface.icon_large", interface.icon_large),
+            brand_color: resolve_color_str(interface.brand_color, "interface.brand_color"),
+            default_prompt: resolve_str(
+                interface.default_prompt,
+                MAX_DEFAULT_PROMPT_LEN,
+                "interface.default_prompt",
+            ),
+        };
+        let has_fields = interface.display_name.is_some()
+            || interface.short_description.is_some()
+            || interface.icon_small.is_some()
+            || interface.icon_large.is_some()
+            || interface.brand_color.is_some()
+            || interface.default_prompt.is_some();
+        return if has_fields { Some(interface) } else { None };
     }
 
-    let contents = match fs::read_to_string(&interface_path) {
-        Ok(contents) => contents,
-        Err(error) => {
-            tracing::warn!(
-                "ignoring {path}: failed to read SKILL.toml: {error}",
-                path = interface_path.display()
-            );
-            return None;
-        }
-    };
-    let parsed: SkillToml = match toml::from_str(&contents) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            tracing::warn!(
-                "ignoring {path}: invalid TOML: {error}",
-                path = interface_path.display()
-            );
-            return None;
-        }
-    };
-    let interface = parsed.interface?;
+    None
+}
 
-    let interface = SkillInterface {
-        display_name: resolve_str(
-            interface.display_name,
-            MAX_NAME_LEN,
-            "interface.display_name",
-        ),
-        short_description: resolve_str(
-            interface.short_description,
-            MAX_SHORT_DESCRIPTION_LEN,
-            "interface.short_description",
-        ),
-        icon_small: resolve_asset_path(skill_dir, "interface.icon_small", interface.icon_small),
-        icon_large: resolve_asset_path(skill_dir, "interface.icon_large", interface.icon_large),
-        brand_color: resolve_color_str(interface.brand_color, "interface.brand_color"),
-        default_prompt: resolve_str(
-            interface.default_prompt,
-            MAX_DEFAULT_PROMPT_LEN,
-            "interface.default_prompt",
-        ),
-    };
-    let has_fields = interface.display_name.is_some()
-        || interface.short_description.is_some()
-        || interface.icon_small.is_some()
-        || interface.icon_large.is_some()
-        || interface.brand_color.is_some()
-        || interface.default_prompt.is_some();
-    if has_fields { Some(interface) } else { None }
+#[derive(Clone, Copy)]
+enum InterfaceFormat {
+    Json,
+    Toml,
+}
+
+impl InterfaceFormat {
+    fn label(self) -> &'static str {
+        match self {
+            InterfaceFormat::Json => "SKILL.json",
+            InterfaceFormat::Toml => "SKILL.toml",
+        }
+    }
+
+    fn parse(self, contents: &str) -> Result<SkillMetadataFile, String> {
+        match self {
+            InterfaceFormat::Json => serde_json::from_str(contents).map_err(|err| err.to_string()),
+            InterfaceFormat::Toml => toml::from_str(contents).map_err(|err| err.to_string()),
+        }
+    }
 }
 
 fn resolve_asset_path(
@@ -761,6 +794,12 @@ mod tests {
         path
     }
 
+    fn write_skill_interface_json_at(skill_dir: &Path, contents: &str) -> PathBuf {
+        let path = skill_dir.join(SKILLS_JSON_FILENAME);
+        fs::write(&path, contents).unwrap();
+        path
+    }
+
     #[tokio::test]
     async fn loads_skill_interface_metadata_happy_path() {
         let codex_home = tempfile::tempdir().expect("tempdir");
@@ -804,6 +843,57 @@ default_prompt = "  default   prompt   "
                     default_prompt: Some("default prompt".to_string()),
                 }),
                 path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn loads_skill_interface_metadata_from_json() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from json");
+        let skill_dir = skill_path.parent().expect("skill dir");
+        let normalized_skill_dir = normalized(skill_dir);
+
+        write_skill_interface_json_at(
+            skill_dir,
+            r##"
+{
+  "interface": {
+    "display_name": "UI Skill",
+    "short_description": "  short    desc   ",
+    "icon_small": "./assets/small-400px.png",
+    "icon_large": "./assets/large-logo.svg",
+    "brand_color": "#3B82F6",
+    "default_prompt": "  default   prompt   "
+  }
+}
+"##,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "ui-skill".to_string(),
+                description: "from json".to_string(),
+                short_description: None,
+                interface: Some(SkillInterface {
+                    display_name: Some("UI Skill".to_string()),
+                    short_description: Some("short desc".to_string()),
+                    icon_small: Some(normalized_skill_dir.join("assets/small-400px.png")),
+                    icon_large: Some(normalized_skill_dir.join("assets/large-logo.svg")),
+                    brand_color: Some("#3B82F6".to_string()),
+                    default_prompt: Some("default prompt".to_string()),
+                }),
+                path: normalized(skill_path.as_path()),
                 scope: SkillScope::User,
             }]
         );

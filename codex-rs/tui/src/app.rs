@@ -93,11 +93,12 @@ use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
-const THREAD_EVENT_CHANNEL_CAPACITY: usize = 1024;
+const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -201,7 +202,7 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
                 .disabled_reason
                 .as_ref()
                 .map(ToString::to_string)
-                .unwrap_or_else(|| "Config folder disabled.".to_string()),
+                .unwrap_or_else(|| "config.toml is disabled.".to_string()),
         ));
     }
 
@@ -209,7 +210,11 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
         return;
     }
 
-    let mut message = "The following config folders are disabled:\n".to_string();
+    let mut message = concat!(
+        "Project config.toml files are disabled in the following folders. ",
+        "Settings in those files are ignored, but skills and exec policies still load.\n",
+    )
+    .to_string();
     for (index, (folder, reason)) in disabled_folders.iter().enumerate() {
         let display_index = index + 1;
         message.push_str(&format!("    {display_index}. {folder}\n"));
@@ -710,8 +715,23 @@ impl App {
             guard.active
         };
 
-        if should_send && let Err(err) = sender.send(event).await {
-            tracing::warn!("thread {thread_id} event channel closed: {err}");
+        if should_send {
+            // Never await a bounded channel send on the main TUI loop: if the receiver falls behind,
+            // `send().await` can block and the UI stops drawing. If the channel is full, wait in a
+            // spawned task instead.
+            match sender.try_send(event) {
+                Ok(()) => {}
+                Err(TrySendError::Full(event)) => {
+                    tokio::spawn(async move {
+                        if let Err(err) = sender.send(event).await {
+                            tracing::warn!("thread {thread_id} event channel closed: {err}");
+                        }
+                    });
+                }
+                Err(TrySendError::Closed(_)) => {
+                    tracing::warn!("thread {thread_id} event channel closed");
+                }
+            }
         }
         Ok(())
     }
@@ -2396,6 +2416,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use tempfile::tempdir;
+    use tokio::time;
 
     #[test]
     fn normalize_harness_overrides_resolves_relative_add_dirs() -> Result<()> {
@@ -2413,6 +2434,47 @@ mod tests {
             normalized.additional_writable_roots,
             vec![base_cwd.join("rel")]
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn enqueue_thread_event_does_not_block_when_channel_full() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        app.thread_event_channels
+            .insert(thread_id, ThreadEventChannel::new(1));
+        app.set_thread_active(thread_id, true).await;
+
+        let event = Event {
+            id: String::new(),
+            msg: EventMsg::ShutdownComplete,
+        };
+
+        app.enqueue_thread_event(thread_id, event.clone()).await?;
+        time::timeout(
+            Duration::from_millis(50),
+            app.enqueue_thread_event(thread_id, event),
+        )
+        .await
+        .expect("enqueue_thread_event blocked on a full channel")?;
+
+        let mut rx = app
+            .thread_event_channels
+            .get_mut(&thread_id)
+            .expect("missing thread channel")
+            .receiver
+            .take()
+            .expect("missing receiver");
+
+        time::timeout(Duration::from_millis(50), rx.recv())
+            .await
+            .expect("timed out waiting for first event")
+            .expect("channel closed unexpectedly");
+        time::timeout(Duration::from_millis(50), rx.recv())
+            .await
+            .expect("timed out waiting for second event")
+            .expect("channel closed unexpectedly");
+
         Ok(())
     }
 
