@@ -1651,6 +1651,13 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
+      if (cliVariantForBackendKey(session.backendKey) !== "codez") {
+        void vscode.window.showInformationMessage(
+          "アカウントの作成/切り替えは codez 選択時のみ対応です。Settings (⚙) の CLI から codez を選択し、必要ならバックエンドを再起動してください。",
+        );
+        return;
+      }
+
       const list = await bm.listAccounts(session);
       const active = list.activeAccount ?? null;
 

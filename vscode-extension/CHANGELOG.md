@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- 改善: codez 限定機能を codex 選択時に実行しようとした場合、エラーではなく「Settings (⚙) で codez に切り替えると使える」旨を案内表示する
+- 修正: `account/list` / `account/switch`（複数アカウント切替）は codez 限定のため、codex バックエンドでは呼ばず Settings で案内表示する
+
 ## 0.2.1
 
 - 追加: Buy Me a Coffee のリンクを `package.json` / README に追加

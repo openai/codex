@@ -1289,6 +1289,9 @@ function main(): void {
   let settingsRestartMode: "later" | "restartAll" | "forceRestartAll" = "later";
   let settingsActiveAccount: string | null = null;
   let settingsSelectedAccount: string | null = null;
+  let settingsAuthAccount: { type: string; [key: string]: unknown } | null =
+    null;
+  let settingsRequiresOpenaiAuth: boolean | null = null;
   let settingsAccounts: Array<{
     name: string;
     kind?: string;
@@ -1434,43 +1437,73 @@ function main(): void {
       const acctRow = document.createElement("div");
       acctRow.className = "settingsRow";
       const activeText = document.createElement("div");
-      activeText.textContent = settingsActiveAccount
-        ? `Active: ${settingsActiveAccount}`
-        : "Active: (none) (legacy auth)";
+      const detected = state.capabilities?.detectedCliVariant ?? "unknown";
+      const accountsSwitchSupported = detected === "codez";
+      if (accountsSwitchSupported) {
+        activeText.textContent = settingsActiveAccount
+          ? `Active: ${settingsActiveAccount}`
+          : "Active: (none) (legacy auth)";
+      } else if (settingsAuthAccount?.type === "chatgpt") {
+        const email = String(settingsAuthAccount["email"] ?? "");
+        activeText.textContent = email
+          ? `Active: chatgpt (${email})`
+          : "Active: chatgpt";
+      } else if (settingsAuthAccount?.type === "apiKey") {
+        activeText.textContent = "Active: apiKey";
+      } else {
+        activeText.textContent = "Active: (none) (legacy auth)";
+      }
       acctRow.appendChild(activeText);
       sectionAcct.appendChild(acctRow);
 
+      if (settingsRequiresOpenaiAuth) {
+        const msg = document.createElement("div");
+        msg.className = "settingsHelp";
+        msg.textContent = "OpenAI authentication is required. Use Login below.";
+        sectionAcct.appendChild(msg);
+      }
+
+      if (!accountsSwitchSupported) {
+        const msg = document.createElement("div");
+        msg.className = "settingsHelp";
+        msg.textContent =
+          "アカウントの作成/切り替えは codez 選択時のみ対応です。\nSettings (⚙) の CLI から codez を選択し、必要ならバックエンドを再起動してください。";
+        sectionAcct.appendChild(msg);
+      }
+
       const list = document.createElement("div");
       list.className = "settingsList";
-      for (const a of settingsAccounts) {
-        const row = document.createElement("div");
-        row.className =
-          "settingsListItem" +
-          (settingsSelectedAccount === a.name ? " active" : "");
-        row.addEventListener("click", () => {
-          settingsSelectedAccount = a.name;
-          renderSettings();
-        });
+      if (accountsSwitchSupported) {
+        for (const a of settingsAccounts) {
+          const row = document.createElement("div");
+          row.className =
+            "settingsListItem" +
+            (settingsSelectedAccount === a.name ? " active" : "");
+          row.addEventListener("click", () => {
+            settingsSelectedAccount = a.name;
+            renderSettings();
+          });
 
-        const left = document.createElement("div");
-        left.textContent = a.name;
-        row.appendChild(left);
+          const left = document.createElement("div");
+          left.textContent = a.name;
+          row.appendChild(left);
 
-        const meta = document.createElement("div");
-        meta.className = "settingsListMeta";
-        const kind = a.kind ? String(a.kind) : "";
-        const email = a.email ? String(a.email) : "";
-        meta.textContent =
-          kind === "chatgpt"
-            ? email
-              ? `chatgpt (${email})`
-              : "chatgpt"
-            : kind === "apiKey"
-              ? "apiKey"
-              : "";
-        row.appendChild(meta);
+          const meta = document.createElement("div");
+          meta.className = "settingsListMeta";
+          const kind = a.kind ? String(a.kind) : "";
+          const email = a.email ? String(a.email) : "";
+          meta.textContent =
+            kind === "chatgpt"
+              ? email
+                ? `chatgpt (${email})`
+                : "chatgpt"
+              : kind === "apiKey"
+                ? "apiKey"
+                : "";
+          row.appendChild(meta);
 
-        list.appendChild(row);
+          list.appendChild(row);
+        }
       }
       sectionAcct.appendChild(list);
 
@@ -1487,38 +1520,56 @@ function main(): void {
       });
       acctBtnRow2.appendChild(refreshBtn);
 
-      const switchBtn = document.createElement("button");
-      switchBtn.className = "settingsBtn primary";
-      switchBtn.textContent = "Switch";
-      switchBtn.disabled =
-        settingsBusy || !settingsSelectedAccount || settingsSelectedAccount === settingsActiveAccount;
-      switchBtn.addEventListener("click", async () => {
-        if (!settingsSelectedAccount) return;
-        settingsBusy = true;
-        renderSettings();
-        const res = await settingsRequest("accountSwitch", {
-          name: settingsSelectedAccount,
-          createIfMissing: false,
-        });
-        settingsBusy = false;
-        if (res.ok) {
-          const migratedLegacy =
-            res.data &&
-            typeof (res.data as any).migratedLegacy === "boolean" &&
-            Boolean((res.data as any).migratedLegacy);
-          showToast(
-            "success",
-            migratedLegacy
-              ? `Switched to ${settingsSelectedAccount} (migrated legacy auth).`
-              : `Switched to ${settingsSelectedAccount}.`,
-          );
-          await loadSettings();
-        } else {
-          showToast("error", res.error);
+      if (accountsSwitchSupported) {
+        const switchBtn = document.createElement("button");
+        switchBtn.className = "settingsBtn primary";
+        switchBtn.textContent = "Switch";
+        switchBtn.disabled =
+          settingsBusy ||
+          !settingsSelectedAccount ||
+          settingsSelectedAccount === settingsActiveAccount;
+        switchBtn.addEventListener("click", async () => {
+          if (!settingsSelectedAccount) return;
+          settingsBusy = true;
           renderSettings();
-        }
-      });
-      acctBtnRow2.appendChild(switchBtn);
+          const res = await settingsRequest("accountSwitch", {
+            name: settingsSelectedAccount,
+            createIfMissing: false,
+          });
+          settingsBusy = false;
+          if (res.ok) {
+            const unsupported =
+              res.data &&
+              typeof res.data === "object" &&
+              (res.data as any).unsupported === true;
+            if (unsupported) {
+              const msg =
+                typeof (res.data as any).message === "string"
+                  ? String((res.data as any).message)
+                  : "アカウントの作成/切り替えは codez 選択時のみ対応です。";
+              showToast("info", msg, 4000);
+              renderSettings();
+              return;
+            }
+
+            const migratedLegacy =
+              res.data &&
+              typeof (res.data as any).migratedLegacy === "boolean" &&
+              Boolean((res.data as any).migratedLegacy);
+            showToast(
+              "success",
+              migratedLegacy
+                ? `Switched to ${settingsSelectedAccount} (migrated legacy auth).`
+                : `Switched to ${settingsSelectedAccount}.`,
+            );
+            await loadSettings();
+          } else {
+            showToast("error", res.error);
+            renderSettings();
+          }
+        });
+        acctBtnRow2.appendChild(switchBtn);
+      }
 
       const logoutBtn = document.createElement("button");
       logoutBtn.className = "settingsBtn";
@@ -1541,54 +1592,70 @@ function main(): void {
 
       sectionAcct.appendChild(acctBtnRow2);
 
-      const createRow = document.createElement("div");
-      createRow.className = "settingsRow";
-      const createInput = document.createElement("input");
-      createInput.className = "settingsInput";
-      createInput.placeholder = "new-account-name";
-      createInput.addEventListener("input", () => {
-        const v = createInput.value;
-        const err = validateAccountName(v);
-        createInput.title = err ?? "";
-      });
-      const createBtn = document.createElement("button");
-      createBtn.className = "settingsBtn primary";
-      createBtn.textContent = "Create & Switch";
-      createBtn.disabled = settingsBusy;
-      createBtn.addEventListener("click", async () => {
-        const name = createInput.value.trim();
-        const err = validateAccountName(name);
-        if (err) {
-          showToast("error", err);
-          return;
-        }
-        settingsBusy = true;
-        renderSettings();
-        const res = await settingsRequest("accountSwitch", {
-          name,
-          createIfMissing: true,
+      if (accountsSwitchSupported) {
+        const createRow = document.createElement("div");
+        createRow.className = "settingsRow";
+        const createInput = document.createElement("input");
+        createInput.className = "settingsInput";
+        createInput.placeholder = "new-account-name";
+        createInput.addEventListener("input", () => {
+          const v = createInput.value;
+          const err = validateAccountName(v);
+          createInput.title = err ?? "";
         });
-        settingsBusy = false;
-        if (res.ok) {
-          const migratedLegacy =
-            res.data &&
-            typeof (res.data as any).migratedLegacy === "boolean" &&
-            Boolean((res.data as any).migratedLegacy);
-          showToast(
-            "success",
-            migratedLegacy
-              ? `Created and switched to ${name} (migrated legacy auth).`
-              : `Created and switched to ${name}.`,
-          );
-          await loadSettings();
-        } else {
-          showToast("error", res.error);
+        const createBtn = document.createElement("button");
+        createBtn.className = "settingsBtn primary";
+        createBtn.textContent = "Create & Switch";
+        createBtn.disabled = settingsBusy;
+        createBtn.addEventListener("click", async () => {
+          const name = createInput.value.trim();
+          const err = validateAccountName(name);
+          if (err) {
+            showToast("error", err);
+            return;
+          }
+          settingsBusy = true;
           renderSettings();
-        }
-      });
-      createRow.appendChild(createInput);
-      createRow.appendChild(createBtn);
-      sectionAcct.appendChild(createRow);
+          const res = await settingsRequest("accountSwitch", {
+            name,
+            createIfMissing: true,
+          });
+          settingsBusy = false;
+          if (res.ok) {
+            const unsupported =
+              res.data &&
+              typeof res.data === "object" &&
+              (res.data as any).unsupported === true;
+            if (unsupported) {
+              const msg =
+                typeof (res.data as any).message === "string"
+                  ? String((res.data as any).message)
+                  : "アカウントの作成/切り替えは codez 選択時のみ対応です。";
+              showToast("info", msg, 4000);
+              renderSettings();
+              return;
+            }
+
+            const migratedLegacy =
+              res.data &&
+              typeof (res.data as any).migratedLegacy === "boolean" &&
+              Boolean((res.data as any).migratedLegacy);
+            showToast(
+              "success",
+              migratedLegacy
+                ? `Created and switched to ${name} (migrated legacy auth).`
+                : `Created and switched to ${name}.`,
+            );
+            await loadSettings();
+          } else {
+            showToast("error", res.error);
+            renderSettings();
+          }
+        });
+        createRow.appendChild(createInput);
+        createRow.appendChild(createBtn);
+        sectionAcct.appendChild(createRow);
+      }
 
       const help = document.createElement("div");
       help.className = "settingsHelp";
@@ -1714,6 +1781,18 @@ function main(): void {
     const activeAccount =
       typeof accounts?.activeAccount === "string" ? accounts.activeAccount : null;
     const list = Array.isArray(accounts?.accounts) ? accounts.accounts : [];
+
+    const account = data?.account ?? null;
+    const rawAccountObj = account ? (account as any).account : null;
+    const accountObj =
+      rawAccountObj && typeof rawAccountObj === "object" ? rawAccountObj : null;
+    settingsAuthAccount =
+      accountObj && typeof accountObj.type === "string" ? accountObj : null;
+    settingsRequiresOpenaiAuth =
+      account && typeof (account as any).requiresOpenaiAuth === "boolean"
+        ? Boolean((account as any).requiresOpenaiAuth)
+        : null;
+
     settingsActiveAccount = activeAccount;
     settingsAccounts = list
       .filter((x: any) => x && typeof x.name === "string")

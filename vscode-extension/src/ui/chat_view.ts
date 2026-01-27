@@ -720,10 +720,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             });
             return;
           }
-          const [accounts, account] = await Promise.all([
-            this.onAccountList(active),
-            this.onAccountRead(active),
-          ]);
+          const detected = st.capabilities?.detectedCliVariant ?? "unknown";
+          const account = await this.onAccountRead(active);
+          const accounts =
+            detected === "codez" ? await this.onAccountList(active) : null;
           await respondOk({
             hasActiveSession: true,
             capabilities: st.capabilities ?? null,
@@ -739,6 +739,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
 
         if (op === "accountSwitch") {
+          const detected = st.capabilities?.detectedCliVariant ?? "unknown";
+          if (detected !== "codez") {
+            await respondOk({
+              unsupported: true,
+              message:
+                "アカウントの作成/切り替えは codez 選択時のみ対応です。Settings (⚙) の CLI から codez を選択し、必要ならバックエンドを再起動してください。",
+            });
+            return;
+          }
+
           const name = anyMsg["name"];
           const createIfMissing = anyMsg["createIfMissing"];
           if (typeof name !== "string" || !name.trim()) {
