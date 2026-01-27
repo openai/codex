@@ -155,31 +155,14 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
 async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-
-    let preview = "Saved user message";
-    let filename_ts = "2025-01-05T12-00-00";
-    let meta_rfc3339 = "2025-01-05T12:00:00Z";
-    let expected_updated_at_rfc3339 = "2025-01-07T00:00:00Z";
-    let conversation_id = create_fake_rollout_with_text_elements(
-        codex_home.path(),
-        filename_ts,
-        meta_rfc3339,
-        preview,
-        Vec::new(),
-        Some("mock_provider"),
-        None,
-    )?;
-    let rollout_file_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
-    set_rollout_mtime(rollout_file_path.as_path(), expected_updated_at_rfc3339)?;
-    let before_modified = std::fs::metadata(&rollout_file_path)?.modified()?;
+    let rollout = setup_rollout_fixture(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
-            thread_id: conversation_id,
+            thread_id: rollout.conversation_id,
             ..Default::default()
         })
         .await?;
@@ -190,13 +173,10 @@ async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -
     .await??;
     let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
-    let expected_updated_at = chrono::DateTime::parse_from_rfc3339(expected_updated_at_rfc3339)?
-        .with_timezone(&Utc)
-        .timestamp();
-    assert_eq!(thread.updated_at, expected_updated_at);
+    assert_eq!(thread.updated_at, rollout.expected_updated_at);
 
-    let after_modified = std::fs::metadata(&rollout_file_path)?.modified()?;
-    assert_eq!(after_modified, before_modified);
+    let after_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
+    assert_eq!(after_modified, rollout.before_modified);
 
     Ok(())
 }
@@ -205,31 +185,14 @@ async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -
 async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
-
-    let preview = "Saved user message";
-    let filename_ts = "2025-01-05T12-00-00";
-    let meta_rfc3339 = "2025-01-05T12:00:00Z";
-    let expected_updated_at_rfc3339 = "2025-01-07T00:00:00Z";
-    let conversation_id = create_fake_rollout_with_text_elements(
-        codex_home.path(),
-        filename_ts,
-        meta_rfc3339,
-        preview,
-        Vec::new(),
-        Some("mock_provider"),
-        None,
-    )?;
-    let rollout_file_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
-    set_rollout_mtime(rollout_file_path.as_path(), expected_updated_at_rfc3339)?;
-    let before_modified = std::fs::metadata(&rollout_file_path)?.modified()?;
+    let rollout = setup_rollout_fixture(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
-            thread_id: conversation_id.clone(),
+            thread_id: rollout.conversation_id.clone(),
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -241,17 +204,14 @@ async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Re
     .await??;
     let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
 
-    let expected_updated_at = chrono::DateTime::parse_from_rfc3339(expected_updated_at_rfc3339)?
-        .with_timezone(&Utc)
-        .timestamp();
-    assert_eq!(thread.updated_at, expected_updated_at);
+    assert_eq!(thread.updated_at, rollout.expected_updated_at);
 
-    let after_resume_modified = std::fs::metadata(&rollout_file_path)?.modified()?;
-    assert_eq!(after_resume_modified, before_modified);
+    let after_resume_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
+    assert_eq!(after_resume_modified, rollout.before_modified);
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
-            thread_id: conversation_id,
+            thread_id: rollout.conversation_id,
             input: vec![UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
@@ -270,8 +230,8 @@ async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Re
     )
     .await??;
 
-    let after_turn_modified = std::fs::metadata(&rollout_file_path)?.modified()?;
-    assert!(after_turn_modified > before_modified);
+    let after_turn_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
+    assert!(after_turn_modified > rollout.before_modified);
 
     Ok(())
 }
@@ -502,4 +462,42 @@ fn set_rollout_mtime(path: &Path, updated_at_rfc3339: &str) -> Result<()> {
         .open(path)?
         .set_times(times)?;
     Ok(())
+}
+
+struct RolloutFixture {
+    conversation_id: String,
+    rollout_file_path: PathBuf,
+    before_modified: std::time::SystemTime,
+    expected_updated_at: i64,
+}
+
+fn setup_rollout_fixture(codex_home: &Path, server_uri: &str) -> Result<RolloutFixture> {
+    create_config_toml(codex_home, server_uri)?;
+
+    let preview = "Saved user message";
+    let filename_ts = "2025-01-05T12-00-00";
+    let meta_rfc3339 = "2025-01-05T12:00:00Z";
+    let expected_updated_at_rfc3339 = "2025-01-07T00:00:00Z";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home,
+        filename_ts,
+        meta_rfc3339,
+        preview,
+        Vec::new(),
+        Some("mock_provider"),
+        None,
+    )?;
+    let rollout_file_path = rollout_path(codex_home, filename_ts, &conversation_id);
+    set_rollout_mtime(rollout_file_path.as_path(), expected_updated_at_rfc3339)?;
+    let before_modified = std::fs::metadata(&rollout_file_path)?.modified()?;
+    let expected_updated_at = chrono::DateTime::parse_from_rfc3339(expected_updated_at_rfc3339)?
+        .with_timezone(&Utc)
+        .timestamp();
+
+    Ok(RolloutFixture {
+        conversation_id,
+        rollout_file_path,
+        before_modified,
+        expected_updated_at,
+    })
 }

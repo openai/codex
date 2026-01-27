@@ -931,34 +931,23 @@ impl Session {
                 // Build and record initial items (user instructions + environment context)
                 let items = self.build_initial_context(&turn_context).await;
                 self.record_conversation_items(&turn_context, &items).await;
-                {
-                    let mut state = self.state.lock().await;
-                    state.initial_context_seeded = true;
-                    state.persist_initial_context_on_seed = true;
-                }
+                self.mark_initial_context_seeded().await;
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
                 self.flush_rollout().await;
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
-                let is_resumed = true;
-
-                {
-                    let mut state = self.state.lock().await;
-                    state.initial_context_seeded = false;
-                    state.persist_initial_context_on_seed = resumed_history.persist_initial_context;
-                }
+                self.set_initial_context_seed_state(false, resumed_history.persist_initial_context)
+                    .await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
-                if is_resumed
-                    && let Some(prev) = rollout_items.iter().rev().find_map(|it| {
-                        if let RolloutItem::TurnContext(ctx) = it {
-                            Some(ctx.model.as_str())
-                        } else {
-                            None
-                        }
-                    })
-                {
+                if let Some(prev) = rollout_items.iter().rev().find_map(|it| {
+                    if let RolloutItem::TurnContext(ctx) = it {
+                        Some(ctx.model.as_str())
+                    } else {
+                        None
+                    }
+                }) {
                     let curr = turn_context.client.get_model();
                     if prev != curr {
                         warn!(
@@ -1023,11 +1012,7 @@ impl Session {
                 let initial_context = self.build_initial_context(&turn_context).await;
                 self.record_conversation_items(&turn_context, &initial_context)
                     .await;
-                {
-                    let mut state = self.state.lock().await;
-                    state.initial_context_seeded = true;
-                    state.persist_initial_context_on_seed = true;
-                }
+                self.mark_initial_context_seeded().await;
                 // Flush after seeding history and any persisted rollout copy.
                 self.flush_rollout().await;
             }
@@ -1676,6 +1661,16 @@ impl Session {
     pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
         let mut state = self.state.lock().await;
         state.replace_history(items);
+    }
+
+    async fn set_initial_context_seed_state(&self, seeded: bool, persist: bool) {
+        let mut state = self.state.lock().await;
+        state.initial_context_seeded = seeded;
+        state.persist_initial_context_on_seed = persist;
+    }
+
+    async fn mark_initial_context_seeded(&self) {
+        self.set_initial_context_seed_state(true, true).await;
     }
 
     pub(crate) async fn seed_initial_context_if_needed(&self, turn_context: &TurnContext) {
@@ -2364,12 +2359,7 @@ mod handlers {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) {
-        let has_override_updates = updates.cwd.is_some()
-            || updates.approval_policy.is_some()
-            || updates.sandbox_policy.is_some()
-            || updates.collaboration_mode.is_some()
-            || updates.reasoning_summary.is_some()
-            || updates.personality.is_some();
+        let has_override_updates = has_override_updates(&updates);
         let previous_context = sess
             .new_default_turn_with_sub_id(sess.next_internal_sub_id())
             .await;
@@ -2416,6 +2406,15 @@ mod handlers {
             sess.record_conversation_items(&current_context, &update_items)
                 .await;
         }
+    }
+
+    fn has_override_updates(updates: &SessionSettingsUpdate) -> bool {
+        updates.cwd.is_some()
+            || updates.approval_policy.is_some()
+            || updates.sandbox_policy.is_some()
+            || updates.collaboration_mode.is_some()
+            || updates.reasoning_summary.is_some()
+            || updates.personality.is_some()
     }
 
     pub async fn user_input_or_turn(
@@ -4452,8 +4451,7 @@ mod tests {
         );
 
         let mut state = SessionState::new(session_configuration.clone());
-        state.initial_context_seeded = true;
-        state.persist_initial_context_on_seed = true;
+        mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let services = SessionServices {
@@ -4563,8 +4561,7 @@ mod tests {
         );
 
         let mut state = SessionState::new(session_configuration.clone());
-        state.initial_context_seeded = true;
-        state.persist_initial_context_on_seed = true;
+        mark_state_initial_context_seeded(&mut state);
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
         let services = SessionServices {
@@ -4608,6 +4605,11 @@ mod tests {
         });
 
         (session, turn_context, rx_event)
+    }
+
+    fn mark_state_initial_context_seeded(state: &mut SessionState) {
+        state.initial_context_seeded = true;
+        state.persist_initial_context_on_seed = true;
     }
 
     #[tokio::test]
