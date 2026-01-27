@@ -337,9 +337,10 @@ impl RequestUserInputOverlay {
 
     fn save_current_draft(&mut self) {
         let draft = self.capture_composer_draft();
+        let has_options = self.has_options();
         let notes_empty = draft.text.trim().is_empty();
         if let Some(answer) = self.current_answer_mut() {
-            if !self.has_options() && answer.freeform_committed && answer.draft != draft {
+            if !has_options && answer.freeform_committed && answer.draft != draft {
                 answer.freeform_committed = false;
             }
             answer.draft = draft;
