@@ -1,5 +1,6 @@
 pub mod auth;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::path::PathBuf;
 
@@ -227,7 +228,7 @@ async fn filter_prompted_mcp_dependencies(
 
     missing
         .iter()
-        .filter(|(name, _)| !prompted.contains(*name))
+        .filter(|(name, config)| !prompted.contains(&canonical_mcp_server_key(name, config)))
         .map(|(name, config)| (name.clone(), config.clone()))
         .collect()
 }
@@ -293,8 +294,10 @@ async fn should_install_mcp_dependencies(
                 .any(|entry| entry == MCP_DEPENDENCY_OPTION_INSTALL)
         });
 
-    sess.record_mcp_dependency_prompted(missing.keys().cloned())
-        .await;
+    let prompted_keys = missing
+        .iter()
+        .map(|(name, config)| canonical_mcp_server_key(name, config));
+    sess.record_mcp_dependency_prompted(prompted_keys).await;
 
     install
 }
@@ -433,11 +436,55 @@ pub(crate) async fn maybe_install_mcp_dependencies(
     .await;
 }
 
+fn canonical_mcp_key(transport: &str, identifier: &str, fallback: &str) -> String {
+    let identifier = identifier.trim();
+    if identifier.is_empty() {
+        fallback.to_string()
+    } else {
+        format!("mcp__{transport}__{identifier}")
+    }
+}
+
+fn canonical_mcp_server_key(name: &str, config: &McpServerConfig) -> String {
+    match &config.transport {
+        McpServerTransportConfig::Stdio { command, .. } => {
+            canonical_mcp_key("stdio", command, name)
+        }
+        McpServerTransportConfig::StreamableHttp { url, .. } => {
+            canonical_mcp_key("streamable_http", url, name)
+        }
+    }
+}
+
+fn canonical_mcp_dependency_key(dependency: &SkillToolDependency) -> Result<String, String> {
+    let transport = dependency.transport.as_deref().unwrap_or("streamable_http");
+    if transport.eq_ignore_ascii_case("streamable_http") {
+        let url = dependency
+            .url
+            .as_ref()
+            .ok_or_else(|| "missing url for streamable_http dependency".to_string())?;
+        return Ok(canonical_mcp_key("streamable_http", url, &dependency.value));
+    }
+    if transport.eq_ignore_ascii_case("stdio") {
+        let command = dependency
+            .command
+            .as_ref()
+            .ok_or_else(|| "missing command for stdio dependency".to_string())?;
+        return Ok(canonical_mcp_key("stdio", command, &dependency.value));
+    }
+    Err(format!("unsupported transport {transport}"))
+}
+
 pub(crate) fn collect_missing_mcp_dependencies(
     mentioned_skills: &[SkillMetadata],
     installed: &HashMap<String, McpServerConfig>,
 ) -> HashMap<String, McpServerConfig> {
     let mut missing = HashMap::new();
+    let installed_keys: HashSet<String> = installed
+        .iter()
+        .map(|(name, config)| canonical_mcp_server_key(name, config))
+        .collect();
+    let mut seen_canonical_keys = HashSet::new();
 
     for skill in mentioned_skills {
         let Some(dependencies) = skill.dependencies.as_ref() else {
@@ -448,23 +495,37 @@ pub(crate) fn collect_missing_mcp_dependencies(
             if !tool.r#type.eq_ignore_ascii_case("mcp") {
                 continue;
             }
-            if installed.contains_key(&tool.value) || missing.contains_key(&tool.value) {
+            let dependency_key = match canonical_mcp_dependency_key(tool) {
+                Ok(key) => key,
+                Err(err) => {
+                    let dependency = tool.value.as_str();
+                    let skill_name = skill.name.as_str();
+                    warn!(
+                        "unable to auto-install MCP dependency {dependency} for skill {skill_name}: {err}",
+                    );
+                    continue;
+                }
+            };
+            if installed_keys.contains(&dependency_key)
+                || seen_canonical_keys.contains(&dependency_key)
+            {
                 continue;
             }
 
             let config = match mcp_dependency_to_server_config(tool) {
                 Ok(config) => config,
                 Err(err) => {
+                    let dependency = dependency_key.as_str();
+                    let skill_name = skill.name.as_str();
                     warn!(
-                        "unable to auto-install MCP dependency {dependency} for skill {skill}: {err}",
-                        dependency = tool.value.as_str(),
-                        skill = skill.name.as_str()
+                        "unable to auto-install MCP dependency {dependency} for skill {skill_name}: {err}",
                     );
                     continue;
                 }
             };
 
             missing.insert(tool.value.clone(), config);
+            seen_canonical_keys.insert(dependency_key);
         }
     }
 
@@ -581,8 +642,11 @@ pub(crate) async fn collect_mcp_snapshot_from_manager(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::skills::model::SkillDependencies;
+    use codex_protocol::protocol::SkillScope;
     use mcp_types::ToolInputSchema;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
 
     fn make_tool(name: &str) -> McpTool {
         McpTool {
@@ -596,6 +660,18 @@ mod tests {
             name: name.to_string(),
             output_schema: None,
             title: None,
+        }
+    }
+
+    fn skill_with_tools(tools: Vec<SkillToolDependency>) -> SkillMetadata {
+        SkillMetadata {
+            name: "skill".to_string(),
+            description: "skill".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: Some(SkillDependencies { tools }),
+            path: PathBuf::from("skill"),
+            scope: SkillScope::User,
         }
     }
 
@@ -635,5 +711,88 @@ mod tests {
         expected.insert("beta".to_string(), expected_beta);
 
         assert_eq!(group_tools_by_server(&tools), expected);
+    }
+
+    #[test]
+    fn collect_missing_respects_canonical_installed_key() {
+        let url = "https://example.com/mcp".to_string();
+        let skills = vec![skill_with_tools(vec![SkillToolDependency {
+            r#type: "mcp".to_string(),
+            value: "github".to_string(),
+            description: None,
+            transport: Some("streamable_http".to_string()),
+            command: None,
+            url: Some(url.clone()),
+        }])];
+        let installed = HashMap::from([(
+            "alias".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url: url.clone(),
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                enabled: true,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+            },
+        )]);
+
+        assert_eq!(
+            collect_missing_mcp_dependencies(&skills, &installed),
+            HashMap::new()
+        );
+    }
+
+    #[test]
+    fn collect_missing_dedupes_by_canonical_key_but_preserves_original_name() {
+        let url = "https://example.com/one".to_string();
+        let skills = vec![skill_with_tools(vec![
+            SkillToolDependency {
+                r#type: "mcp".to_string(),
+                value: "alias-one".to_string(),
+                description: None,
+                transport: Some("streamable_http".to_string()),
+                command: None,
+                url: Some(url.clone()),
+            },
+            SkillToolDependency {
+                r#type: "mcp".to_string(),
+                value: "alias-two".to_string(),
+                description: None,
+                transport: Some("streamable_http".to_string()),
+                command: None,
+                url: Some(url.clone()),
+            },
+        ])];
+
+        let expected = HashMap::from([(
+            "alias-one".to_string(),
+            McpServerConfig {
+                transport: McpServerTransportConfig::StreamableHttp {
+                    url,
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                },
+                enabled: true,
+                disabled_reason: None,
+                startup_timeout_sec: None,
+                tool_timeout_sec: None,
+                enabled_tools: None,
+                disabled_tools: None,
+                scopes: None,
+            },
+        )]);
+
+        assert_eq!(
+            collect_missing_mcp_dependencies(&skills, &HashMap::new()),
+            expected
+        );
     }
 }
