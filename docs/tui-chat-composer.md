@@ -115,6 +115,17 @@ positional args, Enter auto-submits without calling `prepare_submission_text`. T
 - Prunes attachments based on expanded placeholders.
 - Clears pending pastes after a successful auto-submit.
 
+### Large paste placeholders
+
+Large pastes (over `LARGE_PASTE_CHAR_THRESHOLD`) insert an element placeholder and store the full
+text in `pending_pastes`. Placeholder labels are derived from the pasted character count:
+
+- First paste of a given size uses `[Pasted Content N chars]`.
+- Additional pending pastes of the same size add a numeric suffix (`#2`, `#3`, ...), where the
+  next suffix is computed from placeholders that still exist in `pending_pastes`.
+- When all placeholders for a size are deleted (which removes their pending entries), the next
+  paste of that size reuses the base label without a suffix.
+
 ## Paste burst: concepts and assumptions
 
 The burst detector is intentionally conservative: it only processes “plain” character input
