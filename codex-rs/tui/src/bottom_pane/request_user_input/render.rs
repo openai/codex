@@ -213,9 +213,9 @@ impl RequestUserInputOverlay {
         hint_spans.extend(vec![enter_hint.dim(), " | ".into()]);
         if question_count > 1 {
             hint_spans.extend(vec![
-                key_hint::ctrl(KeyCode::Char('p')).into(),
+                ctrl_hint('p'),
                 " prev | ".into(),
-                key_hint::ctrl(KeyCode::Char('n')).into(),
+                ctrl_hint('n'),
                 " next | ".into(),
             ]);
         }
@@ -277,6 +277,10 @@ fn line_width(line: &Line<'_>) -> usize {
     line.iter()
         .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
         .sum()
+}
+
+fn ctrl_hint(key: char) -> Span<'static> {
+    format!("Ctrl+{key}").dim()
 }
 
 fn truncate_line_word_boundary_with_ellipsis(
