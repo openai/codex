@@ -107,7 +107,7 @@ use super::footer::render_footer;
 use super::footer::render_footer_hint_items;
 use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
-use super::footer::shortcut_summary_layout;
+use super::footer::single_line_footer_layout;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
@@ -2570,21 +2570,28 @@ impl Renderable for ChatComposer {
                     can_show_left_with_context(hint_rect, left_width, context_width);
                 let has_override =
                     self.footer_flash_visible() || self.footer_hint_override.is_some();
-                let summary_layout = if !has_override
-                    && matches!(
-                        footer_props.mode,
-                        FooterMode::ShortcutSummary | FooterMode::ComposerHasDraft
-                    ) {
-                    Some(shortcut_summary_layout(
-                        hint_rect,
-                        context_width,
-                        indicator,
-                        show_cycle_hint,
-                        show_shortcuts_hint,
-                        show_queue_hint,
-                    ))
-                } else {
+                let single_line_layout = if has_override {
                     None
+                } else {
+                    match footer_props.mode {
+                        FooterMode::ShortcutSummary | FooterMode::ComposerHasDraft => {
+                            // Both of these modes render the single-line footer style (with
+                            // either the shortcuts hint or the optional queue hint). We still
+                            // want the single-line collapse rules so the mode label can win over
+                            // the context indicator on narrow widths.
+                            Some(single_line_footer_layout(
+                                hint_rect,
+                                context_width,
+                                indicator,
+                                show_cycle_hint,
+                                show_shortcuts_hint,
+                                show_queue_hint,
+                            ))
+                        }
+                        FooterMode::EscHint
+                        | FooterMode::QuitShortcutReminder
+                        | FooterMode::ShortcutOverlay => None,
+                    }
                 };
                 let show_context = if matches!(
                     footer_props.mode,
@@ -2594,13 +2601,13 @@ impl Renderable for ChatComposer {
                 ) {
                     false
                 } else {
-                    summary_layout
+                    single_line_layout
                         .as_ref()
                         .map(|(_, show_context)| *show_context)
                         .unwrap_or(can_show_left_and_context)
                 };
 
-                if let Some((summary_left, _)) = summary_layout {
+                if let Some((summary_left, _)) = single_line_layout {
                     match summary_left {
                         SummaryLeft::Default => {
                             render_footer(

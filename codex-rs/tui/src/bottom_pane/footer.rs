@@ -236,7 +236,9 @@ pub(crate) enum SummaryLeft {
     None,
 }
 
-pub(crate) fn shortcut_summary_layout(
+/// Compute the single-line footer layout and whether the right-side context
+/// indicator can be shown alongside it.
+pub(crate) fn single_line_footer_layout(
     area: Rect,
     context_width: u16,
     indicator: Option<CollaborationModeIndicator>,
@@ -921,7 +923,7 @@ mod tests {
                     props.mode,
                     FooterMode::ShortcutSummary | FooterMode::ComposerHasDraft
                 ) {
-                    let (summary_left, show_context) = shortcut_summary_layout(
+                    let (summary_left, show_context) = single_line_footer_layout(
                         area,
                         context_width,
                         None,
@@ -1019,7 +1021,7 @@ mod tests {
                     props.mode,
                     FooterMode::ShortcutSummary | FooterMode::ComposerHasDraft
                 ) {
-                    let (summary_left, show_context) = shortcut_summary_layout(
+                    let (summary_left, show_context) = single_line_footer_layout(
                         area,
                         context_width,
                         indicator,
