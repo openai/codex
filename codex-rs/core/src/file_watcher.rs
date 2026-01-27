@@ -106,6 +106,8 @@ impl FileWatcher {
         }
     }
 
+    // Bridge `notify`'s callback-based events into the Tokio runtime and
+    // broadcast coarse-grained change signals to subscribers.
     fn spawn_event_loop(
         &self,
         mut raw_rx: mpsc::UnboundedReceiver<notify::Result<Event>>,
