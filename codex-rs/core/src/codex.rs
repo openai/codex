@@ -18,13 +18,11 @@ use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
-use crate::config::CONFIG_TOML_FILE;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
-use crate::features::FEATURES;
+use crate::features::maybe_push_unstable_features_warning;
 use crate::features::Feature;
 use crate::features::Features;
-use crate::features::Stage;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -191,7 +189,6 @@ use codex_protocol::user_input::UserInput;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
 use tokio::sync::watch;
-use toml::Value as TomlValue;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -242,55 +239,6 @@ fn maybe_push_chat_wire_api_deprecation(
     });
 }
 
-fn maybe_push_unstable_features_warning(
-    config: &Config,
-    post_session_configured_events: &mut Vec<Event>,
-) {
-    if config.suppress_experimental_warning {
-        return;
-    }
-
-    let mut under_development_feature_keys = Vec::new();
-    if let Some(table) = config
-        .config_layer_stack
-        .effective_config()
-        .get("features")
-        .and_then(TomlValue::as_table)
-    {
-        for (key, value) in table {
-            if value.as_bool() != Some(true) {
-                continue;
-            }
-            let Some(spec) = FEATURES.iter().find(|spec| spec.key == key.as_str()) else {
-                continue;
-            };
-            if !config.features.enabled(spec.id) {
-                continue;
-            }
-            if matches!(spec.stage, Stage::UnderDevelopment) {
-                under_development_feature_keys.push(spec.key.to_string());
-            }
-        }
-    }
-
-    if under_development_feature_keys.is_empty() {
-        return;
-    }
-
-    let under_development_feature_keys = under_development_feature_keys.join(", ");
-    let config_path = config
-        .codex_home
-        .join(CONFIG_TOML_FILE)
-        .display()
-        .to_string();
-    let message = format!(
-        "Under-development features enabled: {under_development_feature_keys}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_experimental_warning = true` in {config_path}."
-    );
-    post_session_configured_events.push(Event {
-        id: INITIAL_SUBMIT_ID.to_owned(),
-        msg: EventMsg::Warning(WarningEvent { message }),
-    });
-}
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
