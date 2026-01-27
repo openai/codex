@@ -398,7 +398,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RequestRule,
         key: "request_rule",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
