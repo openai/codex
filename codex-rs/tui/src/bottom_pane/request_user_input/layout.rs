@@ -28,9 +28,11 @@ impl RequestUserInputOverlay {
         let (
             question_height,
             progress_height,
+            spacer_after_question,
+            options_height,
+            spacer_after_options,
             notes_title_height,
             notes_height,
-            options_height,
             footer_lines,
         ) = if has_options {
             self.layout_with_options(
@@ -58,7 +60,9 @@ impl RequestUserInputOverlay {
                 LayoutHeights {
                     progress_height,
                     question_height,
+                    spacer_after_question,
                     options_height,
+                    spacer_after_options,
                     notes_title_height,
                     notes_height,
                 },
@@ -81,7 +85,7 @@ impl RequestUserInputOverlay {
     /// Handles both tight layout (when space is constrained) and normal layout
     /// (when there's sufficient space for all elements).
     ///
-    /// Returns: (question_height, progress_height, notes_title_height, notes_height, options_height, footer_lines)
+    /// Returns: (question_height, progress_height, spacer_after_question, options_height, spacer_after_options, notes_title_height, notes_height, footer_lines)
     fn layout_with_options(
         &self,
         available_height: u16,
@@ -91,7 +95,7 @@ impl RequestUserInputOverlay {
         footer_pref: u16,
         notes_visible: bool,
         question_lines: &mut Vec<String>,
-    ) -> (u16, u16, u16, u16, u16, u16) {
+    ) -> (u16, u16, u16, u16, u16, u16, u16, u16) {
         let options_required_height = self.options_required_height(width);
         let min_options_height = 1u16;
         let required = 1u16
@@ -125,7 +129,7 @@ impl RequestUserInputOverlay {
         question_height: u16,
         min_options_height: u16,
         question_lines: &mut Vec<String>,
-    ) -> (u16, u16, u16, u16, u16, u16) {
+    ) -> (u16, u16, u16, u16, u16, u16, u16, u16) {
         let max_question_height =
             available_height.saturating_sub(1u16.saturating_add(min_options_height));
         let adjusted_question_height = question_height.min(max_question_height);
@@ -133,7 +137,7 @@ impl RequestUserInputOverlay {
         let options_height =
             available_height.saturating_sub(1u16.saturating_add(adjusted_question_height));
 
-        (adjusted_question_height, 0, 0, 0, options_height, 0)
+        (adjusted_question_height, 0, 0, options_height, 0, 0, 0, 0)
     }
 
     /// Normal layout for options case: allocate footer + progress first, and
@@ -146,12 +150,27 @@ impl RequestUserInputOverlay {
         notes_pref_height: u16,
         footer_pref: u16,
         notes_visible: bool,
-    ) -> (u16, u16, u16, u16, u16, u16) {
-        let options_height = options_required_height;
+    ) -> (u16, u16, u16, u16, u16, u16, u16, u16) {
+        let min_options_height = 1u16;
+        let mut options_height = options_required_height;
         let used = 1u16
             .saturating_add(question_height)
             .saturating_add(options_height);
         let mut remaining = available_height.saturating_sub(used);
+
+        // When notes are hidden, prefer to reserve room for progress, footer,
+        // and at least one spacer by shrinking the options window if needed.
+        let desired_spacers = if notes_visible { 0 } else { 1 };
+        let required_extra = footer_pref
+            .saturating_add(1) // progress line
+            .saturating_add(desired_spacers);
+        if remaining < required_extra {
+            let deficit = required_extra.saturating_sub(remaining);
+            let reducible = options_height.saturating_sub(min_options_height);
+            let reduce_by = deficit.min(reducible);
+            options_height = options_height.saturating_sub(reduce_by);
+            remaining = remaining.saturating_add(reduce_by);
+        }
 
         let footer_lines = footer_pref.min(remaining);
         remaining = remaining.saturating_sub(footer_lines);
@@ -163,17 +182,30 @@ impl RequestUserInputOverlay {
         }
 
         if !notes_visible {
+            let mut spacer_after_question = 0;
+            if remaining > 0 {
+                spacer_after_question = 1;
+                remaining = remaining.saturating_sub(1);
+            }
+            let mut spacer_after_options = 0;
+            if remaining > 0 {
+                spacer_after_options = 1;
+            }
             return (
                 question_height,
                 progress_height,
-                0,
-                0,
+                spacer_after_question,
                 options_height,
+                spacer_after_options,
+                0,
+                0,
                 footer_lines,
             );
         }
 
         // Prefer notes next, then labels, with any leftover rows expanding notes.
+        let spacer_after_question = 0;
+        let spacer_after_options = 0;
         let mut notes_height = notes_pref_height.min(remaining);
         remaining = remaining.saturating_sub(notes_height);
 
@@ -188,9 +220,11 @@ impl RequestUserInputOverlay {
         (
             question_height,
             progress_height,
+            spacer_after_question,
+            options_height,
+            spacer_after_options,
             notes_title_height,
             notes_height,
-            options_height,
             footer_lines,
         )
     }
@@ -200,7 +234,7 @@ impl RequestUserInputOverlay {
     /// Handles both tight layout (when space is constrained) and normal layout
     /// (when there's sufficient space for all elements).
     ///
-    /// Returns: (question_height, progress_height, notes_title_height, notes_height, options_height, footer_lines)
+    /// Returns: (question_height, progress_height, spacer_after_question, options_height, spacer_after_options, notes_title_height, notes_height, footer_lines)
     fn layout_without_options(
         &self,
         available_height: u16,
@@ -208,7 +242,7 @@ impl RequestUserInputOverlay {
         notes_pref_height: u16,
         footer_pref: u16,
         question_lines: &mut Vec<String>,
-    ) -> (u16, u16, u16, u16, u16, u16) {
+    ) -> (u16, u16, u16, u16, u16, u16, u16, u16) {
         let required = 1u16.saturating_add(question_height);
         if required > available_height {
             self.layout_without_options_tight(available_height, question_height, question_lines)
@@ -228,12 +262,12 @@ impl RequestUserInputOverlay {
         available_height: u16,
         question_height: u16,
         question_lines: &mut Vec<String>,
-    ) -> (u16, u16, u16, u16, u16, u16) {
+    ) -> (u16, u16, u16, u16, u16, u16, u16, u16) {
         let max_question_height = available_height.saturating_sub(1);
         let adjusted_question_height = question_height.min(max_question_height);
         question_lines.truncate(adjusted_question_height as usize);
 
-        (adjusted_question_height, 0, 0, 0, 0, 0)
+        (adjusted_question_height, 0, 0, 0, 0, 0, 0, 0)
     }
 
     /// Normal layout for no-options case: allocate space for notes, footer, and progress.
@@ -243,7 +277,7 @@ impl RequestUserInputOverlay {
         question_height: u16,
         notes_pref_height: u16,
         footer_pref: u16,
-    ) -> (u16, u16, u16, u16, u16, u16) {
+    ) -> (u16, u16, u16, u16, u16, u16, u16, u16) {
         let required = 1u16.saturating_add(question_height);
         let mut remaining = available_height.saturating_sub(required);
         let mut notes_height = notes_pref_height.min(remaining);
@@ -264,8 +298,10 @@ impl RequestUserInputOverlay {
             question_height,
             progress_height,
             0,
-            notes_height,
             0,
+            0,
+            0,
+            notes_height,
             footer_lines,
         )
     }
@@ -306,6 +342,7 @@ impl RequestUserInputOverlay {
             height: heights.question_height,
         };
         cursor_y = cursor_y.saturating_add(heights.question_height);
+        cursor_y = cursor_y.saturating_add(heights.spacer_after_question);
 
         let options_area = Rect {
             x: area.x,
@@ -314,6 +351,7 @@ impl RequestUserInputOverlay {
             height: heights.options_height,
         };
         cursor_y = cursor_y.saturating_add(heights.options_height);
+        cursor_y = cursor_y.saturating_add(heights.spacer_after_options);
 
         let notes_title_area = Rect {
             x: area.x,
@@ -344,7 +382,9 @@ impl RequestUserInputOverlay {
 struct LayoutHeights {
     progress_height: u16,
     question_height: u16,
+    spacer_after_question: u16,
     options_height: u16,
+    spacer_after_options: u16,
     notes_title_height: u16,
     notes_height: u16,
 }

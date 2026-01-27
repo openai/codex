@@ -1111,6 +1111,33 @@ mod tests {
     }
 
     #[test]
+    fn request_user_input_options_notes_with_text_snapshot() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Area")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+        {
+            let answer = overlay.current_answer_mut().expect("answer missing");
+            answer.option_state.selected_idx = Some(0);
+            answer.selected = Some(0);
+        }
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        overlay
+            .composer
+            .handle_paste("Include notes about follow-up tests.".to_string());
+
+        let area = Rect::new(0, 0, 120, 18);
+        insta::assert_snapshot!(
+            "request_user_input_options_notes_with_text",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
     fn request_user_input_tight_height_snapshot() {
         let (tx, _rx) = test_sender();
         let overlay = RequestUserInputOverlay::new(

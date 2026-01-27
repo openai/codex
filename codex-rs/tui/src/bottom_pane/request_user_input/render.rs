@@ -196,15 +196,15 @@ impl RequestUserInputOverlay {
                 " scroll | ".into(),
             ]);
             if self.selected_option_index().is_some() && !notes_visible {
-                hint_spans.extend(vec!["Tab".dim(), " add notes | ".into()]);
+                hint_spans.extend(vec!["Tab".dim(), ": add notes | ".into()]);
             }
         }
         let question_count = self.question_count();
         let is_last_question = question_count > 0 && self.current_index() + 1 >= question_count;
         let enter_hint = if question_count > 1 && is_last_question {
-            "Enter to submit all answers"
+            "Enter: submit all answers"
         } else {
-            "Enter to submit answer"
+            "Enter: submit answer"
         };
         hint_spans.extend(vec![enter_hint.dim(), " | ".into()]);
         if question_count > 1 {
@@ -219,9 +219,9 @@ impl RequestUserInputOverlay {
             hint_spans.extend(vec!["Notes optional | ".dim()]);
         }
         let esc_hint = if self.has_options() && notes_visible && self.focus_is_notes() {
-            "Esc to change answer"
+            "Esc: change answer"
         } else {
-            "Esc to interrupt"
+            "Esc: interrupt"
         };
         hint_spans.extend(vec![esc_hint.dim()]);
         let hint_line = Line::from(hint_spans).dim();

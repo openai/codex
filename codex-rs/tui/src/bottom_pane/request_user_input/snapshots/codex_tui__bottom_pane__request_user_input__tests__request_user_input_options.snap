@@ -6,7 +6,9 @@ expression: "render_snapshot(&overlay, area)"
   Question 1/1 (1 unanswered)                                                                                           
   Area                                                                                                                  
   Choose an option.                                                                                                     
+                                                                                                                        
   ( ) Option 1  First choice.                                                                                           
   ( ) Option 2  Second choice.                                                                                          
   ( ) Option 3  Third choice.                                                                                           
-  No option selected | ↑/↓ scroll | Enter to submit answer | Esc to interrupt
+                                                                                                                        
+  No option selected | ↑/↓ scroll | Enter: submit answer | Esc: interrupt
