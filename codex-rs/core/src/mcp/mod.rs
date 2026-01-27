@@ -25,7 +25,7 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::config::load_global_mcp_servers;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
-use crate::default_client::DEFAULT_ORIGINATOR;
+use crate::default_client::is_first_party_originator;
 use crate::default_client::originator;
 use crate::features::Feature;
 use crate::mcp::auth::McpOAuthLoginSupport;
@@ -305,7 +305,7 @@ pub(crate) async fn maybe_prompt_and_install_mcp_dependencies(
     mentioned_skills: &[SkillMetadata],
 ) {
     let originator_value = originator().value;
-    if originator_value != DEFAULT_ORIGINATOR && originator_value != "codex_vscode" {
+    if !is_first_party_originator(originator_value.as_str()) {
         // Only support first-party clients for now.
         return;
     }
