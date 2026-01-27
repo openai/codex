@@ -732,6 +732,22 @@ impl BottomPaneView for RequestUserInputOverlay {
                 self.move_question(true);
                 return;
             }
+            KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.has_options() && matches!(self.focus, Focus::Options) => {
+                self.move_question(false);
+                return;
+            }
+            KeyEvent {
+                code: KeyCode::Char('l'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.has_options() && matches!(self.focus, Focus::Options) => {
+                self.move_question(true);
+                return;
+            }
             _ => {}
         }
 
@@ -1147,11 +1163,35 @@ mod tests {
 
         assert_eq!(overlay.current_index(), 0);
         assert_eq!(overlay.notes_ui_visible(), false);
-        overlay.handle_key_event(KeyEvent::from(KeyCode::Char('h')));
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Char('x')));
         assert_eq!(overlay.current_index(), 0);
         assert_eq!(overlay.notes_ui_visible(), false);
         assert!(matches!(overlay.focus, Focus::Options));
         assert_eq!(overlay.composer.current_text_with_pending(), "");
+    }
+
+    #[test]
+    fn h_l_move_between_questions_in_options() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "Pick one"),
+                    question_with_options("q2", "Pick two"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        assert_eq!(overlay.current_index(), 0);
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(overlay.current_index(), 1);
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Char('h')));
+        assert_eq!(overlay.current_index(), 0);
     }
 
     #[test]
