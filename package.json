@@ -10,6 +10,7 @@
     "test": "pnpm --filter @openai/codex run test",
     "lint": "pnpm --filter @openai/codex run lint",
     "lint:fix": "pnpm --filter @openai/codex run lint:fix",
+    "lint:openapi": "npx --yes @redocly/cli@latest lint smallwallets-openapi.json",
     "typecheck": "pnpm --filter @openai/codex run typecheck",
     "export:postman": "node scripts/export-postman.mjs",
     "changelog": "git-cliff --config cliff.toml --output CHANGELOG.ignore.md $LAST_RELEASE_TAG..HEAD",
