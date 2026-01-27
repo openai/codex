@@ -2,5 +2,5 @@
 
 This file has moved. Please see the latest configuration documentation here:
 
-- Full config docs: [docs/config.md](../docs/config.md)
-- MCP servers section: [docs/config.md#connecting-to-mcp-servers](../docs/config.md#connecting-to-mcp-servers)
+- Full config docs: https://developers.openai.com/codex/configuration/config-file
+- MCP servers section: https://developers.openai.com/codex/configuration/config-file#connecting-to-mcp-servers
