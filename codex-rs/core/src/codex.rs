@@ -686,9 +686,10 @@ impl Session {
             ),
         };
         let state_builder = match &initial_history {
-            InitialHistory::Resumed(resumed) => {
-                metadata::builder_from_items(resumed.history.as_slice(), resumed.rollout_path.as_path())
-            }
+            InitialHistory::Resumed(resumed) => metadata::builder_from_items(
+                resumed.history.as_slice(),
+                resumed.rollout_path.as_path(),
+            ),
             InitialHistory::New | InitialHistory::Forked(_) => None,
         };
 
@@ -708,7 +709,7 @@ impl Session {
                     state_db_ctx.clone(),
                     state_builder.clone(),
                 )
-                        .await?;
+                .await?;
                 Ok((Some(rollout_recorder), state_db_ctx))
             }
         };

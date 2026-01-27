@@ -142,7 +142,9 @@ impl RolloutRecorder {
                 archived_only: false,
                 stage,
             },
-        ).await {
+        )
+        .await
+        {
             if page.items.len() != db_ids.len() {
                 state_db::record_discrepancy(stage, "bad_len");
                 return Ok(page);
@@ -152,7 +154,6 @@ impl RolloutRecorder {
                     state_db::record_discrepancy(stage, "bad_id");
                 }
             }
-
         }
         Ok(page)
     }
@@ -197,7 +198,9 @@ impl RolloutRecorder {
                 archived_only: true,
                 stage,
             },
-        ).await {
+        )
+        .await
+        {
             if page.items.len() != db_ids.len() {
                 state_db::record_discrepancy(stage, "bad_len");
                 return Ok(page);
@@ -207,7 +210,6 @@ impl RolloutRecorder {
                     state_db::record_discrepancy(stage, "bad_id");
                 }
             }
-
         }
         Ok(page)
     }

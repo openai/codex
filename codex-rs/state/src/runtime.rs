@@ -52,10 +52,9 @@ impl StateRuntime {
             codex_home,
             default_provider,
         });
-        if !existed
-            && let Some(otel) = otel.as_ref() {
-                otel.counter(METRIC_DB_INIT, 1, &[("status", "created")]);
-            }
+        if !existed && let Some(otel) = otel.as_ref() {
+            otel.counter(METRIC_DB_INIT, 1, &[("status", "created")]);
+        }
         Ok(runtime)
     }
 

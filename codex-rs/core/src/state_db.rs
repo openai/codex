@@ -1,8 +1,8 @@
 use crate::config::Config;
 use crate::features::Feature;
-use crate::rollout::metadata;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::ThreadSortKey;
+use crate::rollout::metadata;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
@@ -12,8 +12,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_state::DB_METRIC_BACKFILL;
-use codex_state::ThreadMetadataBuilder;
 use codex_state::STATE_DB_FILENAME;
+use codex_state::ThreadMetadataBuilder;
 use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
@@ -26,10 +26,7 @@ use uuid::Uuid;
 pub type StateDbHandle = Arc<codex_state::StateRuntime>;
 
 /// Initialize the state runtime when the `sqlite` feature flag is enabled.
-pub async fn init_if_enabled(
-    config: &Config,
-    otel: Option<&OtelManager>,
-) -> Option<StateDbHandle> {
+pub async fn init_if_enabled(config: &Config, otel: Option<&OtelManager>) -> Option<StateDbHandle> {
     if !config.features.enabled(Feature::Sqlite) {
         // We delete the file on best effort basis to maintain retro-compatibility in the future.
         tokio::fs::remove_file(config.codex_home.join(STATE_DB_FILENAME))
@@ -82,10 +79,7 @@ pub async fn init_if_enabled(
 }
 
 /// Open the state runtime when the SQLite file exists, without feature gating.
-pub async fn open_if_present(
-    codex_home: &Path,
-    default_provider: &str,
-) -> Option<StateDbHandle> {
+pub async fn open_if_present(codex_home: &Path, default_provider: &str) -> Option<StateDbHandle> {
     let db_path = codex_home.join(STATE_DB_FILENAME);
     if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
         return None;
@@ -216,8 +210,7 @@ pub async fn find_rollout_path_by_id(
     stage: &str,
 ) -> Option<PathBuf> {
     let ctx = context?;
-    ctx
-        .find_rollout_path_by_id(thread_id, archived_only)
+    ctx.find_rollout_path_by_id(thread_id, archived_only)
         .await
         .unwrap_or_else(|err| {
             warn!("state db find_rollout_path_by_id failed during {stage}: {err}");
@@ -391,18 +384,18 @@ mod tests {
     #[test]
     fn cursor_to_anchor_normalizes_timestamp_format() {
         let uuid = Uuid::new_v4();
-    let ts_str = "2026-01-27T12-34-56";
-    let token = format!("{ts_str}|{uuid}");
-    let cursor = parse_cursor(token.as_str()).expect("cursor should parse");
-    let anchor = cursor_to_anchor(Some(&cursor)).expect("anchor should parse");
+        let ts_str = "2026-01-27T12-34-56";
+        let token = format!("{ts_str}|{uuid}");
+        let cursor = parse_cursor(token.as_str()).expect("cursor should parse");
+        let anchor = cursor_to_anchor(Some(&cursor)).expect("anchor should parse");
 
-    let naive =
-        NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%dT%H-%M-%S").expect("ts should parse");
-    let expected_ts = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc)
-        .with_nanosecond(0)
-        .expect("nanosecond");
+        let naive =
+            NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%dT%H-%M-%S").expect("ts should parse");
+        let expected_ts = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc)
+            .with_nanosecond(0)
+            .expect("nanosecond");
 
-    assert_eq!(anchor.id, uuid);
-    assert_eq!(anchor.ts, expected_ts);
-}
+        assert_eq!(anchor.id, uuid);
+        assert_eq!(anchor.ts, expected_ts);
+    }
 }

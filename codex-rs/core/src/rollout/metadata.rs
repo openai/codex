@@ -70,15 +70,20 @@ pub(crate) async fn extract_metadata_from_rollout(
     default_provider: &str,
     otel: Option<&OtelManager>,
 ) -> anyhow::Result<ExtractionOutcome> {
-    let (items, _thread_id, parse_errors) = RolloutRecorder::load_rollout_items(rollout_path).await?;
+    let (items, _thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(rollout_path).await?;
     if items.is_empty() {
         return Err(anyhow::anyhow!(
             "empty session file: {}",
             rollout_path.display()
         ));
     }
-    let builder = builder_from_items(items.as_slice(), rollout_path)
-        .ok_or_else(|| anyhow::anyhow!("rollout missing metadata builder: {}", rollout_path.display()))?;
+    let builder = builder_from_items(items.as_slice(), rollout_path).ok_or_else(|| {
+        anyhow::anyhow!(
+            "rollout missing metadata builder: {}",
+            rollout_path.display()
+        )
+    })?;
     let mut metadata = builder.build(default_provider);
     for item in &items {
         apply_rollout_item(&mut metadata, item, default_provider);
@@ -86,7 +91,9 @@ pub(crate) async fn extract_metadata_from_rollout(
     if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
         metadata.updated_at = updated_at;
     }
-    if parse_errors > 0 && let Some(otel) = otel {
+    if parse_errors > 0
+        && let Some(otel) = otel
+    {
         otel.counter(
             DB_ERROR_METRIC,
             parse_errors as i64,
@@ -132,7 +139,9 @@ pub(crate) async fn backfill_sessions(
         stats.scanned = stats.scanned.saturating_add(1);
         match extract_metadata_from_rollout(&path, config.model_provider_id.as_str(), otel).await {
             Ok(outcome) => {
-                if outcome.parse_errors > 0 && let Some(otel) = otel {
+                if outcome.parse_errors > 0
+                    && let Some(otel) = otel
+                {
                     otel.counter(
                         DB_ERROR_METRIC,
                         outcome.parse_errors as i64,
@@ -168,8 +177,8 @@ fn builder_from_rollout_filename(rollout_path: &Path) -> Option<ThreadMetadataBu
         return None;
     }
     let (created_ts, uuid) = parse_timestamp_uuid_from_filename(file_name)?;
-    let created_at = DateTime::<Utc>::from_timestamp(created_ts.unix_timestamp(), 0)?
-        .with_nanosecond(0)?;
+    let created_at =
+        DateTime::<Utc>::from_timestamp(created_ts.unix_timestamp(), 0)?.with_nanosecond(0)?;
     let id = ThreadId::from_string(&uuid.to_string()).ok()?;
     Some(ThreadMetadataBuilder::new(
         id,
@@ -237,13 +246,13 @@ mod tests {
     use chrono::NaiveDateTime;
     use chrono::Timelike;
     use chrono::Utc;
+    use codex_protocol::ThreadId;
     use codex_protocol::protocol::CompactedItem;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SessionMeta;
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
-    use codex_protocol::ThreadId;
     use codex_state::ThreadMetadataBuilder;
     use pretty_assertions::assert_eq;
     use std::fs::File;
@@ -283,8 +292,9 @@ mod tests {
         let mut file = File::create(&path).expect("create rollout");
         writeln!(file, "{json}").expect("write rollout");
 
-        let outcome =
-            extract_metadata_from_rollout(&path, "openai", None).await.expect("extract");
+        let outcome = extract_metadata_from_rollout(&path, "openai", None)
+            .await
+            .expect("extract");
 
         let builder =
             builder_from_session_meta(&session_meta_line, path.as_path()).expect("builder");
@@ -309,9 +319,8 @@ mod tests {
         })];
 
         let builder = builder_from_items(items.as_slice(), path.as_path()).expect("builder");
-        let naive =
-            NaiveDateTime::parse_from_str("2026-01-27T12-34-56", "%Y-%m-%dT%H-%M-%S")
-                .expect("timestamp");
+        let naive = NaiveDateTime::parse_from_str("2026-01-27T12-34-56", "%Y-%m-%dT%H-%M-%S")
+            .expect("timestamp");
         let created_at = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc)
             .with_nanosecond(0)
             .expect("nanosecond");
