@@ -1,6 +1,4 @@
-use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::Path;
 use std::path::PathBuf;
 
 use crate::instructions::SkillInstructions;
@@ -66,7 +64,7 @@ fn emit_skill_injected_metric(otel: Option<&OtelManager>, skill: &SkillMetadata,
     );
 }
 
-/// Collect explicitly mentioned skills from structured inputs and `$name` text mentions.
+/// Collect explicitly mentioned skills from `$name` text mentions.
 ///
 /// Text inputs are scanned once to extract `$skill-name` tokens, then we iterate `skills`
 /// in their existing order to preserve prior ordering semantics.
@@ -81,22 +79,8 @@ pub(crate) fn collect_explicit_skill_mentions(
     let mut selected: Vec<SkillMetadata> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
 
-    // Index skills for explicit (name, path) lookups; text mentions are parsed once per input.
-    let mut by_name_and_path: HashMap<(&str, &Path), &SkillMetadata> = HashMap::new();
-    for skill in skills {
-        by_name_and_path.insert((skill.name.as_str(), skill.path.as_path()), skill);
-    }
-
     for input in inputs {
         match input {
-            UserInput::Skill { name, path } => {
-                if seen.insert(name.clone())
-                    && !disabled_paths.contains(path)
-                    && let Some(skill) = by_name_and_path.get(&(name.as_str(), path.as_path()))
-                {
-                    selected.push((*skill).clone());
-                }
-            }
             UserInput::Text { text, .. } => {
                 let mentioned_names = extract_skill_mentions(text);
                 select_skills_from_mentions(
@@ -278,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_explicit_skill_mentions_includes_prompt_references() {
+    fn collect_explicit_skill_mentions_ignores_structured_inputs() {
         let alpha = make_skill("alpha-skill", "/tmp/alpha");
         let beta = make_skill("beta-skill", "/tmp/beta");
         let skills = vec![alpha.clone(), beta.clone()];
@@ -295,6 +279,6 @@ mod tests {
 
         let selected = collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new());
 
-        assert_eq!(selected, vec![alpha, beta]);
+        assert_eq!(selected, vec![alpha]);
     }
 }
