@@ -34,7 +34,6 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use tempfile::TempDir;
 use tokio::runtime::Handle;
-#[cfg(test)]
 use tokio::runtime::RuntimeFlavor;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
@@ -43,7 +42,6 @@ use tracing::warn;
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
 
 fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -> Arc<FileWatcher> {
-    #[cfg(test)]
     if let Ok(handle) = Handle::try_current()
         && handle.runtime_flavor() == RuntimeFlavor::CurrentThread
     {
