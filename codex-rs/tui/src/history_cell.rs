@@ -690,22 +690,18 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
-        ApprovedExecpolicyAmendment {
-            proposed_execpolicy_amendment,
-        } => {
+        ApprovedExecpolicyAmendment { .. } => {
             let snippet = Span::from(exec_snippet(&command)).dim();
-            let prefix = strip_bash_lc_and_escape(proposed_execpolicy_amendment.command());
-            let mut summary = vec![
-                "You ".into(),
-                "approved".bold(),
-                " codex to run ".into(),
-                snippet,
-                " and applied the execpolicy amendment".bold(),
-            ];
-            if !prefix.contains('\n') && !prefix.contains('\r') {
-                summary.extend([" for ".into(), Span::from(format!("`{prefix}`")).dim()]);
-            }
-            ("✔ ".green(), summary)
+            (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "approved".bold(),
+                    " codex to run ".into(),
+                    snippet,
+                    " and applied the execpolicy amendment".bold(),
+                ],
+            )
         }
         ApprovedForSession => {
             let snippet = Span::from(exec_snippet(&command)).dim();
@@ -1940,7 +1936,6 @@ mod tests {
     use codex_core::config::ConfigBuilder;
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
-    use codex_core::protocol::ExecPolicyAmendment;
     use codex_core::protocol::McpAuthStatus;
     use codex_core::protocol::ReviewDecision;
     use codex_protocol::models::WebSearchAction;
@@ -1991,29 +1986,6 @@ mod tests {
             mime_type: "image/png".into(),
             r#type: "image".into(),
         })
-    }
-
-    #[test]
-    fn approval_decision_cell_renders_execpolicy_prefix() {
-        let command = vec![
-            "/bin/zsh".to_string(),
-            "-lc".to_string(),
-            "cargo install cargo-insta".to_string(),
-        ];
-        let decision = ReviewDecision::ApprovedExecpolicyAmendment {
-            proposed_execpolicy_amendment: ExecPolicyAmendment::new(vec![
-                "cargo".to_string(),
-                "install".to_string(),
-            ]),
-        };
-
-        let cell = new_approval_decision_cell(command, decision);
-        let rendered = render_lines(&cell.display_lines(80));
-
-        assert!(
-            rendered.iter().any(|line| line.contains("`cargo install`")),
-            "expected rendered approval decision to include saved prefix, got: {rendered:?}"
-        );
     }
 
     #[test]
