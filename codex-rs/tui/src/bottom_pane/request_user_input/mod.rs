@@ -44,6 +44,8 @@ const SELECT_OPTION_PLACEHOLDER: &str = "Select an option to add notes";
 pub(super) const TIP_SEPARATOR: &str = " | ";
 pub(super) const MAX_VISIBLE_OPTION_ROWS: usize = 4;
 pub(super) const DESIRED_SPACERS_WHEN_NOTES_HIDDEN: u16 = 2;
+const OTHER_OPTION_LABEL: &str = "None of the above";
+const OTHER_OPTION_DESCRIPTION: &str = "Add details in notes (Tab)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
@@ -51,7 +53,7 @@ enum Focus {
     Notes,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, PartialEq)]
 struct ComposerDraft {
     text: String,
     text_elements: Vec<TextElement>,
@@ -176,8 +178,7 @@ impl RequestUserInputOverlay {
 
     fn options_len(&self) -> usize {
         self.current_question()
-            .and_then(|question| question.options.as_ref())
-            .map(std::vec::Vec::len)
+            .map(Self::options_len_for_question)
             .unwrap_or(0)
     }
 
@@ -194,10 +195,15 @@ impl RequestUserInputOverlay {
 
     fn current_option_label(&self) -> Option<&str> {
         let idx = self.selected_option_index()?;
-        self.current_question()
-            .and_then(|question| question.options.as_ref())
-            .and_then(|options| options.get(idx))
-            .map(|option| option.label.as_str())
+        let question = self.current_question()?;
+        let options = question.options.as_ref()?;
+        if idx < options.len() {
+            return options.get(idx).map(|option| option.label.as_str());
+        }
+        if idx == options.len() && Self::other_option_enabled_for_question(question) {
+            return Some(OTHER_OPTION_LABEL);
+        }
+        None
     }
 
     fn notes_has_content(&self, idx: usize) -> bool {
@@ -234,9 +240,9 @@ impl RequestUserInputOverlay {
 
     pub(super) fn option_rows(&self) -> Vec<GenericDisplayRow> {
         self.current_question()
-            .and_then(|question| question.options.as_ref())
-            .map(|options| {
-                options
+            .and_then(|question| question.options.as_ref().map(|options| (question, options)))
+            .map(|(question, options)| {
+                let mut rows = options
                     .iter()
                     .enumerate()
                     .map(|(idx, opt)| {
@@ -245,13 +251,30 @@ impl RequestUserInputOverlay {
                             .and_then(|answer| answer.committed_option_idx)
                             .is_some_and(|sel| sel == idx);
                         let prefix = if selected { "(x)" } else { "( )" };
+                        let label = opt.label.as_str();
                         GenericDisplayRow {
-                            name: format!("{prefix} {}", opt.label),
+                            name: format!("{prefix} {label}"),
                             description: Some(opt.description.clone()),
                             ..Default::default()
                         }
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+
+                if Self::other_option_enabled_for_question(question) {
+                    let idx = options.len();
+                    let selected = self
+                        .current_answer()
+                        .and_then(|answer| answer.committed_option_idx)
+                        .is_some_and(|sel| sel == idx);
+                    let prefix = if selected { "(x)" } else { "( )" };
+                    rows.push(GenericDisplayRow {
+                        name: format!("{prefix} {OTHER_OPTION_LABEL}"),
+                        description: Some(OTHER_OPTION_DESCRIPTION.to_string()),
+                        ..Default::default()
+                    });
+                }
+
+                rows
             })
             .unwrap_or_default()
     }
@@ -316,6 +339,9 @@ impl RequestUserInputOverlay {
         let draft = self.capture_composer_draft();
         let notes_empty = draft.text.trim().is_empty();
         if let Some(answer) = self.current_answer_mut() {
+            if !self.has_options() && answer.freeform_committed && answer.draft != draft {
+                answer.freeform_committed = false;
+            }
             answer.draft = draft;
             if !notes_empty {
                 answer.notes_visible = true;
@@ -486,6 +512,45 @@ impl RequestUserInputOverlay {
             .set_text_content(String::new(), Vec::new(), Vec::new());
     }
 
+    fn options_len_for_question(
+        question: &codex_protocol::request_user_input::RequestUserInputQuestion,
+    ) -> usize {
+        let options_len = question
+            .options
+            .as_ref()
+            .map(std::vec::Vec::len)
+            .unwrap_or(0);
+        if Self::other_option_enabled_for_question(question) {
+            options_len + 1
+        } else {
+            options_len
+        }
+    }
+
+    fn other_option_enabled_for_question(
+        question: &codex_protocol::request_user_input::RequestUserInputQuestion,
+    ) -> bool {
+        question.is_other
+            && question
+                .options
+                .as_ref()
+                .is_some_and(|options| !options.is_empty())
+    }
+
+    fn option_label_for_index(
+        question: &codex_protocol::request_user_input::RequestUserInputQuestion,
+        idx: usize,
+    ) -> Option<String> {
+        let options = question.options.as_ref()?;
+        if idx < options.len() {
+            return options.get(idx).map(|opt| opt.label.clone());
+        }
+        if idx == options.len() && Self::other_option_enabled_for_question(question) {
+            return Some(OTHER_OPTION_LABEL.to_string());
+        }
+        None
+    }
+
     /// Move to the next/previous question, wrapping in either direction.
     fn move_question(&mut self, next: bool) {
         let len = self.question_count();
@@ -573,13 +638,8 @@ impl RequestUserInputOverlay {
             } else {
                 String::new()
             };
-            let selected_label = selected_idx.and_then(|selected_idx| {
-                question
-                    .options
-                    .as_ref()
-                    .and_then(|opts| opts.get(selected_idx))
-                    .map(|opt| opt.label.clone())
-            });
+            let selected_label = selected_idx
+                .and_then(|selected_idx| Self::option_label_for_index(question, selected_idx));
             let mut answer_list = selected_label.into_iter().collect::<Vec<_>>();
             if !notes.is_empty() {
                 answer_list.push(format!("user_note: {notes}"));
@@ -935,6 +995,29 @@ mod tests {
             header: header.to_string(),
             question: "Choose an option.".to_string(),
             is_other: false,
+            options: Some(vec![
+                RequestUserInputQuestionOption {
+                    label: "Option 1".to_string(),
+                    description: "First choice.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Option 2".to_string(),
+                    description: "Second choice.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Option 3".to_string(),
+                    description: "Third choice.".to_string(),
+                },
+            ]),
+        }
+    }
+
+    fn question_with_options_and_other(id: &str, header: &str) -> RequestUserInputQuestion {
+        RequestUserInputQuestion {
+            id: id.to_string(),
+            header: header.to_string(),
+            question: "Choose an option.".to_string(),
+            is_other: true,
             options: Some(vec![
                 RequestUserInputQuestionOption {
                     label: "Option 1".to_string(),
@@ -1581,6 +1664,48 @@ mod tests {
     }
 
     #[test]
+    fn freeform_commit_resets_when_draft_changes() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_without_options("q1", "Notes"),
+                    question_without_options("q2", "More"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay
+            .composer
+            .set_text_content("Committed".to_string(), Vec::new(), Vec::new());
+        overlay.composer.move_cursor_to_end();
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(overlay.answers[0].freeform_committed, true);
+
+        overlay.move_question(false);
+        overlay
+            .composer
+            .set_text_content("Edited".to_string(), Vec::new(), Vec::new());
+        overlay.composer.move_cursor_to_end();
+        overlay.move_question(true);
+        assert_eq!(overlay.answers[0].freeform_committed, false);
+
+        overlay.submit_answers();
+
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let answer = response.answers.get("q1").expect("answer missing");
+        assert_eq!(answer.answers, Vec::<String>::new());
+    }
+
+    #[test]
     fn notes_are_captured_for_selected_option() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
@@ -1646,6 +1771,55 @@ mod tests {
         assert_eq!(overlay.current_index(), 1);
         let answer = overlay.answers.first().expect("answer missing");
         assert_eq!(answer.committed_option_idx, Some(1));
+    }
+
+    #[test]
+    fn is_other_adds_none_of_the_above_and_submits_it() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![question_with_options_and_other("q1", "Pick one")],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        let rows = overlay.option_rows();
+        let other_row = rows.last().expect("expected none-of-the-above row");
+        assert_eq!(other_row.name, "( ) None of the above");
+        assert_eq!(
+            other_row.description.as_deref(),
+            Some(OTHER_OPTION_DESCRIPTION)
+        );
+
+        let other_idx = overlay.options_len().saturating_sub(1);
+        {
+            let answer = overlay.current_answer_mut().expect("answer missing");
+            answer.options_ui_state.selected_idx = Some(other_idx);
+            answer.committed_option_idx = Some(other_idx);
+        }
+        overlay
+            .composer
+            .set_text_content("Custom answer".to_string(), Vec::new(), Vec::new());
+        overlay.composer.move_cursor_to_end();
+
+        overlay.submit_answers();
+
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let answer = response.answers.get("q1").expect("answer missing");
+        assert_eq!(
+            answer.answers,
+            vec![
+                OTHER_OPTION_LABEL.to_string(),
+                "user_note: Custom answer".to_string(),
+            ]
+        );
     }
 
     #[test]
