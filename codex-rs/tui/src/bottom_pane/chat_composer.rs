@@ -2522,7 +2522,7 @@ impl Renderable for ChatComposer {
                 let footer_props = self.footer_props();
                 let show_cycle_hint = !footer_props.is_task_running;
                 let show_shortcuts_hint = match footer_props.mode {
-                    FooterMode::ComposerEmpty => self.is_empty() && !self.is_in_paste_burst(),
+                    FooterMode::ComposerEmpty => !self.is_in_paste_burst(),
                     FooterMode::QuitShortcutReminder
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint
@@ -2556,7 +2556,6 @@ impl Renderable for ChatComposer {
                 } else {
                     popup_rect
                 };
-                let indicator = self.collaboration_mode_indicator;
                 let left_width = if self.footer_flash_visible() {
                     self.footer_flash
                         .as_ref()
@@ -2567,7 +2566,7 @@ impl Renderable for ChatComposer {
                 } else {
                     footer_line_width(
                         footer_props,
-                        indicator,
+                        self.collaboration_mode_indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
                         show_queue_hint,
@@ -2589,7 +2588,7 @@ impl Renderable for ChatComposer {
                             Some(single_line_footer_layout(
                                 hint_rect,
                                 context_width,
-                                indicator,
+                                self.collaboration_mode_indicator,
                                 show_cycle_hint,
                                 show_shortcuts_hint,
                                 show_queue_hint,
@@ -2621,7 +2620,7 @@ impl Renderable for ChatComposer {
                                 hint_rect,
                                 buf,
                                 footer_props,
-                                indicator,
+                                self.collaboration_mode_indicator,
                                 show_cycle_hint,
                                 show_shortcuts_hint,
                                 show_queue_hint,
@@ -2643,7 +2642,7 @@ impl Renderable for ChatComposer {
                         hint_rect,
                         buf,
                         footer_props,
-                        indicator,
+                        self.collaboration_mode_indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
                         show_queue_hint,
