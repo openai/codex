@@ -259,7 +259,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
         )
-    } else if (slug.starts_with("gpt-5.2") || slug.starts_with("boomslang")) {
+    } else if slug.starts_with("gpt-5.2") || slug.starts_with("boomslang") {
         model_info!(
             slug,
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
