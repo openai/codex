@@ -598,7 +598,10 @@ server_notification_definitions! {
     ReasoningSummaryTextDelta => "item/reasoning/summaryTextDelta" (v2::ReasoningSummaryTextDeltaNotification),
     ReasoningSummaryPartAdded => "item/reasoning/summaryPartAdded" (v2::ReasoningSummaryPartAddedNotification),
     ReasoningTextDelta => "item/reasoning/textDelta" (v2::ReasoningTextDeltaNotification),
-    ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
+    CompactionStarted => "thread/compactionStarted" (v2::CompactionStartedNotification),
+    CompactionEnded => "thread/compactionEnded" (v2::CompactionEndedNotification),
+    /// Deprecated: use "thread/compactionEnded".
+    ContextCompacted => "thread/compacted" (v2::CompactionEndedNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
 

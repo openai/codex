@@ -1277,7 +1277,11 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
         .unwrap();
 
     wait_for_event(&resumed.codex, |event| {
-        matches!(event, EventMsg::ContextCompacted(_))
+        matches!(event, EventMsg::CompactionStarted(_))
+    })
+    .await;
+    wait_for_event(&resumed.codex, |event| {
+        matches!(event, EventMsg::CompactionEnded(_))
     })
     .await;
     wait_for_event(&resumed.codex, |event| {

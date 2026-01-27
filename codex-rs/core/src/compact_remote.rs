@@ -5,7 +5,8 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::Result as CodexResult;
 use crate::protocol::CompactedItem;
-use crate::protocol::ContextCompactedEvent;
+use crate::protocol::CompactionEndedEvent;
+use crate::protocol::CompactionStartedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TurnStartedEvent;
@@ -59,6 +60,11 @@ async fn run_remote_compact_task_inner_impl(
         output_schema: None,
     };
 
+    sess.send_event(
+        turn_context,
+        EventMsg::CompactionStarted(CompactionStartedEvent {}),
+    )
+    .await;
     let mut new_history = turn_context
         .client
         .compact_conversation_history(&prompt)
@@ -77,7 +83,7 @@ async fn run_remote_compact_task_inner_impl(
     sess.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
         .await;
 
-    let event = EventMsg::ContextCompacted(ContextCompactedEvent {});
+    let event = EventMsg::CompactionEnded(CompactionEndedEvent {});
     sess.send_event(turn_context, event).await;
 
     Ok(())

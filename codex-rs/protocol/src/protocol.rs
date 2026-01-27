@@ -683,8 +683,12 @@ pub enum EventMsg {
     /// indicates the turn continued but the user should still be notified.
     Warning(WarningEvent),
 
-    /// Conversation history was compacted (either automatically or manually).
-    ContextCompacted(ContextCompactedEvent),
+    /// Conversation history compaction has started.
+    CompactionStarted(CompactionStartedEvent),
+
+    /// Conversation history compaction has completed.
+    #[serde(alias = "context_compacted")]
+    CompactionEnded(CompactionEndedEvent),
 
     /// Conversation history was rolled back by dropping the last N user turns.
     ThreadRolledBack(ThreadRolledBackEvent),
@@ -1078,7 +1082,14 @@ pub struct WarningEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ContextCompactedEvent;
+pub struct CompactionStartedEvent;
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct CompactionEndedEvent;
+
+#[allow(deprecated)]
+#[deprecated(note = "Use CompactionEndedEvent")]
+pub type ContextCompactedEvent = CompactionEndedEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnCompleteEvent {

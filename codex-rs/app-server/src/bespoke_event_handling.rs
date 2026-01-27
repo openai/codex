@@ -23,7 +23,8 @@ use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
-use codex_app_server_protocol::ContextCompactedNotification;
+use codex_app_server_protocol::CompactionEndedNotification;
+use codex_app_server_protocol::CompactionStartedNotification;
 use codex_app_server_protocol::DeprecationNoticeNotification;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::ErrorNotification;
@@ -601,13 +602,22 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::AgentMessageDelta(notification))
                 .await;
         }
-        EventMsg::ContextCompacted(..) => {
-            let notification = ContextCompactedNotification {
+        EventMsg::CompactionStarted(..) => {
+            let notification = CompactionStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
             };
             outgoing
-                .send_server_notification(ServerNotification::ContextCompacted(notification))
+                .send_server_notification(ServerNotification::CompactionStarted(notification))
+                .await;
+        }
+        EventMsg::CompactionEnded(..) => {
+            let notification = CompactionEndedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::CompactionEnded(notification))
                 .await;
         }
         EventMsg::DeprecationNotice(event) => {

@@ -201,8 +201,9 @@ async fn remote_compact_runs_automatically() -> Result<()> {
             final_output_json_schema: None,
         })
         .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::CompactionStarted(_))).await;
     let message = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ContextCompacted(_) => Some(true),
+        EventMsg::CompactionEnded(_) => Some(true),
         _ => None,
     })
     .await;

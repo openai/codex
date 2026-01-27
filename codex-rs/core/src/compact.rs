@@ -10,7 +10,8 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
 use crate::protocol::CompactedItem;
-use crate::protocol::ContextCompactedEvent;
+use crate::protocol::CompactionEndedEvent;
+use crate::protocol::CompactionStartedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnContextItem;
 use crate::protocol::TurnStartedEvent;
@@ -104,6 +105,11 @@ async fn run_compact_task_inner(
         truncation_policy: Some(turn_context.truncation_policy.into()),
     });
     sess.persist_rollout_items(&[rollout_item]).await;
+    sess.send_event(
+        &turn_context,
+        EventMsg::CompactionStarted(CompactionStartedEvent {}),
+    )
+    .await;
 
     loop {
         // Clone is required because of the loop
@@ -193,7 +199,7 @@ async fn run_compact_task_inner(
     });
     sess.persist_rollout_items(&[rollout_item]).await;
 
-    let event = EventMsg::ContextCompacted(ContextCompactedEvent {});
+    let event = EventMsg::CompactionEnded(CompactionEndedEvent {});
     sess.send_event(&turn_context, event).await;
 
     let warning = EventMsg::Warning(WarningEvent {
