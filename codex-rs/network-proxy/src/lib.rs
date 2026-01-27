@@ -9,6 +9,7 @@ mod proxy;
 mod reasons;
 mod responses;
 mod runtime;
+mod socks5;
 mod state;
 mod upstream;
 
