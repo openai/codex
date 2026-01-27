@@ -1,7 +1,8 @@
 //! SQLite-backed state for rollout metadata.
 //!
 //! This crate is intentionally small and focused: it extracts rollout metadata
-//! from JSONL rollouts and mirrors it into a local SQLite database.
+//! from JSONL rollouts and mirrors it into a local SQLite database. Backfill
+//! orchestration and rollout scanning live in `codex-core`.
 
 mod db;
 mod extract;
@@ -10,25 +11,26 @@ mod model;
 mod paths;
 mod runtime;
 
-/// Preferred entrypoint: owns configuration, metrics, and first-run backfill.
+/// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
 
 /// Low-level storage engine: useful for focused tests.
 ///
 /// Most consumers should prefer [`StateRuntime`].
 pub use db::StateDb;
-pub use extract::extract_metadata_from_rollout;
+pub use extract::apply_rollout_item;
 pub use model::Anchor;
 pub use model::BackfillStats;
 pub use model::ExtractionOutcome;
 pub use model::SortKey;
 pub use model::ThreadMetadata;
+pub use model::ThreadMetadataBuilder;
 pub use model::ThreadsPage;
 pub use runtime::STATE_DB_FILENAME;
 
 /// Errors encountered during DB operations. Tags: [stage]
-pub(crate) const DB_ERROR_METRIC: &str = "codex.db.error";
+pub const DB_ERROR_METRIC: &str = "codex.db.error";
 /// Metrics on backfill process during first init of the db. Tags: [status]
-pub(crate) const DB_METRIC_BACKFILL: &str = "codex.db.backfill";
+pub const DB_METRIC_BACKFILL: &str = "codex.db.backfill";
 /// Metrics on errors during comparison between DB and rollout file. Tags: [stage]
-pub(crate) const DB_METRIC_COMPARE_ERROR: &str = "codex.db.compare_error";
+pub const DB_METRIC_COMPARE_ERROR: &str = "codex.db.compare_error";

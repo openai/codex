@@ -10,10 +10,9 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::sync::watch;
 
-use crate::state_db::StateDbContext;
+use crate::state_db::StateDbHandle;
 
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
@@ -67,7 +66,7 @@ impl CodexThread {
         self.rollout_path.clone()
     }
 
-    pub fn state_db(&self) -> Option<Arc<StateDbContext>> {
+    pub fn state_db(&self) -> Option<StateDbHandle> {
         self.codex.state_db()
     }
 

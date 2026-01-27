@@ -1,8 +1,7 @@
-use crate::DB_ERROR_METRIC;
-use crate::DB_METRIC_BACKFILL;
-use crate::DB_METRIC_COMPARE_ERROR;
 use crate::StateDb;
-use crate::extract_metadata_from_rollout;
+use crate::ThreadMetadataBuilder;
+use chrono::DateTime;
+use chrono::Utc;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
@@ -28,8 +27,6 @@ impl StateRuntime {
     /// Initialize the state runtime using the provided Codex home and default provider.
     ///
     /// This opens (and migrates) the SQLite database at `codex_home/state.sqlite`.
-    /// If the database did not previously exist, this also performs a full best-effort
-    /// backfill by scanning `sessions/`.
     pub async fn init(
         codex_home: PathBuf,
         default_provider: String,
@@ -55,42 +52,10 @@ impl StateRuntime {
             codex_home,
             default_provider,
         });
-        if !existed {
-            if let Some(otel) = otel.as_ref() {
+        if !existed
+            && let Some(otel) = otel.as_ref() {
                 otel.counter(METRIC_DB_INIT, 1, &[("status", "created")]);
             }
-            warn!("state db created; performing initial backfill scan of sessions/ (may be slow)");
-            match runtime
-                .db
-                .backfill_sessions(
-                    runtime.codex_home.as_path(),
-                    runtime.default_provider.as_str(),
-                    otel.as_ref(),
-                )
-                .await
-            {
-                Ok(stats) => {
-                    if let Some(otel) = otel.as_ref() {
-                        otel.counter(
-                            DB_METRIC_BACKFILL,
-                            stats.upserted as i64,
-                            &[("status", "upserted")],
-                        );
-                        otel.counter(
-                            DB_METRIC_BACKFILL,
-                            stats.failed as i64,
-                            &[("status", "failed")],
-                        );
-                    }
-                }
-                Err(err) => {
-                    warn!("state db backfill failed: {err}");
-                    if let Some(otel) = otel.as_ref() {
-                        otel.counter(DB_METRIC_BACKFILL, 1, &[("status", "error")]);
-                    }
-                }
-            }
-        }
         Ok(runtime)
     }
 
@@ -157,70 +122,21 @@ impl StateRuntime {
             .await
     }
 
-    /// Extract rollout metadata.
-    pub async fn extract(
-        &self,
-        path: &Path,
-        otel: Option<&OtelManager>,
-    ) -> Option<crate::ThreadMetadata> {
-        // TODO(jif) add a cache if this is too slow.
-        let outcome =
-            match extract_metadata_from_rollout(path, self.default_provider.as_str(), otel).await {
-                Ok(outcome) => outcome,
-                Err(err) => {
-                    warn!(
-                        "failed to extract rollout metadata {}: {err}",
-                        path.display()
-                    );
-                    if let Some(otel) = otel {
-                        otel.counter(DB_METRIC_COMPARE_ERROR, 1, &[("stage", "extract")]);
-                    }
-                    return None;
-                }
-            };
-
-        if outcome.parse_errors > 0
-            && let Some(otel) = otel
-        {
-            otel.counter(
-                DB_METRIC_COMPARE_ERROR,
-                outcome.parse_errors as i64,
-                &[("stage", "extract_per_line")],
-            );
-        }
-        Some(outcome.metadata)
-    }
-
-    /// Ingest a rollout file by extracting metadata and upserting it into the database.
-    pub async fn ingest_rollout_file(&self, path: &Path, otel: Option<&OtelManager>) {
-        let Some(metadata) = self.extract(path, otel).await else {
-            return;
-        };
-        if let Err(err) = self.db.upsert_thread(&metadata).await {
-            warn!("failed to reconcile rollout {}: {err}", path.display());
-            if let Some(otel) = otel {
-                otel.counter(DB_ERROR_METRIC, 1, &[("stage", "ingest_rollout_file")]);
-            }
-        }
+    /// Insert or replace thread metadata directly.
+    pub async fn upsert_thread(&self, metadata: &crate::ThreadMetadata) -> anyhow::Result<()> {
+        self.db.upsert_thread(metadata).await
     }
 
     /// Apply rollout items incrementally using the underlying database.
     pub async fn apply_rollout_items(
         &self,
-        path: &Path,
+        builder: &ThreadMetadataBuilder,
         items: &[RolloutItem],
         otel: Option<&OtelManager>,
-    ) {
-        if let Err(err) = self
-            .db
-            .apply_rollout_items(path, self.default_provider.as_str(), items, otel)
+    ) -> anyhow::Result<()> {
+        self.db
+            .apply_rollout_items(builder, self.default_provider.as_str(), items, otel)
             .await
-        {
-            warn!(
-                "failed to apply rollout items to db {}: {err}",
-                path.display()
-            );
-        }
     }
 
     /// Mark a thread as archived using the underlying database.
@@ -228,7 +144,7 @@ impl StateRuntime {
         &self,
         thread_id: ThreadId,
         rollout_path: &Path,
-        archived_at: &str,
+        archived_at: DateTime<Utc>,
     ) -> anyhow::Result<()> {
         self.db
             .mark_archived(thread_id, rollout_path, archived_at)

@@ -1,17 +1,16 @@
 use crate::DB_ERROR_METRIC;
 use crate::extract::apply_rollout_item;
-use crate::extract::extract_metadata_from_rollout;
 use crate::extract::rollout_has_user_event;
 use crate::migrations::MIGRATOR;
 use crate::model::Anchor;
-use crate::model::BackfillStats;
 use crate::model::SortKey;
 use crate::model::ThreadMetadata;
+use crate::model::ThreadMetadataBuilder;
 use crate::model::ThreadsPage;
-use crate::paths::SESSIONS_SUBDIR;
-use crate::paths::collect_rollout_paths;
-use crate::paths::file_modified_time_rfc3339;
+use crate::paths::file_modified_time_utc;
 use anyhow::Result;
+use chrono::DateTime;
+use chrono::Utc;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
@@ -25,7 +24,6 @@ use sqlx::sqlite::SqliteSynchronous;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
-use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -92,7 +90,7 @@ WHERE id = ?
         .bind(id.to_string())
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(ThreadMetadata::try_from).transpose()?)
+        row.map(ThreadMetadata::try_from).transpose()
     }
 
     /// Resolve a rollout path by id, optionally constrained by archive state.
@@ -161,8 +159,8 @@ ON CONFLICT(id) DO UPDATE SET
         )
         .bind(metadata.id.to_string())
         .bind(metadata.rollout_path.display().to_string())
-        .bind(metadata.created_at.as_str())
-        .bind(metadata.updated_at.as_str())
+        .bind(datetime_to_epoch_seconds(metadata.created_at))
+        .bind(datetime_to_epoch_seconds(metadata.updated_at))
         .bind(metadata.source.as_str())
         .bind(metadata.model_provider.as_str())
         .bind(metadata.cwd.display().to_string())
@@ -171,7 +169,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.approval_mode.as_str())
         .bind(metadata.tokens_used)
         .bind(metadata.archived_at.is_some())
-        .bind(metadata.archived_at.as_deref())
+        .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
@@ -292,6 +290,7 @@ ON CONFLICT(id) DO UPDATE SET
             separated.push_unseparated(")");
         }
         if let Some(anchor) = anchor {
+            let anchor_ts = datetime_to_epoch_seconds(anchor.ts);
             let column = match sort_key {
                 SortKey::CreatedAt => "created_at",
                 SortKey::UpdatedAt => "updated_at",
@@ -299,11 +298,11 @@ ON CONFLICT(id) DO UPDATE SET
             builder.push(" AND (");
             builder.push(column);
             builder.push(" < ");
-            builder.push_bind(anchor.ts.as_str());
+            builder.push_bind(anchor_ts);
             builder.push(" OR (");
             builder.push(column);
             builder.push(" = ");
-            builder.push_bind(anchor.ts.as_str());
+            builder.push_bind(anchor_ts);
             builder.push(" AND id < ");
             builder.push_bind(anchor.id.to_string());
             builder.push("))");
@@ -332,14 +331,14 @@ ON CONFLICT(id) DO UPDATE SET
         &self,
         thread_id: ThreadId,
         rollout_path: &Path,
-        archived_at: &str,
+        archived_at: DateTime<Utc>,
     ) -> Result<()> {
         let Some(mut metadata) = self.get_thread(thread_id).await? else {
             return Ok(());
         };
-        metadata.archived_at = Some(archived_at.to_string());
+        metadata.archived_at = Some(archived_at);
         metadata.rollout_path = rollout_path.to_path_buf();
-        if let Some(updated_at) = file_modified_time_rfc3339(rollout_path).await {
+        if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
             metadata.updated_at = updated_at;
         }
         if metadata.id != thread_id {
@@ -358,7 +357,7 @@ ON CONFLICT(id) DO UPDATE SET
         };
         metadata.archived_at = None;
         metadata.rollout_path = rollout_path.to_path_buf();
-        if let Some(updated_at) = file_modified_time_rfc3339(rollout_path).await {
+        if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
             metadata.updated_at = updated_at;
         }
         if metadata.id != thread_id {
@@ -373,7 +372,7 @@ ON CONFLICT(id) DO UPDATE SET
     /// Apply incremental rollout items to the stored metadata.
     pub async fn apply_rollout_items(
         &self,
-        rollout_path: &Path,
+        builder: &ThreadMetadataBuilder,
         default_provider: &str,
         items: &[RolloutItem],
         otel: Option<&OtelManager>,
@@ -381,15 +380,15 @@ ON CONFLICT(id) DO UPDATE SET
         if items.is_empty() {
             return Ok(());
         }
-        let path_metadata = ThreadMetadata::from_path_defaults(rollout_path, default_provider)?;
         let mut metadata = self
-            .get_thread(path_metadata.id)
+            .get_thread(builder.id)
             .await?
-            .unwrap_or(path_metadata);
+            .unwrap_or_else(|| builder.build(default_provider));
+        metadata.rollout_path = builder.rollout_path.clone();
         for item in items {
             apply_rollout_item(&mut metadata, item, default_provider);
         }
-        if let Some(updated_at) = file_modified_time_rfc3339(rollout_path).await {
+        if let Some(updated_at) = file_modified_time_utc(builder.rollout_path.as_path()).await {
             metadata.updated_at = updated_at;
         }
         if let Err(err) = self.upsert_thread(&metadata).await {
@@ -399,72 +398,6 @@ ON CONFLICT(id) DO UPDATE SET
             return Err(err);
         }
         Ok(())
-    }
-
-    /// Backfill metadata by scanning all rollout files under `sessions/`.
-    pub async fn backfill_sessions(
-        &self,
-        codex_home: &Path,
-        default_provider: &str,
-        otel: Option<&OtelManager>,
-    ) -> Result<BackfillStats> {
-        let sessions_root = codex_home.join(SESSIONS_SUBDIR);
-        if !tokio::fs::try_exists(&sessions_root).await.unwrap_or(false) {
-            return Ok(BackfillStats {
-                scanned: 0,
-                upserted: 0,
-                failed: 0,
-            });
-        }
-        let paths = collect_rollout_paths(&sessions_root).await?;
-        let mut stats = BackfillStats {
-            scanned: 0,
-            upserted: 0,
-            failed: 0,
-        };
-        for path in paths {
-            stats.scanned = stats.scanned.saturating_add(1);
-            match extract_metadata_from_rollout(&path, default_provider, otel).await {
-                Ok(outcome) => {
-                    if outcome.parse_errors > 0
-                        && let Some(otel) = otel
-                    {
-                        otel.counter(
-                            DB_ERROR_METRIC,
-                            outcome.parse_errors as i64,
-                            &[("stage", "backfill_sessions")],
-                        );
-                    }
-                    if let Err(err) = self.upsert_thread(&outcome.metadata).await {
-                        stats.failed = stats.failed.saturating_add(1);
-                        warn!("failed to upsert rollout {}: {err}", path.display());
-                    } else {
-                        stats.upserted = stats.upserted.saturating_add(1);
-                    }
-                }
-                Err(err) => {
-                    stats.failed = stats.failed.saturating_add(1);
-                    warn!("failed to extract rollout {}: {err}", path.display());
-                }
-            }
-        }
-        info!(
-            "state db backfill scanned={}, upserted={}, failed={}",
-            stats.scanned, stats.upserted, stats.failed
-        );
-        if let Some(otel) = otel {
-            otel.histogram(
-                "codex.db.backfill_sessions",
-                stats.upserted as i64,
-                &[("status", "success")],
-            );
-            otel.histogram(
-                "codex.db.backfill_sessions",
-                stats.failed as i64,
-                &[("status", "failed")],
-            );
-        }
-        Ok(stats)
     }
 }
 
@@ -524,6 +457,7 @@ WHERE 1 = 1
             separated.push_unseparated(")");
         }
         if let Some(anchor) = anchor {
+            let anchor_ts = datetime_to_epoch_seconds(anchor.ts);
             let column = match sort_key {
                 SortKey::CreatedAt => "created_at",
                 SortKey::UpdatedAt => "updated_at",
@@ -531,11 +465,11 @@ WHERE 1 = 1
             builder.push(" AND (");
             builder.push(column);
             builder.push(" < ");
-            builder.push_bind(anchor.ts.as_str());
+            builder.push_bind(anchor_ts);
             builder.push(" OR (");
             builder.push(column);
             builder.push(" = ");
-            builder.push_bind(anchor.ts.as_str());
+            builder.push_bind(anchor_ts);
             builder.push(" AND id < ");
             builder.push_bind(anchor.id.to_string());
             builder.push("))");
@@ -565,8 +499,8 @@ WHERE 1 = 1
 struct ThreadRow {
     id: String,
     rollout_path: String,
-    created_at: String,
-    updated_at: String,
+    created_at: i64,
+    updated_at: i64,
     source: String,
     model_provider: String,
     cwd: String,
@@ -574,14 +508,14 @@ struct ThreadRow {
     sandbox_policy: String,
     approval_mode: String,
     tokens_used: i64,
-    archived_at: Option<String>,
+    archived_at: Option<i64>,
     git_sha: Option<String>,
     git_branch: Option<String>,
     git_origin_url: Option<String>,
 }
 
 impl TryFrom<ThreadRow> for ThreadMetadata {
-    type Error = uuid::Error;
+    type Error = anyhow::Error;
 
     fn try_from(row: ThreadRow) -> std::result::Result<Self, Self::Error> {
         let ThreadRow {
@@ -604,8 +538,8 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
         Ok(Self {
             id: ThreadId::try_from(id)?,
             rollout_path: PathBuf::from(rollout_path),
-            created_at,
-            updated_at,
+            created_at: epoch_seconds_to_datetime(created_at)?,
+            updated_at: epoch_seconds_to_datetime(updated_at)?,
             source,
             model_provider,
             cwd: PathBuf::from(cwd),
@@ -613,7 +547,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             sandbox_policy,
             approval_mode,
             tokens_used,
-            archived_at,
+            archived_at: archived_at.map(epoch_seconds_to_datetime).transpose()?,
             git_sha,
             git_branch,
             git_origin_url,
@@ -624,8 +558,17 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
 fn anchor_from_item(item: &ThreadMetadata, sort_key: SortKey) -> Option<Anchor> {
     let id = Uuid::parse_str(&item.id.to_string()).ok()?;
     let ts = match sort_key {
-        SortKey::CreatedAt => item.created_at.clone(),
-        SortKey::UpdatedAt => item.updated_at.clone(),
+        SortKey::CreatedAt => item.created_at,
+        SortKey::UpdatedAt => item.updated_at,
     };
     Some(Anchor { ts, id })
+}
+
+fn datetime_to_epoch_seconds(dt: DateTime<Utc>) -> i64 {
+    dt.timestamp()
+}
+
+fn epoch_seconds_to_datetime(secs: i64) -> Result<DateTime<Utc>> {
+    DateTime::<Utc>::from_timestamp(secs, 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp: {secs}"))
 }

@@ -1,46 +1,35 @@
 use crate::config::Config;
 use crate::features::Feature;
+use crate::rollout::metadata;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::ThreadSortKey;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
-use chrono::SecondsFormat;
+use chrono::Timelike;
 use chrono::Utc;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_state::DB_METRIC_BACKFILL;
+use codex_state::ThreadMetadataBuilder;
 use codex_state::STATE_DB_FILENAME;
 use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
 
-type StateRuntimeHandle = Arc<codex_state::StateRuntime>;
-
 /// Core-facing handle to the optional SQLite-backed state runtime.
-#[derive(Clone)]
-pub struct StateDbContext {
-    runtime: StateRuntimeHandle,
-}
-
-impl StateDbContext {
-    pub fn new(runtime: StateRuntimeHandle) -> Self {
-        Self { runtime }
-    }
-
-    pub fn codex_home(&self) -> &Path {
-        self.runtime.codex_home()
-    }
-}
+pub type StateDbHandle = Arc<codex_state::StateRuntime>;
 
 /// Initialize the state runtime when the `sqlite` feature flag is enabled.
 pub async fn init_if_enabled(
     config: &Config,
     otel: Option<&OtelManager>,
-) -> Option<Arc<StateDbContext>> {
+) -> Option<StateDbHandle> {
     if !config.features.enabled(Feature::Sqlite) {
         // We delete the file on best effort basis to maintain retro-compatibility in the future.
         tokio::fs::remove_file(config.codex_home.join(STATE_DB_FILENAME))
@@ -49,6 +38,8 @@ pub async fn init_if_enabled(
         return None;
     }
 
+    let state_path = config.codex_home.join(STATE_DB_FILENAME);
+    let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
     let runtime = match codex_state::StateRuntime::init(
         config.codex_home.clone(),
         config.model_provider_id.clone(),
@@ -68,14 +59,33 @@ pub async fn init_if_enabled(
             return None;
         }
     };
-    Some(Arc::new(StateDbContext::new(runtime)))
+    if !existed {
+        let stats = metadata::backfill_sessions(runtime.as_ref(), config, otel).await;
+        info!(
+            "state db backfill scanned={}, upserted={}, failed={}",
+            stats.scanned, stats.upserted, stats.failed
+        );
+        if let Some(otel) = otel {
+            otel.counter(
+                DB_METRIC_BACKFILL,
+                stats.upserted as i64,
+                &[("status", "upserted")],
+            );
+            otel.counter(
+                DB_METRIC_BACKFILL,
+                stats.failed as i64,
+                &[("status", "failed")],
+            );
+        }
+    }
+    Some(runtime)
 }
 
 /// Open the state runtime when the SQLite file exists, without feature gating.
 pub async fn open_if_present(
     codex_home: &Path,
     default_provider: &str,
-) -> Option<Arc<StateDbContext>> {
+) -> Option<StateDbHandle> {
     let db_path = codex_home.join(STATE_DB_FILENAME);
     if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
         return None;
@@ -87,7 +97,16 @@ pub async fn open_if_present(
     )
     .await
     .ok()?;
-    Some(Arc::new(StateDbContext::new(runtime)))
+    Some(runtime)
+}
+
+/// Extract rollout metadata by scanning the rollout file in core.
+pub async fn extract_metadata_from_rollout(
+    rollout_path: &Path,
+    default_provider: &str,
+    otel: Option<&OtelManager>,
+) -> anyhow::Result<codex_state::ExtractionOutcome> {
+    metadata::extract_metadata_from_rollout(rollout_path, default_provider, otel).await
 }
 
 fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
@@ -101,13 +120,12 @@ fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
     let id = Uuid::parse_str(id_str).ok()?;
     let ts = if let Ok(naive) = NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%dT%H-%M-%S") {
         DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc)
-            .to_rfc3339_opts(SecondsFormat::Secs, true)
     } else if let Ok(dt) = DateTime::parse_from_rfc3339(ts_str) {
         dt.with_timezone(&Utc)
-            .to_rfc3339_opts(SecondsFormat::Secs, true)
     } else {
         return None;
-    };
+    }
+    .with_nanosecond(0)?;
     Some(codex_state::Anchor { ts, id })
 }
 
@@ -146,7 +164,7 @@ pub struct ListThreadsDbQuery<'a> {
 
 /// List thread ids from SQLite for parity checks without rollout scanning.
 pub async fn list_thread_ids_db(
-    context: Option<&StateDbContext>,
+    context: Option<&codex_state::StateRuntime>,
     codex_home: &Path,
     query: ListThreadsDbQuery<'_>,
 ) -> Option<Vec<ThreadId>> {
@@ -172,7 +190,6 @@ pub async fn list_thread_ids_db(
     let allowed_sources = sources_to_strings(allowed_sources);
     let model_providers = model_providers_to_vec(model_providers);
     match ctx
-        .runtime
         .list_thread_ids(
             page_size,
             anchor.as_ref(),
@@ -193,13 +210,13 @@ pub async fn list_thread_ids_db(
 
 /// Look up the rollout path for a thread id using SQLite.
 pub async fn find_rollout_path_by_id(
-    context: Option<&StateDbContext>,
+    context: Option<&codex_state::StateRuntime>,
     thread_id: ThreadId,
     archived_only: Option<bool>,
     stage: &str,
 ) -> Option<PathBuf> {
     let ctx = context?;
-    ctx.runtime
+    ctx
         .find_rollout_path_by_id(thread_id, archived_only)
         .await
         .unwrap_or_else(|err| {
@@ -208,39 +225,94 @@ pub async fn find_rollout_path_by_id(
         })
 }
 
-/// Reconcile a rollout file into SQLite by extracting and upserting metadata.
-pub async fn reconcile_rollout(context: Option<&StateDbContext>, path: &Path) {
-    let Some(ctx) = context else {
-        return;
-    };
-    ctx.runtime.ingest_rollout_file(path, None).await;
-}
-
-/// Apply rollout items incrementally to SQLite.
-pub async fn apply_rollout_items(
-    context: Option<&StateDbContext>,
-    path: &Path,
+/// Reconcile rollout items into SQLite, falling back to scanning the rollout file.
+pub async fn reconcile_rollout(
+    context: Option<&codex_state::StateRuntime>,
+    rollout_path: &Path,
+    default_provider: &str,
+    builder: Option<&ThreadMetadataBuilder>,
     items: &[RolloutItem],
 ) {
     let Some(ctx) = context else {
         return;
     };
-    ctx.runtime.apply_rollout_items(path, items, None).await;
+    if builder.is_some() || !items.is_empty() {
+        apply_rollout_items(
+            Some(ctx),
+            rollout_path,
+            default_provider,
+            builder,
+            items,
+            "reconcile_rollout",
+        )
+        .await;
+        return;
+    }
+    let outcome =
+        match metadata::extract_metadata_from_rollout(rollout_path, default_provider, None).await {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                warn!(
+                    "state db reconcile_rollout extraction failed {}: {err}",
+                    rollout_path.display()
+                );
+                return;
+            }
+        };
+    if let Err(err) = ctx.upsert_thread(&outcome.metadata).await {
+        warn!(
+            "state db reconcile_rollout upsert failed {}: {err}",
+            rollout_path.display()
+        );
+    }
+}
+
+/// Apply rollout items incrementally to SQLite.
+pub async fn apply_rollout_items(
+    context: Option<&codex_state::StateRuntime>,
+    rollout_path: &Path,
+    _default_provider: &str,
+    builder: Option<&ThreadMetadataBuilder>,
+    items: &[RolloutItem],
+    stage: &str,
+) {
+    let Some(ctx) = context else {
+        return;
+    };
+    let mut builder = match builder {
+        Some(builder) => builder.clone(),
+        None => match metadata::builder_from_items(items, rollout_path) {
+            Some(builder) => builder,
+            None => {
+                warn!(
+                    "state db apply_rollout_items missing builder during {stage}: {}",
+                    rollout_path.display()
+                );
+                record_discrepancy(stage, "missing_builder");
+                return;
+            }
+        },
+    };
+    builder.rollout_path = rollout_path.to_path_buf();
+    if let Err(err) = ctx.apply_rollout_items(&builder, items, None).await {
+        warn!(
+            "state db apply_rollout_items failed during {stage} for {}: {err}",
+            rollout_path.display()
+        );
+    }
 }
 
 /// Mark a thread as archived in SQLite using the canonical archived rollout path.
 pub async fn mark_archived(
-    context: Option<&StateDbContext>,
+    context: Option<&codex_state::StateRuntime>,
     thread_id: ThreadId,
     rollout_path: &Path,
 ) {
     let Some(ctx) = context else {
         return;
     };
-    let archived_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     if let Err(err) = ctx
-        .runtime
-        .mark_archived(thread_id, rollout_path, archived_at.as_str())
+        .mark_archived(thread_id, rollout_path, chrono::Utc::now())
         .await
     {
         warn!(
@@ -252,14 +324,14 @@ pub async fn mark_archived(
 
 /// Mark a thread as unarchived in SQLite using the canonical restored rollout path.
 pub async fn mark_unarchived(
-    context: Option<&StateDbContext>,
+    context: Option<&codex_state::StateRuntime>,
     thread_id: ThreadId,
     rollout_path: &Path,
 ) {
     let Some(ctx) = context else {
         return;
     };
-    if let Err(err) = ctx.runtime.mark_unarchived(thread_id, rollout_path).await {
+    if let Err(err) = ctx.mark_unarchived(thread_id, rollout_path).await {
         warn!(
             "failed to mark unarchived in state db {}: {err}",
             rollout_path.display()
@@ -293,11 +365,11 @@ pub fn record_discrepancy(stage: &str, reason: &str) {
 }
 
 /// Emit a startup summary when SQLite state is enabled and initialized.
-pub async fn startup_summary(context: Option<&StateDbContext>, config: &Config) {
+pub async fn startup_summary(context: Option<&codex_state::StateRuntime>, config: &Config) {
     if config.features.enabled(Feature::Sqlite)
         && let Some(ctx) = context
     {
-        ctx.runtime.startup_summary().await;
+        ctx.startup_summary().await;
     }
 }
 
@@ -319,17 +391,18 @@ mod tests {
     #[test]
     fn cursor_to_anchor_normalizes_timestamp_format() {
         let uuid = Uuid::new_v4();
-        let ts_str = "2026-01-27T12-34-56";
-        let token = format!("{ts_str}|{uuid}");
-        let cursor = parse_cursor(token.as_str()).expect("cursor should parse");
-        let anchor = cursor_to_anchor(Some(&cursor)).expect("anchor should parse");
+    let ts_str = "2026-01-27T12-34-56";
+    let token = format!("{ts_str}|{uuid}");
+    let cursor = parse_cursor(token.as_str()).expect("cursor should parse");
+    let anchor = cursor_to_anchor(Some(&cursor)).expect("anchor should parse");
 
-        let naive =
-            NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%dT%H-%M-%S").expect("ts should parse");
-        let expected_ts = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc)
-            .to_rfc3339_opts(SecondsFormat::Secs, true);
+    let naive =
+        NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%dT%H-%M-%S").expect("ts should parse");
+    let expected_ts = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc)
+        .with_nanosecond(0)
+        .expect("nanosecond");
 
-        assert_eq!(anchor.id, uuid);
-        assert_eq!(anchor.ts, expected_ts);
-    }
+    assert_eq!(anchor.id, uuid);
+    assert_eq!(anchor.ts, expected_ts);
+}
 }

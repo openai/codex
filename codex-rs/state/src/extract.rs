@@ -1,9 +1,5 @@
-use crate::DB_ERROR_METRIC;
-use crate::model::ExtractionOutcome;
 use crate::model::ThreadMetadata;
-use crate::paths::file_modified_time_rfc3339;
 use anyhow::Result;
-use codex_otel::OtelManager;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::is_local_image_close_tag_text;
@@ -17,52 +13,9 @@ use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::io::AsyncBufReadExt;
-use tracing::warn;
-
-/// Extract canonical thread metadata from a rollout JSONL file.
-pub async fn extract_metadata_from_rollout(
-    path: &std::path::Path,
-    default_provider: &str,
-    otel: Option<&OtelManager>,
-) -> Result<ExtractionOutcome> {
-    let mut metadata = ThreadMetadata::from_path_defaults(path, default_provider)?;
-    let mut parse_errors = 0usize;
-    let file = tokio::fs::File::open(path).await?;
-    let reader = tokio::io::BufReader::new(file);
-    let mut lines = reader.lines();
-    while let Some(line) = lines.next_line().await? {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<RolloutLine>(trimmed) {
-            Ok(rollout_line) => {
-                apply_rollout_item(&mut metadata, &rollout_line.item, default_provider)
-            }
-            Err(err) => {
-                parse_errors = parse_errors.saturating_add(1);
-                warn!("failed to parse rollout line {}: {err}", path.display());
-                if let Some(otel) = otel {
-                    otel.counter(
-                        DB_ERROR_METRIC,
-                        1,
-                        &[("stage", "extract_metadata_from_rollout")],
-                    );
-                }
-            }
-        }
-    }
-    if let Some(updated_at) = file_modified_time_rfc3339(path).await {
-        metadata.updated_at = updated_at;
-    }
-    Ok(ExtractionOutcome {
-        metadata,
-        parse_errors,
-    })
-}
 
 /// Apply a rollout item to the metadata structure.
-pub(crate) fn apply_rollout_item(
+pub fn apply_rollout_item(
     metadata: &mut ThreadMetadata,
     item: &RolloutItem,
     default_provider: &str,
@@ -198,6 +151,8 @@ pub(crate) fn enum_to_string<T: Serialize>(value: &T) -> String {
 mod tests {
     use super::extract_user_message_text;
     use crate::model::ThreadMetadata;
+    use chrono::DateTime;
+    use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
@@ -228,11 +183,12 @@ mod tests {
     #[test]
     fn diff_fields_detects_changes() {
         let id = ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id");
+        let created_at = DateTime::<Utc>::from_timestamp(1_735_689_600, 0).expect("timestamp");
         let base = ThreadMetadata {
             id,
             rollout_path: PathBuf::from("/tmp/a.jsonl"),
-            created_at: "2025-01-01T00:00:00Z".to_string(),
-            updated_at: "2025-01-01T00:00:00Z".to_string(),
+            created_at,
+            updated_at: created_at,
             source: "cli".to_string(),
             model_provider: "openai".to_string(),
             cwd: PathBuf::from("/tmp"),

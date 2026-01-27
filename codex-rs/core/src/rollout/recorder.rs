@@ -1,7 +1,5 @@
 //! Persist Codex session rollouts (.jsonl) so sessions can be replayed or inspected later.
 
-use std::collections::HashMap;
-use std::collections::HashSet;
 use std::fs::File;
 use std::fs::{self};
 use std::io::Error as IoError;
@@ -30,6 +28,7 @@ use super::list::ThreadSortKey;
 use super::list::ThreadsPage;
 use super::list::get_threads;
 use super::list::get_threads_in_root;
+use super::metadata;
 use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::default_client::originator;
@@ -44,7 +43,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
-use codex_state::ThreadMetadataSeed;
+use codex_state::ThreadMetadataBuilder;
 
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
 /// every update.
@@ -253,7 +252,8 @@ impl RolloutRecorder {
     pub async fn new(
         config: &Config,
         params: RolloutRecorderParams,
-        state_db_ctx: Option<Arc<StateDbContext>>,
+        state_db_ctx: Option<StateDbHandle>,
+        state_builder: Option<ThreadMetadataBuilder>,
     ) -> std::io::Result<Self> {
         let (file, rollout_path, meta) = match params {
             RolloutRecorderParams::Create {
@@ -321,6 +321,8 @@ impl RolloutRecorder {
             cwd,
             rollout_path.clone(),
             state_db_ctx.clone(),
+            state_builder,
+            config.model_provider_id.clone(),
         ));
 
         Ok(Self {
@@ -334,7 +336,7 @@ impl RolloutRecorder {
         self.rollout_path.as_path()
     }
 
-    pub fn state_db(&self) -> Option<Arc<StateDbContext>> {
+    pub fn state_db(&self) -> Option<StateDbHandle> {
         self.state_db.clone()
     }
 
@@ -368,7 +370,9 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
     }
 
-    pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
+    pub(crate) async fn load_rollout_items(
+        path: &Path,
+    ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
         info!("Resuming rollout from {path:?}");
         let text = tokio::fs::read_to_string(path).await?;
         if text.trim().is_empty() {
@@ -377,6 +381,7 @@ impl RolloutRecorder {
 
         let mut items: Vec<RolloutItem> = Vec::new();
         let mut thread_id: Option<ThreadId> = None;
+        let mut parse_errors = 0usize;
         for line in text.lines() {
             if line.trim().is_empty() {
                 continue;
@@ -385,6 +390,7 @@ impl RolloutRecorder {
                 Ok(v) => v,
                 Err(e) => {
                     warn!("failed to parse line as JSON: {line:?}, error: {e}");
+                    parse_errors = parse_errors.saturating_add(1);
                     continue;
                 }
             };
@@ -415,15 +421,22 @@ impl RolloutRecorder {
                 },
                 Err(e) => {
                     warn!("failed to parse rollout line: {v:?}, error: {e}");
+                    parse_errors = parse_errors.saturating_add(1);
                 }
             }
         }
 
         info!(
-            "Resumed rollout with {} items, thread ID: {:?}",
+            "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
             items.len(),
-            thread_id
+            thread_id,
+            parse_errors,
         );
+        Ok((items, thread_id, parse_errors))
+    }
+
+    pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
+        let (items, thread_id, _parse_errors) = Self::load_rollout_items(path).await?;
         let conversation_id = thread_id
             .ok_or_else(|| IoError::other("failed to parse thread ID from rollout file"))?;
 
@@ -510,9 +523,14 @@ async fn rollout_writer(
     mut meta: Option<SessionMeta>,
     cwd: std::path::PathBuf,
     rollout_path: PathBuf,
-    state_db_ctx: Option<Arc<StateDbContext>>,
+    state_db_ctx: Option<StateDbHandle>,
+    mut state_builder: Option<ThreadMetadataBuilder>,
+    default_provider: String,
 ) -> std::io::Result<()> {
     let mut writer = JsonlWriter { file };
+    if let Some(builder) = state_builder.as_mut() {
+        builder.rollout_path = rollout_path.clone();
+    }
 
     // If we have a meta, collect git info asynchronously and write meta first
     if let Some(session_meta) = meta.take() {
@@ -521,11 +539,22 @@ async fn rollout_writer(
             meta: session_meta,
             git: git_info,
         };
+        if state_db_ctx.is_some() {
+            state_builder =
+                metadata::builder_from_session_meta(&session_meta_line, rollout_path.as_path());
+        }
 
         // Write the SessionMeta as the first item in the file, wrapped in a rollout line
         let rollout_item = RolloutItem::SessionMeta(session_meta_line);
         writer.write_rollout_item(&rollout_item).await?;
-        state_db::reconcile_rollout(state_db_ctx.as_deref(), rollout_path.as_path()).await;
+        state_db::reconcile_rollout(
+            state_db_ctx.as_deref(),
+            rollout_path.as_path(),
+            default_provider.as_str(),
+            state_builder.as_ref(),
+            std::slice::from_ref(&rollout_item),
+        )
+        .await;
     }
 
     // Process rollout commands
@@ -542,10 +571,16 @@ async fn rollout_writer(
                 if persisted_items.is_empty() {
                     continue;
                 }
+                if let Some(builder) = state_builder.as_mut() {
+                    builder.rollout_path = rollout_path.clone();
+                }
                 state_db::apply_rollout_items(
                     state_db_ctx.as_deref(),
                     rollout_path.as_path(),
+                    default_provider.as_str(),
+                    state_builder.as_ref(),
                     persisted_items.as_slice(),
+                    "rollout_writer",
                 )
                 .await;
             }

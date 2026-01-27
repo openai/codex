@@ -169,7 +169,6 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
-use codex_core::state_db::StateDbContext;
 use codex_core::state_db::{self};
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;

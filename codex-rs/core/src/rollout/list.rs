@@ -796,7 +796,7 @@ async fn collect_rollout_day_files(
     Ok(day_files)
 }
 
-fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uuid)> {
+pub(crate) fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uuid)> {
     // Expected: rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl
     let core = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
 

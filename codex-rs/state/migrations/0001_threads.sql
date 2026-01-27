@@ -1,8 +1,8 @@
 CREATE TABLE threads (
     id TEXT PRIMARY KEY,
     rollout_path TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
     source TEXT NOT NULL,
     model_provider TEXT NOT NULL,
     cwd TEXT NOT NULL,
@@ -11,7 +11,7 @@ CREATE TABLE threads (
     approval_mode TEXT NOT NULL,
     tokens_used INTEGER NOT NULL DEFAULT 0,
     archived INTEGER NOT NULL DEFAULT 0,
-    archived_at TEXT,
+    archived_at INTEGER,
     git_sha TEXT,
     git_branch TEXT,
     git_origin_url TEXT

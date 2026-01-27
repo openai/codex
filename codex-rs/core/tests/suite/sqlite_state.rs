@@ -1,6 +1,7 @@
 use std::fs;
 use anyhow::Result;
 use codex_core::features::Feature;
+use codex_core::state_db;
 use codex_state::STATE_DB_FILENAME;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
@@ -131,10 +132,13 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
     }
 
     let metadata = metadata.expect("backfilled thread should exist in state db");
-    let expected =
-        codex_state::extract_metadata_from_rollout(&rollout_path, default_provider.as_str(), None)
-            .await?
-            .metadata;
+    let expected = state_db::extract_metadata_from_rollout(
+        &rollout_path,
+        default_provider.as_str(),
+        None,
+    )
+    .await?
+    .metadata;
 
     assert_eq!(metadata, expected);
 

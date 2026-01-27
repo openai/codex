@@ -1,14 +1,12 @@
-use anyhow::Result;
+use chrono::DateTime;
+use chrono::Timelike;
+use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
-use std::ffi::OsStr;
-use std::path::Path;
 use std::path::PathBuf;
 use uuid::Uuid;
-
-use crate::paths::parse_timestamp_uuid_from_filename;
 
 /// The sort key to use when listing threads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,7 +21,7 @@ pub enum SortKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
     /// The timestamp component of the anchor.
-    pub ts: String,
+    pub ts: DateTime<Utc>,
     /// The UUID component of the anchor.
     pub id: Uuid,
 }
@@ -55,10 +53,10 @@ pub struct ThreadMetadata {
     pub id: ThreadId,
     /// The absolute rollout path on disk.
     pub rollout_path: PathBuf,
-    /// The creation timestamp in RFC3339 seconds precision.
-    pub created_at: String,
-    /// The last update timestamp in RFC3339 seconds precision.
-    pub updated_at: String,
+    /// The creation timestamp.
+    pub created_at: DateTime<Utc>,
+    /// The last update timestamp.
+    pub updated_at: DateTime<Utc>,
     /// The session source (stringified enum).
     pub source: String,
     /// The model provider identifier.
@@ -74,13 +72,102 @@ pub struct ThreadMetadata {
     /// The last observed token usage.
     pub tokens_used: i64,
     /// The archive timestamp, if the thread is archived.
-    pub archived_at: Option<String>,
+    pub archived_at: Option<DateTime<Utc>>,
     /// The git commit SHA, if known.
     pub git_sha: Option<String>,
     /// The git branch name, if known.
     pub git_branch: Option<String>,
     /// The git origin URL, if known.
     pub git_origin_url: Option<String>,
+}
+
+/// Builder data required to construct [`ThreadMetadata`] without parsing filenames.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadMetadataBuilder {
+    /// The thread identifier.
+    pub id: ThreadId,
+    /// The absolute rollout path on disk.
+    pub rollout_path: PathBuf,
+    /// The creation timestamp.
+    pub created_at: DateTime<Utc>,
+    /// The last update timestamp, if known.
+    pub updated_at: Option<DateTime<Utc>>,
+    /// The session source.
+    pub source: SessionSource,
+    /// The model provider identifier, if known.
+    pub model_provider: Option<String>,
+    /// The working directory for the thread.
+    pub cwd: PathBuf,
+    /// The sandbox policy.
+    pub sandbox_policy: SandboxPolicy,
+    /// The approval mode.
+    pub approval_mode: AskForApproval,
+    /// The archive timestamp, if the thread is archived.
+    pub archived_at: Option<DateTime<Utc>>,
+    /// The git commit SHA, if known.
+    pub git_sha: Option<String>,
+    /// The git branch name, if known.
+    pub git_branch: Option<String>,
+    /// The git origin URL, if known.
+    pub git_origin_url: Option<String>,
+}
+
+impl ThreadMetadataBuilder {
+    /// Create a new builder with required fields and sensible defaults.
+    pub fn new(
+        id: ThreadId,
+        rollout_path: PathBuf,
+        created_at: DateTime<Utc>,
+        source: SessionSource,
+    ) -> Self {
+        Self {
+            id,
+            rollout_path,
+            created_at,
+            updated_at: None,
+            source,
+            model_provider: None,
+            cwd: PathBuf::new(),
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            approval_mode: AskForApproval::OnRequest,
+            archived_at: None,
+            git_sha: None,
+            git_branch: None,
+            git_origin_url: None,
+        }
+    }
+
+    /// Build canonical thread metadata, filling missing values from defaults.
+    pub fn build(&self, default_provider: &str) -> ThreadMetadata {
+        let source = crate::extract::enum_to_string(&self.source);
+        let sandbox_policy = crate::extract::enum_to_string(&self.sandbox_policy);
+        let approval_mode = crate::extract::enum_to_string(&self.approval_mode);
+        let created_at = canonicalize_datetime(self.created_at);
+        let updated_at = self
+            .updated_at
+            .map(canonicalize_datetime)
+            .unwrap_or(created_at);
+        ThreadMetadata {
+            id: self.id,
+            rollout_path: self.rollout_path.clone(),
+            created_at,
+            updated_at,
+            source,
+            model_provider: self
+                .model_provider
+                .clone()
+                .unwrap_or_else(|| default_provider.to_string()),
+            cwd: self.cwd.clone(),
+            title: String::new(),
+            sandbox_policy,
+            approval_mode,
+            tokens_used: 0,
+            archived_at: self.archived_at.map(canonicalize_datetime),
+            git_sha: self.git_sha.clone(),
+            git_branch: self.git_branch.clone(),
+            git_origin_url: self.git_origin_url.clone(),
+        }
+    }
 }
 
 impl ThreadMetadata {
@@ -134,41 +221,10 @@ impl ThreadMetadata {
         }
         diffs
     }
+}
 
-    pub(crate) fn from_path_defaults(path: &Path, default_provider: &str) -> Result<Self> {
-        let file_name = path
-            .file_name()
-            .and_then(OsStr::to_str)
-            .ok_or_else(|| anyhow::anyhow!("rollout path missing file name: {}", path.display()))?;
-        let (created_at, uuid) =
-            parse_timestamp_uuid_from_filename(file_name).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "rollout filename missing timestamp/uuid: {}",
-                    path.display()
-                )
-            })?;
-        let id = ThreadId::from_string(&uuid.to_string())?;
-        let source = crate::extract::enum_to_string(&SessionSource::default());
-        let sandbox_policy = crate::extract::enum_to_string(&SandboxPolicy::ReadOnly);
-        let approval_mode = crate::extract::enum_to_string(&AskForApproval::OnRequest);
-        Ok(Self {
-            id,
-            rollout_path: path.to_path_buf(),
-            created_at: created_at.clone(),
-            updated_at: created_at,
-            source,
-            model_provider: default_provider.to_string(),
-            cwd: PathBuf::new(),
-            title: String::new(),
-            sandbox_policy,
-            approval_mode,
-            tokens_used: 0,
-            archived_at: None,
-            git_sha: None,
-            git_branch: None,
-            git_origin_url: None,
-        })
-    }
+fn canonicalize_datetime(dt: DateTime<Utc>) -> DateTime<Utc> {
+    dt.with_nanosecond(0).unwrap_or(dt)
 }
 
 /// Statistics about a backfill operation.

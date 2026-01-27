@@ -150,6 +150,7 @@ use crate::protocol::WarningEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
+use crate::rollout::metadata;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
@@ -413,7 +414,7 @@ impl Codex {
         state.session_configuration.thread_config_snapshot()
     }
 
-    pub(crate) fn state_db(&self) -> Option<Arc<state_db::StateDbContext>> {
+    pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.session.state_db()
     }
 }
@@ -684,6 +685,12 @@ impl Session {
                 RolloutRecorderParams::resume(resumed_history.rollout_path.clone()),
             ),
         };
+        let state_builder = match &initial_history {
+            InitialHistory::Resumed(resumed) => {
+                metadata::builder_from_items(resumed.history.as_slice(), resumed.rollout_path.as_path())
+            }
+            InitialHistory::New | InitialHistory::Forked(_) => None,
+        };
 
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
@@ -695,8 +702,13 @@ impl Session {
                 Ok::<_, anyhow::Error>((None, None))
             } else {
                 let state_db_ctx = state_db::init_if_enabled(&config, None).await;
-                let rollout_recorder =
-                    RolloutRecorder::new(&config, rollout_params, state_db_ctx.clone()).await?;
+                let rollout_recorder = RolloutRecorder::new(
+                    &config,
+                    rollout_params,
+                    state_db_ctx.clone(),
+                    state_builder.clone(),
+                )
+                        .await?;
                 Ok((Some(rollout_recorder), state_db_ctx))
             }
         };
@@ -831,9 +843,7 @@ impl Session {
             state_db: state_db_ctx.clone(),
         };
 
-        if let Some(state_db_ctx) = state_db_ctx.as_ref() {
-            state_db::startup_summary(Some(state_db_ctx), &config).await;
-        }
+        state_db::startup_summary(state_db_ctx.as_deref(), &config).await;
 
         let sess = Arc::new(Session {
             conversation_id,
@@ -905,7 +915,7 @@ impl Session {
         self.tx_event.clone()
     }
 
-    pub(crate) fn state_db(&self) -> Option<Arc<state_db::StateDbContext>> {
+    pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.services.state_db.clone()
     }
 
