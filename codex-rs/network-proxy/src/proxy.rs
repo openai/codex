@@ -1,12 +1,14 @@
 use crate::admin;
 use crate::config;
 use crate::http_proxy;
+use crate::init;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::runtime::unix_socket_permissions_supported;
 use crate::state::NetworkProxyState;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Parser;
+use clap::Subcommand;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -14,7 +16,16 @@ use tracing::warn;
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "codex-network-proxy", about = "Codex network sandbox proxy")]
-pub struct Args {}
+pub struct Args {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum Command {
+    /// Initialize the Codex network proxy directories (e.g. MITM cert paths).
+    Init,
+}
 
 #[derive(Clone, Default)]
 pub struct NetworkProxyBuilder {
@@ -173,4 +184,8 @@ impl Drop for NetworkProxyHandle {
             abort_tasks(http_task, admin_task).await;
         });
     }
+}
+
+pub fn run_init() -> Result<()> {
+    init::run_init()
 }

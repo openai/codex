@@ -1,5 +1,6 @@
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
+use crate::mitm::MitmState;
 use crate::policy::Host;
 use crate::policy::is_loopback_host;
 use crate::policy::is_non_public_ip;
@@ -99,6 +100,7 @@ pub(crate) struct ConfigState {
     pub(crate) config: NetworkProxyConfig,
     pub(crate) allow_set: GlobSet,
     pub(crate) deny_set: GlobSet,
+    pub(crate) mitm: Option<Arc<MitmState>>,
     pub(crate) constraints: NetworkProxyConstraints,
     pub(crate) layer_mtimes: Vec<LayerMtime>,
     pub(crate) cfg_path: PathBuf,
@@ -356,6 +358,12 @@ impl NetworkProxyState {
         }
     }
 
+    pub async fn mitm_state(&self) -> Result<Option<Arc<MitmState>>> {
+        self.reload_if_needed().await?;
+        let guard = self.state.read().await;
+        Ok(guard.mitm.clone())
+    }
+
     async fn reload_if_needed(&self) -> Result<()> {
         let needs_reload = {
             let guard = self.state.read().await;
@@ -493,6 +501,7 @@ pub(crate) fn network_proxy_state_for_policy(
         config,
         allow_set,
         deny_set,
+        mitm: None,
         constraints: NetworkProxyConstraints::default(),
         layer_mtimes: Vec::new(),
         cfg_path: PathBuf::from("/nonexistent/config.toml"),
