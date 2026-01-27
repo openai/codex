@@ -405,6 +405,11 @@ Notes:
 
 Event notifications are the server-initiated event stream for thread lifecycles, turn lifecycles, and the items within them. After you start or resume a thread, keep reading stdout for `thread/started`, `turn/*`, and `item/*` notifications.
 
+### Thread events
+
+- `thread/started` — `{ thread }` emitted when a new thread is created (via `thread/start` or `thread/fork`).
+- `thread/compacted` — `{ threadId, turnId }` emitted when codex compacts the conversation history. This can happen automatically.
+
 ### Turn events
 
 The app-server streams JSON-RPC notifications while a turn is running. Each turn starts with `turn/started` (initial `turn`) and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
@@ -431,6 +436,7 @@ Today both notifications carry an empty `items` array even when item events were
 - `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
 - `enteredReviewMode` — `{id, review}` sent when the reviewer starts; `review` is a short user-facing label such as `"current changes"` or the requested target description.
 - `exitedReviewMode` — `{id, review}` emitted when the reviewer finishes; `review` is the full plain-text review (usually, overall notes plus bullet point findings).
+- `contextCompaction` — `{id}` emitted when codex compacts the conversation history. This can happen automatically.
 - `compacted` - `{threadId, turnId}` when codex compacts the conversation history. This can happen automatically.
 
 All items emit two shared lifecycle events:

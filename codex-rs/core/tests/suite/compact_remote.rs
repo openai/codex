@@ -6,9 +6,12 @@ use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::features::Feature;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ItemCompletedEvent;
+use codex_core::protocol::ItemStartedEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
@@ -19,7 +22,6 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -201,14 +203,42 @@ async fn remote_compact_runs_automatically() -> Result<()> {
             final_output_json_schema: None,
         })
         .await?;
-    let message = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ContextCompacted(_) => Some(true),
-        _ => None,
-    })
-    .await;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    assert!(message);
+    let mut started_item = None;
+    let mut completed_item = None;
+    let mut legacy_event = false;
+    let mut saw_turn_complete = false;
+
+    while !saw_turn_complete || started_item.is_none() || completed_item.is_none() || !legacy_event
+    {
+        let event = codex.next_event().await.unwrap();
+        match event.msg {
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::ContextCompaction(item),
+                ..
+            }) => {
+                started_item = Some(item);
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::ContextCompaction(item),
+                ..
+            }) => {
+                completed_item = Some(item);
+            }
+            EventMsg::ContextCompacted(_) => {
+                legacy_event = true;
+            }
+            EventMsg::TurnComplete(_) => {
+                saw_turn_complete = true;
+            }
+            _ => {}
+        }
+    }
+
+    let started_item = started_item.expect("context compaction item started");
+    let completed_item = completed_item.expect("context compaction item completed");
+    assert_eq!(started_item.id, completed_item.id);
+    assert!(legacy_event);
     assert_eq!(compact_mock.requests().len(), 1);
     let follow_up_body = responses_mock.single_request().body_json().to_string();
     assert!(follow_up_body.contains("REMOTE_COMPACTED_SUMMARY"));

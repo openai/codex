@@ -5,10 +5,11 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::error::Result as CodexResult;
 use crate::protocol::CompactedItem;
-use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TurnStartedEvent;
+use codex_protocol::items::ContextCompactionItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
@@ -40,6 +41,9 @@ async fn run_remote_compact_task_inner_impl(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
 ) -> CodexResult<()> {
+    let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
+    sess.emit_turn_item_started(turn_context, &compaction_item)
+        .await;
     let history = sess.clone_history().await;
 
     // Required to keep `/undo` available after compaction
@@ -77,8 +81,7 @@ async fn run_remote_compact_task_inner_impl(
     sess.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
         .await;
 
-    let event = EventMsg::ContextCompacted(ContextCompactedEvent {});
-    sess.send_event(turn_context, event).await;
-
+    sess.emit_turn_item_completed(turn_context, compaction_item)
+        .await;
     Ok(())
 }

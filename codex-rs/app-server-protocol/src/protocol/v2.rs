@@ -1969,6 +1969,9 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ExitedReviewMode { id: String, review: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ContextCompaction { id: String },
 }
 
 impl From<CoreTurnItem> for ThreadItem {
@@ -1997,6 +2000,9 @@ impl From<CoreTurnItem> for ThreadItem {
                 id: search.id,
                 query: search.query,
             },
+            CoreTurnItem::ContextCompaction(compaction) => {
+                ThreadItem::ContextCompaction { id: compaction.id }
+            }
         }
     }
 }
