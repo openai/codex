@@ -755,8 +755,10 @@ fn matcher_worker(
         }
 
         let query_is_empty = current_query.is_empty();
-        if !query_is_empty && (query_changed || saw_nucleo_notify || emit_pending) {
-            let _ = nucleo.tick(TICK_TIMEOUT_MS);
+        let mut nucleo_running = false;
+        if !query_is_empty && (query_changed || saw_signal || saw_nucleo_notify || emit_pending) {
+            let status = nucleo.tick(TICK_TIMEOUT_MS);
+            nucleo_running = status.running;
         }
 
         let matches = if query_is_empty {
@@ -832,6 +834,14 @@ fn matcher_worker(
             inner.reporter.on_update(&snapshot);
             last_emit_at = now;
             emit_pending = false;
+        }
+
+        if walk_complete && nucleo_running {
+            // The walk may complete before the matcher has processed all injected items.
+            // Keep ticking until nucleo reports that it is no longer running to avoid
+            // emitting an incomplete "complete" snapshot.
+            emit_pending = true;
+            continue;
         }
 
         if walk_complete && !inner.complete_emitted.load(Ordering::Relaxed) {
