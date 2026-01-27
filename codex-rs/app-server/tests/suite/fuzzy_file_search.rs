@@ -48,8 +48,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
     .await??;
 
     let value = resp.result;
-    // The path separator on Windows affects the score.
-    let expected_score = if cfg!(windows) { 69 } else { 72 };
+    let expected_score = 72;
 
     assert_eq!(
         value,

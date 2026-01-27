@@ -851,7 +851,7 @@ fn matcher_worker(
             // The walk may complete before the matcher has processed all injected items.
             // Keep ticking until nucleo reports that it is no longer running to avoid
             // emitting an incomplete "complete" snapshot.
-            emit_pending = true;
+            emit_pending |= top_changed || query_changed_after_complete;
             continue;
         }
 
