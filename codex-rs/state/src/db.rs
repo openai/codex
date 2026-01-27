@@ -30,6 +30,10 @@ use tracing::warn;
 use uuid::Uuid;
 
 /// A SQLite-backed store for rollout-derived thread metadata.
+///
+/// This type is intentionally low-level: it focuses on persistence and queries.
+/// Most consumers should prefer [`crate::StateRuntime`], which owns configuration,
+/// metrics, and first-run backfill behavior.
 #[derive(Clone)]
 pub struct StateDb {
     pool: sqlx::SqlitePool,
@@ -333,7 +337,7 @@ ON CONFLICT(id) DO UPDATE SET
         otel: Option<&OtelManager>,
     ) -> Result<BackfillStats> {
         let sessions_root = codex_home.join(SESSIONS_SUBDIR);
-        if !sessions_root.exists() {
+        if !tokio::fs::try_exists(&sessions_root).await.unwrap_or(false) {
             return Ok(BackfillStats {
                 scanned: 0,
                 upserted: 0,

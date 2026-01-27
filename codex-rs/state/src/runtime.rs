@@ -16,7 +16,9 @@ pub const STATE_DB_FILENAME: &str = "state.sqlite";
 
 const METRIC_DB_INIT: &str = "codex.db.init";
 
-/// A runtime wrapper around [`StateDb`] that owns configuration, metrics, and a metadata cache.
+/// A runtime wrapper around [`StateDb`] that owns configuration and metrics.
+///
+/// This should be the entry point of the crate.
 #[derive(Clone)]
 pub struct StateRuntime {
     db: Arc<StateDb>,

@@ -10,6 +10,12 @@ mod model;
 mod paths;
 mod runtime;
 
+/// Preferred entrypoint: owns configuration, metrics, and first-run backfill.
+pub use runtime::StateRuntime;
+
+/// Low-level storage engine: useful for focused tests.
+///
+/// Most consumers should prefer [`StateRuntime`].
 pub use db::StateDb;
 pub use extract::extract_metadata_from_rollout;
 pub use model::Anchor;
@@ -19,7 +25,6 @@ pub use model::SortKey;
 pub use model::ThreadMetadata;
 pub use model::ThreadsPage;
 pub use runtime::STATE_DB_FILENAME;
-pub use runtime::StateRuntime;
 
 /// Errors encountered during DB operations. Tags: [stage]
 pub(crate) const DB_ERROR_METRIC: &str = "codex.db.error";
