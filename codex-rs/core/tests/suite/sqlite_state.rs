@@ -1,0 +1,142 @@
+use std::fs;
+use anyhow::Result;
+use codex_core::features::Feature;
+use codex_state::STATE_DB_FILENAME;
+use core_test_support::responses::start_mock_server;
+use core_test_support::test_codex::test_codex;
+use pretty_assertions::assert_eq;
+use tokio::time::Duration;
+use uuid::Uuid;
+use codex_protocol::protocol::{EventMsg, RolloutItem, RolloutLine, SessionMeta, SessionMetaLine, SessionSource, UserMessageEvent};
+use codex_protocol::ThreadId;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_thread_is_recorded_in_state_db() -> Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Sqlite);
+    });
+    let test = builder.build(&server).await?;
+
+    let thread_id = test.session_configured.session_id;
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let db_path = test.config.codex_home.join(STATE_DB_FILENAME);
+
+    for _ in 0..100 {
+        if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let db = codex_state::StateDb::open(&db_path).await?;
+
+    let mut metadata = None;
+    for _ in 0..100 {
+        metadata = db.get_thread(thread_id).await?;
+        if metadata.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let metadata = metadata.expect("thread should exist in state db");
+    assert_eq!(metadata.id, thread_id);
+    assert_eq!(metadata.rollout_path, rollout_path);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn backfill_scans_existing_rollouts() -> Result<()> {
+    let server = start_mock_server().await;
+
+    let uuid = Uuid::now_v7();
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_rel_path = format!("sessions/2026/01/27/rollout-2026-01-27T12-00-00-{uuid}.jsonl");
+    let rollout_rel_path_for_hook = rollout_rel_path.clone();
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |codex_home| {
+            let rollout_path = codex_home.join(&rollout_rel_path_for_hook);
+            let parent = rollout_path
+                .parent()
+                .expect("rollout path should have parent");
+            fs::create_dir_all(parent).expect("should create rollout directory");
+
+            let session_meta_line = SessionMetaLine {
+                meta: SessionMeta {
+                    id: thread_id,
+                    forked_from_id: None,
+                    timestamp: "2026-01-27T12:00:00Z".to_string(),
+                    cwd: codex_home.to_path_buf(),
+                    originator: "test".to_string(),
+                    cli_version: "test".to_string(),
+                    source: SessionSource::default(),
+                    model_provider: None,
+                    base_instructions: None,
+                },
+                git: None,
+            };
+
+            let lines = [
+                RolloutLine {
+                    timestamp: "2026-01-27T12:00:00Z".to_string(),
+                    item: RolloutItem::SessionMeta(session_meta_line),
+                },
+                RolloutLine {
+                    timestamp: "2026-01-27T12:00:01Z".to_string(),
+                    item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                        message: "hello from backfill".to_string(),
+                        images: None,
+                        local_images: Vec::new(),
+                        text_elements: Vec::new(),
+                    })),
+                },
+            ];
+
+            let jsonl = lines
+                .iter()
+                .map(|line| serde_json::to_string(line).expect("rollout line should serialize"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            fs::write(&rollout_path, format!("{jsonl}\n")).expect("should write rollout file");
+        })
+        .with_config(|config| {
+            config.features.enable(Feature::Sqlite);
+        });
+
+    let test = builder.build(&server).await?;
+
+    let db_path = test.config.codex_home.join(STATE_DB_FILENAME);
+    let rollout_path = test.config.codex_home.join(&rollout_rel_path);
+    let default_provider = test.config.model_provider_id.clone();
+
+    for _ in 0..20 {
+        if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let db = codex_state::StateDb::open(&db_path).await?;
+
+    let mut metadata = None;
+    for _ in 0..40 {
+        metadata = db.get_thread(thread_id).await?;
+        if metadata.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let metadata = metadata.expect("backfilled thread should exist in state db");
+    let expected =
+        codex_state::extract_metadata_from_rollout(&rollout_path, default_provider.as_str(), None)
+            .await?
+            .metadata;
+
+    assert_eq!(metadata, expected);
+
+    Ok(())
+}
