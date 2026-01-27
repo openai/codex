@@ -85,7 +85,7 @@ export function renderVscodeChatHtml(args) {
         <div class="actions">
           <button id="new">New</button>
           <button id="resume">Resume</button>
-          <button id="reload" title="Reload session (codex-mine only)" disabled>Reload</button>
+          <button id="reload" title="Reload session (codez only)" disabled>Reload</button>
           <button id="settings" class="iconBtn settingsBtn" aria-label="Settings" title="Settings"></button>
         </div>
       </div>

@@ -53,7 +53,7 @@ export function App() {
 
   const activeRoot =
     (activeRootId ? roots.find((r) => r.id === activeRootId) : null) ?? roots.at(0) ?? null;
-  const cliLabel = workspaceSettings?.cliCommand ?? "codex-mine";
+  const cliLabel = workspaceSettings?.cliCommand ?? "codez";
 
   useEffect(() => {
     if (!activeRoot) return;
@@ -86,12 +86,12 @@ export function App() {
       if (ev.origin !== window.location.origin) return;
       const data = ev.data as any;
       if (!data || typeof data !== "object") return;
-      if (data.type === "codexMine.newSessionPickFolder") {
+      if (data.type === "codez.newSessionPickFolder") {
         setRootPickerMode("newSession");
         setRootPickerOpen(true);
         return;
       }
-      if (data.type === "codexMine.openSettings") {
+      if (data.type === "codez.openSettings") {
         setSettingsOpen(true);
         return;
       }
@@ -225,11 +225,11 @@ export function App() {
             <div className="menuSectionTitle">CLI</div>
             <div className="menuSection">
               <button
-                className={cliLabel === "codex-mine" ? "segBtn active" : "segBtn"}
+                className={cliLabel === "codez" ? "segBtn active" : "segBtn"}
                 onClick={async () => {
                   try {
-                    await patchWorkspaceSettings({ cliCommand: "codex-mine" });
-                    setWorkspaceSettings({ cliCommand: "codex-mine" });
+                    await patchWorkspaceSettings({ cliCommand: "codez" });
+                    setWorkspaceSettings({ cliCommand: "codez" });
                     setSettingsOpen(false);
                     await refreshWorkspace();
                   } catch (e) {
@@ -237,7 +237,7 @@ export function App() {
                   }
                 }}
               >
-                codex-mine
+                codez
               </button>
               <button
                 className={cliLabel === "codex" ? "segBtn active" : "segBtn"}

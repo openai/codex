@@ -84,7 +84,7 @@ export function Explorer(props: {
                     value={root.cliCommand}
                     onChange={async (e) => {
                       try {
-                        const v = e.target.value === "codex" ? "codex" : "codex-mine";
+                        const v = e.target.value === "codex" ? "codex" : "codez";
                         await setRootCliCommand(root.id, v);
                         await props.onWorkspaceChanged();
                       } catch (err) {
@@ -94,7 +94,7 @@ export function Explorer(props: {
                     aria-label="CLI"
                     title="CLI"
                   >
-                    <option value="codex-mine">codex-mine</option>
+                    <option value="codez">codez</option>
                     <option value="codex">codex</option>
                   </select>
                   <button

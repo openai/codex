@@ -7,7 +7,7 @@ sandbox_mode = "danger-full-access"
 # notify（システム通知/外部連携）は今回は無効化（音が連打されて確認がしづらいため）
 # notify = ["bash", "-lc", "afplay /System/Library/Sounds/Ping.aiff"]
 
-# repo-local Hooks (Codex-Mine)
+# repo-local Hooks (Codez)
 # - Each hook receives a single JSON payload via stdin.
 # - `when = "tool.call.begin"` で `blocking = true` を指定した hook は、tool の実行前に拒否できます（exit code 2）。
 

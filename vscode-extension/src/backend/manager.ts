@@ -143,44 +143,44 @@ export class BackendManager implements vscode.Disposable {
       return;
     }
 
-    const cfg = vscode.workspace.getConfiguration("codexMine", folder.uri);
+    const cfg = vscode.workspace.getConfiguration("codez", folder.uri);
     const cliVariantRaw = cfg.get<string>("cli.variant") ?? "auto";
     const cliVariant =
       cliVariantRaw === "upstream"
         ? "codex"
         : cliVariantRaw === "mine"
-          ? "codex-mine"
+          ? "codez"
           : cliVariantRaw;
 
     const codexCommand =
       cfg.get<string>("cli.commands.codex") ??
       cfg.get<string>("cli.commands.upstream") ??
       "codex";
-    const codexMineCommand =
-      cfg.get<string>("cli.commands.codexMine") ??
+    const codezCommand =
+      cfg.get<string>("cli.commands.codez") ??
       cfg.get<string>("cli.commands.mine") ??
-      "codex-mine";
+      "codez";
     const commandFromBackend = cfg.get<string>("backend.command");
     const args = cfg.get<string[]>("backend.args");
     const logRpcPayloads = cfg.get<boolean>("debug.logRpcPayloads") ?? false;
 
     const command =
-      cliVariant === "codex-mine"
-        ? codexMineCommand
+      cliVariant === "codez"
+        ? codezCommand
         : cliVariant === "codex"
           ? codexCommand
           : commandFromBackend;
 
     if (!command) {
       const keyName =
-        cliVariant === "codex-mine"
-          ? "codexMine.cli.commands.codexMine"
+        cliVariant === "codez"
+          ? "codez.cli.commands.codez"
           : cliVariant === "codex"
-            ? "codexMine.cli.commands.codex"
-            : "codexMine.backend.command";
+            ? "codez.cli.commands.codex"
+            : "codez.backend.command";
       throw new Error(`Missing configuration: ${keyName}`);
     }
-    if (!args) throw new Error("Missing configuration: codexMine.backend.args");
+    if (!args) throw new Error("Missing configuration: codez.backend.args");
 
     const startPromise = (async () => {
       this.output.appendLine(

@@ -23,7 +23,7 @@ export class SessionPanel implements vscode.Disposable {
   ) {
     this.baseTitle = session.title;
     this.panel = vscode.window.createWebviewPanel(
-      "codexMine.session",
+      "codez.session",
       this.baseTitle,
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
       {
@@ -267,13 +267,13 @@ export class SessionPanel implements vscode.Disposable {
       return;
     }
     if (type === "sendMessage") {
-      void vscode.commands.executeCommand("codexMine.sendMessage", {
+      void vscode.commands.executeCommand("codez.sendMessage", {
         sessionId: this.session.id,
       });
       return;
     }
     if (type === "openDiff") {
-      void vscode.commands.executeCommand("codexMine.openLatestDiff", {
+      void vscode.commands.executeCommand("codez.openLatestDiff", {
         sessionId: this.session.id,
       });
       return;

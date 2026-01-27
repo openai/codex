@@ -121,7 +121,7 @@ fn load_dotenv() {
     if let Some(cwd_env) = cwd_env
         && let Ok(iter) = dotenvy::from_path_iter(&cwd_env)
     {
-        // Codex-Mine policy: if `cwd/.codex/.env` exists, ignore `$CODEX_HOME/.env`.
+        // Codez policy: if `cwd/.codex/.env` exists, ignore `$CODEX_HOME/.env`.
         set_filtered(iter);
         return;
     }

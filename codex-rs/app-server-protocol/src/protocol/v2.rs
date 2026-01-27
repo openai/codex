@@ -856,7 +856,7 @@ pub struct CancelLoginAccountResponse {
 #[ts(export_to = "v2/")]
 pub struct LogoutAccountResponse {}
 
-/// CODEX-MINE - A short summary of a configured account.
+/// CODEZ - A short summary of a configured account.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
@@ -866,7 +866,7 @@ pub enum AccountKind {
     ApiKey,
 }
 
-/// CODEX-MINE - A short account summary for account switching UIs.
+/// CODEZ - A short account summary for account switching UIs.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -880,7 +880,7 @@ pub struct AccountSummary {
     pub email: Option<String>,
 }
 
-/// CODEX-MINE - List available accounts (multi-account support).
+/// CODEZ - List available accounts (multi-account support).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -891,7 +891,7 @@ pub struct ListAccountsResponse {
     pub accounts: Vec<AccountSummary>,
 }
 
-/// CODEX-MINE - Switch the active account (multi-account support).
+/// CODEZ - Switch the active account (multi-account support).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -900,7 +900,7 @@ pub struct SwitchAccountParams {
     pub create_if_missing: bool,
 }
 
-/// CODEX-MINE - Switch account response (multi-account support).
+/// CODEZ - Switch account response (multi-account support).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

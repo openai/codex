@@ -1,25 +1,25 @@
 #!/bin/sh
 set -eu
 
-# Native installer for codex-mine (prebuilt binaries from GitHub Releases).
+# Native installer for codez (prebuilt binaries from GitHub Releases).
 #
 # Usage examples:
 #   curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/install.sh | sh
-#   CODEX_MINE_VERSION=mine-vX.Y.Z-mine.N sh install.sh
+#   CODEZ_VERSION=codez-vX.Y.Z-codez.N sh install.sh
 #
 # Environment variables:
-#   CODEX_MINE_GITHUB_REPO   (default: harukary/codex-mine)
-#   CODEX_MINE_VERSION       (default: latest)
-#   CODEX_MINE_ROOT          (default: ~/.local/codex-mine)
-#   CODEX_MINE_BIN_DIR       (default: ~/.local/bin)
-#   CODEX_MINE_UPDATE_PATH   (default: 0) If 1, append PATH export to your shell rc file when needed.
+#   CODEZ_GITHUB_REPO   (default: harukary/codez)
+#   CODEZ_VERSION       (default: latest)
+#   CODEZ_ROOT          (default: ~/.local/codez)
+#   CODEZ_BIN_DIR       (default: ~/.local/bin)
+#   CODEZ_UPDATE_PATH   (default: 0) If 1, append PATH export to your shell rc file when needed.
 
-repo="${CODEX_MINE_GITHUB_REPO:-harukary/codex-mine}"
-version="${CODEX_MINE_VERSION:-latest}"
+repo="${CODEZ_GITHUB_REPO:-harukary/codez}"
+version="${CODEZ_VERSION:-latest}"
 
-install_root="${CODEX_MINE_ROOT:-$HOME/.local/codex-mine}"
-bin_dir="${CODEX_MINE_BIN_DIR:-$HOME/.local/bin}"
-update_path="${CODEX_MINE_UPDATE_PATH:-0}"
+install_root="${CODEZ_ROOT:-$HOME/.local/codez}"
+bin_dir="${CODEZ_BIN_DIR:-$HOME/.local/bin}"
+update_path="${CODEZ_UPDATE_PATH:-0}"
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -135,15 +135,15 @@ fi
 chmod +x "$tmp/codex"
 mv "$tmp/codex" "$install_root/bin/codex"
 
-printf '==> Writing wrapper: %s\n' "$bin_dir/codex-mine" >&2
-cat > "$bin_dir/codex-mine" <<SH
+printf '==> Writing wrapper: %s\n' "$bin_dir/codez" >&2
+cat > "$bin_dir/codez" <<SH
 #!/bin/sh
 set -eu
 exec "$install_root/bin/codex" --config check_for_update_on_startup=false "\$@"
 SH
-chmod +x "$bin_dir/codex-mine"
+chmod +x "$bin_dir/codez"
 
-printf '\nOK: %s\n' "$bin_dir/codex-mine" >&2
+printf '\nOK: %s\n' "$bin_dir/codez" >&2
 
 path_has_bindir() {
   case ":$PATH:" in
@@ -175,7 +175,7 @@ append_path_to_shell_rc() {
   printf '==> Updating PATH in %s\n' "$rc" >&2
   cat >> "$rc" <<SH
 
-# Added by codex-mine installer: ensure wrapper is on PATH
+# Added by codez installer: ensure wrapper is on PATH
 export PATH="$bin_dir:\$PATH"
 SH
   return 0
@@ -191,8 +191,8 @@ if ! path_has_bindir; then
     printf 'NOTE: %s is not on your PATH.\n' "$bin_dir" >&2
     printf 'Add this to your shell config (e.g. ~/.zshrc):\n' >&2
     printf '  export PATH="%s:$PATH"\n' "$bin_dir" >&2
-    printf 'Or set CODEX_MINE_BIN_DIR to a directory already on PATH.\n' >&2
-    printf 'If you want this script to append it for you, rerun with CODEX_MINE_UPDATE_PATH=1.\n' >&2
+    printf 'Or set CODEZ_BIN_DIR to a directory already on PATH.\n' >&2
+    printf 'If you want this script to append it for you, rerun with CODEZ_UPDATE_PATH=1.\n' >&2
   fi
 fi
-printf 'Try: %s\n' "codex-mine --version" >&2
+printf 'Try: %s\n' "codez --version" >&2

@@ -194,13 +194,13 @@ client_request_definitions! {
         response: v2::LogoutAccountResponse,
     },
 
-    /// CODEX-MINE - List configured accounts (multi-account support).
+    /// CODEZ - List configured accounts (multi-account support).
     ListAccounts => "account/list" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         response: v2::ListAccountsResponse,
     },
 
-    /// CODEX-MINE - Switch the active account (multi-account support).
+    /// CODEZ - Switch the active account (multi-account support).
     SwitchAccount => "account/switch" {
         params: v2::SwitchAccountParams,
         response: v2::SwitchAccountResponse,
@@ -526,7 +526,7 @@ server_request_definitions! {
         response: v2::FileChangeRequestApprovalResponse,
     },
 
-    /// CODEX-MINE - Request structured input from the user (legacy compatibility).
+    /// CODEZ - Request structured input from the user (legacy compatibility).
     AskUserQuestion => "user/askQuestion" {
         params: v2::AskUserQuestionParams,
         response: v2::AskUserQuestionResponse,

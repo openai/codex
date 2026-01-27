@@ -2,13 +2,13 @@ export type WorkspaceRoot = {
   id: string;
   label: string;
   absPath: string;
-  cliCommand: "codex" | "codex-mine";
+  cliCommand: "codex" | "codez";
   createdAt: string;
   order: number;
 };
 
 export type WorkspaceSettings = {
-  cliCommand: "codex" | "codex-mine";
+  cliCommand: "codex" | "codez";
 };
 
 export type Workspace = {

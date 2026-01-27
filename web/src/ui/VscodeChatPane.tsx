@@ -28,7 +28,7 @@ export const VscodeChatPane = forwardRef<VscodeChatPaneHandle, { rootId: string 
       refreshState: () => {
         const win = iframeRef.current?.contentWindow ?? null;
         if (!win) return;
-        win.postMessage({ type: "codexMine.refreshState" }, window.location.origin);
+        win.postMessage({ type: "codez.refreshState" }, window.location.origin);
       },
     }),
     [],

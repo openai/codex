@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+## 0.2.1
+
+- 追加: Buy Me a Coffee のリンクを `package.json` / README に追加
+
+## 0.2.0
+
+- **破壊的変更**: 設定キー・コマンドID・View ID を `codexMine.*` から `codez.*` に変更（旧キーは非互換）
 - 追加: 複数アカウントの切替（TUI / app-server / VSCode を横断して対応）
 - 追加: Settings のアカウント管理（`/account`）、および CLI variant の切替 UI
 - 追加: app-server 経由のログインフロー（Settings から起動）
@@ -75,7 +82,7 @@
 - 変更: Interrupt を強化（turnId 未確定でも Stop/Interrupt を取りこぼしにくくする）
   - `turn/started` 到達後に割り込み送信
   - turnId 不明時は `thread/resume` で inProgress turn を探索して `turn/interrupt` を試行
-  - backend kill/restart の Force Stop は廃止（`codexMine.interrupt.forceStopAfterMs` も削除）
+  - backend kill/restart の Force Stop は廃止（`codez.interrupt.forceStopAfterMs` も削除）
 - 修正: backend 停止/終了時にキャッシュ（thread/streamState 等）をクリーンアップし、`sending` / 承認待ち状態が残らないよう同期
 - 追加: Agents（subagents）の一覧/候補取得（`.codex/agents` / `$CODEX_HOME/agents` をローカル走査）
 
@@ -129,7 +136,7 @@
 
 ## 0.1.6
 
-- 追加: 入力欄の `@` 補完に `@agents:{name}` を追加（codex-mine 実行時のみ）。ファイル候補より先に表示
+- 追加: 入力欄の `@` 補完に `@agents:{name}` を追加（codez 実行時のみ）。ファイル候補より先に表示
 
 ## 0.1.5
 
@@ -148,9 +155,9 @@
 
 ## 0.1.2
 
-- 追加: ⚙ から CLI を `codex` / `codex-mine` / `auto` で切替（以降のデフォルト。適用には backend 再起動が必要）
-  - `codex-mine` 選択時は `New` が常に codex-mine backend を使う（必要なら自動再起動）
-- 追加: codex-mine 実行時のみ `/agents` を有効化（`.codex/agents` / `$CODEX_HOME/agents` から選び、`@name` を入力欄へ挿入）
+- 追加: ⚙ から CLI を `codex` / `codez` / `auto` で切替（以降のデフォルト。適用には backend 再起動が必要）
+  - `codez` 選択時は `New` が常に codez backend を使う（必要なら自動再起動）
+- 追加: codez 実行時のみ `/agents` を有効化（`.codex/agents` / `$CODEX_HOME/agents` から選び、`@name` を入力欄へ挿入）
 - 追加: Resume（CHAT右上の Resume / `/resume`）
   - app-server の `thread/list` を使って履歴一覧から `thread/resume`
   - 履歴一覧は `CODEX_HOME` の全履歴を対象

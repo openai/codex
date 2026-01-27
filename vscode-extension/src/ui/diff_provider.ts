@@ -32,6 +32,6 @@ export class DiffDocumentProvider
 
 export function makeDiffUri(sessionId: string): vscode.Uri {
   return vscode.Uri.parse(
-    `codex-mine-diff:${encodeURIComponent(sessionId)}.diff`,
+    `codez-diff:${encodeURIComponent(sessionId)}.diff`,
   );
 }

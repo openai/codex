@@ -1,6 +1,6 @@
-# Codex-Mine (VS Code) イベント一覧と UI 取り扱い
+# Codez (VS Code) イベント一覧と UI 取り扱い
 
-このドキュメントは、`vscode-extension/` の Codex-Mine が受け取るイベント（JSON-RPC notification）と、Chat View 上での表示・状態反映のルールを整理したものです。
+このドキュメントは、`vscode-extension/` の Codez が受け取るイベント（JSON-RPC notification）と、Chat View 上での表示・状態反映のルールを整理したものです。
 
 ## 用語
 

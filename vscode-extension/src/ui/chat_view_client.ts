@@ -119,8 +119,8 @@ type ChatViewState = {
   globalBlocks?: ChatBlock[];
   capabilities?: {
     agents: boolean;
-    selectedCliVariant: "auto" | "codex" | "codex-mine";
-    detectedCliVariant: "unknown" | "codex" | "codex-mine";
+    selectedCliVariant: "auto" | "codex" | "codez";
+    detectedCliVariant: "unknown" | "codex" | "codez";
   };
   workspaceColorOverrides?: Record<string, number>;
   sessions: Session[];
@@ -1285,7 +1285,7 @@ function main(): void {
 
   let settingsOpen = false;
   let settingsBusy = false;
-  let settingsSelectedCliVariant: "auto" | "codex" | "codex-mine" = "auto";
+  let settingsSelectedCliVariant: "auto" | "codex" | "codez" = "auto";
   let settingsRestartMode: "later" | "restartAll" | "forceRestartAll" = "later";
   let settingsActiveAccount: string | null = null;
   let settingsSelectedAccount: string | null = null;
@@ -1343,7 +1343,7 @@ function main(): void {
     const choiceRow = document.createElement("div");
     choiceRow.className = "settingsRow";
     const mkRadio = (
-      variant: "auto" | "codex" | "codex-mine",
+      variant: "auto" | "codex" | "codez",
       label: string,
     ): HTMLLabelElement => {
       const wrap = document.createElement("label");
@@ -1366,7 +1366,7 @@ function main(): void {
     };
     choiceRow.appendChild(mkRadio("auto", "Auto"));
     choiceRow.appendChild(mkRadio("codex", "codex"));
-    choiceRow.appendChild(mkRadio("codex-mine", "codex-mine"));
+    choiceRow.appendChild(mkRadio("codez", "codez"));
 
     const restartSelect = document.createElement("select");
     restartSelect.className = "settingsSelect";
@@ -1970,7 +1970,7 @@ function main(): void {
     {
       insert: "/agents ",
       label: "/agents",
-      detail: "Browse agents (codex-mine)",
+      detail: "Browse agents (codez)",
       kind: "slash",
     },
     { insert: "/help ", label: "/help", detail: "Show help", kind: "slash" },
@@ -1983,7 +1983,7 @@ function main(): void {
       detectedCliVariant: "unknown" as const,
     };
     const base =
-      caps.selectedCliVariant === "codex-mine"
+      caps.selectedCliVariant === "codez"
         ? baseSlashSuggestions
         : ([] as const);
     const ui = caps.agents
@@ -3079,21 +3079,21 @@ function main(): void {
     attachBtn.disabled = !s.activeSession;
     const variant = s.capabilities?.selectedCliVariant ?? "auto";
     reloadBtn.disabled =
-      !s.activeSession || s.sending || s.reloading || variant !== "codex-mine";
+      !s.activeSession || s.sending || s.reloading || variant !== "codez";
     reloadBtn.title =
-      variant === "codex-mine"
+      variant === "codez"
         ? "Reload session (re-read config.toml, agents, etc.)"
-        : "Reload session (codex-mine only)";
+        : "Reload session (codez only)";
     settingsBtn.disabled = false;
     settingsBtn.title =
-      variant === "codex-mine"
-        ? "CLI: codex-mine (Settings)"
+      variant === "codez"
+        ? "CLI: codez (Settings)"
         : variant === "codex"
           ? "CLI: codex (Settings)"
           : variant === "auto"
             ? "CLI: auto (Settings)"
             : "Settings";
-    if (variant !== "codex-mine" && rewindTurnIndex !== null) setEditMode(null);
+    if (variant !== "codez" && rewindTurnIndex !== null) setEditMode(null);
     // Keep input enabled so the user can draft messages even before selecting a session,
     // but do not override ask_user_question which intentionally locks the composer.
     // Sending is still guarded by sendBtn.disabled and sendCurrentInput().
@@ -3624,14 +3624,14 @@ function main(): void {
           const editBtn = document.createElement("button");
           editBtn.className = "msgActionBtn";
           editBtn.textContent = "Edit";
-          editBtn.disabled = Boolean(state.sending) || variant !== "codex-mine";
+          editBtn.disabled = Boolean(state.sending) || variant !== "codez";
           editBtn.title =
-            variant === "codex-mine"
+            variant === "codez"
               ? "Edit this turn (rewind)"
-              : "Edit (codex-mine only)";
+              : "Edit (codez only)";
           editBtn.addEventListener("click", () => {
             if (state.sending) return;
-            if (variant !== "codex-mine") return;
+            if (variant !== "codez") return;
             setEditMode(userTurnIndex, block.text);
             inputEl.focus();
           });
@@ -3978,10 +3978,10 @@ function main(): void {
 
   function setEditMode(next: number | null, presetText?: string): void {
     const variant = state.capabilities?.selectedCliVariant ?? "auto";
-    if (next !== null && variant !== "codex-mine") {
+    if (next !== null && variant !== "codez") {
       vscode.postMessage({
         type: "uiError",
-        message: "Edit/Rewind is only supported when using codex-mine backend.",
+        message: "Edit/Rewind is only supported when using codez backend.",
       });
       return;
     }
@@ -4025,7 +4025,7 @@ function main(): void {
         text,
         images: pendingImages.map((img) => ({ name: img.name, url: img.url })),
         rewind:
-          variant === "codex-mine" && rewindTurnIndex !== null
+          variant === "codez" && rewindTurnIndex !== null
             ? { turnIndex: rewindTurnIndex }
             : null,
       });
@@ -4036,7 +4036,7 @@ function main(): void {
         type: "send",
         text,
         rewind:
-          variant === "codex-mine" && rewindTurnIndex !== null
+          variant === "codez" && rewindTurnIndex !== null
             ? { turnIndex: rewindTurnIndex }
             : null,
       });

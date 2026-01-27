@@ -1,4 +1,4 @@
-# codex-mine
+# codez
 
 ## Git worktree 運用（`.worktrees/`）
 
@@ -20,9 +20,9 @@
 - バージョンを上げるのはユーザーが明示的に Publish を指示したタイミングのみ。
 - 運用は「Publish時に1つ上げる → そのバージョンで開発/修正を続ける → 次のPublish時にまた1つ上げる」を繰り返す。
 
-## Codex-Mine バージョニング（CLI表示）
+## Codez バージョニング（CLI表示）
 
-- Codex-Mine の CLI 表示バージョンは、`openai/codex` の **GitHub Releases の最新 stable（pre-release除外）** の `rust-vX.Y.Z` を基準にし、`X.Y.Z-mine.N` とする（例: `0.77.0-mine.0`）。
+- Codez の CLI 表示バージョンは、`openai/codex` の **GitHub Releases の最新 stable（pre-release除外）** の `rust-vX.Y.Z` を基準にし、`X.Y.Z-codez.N` とする（例: `0.77.0-codez.0`）。
   - 理由: `upstream/main` はリリースタグの系譜と一致しないことがあり、`git describe upstream/main` を基準にすると npm / ネイティブ配布の latest とズレうるため。
 - 最新 stable の確認:
   - `git fetch upstream --tags`
@@ -32,7 +32,7 @@
   - `codex-rs/Cargo.toml` の `[workspace.package].version`
   - TUIの表示を含む snapshots（`codex-rs/tui*/src/status/snapshots/*.snap` など）
   - `codex-rs/Cargo.lock`
-  - `README_mine.md` の例
+  - `README_codez.md` の例
 - Rust 変更後は `cd codex-rs && just fmt` を実行する。
 
 In the codex-rs folder where the rust code lives:
@@ -149,14 +149,14 @@ If you don’t have the tool:
 
 # Headings
 
-- `codex-mine` の説明、および `codex-mine` 向けの機能・運用ルールは `README_mine.md` に追記していくこと（一般向けドキュメントや共通仕様に混ぜない）。
-- upstream（openai/codex）をマージしたら、`README_mine.md` の「Upstream マージ履歴」を更新して、取り込み対象（tag/branch）とマージコミットを残すこと。
+- `codez` の説明、および `codez` 向けの機能・運用ルールは `README_codez.md` に追記していくこと（一般向けドキュメントや共通仕様に混ぜない）。
+- upstream（openai/codex）をマージしたら、`README_codez.md` の「Upstream マージ履歴」を更新して、取り込み対象（tag/branch）とマージコミットを残すこと。
 - VSCode拡張の挙動変更をしたら、`vscode-extension/CHANGELOG.md` の `Unreleased` に追記すること（ローカル開発では `vscode-extension/package.json` の `version` は上げない）。
 
 # Git Subtree (vscode-extension)
 
-- `vscode-extension/` は `codex-mine` に subtree で取り込み済みの前提で運用する。
-- `codex-mine` と `vscode-extension` の変更は同一コミットに混在して構わない（subtree push 時に `vscode-extension/` 配下のみが抽出される）。
+- `vscode-extension/` は `codez` に subtree で取り込み済みの前提で運用する。
+- `codez` と `vscode-extension` の変更は同一コミットに混在して構わない（subtree push 時に `vscode-extension/` 配下のみが抽出される）。
 - 元リポジトリと同期したい場合は手動で `git subtree pull/push` を使う（submodule のような自動リンクではない）。
 
 # Marketplace Publish（vscode-extension）

@@ -102,7 +102,7 @@ export class BackendProcess implements vscode.Disposable {
       env: process.env,
     });
 
-    const cfg = vscode.workspace.getConfiguration("codexMine");
+    const cfg = vscode.workspace.getConfiguration("codez");
     const approvalsDefaultDecision =
       cfg.get<"prompt" | "decline" | "cancel">("approvals.defaultDecision") ??
       "prompt";
@@ -324,7 +324,7 @@ export class BackendProcess implements vscode.Disposable {
   private async initializeHandshake(): Promise<void> {
     const params: InitializeParams = {
       clientInfo: {
-        name: "codex-mine-vscode",
+        name: "codez-vscode",
         title: "Codex UI VS Code Extension",
         version: "0.0.1",
       },

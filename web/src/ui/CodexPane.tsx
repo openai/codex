@@ -58,7 +58,7 @@ export const CodexPane = forwardRef<
   const statusText = useMemo(() => {
     if (running) return "実行中…";
     if (error) return `エラー: ${error}`;
-    const cli = workspaceSettings?.cliCommand ?? "codex-mine";
+    const cli = workspaceSettings?.cliCommand ?? "codez";
     const rootLabel = activeRoot ? `${activeRoot.label} (${cli})` : "no root";
     const activeSession = activeSessionId ? sessions.find((s) => s.id === activeSessionId) : null;
     const th = activeSession?.threadId ? `thread: ${activeSession.threadId}` : "新規";

@@ -34,7 +34,7 @@ Tailscale で使う前提なので、`0.0.0.0` bind（デフォルト）でOK。
 - Read Only（閲覧のみ）
 - Codex実行は **`app-server`** を使う
 - `sandbox=workspace-write` + `approvalPolicy=on-request` を使い、承認フロー込みで実行
-- `codex` / `codex-mine` は **全体設定で切替**（root個別ではない）
+- `codex` / `codez` は **全体設定で切替**（root個別ではない）
 
 ---
 
@@ -68,7 +68,7 @@ Tailscale で使う前提なので、`0.0.0.0` bind（デフォルト）でOK。
 ## データ保存（重要）
 
 - `web/.data/` は `.gitignore` 対象（サーバー側ローカル保存）
-- `workspace.json` の `settings.cliCommand` が全体CLI切替（`codex` or `codex-mine`）
+- `workspace.json` の `settings.cliCommand` が全体CLI切替（`codex` or `codez`）
 
 ---
 
@@ -80,7 +80,7 @@ Tailscale で使う前提なので、`0.0.0.0` bind（デフォルト）でOK。
 - Newでセッション作成は走るが、chat_view_client の上部タブに追加されない/変化しないことがある（ユーザー報告）。
 
 現状の実装:
-- root選択で session を作成したら、同一rootの場合に親→iframeへ `postMessage` で `codexMine.refreshState` を送り、server側が `state` を再送する。
+- root選択で session を作成したら、同一rootの場合に親→iframeへ `postMessage` で `codez.refreshState` を送り、server側が `state` を再送する。
 - それでも反映されないケースが残っている。
 
 次にやること（調査手順）:

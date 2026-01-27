@@ -59,7 +59,7 @@ async function readStore() {
     if (parsed?.version !== 1 || !Array.isArray(parsed?.roots)) {
       throw new Error("workspace.json の形式が不正です");
     }
-    const normDefault = normalizeCliCommand(defaultCliCommand) ?? "codex-mine";
+    const normDefault = normalizeCliCommand(defaultCliCommand) ?? "codez";
     // migrate settings.cliCommand (global)
     if (!parsed.settings || typeof parsed.settings !== "object") {
       parsed.settings = { cliCommand: normDefault };
@@ -87,7 +87,7 @@ async function readStore() {
     return parsed;
   } catch (e) {
     if (e && typeof e === "object" && "code" in e && e.code === "ENOENT") {
-      const normDefault = normalizeCliCommand(defaultCliCommand) ?? "codex-mine";
+      const normDefault = normalizeCliCommand(defaultCliCommand) ?? "codez";
       const init = { version: 1, roots: [], settings: { cliCommand: normDefault } };
       await writeStore(init);
       console.log(`[web] init workspace store: ${storePath}`);
@@ -186,10 +186,10 @@ async function listDir(absDir) {
 const app = express();
 app.use(express.json({ limit: "5mb" }));
 
-const defaultCliCommand = String(process.env.CODEX_WEB_DEFAULT_COMMAND ?? "codex-mine");
+const defaultCliCommand = String(process.env.CODEX_WEB_DEFAULT_COMMAND ?? "codez");
 function normalizeCliCommand(v) {
   if (v === "codex") return "codex";
-  if (v === "codex-mine") return "codex-mine";
+  if (v === "codez") return "codez";
   return null;
 }
 
@@ -563,7 +563,7 @@ app.post("/api/codex/run", async (req, res) => {
     const additionalDirectories = [activeRoot.absPath];
     const workingDirectory = activeRoot.absPath;
 
-    const cliCommand = normalizeCliCommand(activeRoot.cliCommand) ?? "codex-mine";
+    const cliCommand = normalizeCliCommand(activeRoot.cliCommand) ?? "codez";
     const codex = new Codex({ codexPathOverride: cliCommand });
 
     const threadOptions = {
@@ -611,7 +611,7 @@ app.post("/api/workspace/roots", async (req, res) => {
       st.roots.length === 0 ? 0 : Math.max(...st.roots.map((r) => r.order ?? 0)) + 1;
     const rootLabel =
       typeof label === "string" && label.trim().length > 0 ? label.trim() : path.basename(real);
-    const cliCommand = normalizeCliCommand(defaultCliCommand) ?? "codex-mine";
+    const cliCommand = normalizeCliCommand(defaultCliCommand) ?? "codez";
     const next = {
       ...st,
       roots: [
@@ -804,7 +804,7 @@ app.get("/webview/chat", async (req, res) => {
       if (ev.origin !== location.origin) return;
       const d = ev.data;
       if (!d || typeof d !== "object") return;
-      if (d.type === "codexMine.refreshState") {
+      if (d.type === "codez.refreshState") {
         send({ type: "webview.refresh" });
       }
     } catch {
@@ -817,11 +817,11 @@ app.get("/webview/chat", async (req, res) => {
       try {
         const t = msg && typeof msg === "object" ? msg.type : null;
         if (t === "newSessionPickFolder") {
-          window.parent?.postMessage({ type: "codexMine.newSessionPickFolder" }, location.origin);
+          window.parent?.postMessage({ type: "codez.newSessionPickFolder" }, location.origin);
           return;
         }
         if (t === "selectCliVariant") {
-          window.parent?.postMessage({ type: "codexMine.openSettings" }, location.origin);
+          window.parent?.postMessage({ type: "codez.openSettings" }, location.origin);
           return;
         }
       } catch {
@@ -872,7 +872,7 @@ async function getOrStartAppServer(root) {
   if (existing) return existing;
 
   const ws = await readStore();
-  const globalCli = normalizeCliCommand(ws.settings?.cliCommand) ?? "codex-mine";
+  const globalCli = normalizeCliCommand(ws.settings?.cliCommand) ?? "codez";
 
   const proc = new AppServerProcess({
     command: globalCli,
@@ -928,7 +928,7 @@ function normalizeApprovalDecision(v) {
 function toCliVariant(v) {
   const norm = normalizeCliCommand(v);
   if (norm === "codex") return "codex";
-  if (norm === "codex-mine") return "codex-mine";
+  if (norm === "codez") return "codez";
   return "unknown";
 }
 

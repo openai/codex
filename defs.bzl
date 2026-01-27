@@ -4,7 +4,7 @@ load("@rules_platform//platform_data:defs.bzl", "platform_data")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("@rules_rust//cargo/private:cargo_build_script_wrapper.bzl", "cargo_build_script")
 
-CODEX_CARGO_PKG_VERSION = "0.89.0-mine.0"
+CODEX_CARGO_PKG_VERSION = "0.89.0-codez.0"
 
 PLATFORMS = [
     "linux_arm64_musl",
@@ -88,7 +88,7 @@ def codex_rust_crate(
     rustc_env = {
         "BAZEL_PACKAGE": native.package_name(),
         # Keep Bazel/Cargo parity for code that uses `env!("CARGO_PKG_VERSION")`.
-        # When bumping codex-mine's version, update this to match `codex-rs/Cargo.toml`.
+        # When bumping codez's version, update this to match `codex-rs/Cargo.toml`.
         "CARGO_PKG_VERSION": CODEX_CARGO_PKG_VERSION,
     }
 

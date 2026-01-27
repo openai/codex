@@ -13,7 +13,7 @@ This extension:
 This extension **does not bundle Codex CLI**.
 
 - Install Codex CLI separately and make sure `codex` is available in your `PATH`.
-- Or set the full path via settings (`codexMine.backend.command`).
+- Or set the full path via settings (`codez.backend.command`).
 
 ## Usage
 
@@ -26,10 +26,10 @@ This extension **does not bundle Codex CLI**.
 
 ### Settings
 
-- `codexMine.backend.command`
+- `codez.backend.command`
   - Default: `codex`
   - If `codex` is not in your `PATH`, set an absolute path.
-- `codexMine.backend.args`
+- `codez.backend.args`
   - Default: `["app-server"]`
 
 ## Development
@@ -68,3 +68,9 @@ This extension **does not bundle Codex CLI**.
 ## Specification
 
 See `docs/spec.md`.
+
+## Support
+
+If you find this extension useful, you can support development via Buy Me a Coffee:
+
+- https://buymeacoffee.com/harukary7518

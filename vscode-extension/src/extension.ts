@@ -39,7 +39,7 @@ import { SessionPanelManager } from "./ui/session_panel_manager";
 import { SessionTreeDataProvider } from "./ui/session_tree";
 
 const REWIND_STEP_TIMEOUT_MS = 120_000;
-const LAST_ACTIVE_SESSION_KEY = "codexMine.lastActiveSessionId.v1";
+const LAST_ACTIVE_SESSION_KEY = "codez.lastActiveSessionId.v1";
 const DEFAULT_PROJECT_DOC_FILENAME = "AGENTS.md";
 
 let backendManager: BackendManager | null = null;
@@ -346,9 +346,9 @@ async function loadCachedImageBase64(imageKey: string): Promise<{
   return { mimeType: meta.mimeType, base64: data.toString("base64") };
 }
 
-const HIDDEN_TAB_SESSIONS_KEY = "codexMine.hiddenTabSessions.v1";
-const WORKSPACE_COLOR_OVERRIDES_KEY = "codexMine.workspaceColorOverrides.v1";
-const LEGACY_RUNTIMES_KEY = "codexMine.sessionRuntime.v1";
+const HIDDEN_TAB_SESSIONS_KEY = "codez.hiddenTabSessions.v1";
+const WORKSPACE_COLOR_OVERRIDES_KEY = "codez.workspaceColorOverrides.v1";
+const LEGACY_RUNTIMES_KEY = "codez.sessionRuntime.v1";
 const hiddenTabSessionIds = new Set<string>();
 const unreadSessionIds = new Set<string>();
 const WORKSPACE_COLOR_PALETTE = [
@@ -369,7 +369,7 @@ let workspaceColorOverrides: Record<string, number> = {};
 const mcpStatusByBackendKey = new Map<string, Map<string, string>>();
 const cliVariantByBackendKey = new Map<
   string,
-  "unknown" | "codex" | "codex-mine"
+  "unknown" | "codex" | "codez"
 >();
 const defaultTitleRe = /^(.*)\s+\([0-9a-f]{8}\)$/i;
 type UiImageInput = { name: string; url: string };
@@ -470,7 +470,7 @@ export function activate(context: vscode.ExtensionContext): void {
     setActiveSession(s.id);
     refreshCustomPromptsFromDisk();
     void ensureModelsFetched(s);
-    void showCodexMineViewContainer();
+    void showCodezViewContainer();
   };
   backendManager.onApprovalRequest = async (session, req) => {
     const requestKey = requestKeyFromId(req.id);
@@ -494,7 +494,7 @@ export function activate(context: vscode.ExtensionContext): void {
       reason,
     });
     chatView?.refresh();
-    void showCodexMineViewContainer();
+    void showCodezViewContainer();
 
     return await new Promise((resolve) => {
       rt.approvalResolvers.set(requestKey, resolve);
@@ -517,9 +517,9 @@ export function activate(context: vscode.ExtensionContext): void {
     // Switch UI context to the requesting session so the prompt is visible.
     setActiveSession(session.id, { markRead: false });
     chatView.refresh();
-    await showCodexMineViewContainer();
+    await showCodezViewContainer();
     // Ensure the webview is actually instantiated and visible.
-    await vscode.commands.executeCommand("codexMine.chatView.focus");
+    await vscode.commands.executeCommand("codez.chatView.focus");
     chatView.reveal();
 
     const response = await chatView.promptAskUserQuestion({
@@ -550,11 +550,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // an actual backend request.
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine._dev.askUserQuestionDemo",
+      "codez._dev.askUserQuestionDemo",
       async () => {
         if (!chatView) throw new Error("chatView is not initialized");
-        await showCodexMineViewContainer();
-        await vscode.commands.executeCommand("codexMine.chatView.focus");
+        await showCodezViewContainer();
+        await vscode.commands.executeCommand("codez.chatView.focus");
         chatView.reveal();
 
         const response = await chatView.promptAskUserQuestion({
@@ -589,7 +589,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(
-      "codex-mine-diff",
+      "codez-diff",
       diffProvider,
     ),
   );
@@ -602,7 +602,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   context.subscriptions.push(sessionTree);
   context.subscriptions.push(
-    vscode.window.createTreeView("codexMine.sessionsView", {
+    vscode.window.createTreeView("codez.sessionsView", {
       treeDataProvider: sessionTree,
     }),
   );
@@ -650,7 +650,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (rewind) {
         if (!isMineSelectedForBackendKey(session.backendKey)) {
           void vscode.window.showErrorMessage(
-            "Rewind は codex-mine 選択時のみ対応です。Settings (⚙) から codex-mine を選択し、必要ならバックエンドを再起動してください。",
+            "Rewind は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
           );
           return;
         }
@@ -663,7 +663,7 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
         try {
-          await ensureBackendMatchesConfiguredCli(folder, "mineFeature");
+          await ensureBackendMatchesConfiguredCli(folder, "codezFeature");
         } catch (err) {
           outputChannel?.appendLine(
             `[rewind] Backend configuration check failed: ${String(err)}`,
@@ -803,22 +803,22 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!backendManager) throw new Error("backendManager is not initialized");
       if (!outputChannel) throw new Error("outputChannel is not initialized");
 
-      const cfg = vscode.workspace.getConfiguration("codexMine");
-      const mineCmd =
-        cfg.get<string>("cli.commands.codexMine") ??
+      const cfg = vscode.workspace.getConfiguration("codez");
+      const codezCmd =
+        cfg.get<string>("cli.commands.codez") ??
         cfg.get<string>("cli.commands.mine") ??
-        "codex-mine";
+        "codez";
 
       const next = normalizeCliVariant(variant);
-      if (next === "codex-mine") {
-        const mineProbe = await probeCliVersion(mineCmd);
-        const mineDetected =
-          mineProbe.ok && mineProbe.version.includes("-mine.");
-        if (!mineDetected) {
+      if (next === "codez") {
+        const codezProbe = await probeCliVersion(codezCmd);
+        const codezDetected =
+          codezProbe.ok && codezProbe.version.includes("-codez.");
+        if (!codezDetected) {
           throw new Error(
-            mineProbe.ok
-              ? `codex-mine not detected (found: ${mineProbe.version})`
-              : `codex-mine not detected (${mineProbe.error})`,
+            codezProbe.ok
+              ? `codez not detected (found: ${codezProbe.version})`
+              : `codez not detected (${codezProbe.error})`,
           );
         }
       }
@@ -836,7 +836,7 @@ export function activate(context: vscode.ExtensionContext): void {
           if (next !== "auto") {
             cliVariantByBackendKey.set(
               f.uri.toString(),
-              next === "codex-mine" ? "codex-mine" : "codex",
+              next === "codez" ? "codez" : "codex",
             );
           }
         }
@@ -897,7 +897,7 @@ export function activate(context: vscode.ExtensionContext): void {
         void vscode.window.showErrorMessage("No session selected.");
         return;
       }
-      await vscode.commands.executeCommand("codexMine.openLatestDiff", {
+      await vscode.commands.executeCommand("codez.openLatestDiff", {
         sessionId: session.id,
       });
     },
@@ -944,7 +944,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!session) return;
     try {
       // Ensure the view is visible so the user sees the restored conversation.
-      await showCodexMineViewContainer();
+      await showCodezViewContainer();
       setActiveSession(session.id, { markRead: false });
       const res = await backendManager.resumeSession(session);
       void ensureModelsFetched(session);
@@ -959,7 +959,7 @@ export function activate(context: vscode.ExtensionContext): void {
   })();
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexMine.startBackend", async () => {
+    vscode.commands.registerCommand("codez.startBackend", async () => {
       if (!backendManager) throw new Error("backendManager is not initialized");
 
       const folder = await pickWorkspaceFolder();
@@ -970,7 +970,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexMine.clearRuntimeCache", async () => {
+    vscode.commands.registerCommand("codez.clearRuntimeCache", async () => {
       if (!extensionContext) throw new Error("extensionContext is not set");
       if (!sessions) throw new Error("sessions is not initialized");
 
@@ -1005,7 +1005,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.pickWorkspaceColor",
+      "codez.pickWorkspaceColor",
       async (args?: unknown) => {
         const workspaceFolderUri =
           typeof (args as any)?.workspaceFolderUri === "string"
@@ -1088,7 +1088,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.newSession",
+      "codez.newSession",
       async (args?: unknown) => {
         if (!backendManager)
           throw new Error("backendManager is not initialized");
@@ -1134,13 +1134,13 @@ export function activate(context: vscode.ExtensionContext): void {
         );
         setActiveSession(session.id);
         void ensureModelsFetched(session);
-        await showCodexMineViewContainer();
+        await showCodezViewContainer();
       },
     ),
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexMine.resumeFromHistory", async () => {
+    vscode.commands.registerCommand("codez.resumeFromHistory", async () => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       if (!sessions) throw new Error("sessions is not initialized");
       if (!extensionContext) throw new Error("extensionContext is not set");
@@ -1230,14 +1230,14 @@ export function activate(context: vscode.ExtensionContext): void {
         hydrateRuntimeFromThread(session.id, resumed.thread);
         setActiveSession(session.id);
         refreshCustomPromptsFromDisk();
-        await showCodexMineViewContainer();
+        await showCodezViewContainer();
         return;
       }
     }),
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexMine.interruptTurn", async () => {
+    vscode.commands.registerCommand("codez.interruptTurn", async () => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       if (!sessions) throw new Error("sessions is not initialized");
 
@@ -1287,7 +1287,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexMine.reloadSession", async () => {
+    vscode.commands.registerCommand("codez.reloadSession", async () => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       if (!sessions) throw new Error("sessions is not initialized");
 
@@ -1304,7 +1304,7 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       try {
-        await ensureBackendMatchesConfiguredCli(folder, "mineFeature");
+        await ensureBackendMatchesConfiguredCli(folder, "codezFeature");
       } catch (err) {
         output.appendLine(
           `[session] Reload backend configuration check failed: ${String(err)}`,
@@ -1358,7 +1358,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexMine.debug.stressUi", async () => {
+    vscode.commands.registerCommand("codez.debug.stressUi", async () => {
       if (!sessions) throw new Error("sessions is not initialized");
       if (!outputChannel) throw new Error("outputChannel is not initialized");
       if (!chatView) throw new Error("chatView is not initialized");
@@ -1501,7 +1501,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.debug.stopStressUi",
+      "codez.debug.stopStressUi",
       async () => {
         if (!outputChannel) throw new Error("outputChannel is not initialized");
         if (!stressUiJob) {
@@ -1517,7 +1517,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexMine.showStatus", async () => {
+    vscode.commands.registerCommand("codez.showStatus", async () => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       if (!sessions) throw new Error("sessions is not initialized");
 
@@ -1627,7 +1627,7 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexMine.switchAccount", async () => {
+    vscode.commands.registerCommand("codez.switchAccount", async () => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       if (!sessions) throw new Error("sessions is not initialized");
       const bm = backendManager;
@@ -1721,7 +1721,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.showSkills",
+      "codez.showSkills",
       async (args?: unknown) => {
         if (!backendManager)
           throw new Error("backendManager is not initialized");
@@ -1779,7 +1779,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.showAgents",
+      "codez.showAgents",
       async (args?: unknown) => {
         if (!sessions) throw new Error("sessions is not initialized");
 
@@ -1801,7 +1801,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
         if (!isMineSelectedForBackendKey(session.backendKey)) {
           void vscode.window.showInformationMessage(
-            "Agents are available only when running codex-mine. Click Settings (⚙) and select codex-mine, then restart the backend.",
+            "Agents are available only when running codez. Click Settings (⚙) and select codez, then restart the backend.",
           );
           return;
         }
@@ -1813,7 +1813,7 @@ export function activate(context: vscode.ExtensionContext): void {
         }
 
         try {
-          // Ensure the backend is configured as codex-mine (purely for UX; listing is from disk).
+          // Ensure the backend is configured as codez (purely for UX; listing is from disk).
           await ensureBackendMatchesConfiguredCli(folder, "agents");
         } catch (err) {
           output.appendLine(
@@ -1852,16 +1852,16 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexMine.selectCliVariant", async () => {
+    vscode.commands.registerCommand("codez.selectCliVariant", async () => {
       if (!backendManager) throw new Error("backendManager is not initialized");
 
       // Global default: do not prompt for a directory. The selected CLI becomes the default
       // for subsequent sessions/backends, and `New` will use it (auto-restarting if needed).
-      const cfg = vscode.workspace.getConfiguration("codexMine");
-      const mineCmd =
-        cfg.get<string>("cli.commands.codexMine") ??
+      const cfg = vscode.workspace.getConfiguration("codez");
+      const codezCmd =
+        cfg.get<string>("cli.commands.codez") ??
         cfg.get<string>("cli.commands.mine") ??
-        "codex-mine";
+        "codez";
       const codexCmd =
         cfg.get<string>("cli.commands.codex") ??
         cfg.get<string>("cli.commands.upstream") ??
@@ -1870,18 +1870,19 @@ export function activate(context: vscode.ExtensionContext): void {
         cfg.get<string>("cli.variant") ?? "auto",
       );
 
-      const mineProbe = await probeCliVersion(mineCmd);
-      const mineDetected = mineProbe.ok && mineProbe.version.includes("-mine.");
+      const codezProbe = await probeCliVersion(codezCmd);
+      const codezDetected =
+        codezProbe.ok && codezProbe.version.includes("-codez.");
 
       const items: Array<{
         label: string;
         detail: string;
-        variant: "auto" | "codex" | "codex-mine";
+        variant: "auto" | "codex" | "codez";
         disabledReason?: string;
       }> = [
         {
           label: "Auto",
-          detail: "Use codexMine.backend.command (existing behavior)",
+          detail: "Use codez.backend.command (existing behavior)",
           variant: "auto",
         },
         {
@@ -1890,14 +1891,14 @@ export function activate(context: vscode.ExtensionContext): void {
           variant: "codex",
         },
         {
-          label: "codex-mine",
-          detail: mineDetected
-            ? `Command: ${mineCmd} (${mineProbe.version})`
-            : mineProbe.ok
-              ? `Command: ${mineCmd} (detected: ${mineProbe.version}, not a mine build)`
-              : `Command: ${mineCmd} (not detected)`,
-          variant: "codex-mine",
-          disabledReason: mineDetected ? undefined : "codex-mine not detected",
+          label: "codez",
+          detail: codezDetected
+            ? `Command: ${codezCmd} (${codezProbe.version})`
+            : codezProbe.ok
+              ? `Command: ${codezCmd} (detected: ${codezProbe.version}, not a codez build)`
+              : `Command: ${codezCmd} (not detected)`,
+          variant: "codez",
+          disabledReason: codezDetected ? undefined : "codez not detected",
         },
       ];
 
@@ -1911,7 +1912,7 @@ export function activate(context: vscode.ExtensionContext): void {
       );
       if (!picked) return;
 
-      if (picked.it.variant === "codex-mine" && picked.it.disabledReason) {
+      if (picked.it.variant === "codez" && picked.it.disabledReason) {
         void vscode.window.showErrorMessage(picked.it.disabledReason);
         return;
       }
@@ -1940,7 +1941,7 @@ export function activate(context: vscode.ExtensionContext): void {
           if (picked.it.variant !== "auto") {
             cliVariantByBackendKey.set(
               f.uri.toString(),
-              picked.it.variant === "codex-mine" ? "codex-mine" : "codex",
+              picked.it.variant === "codez" ? "codez" : "codex",
             );
           }
         }
@@ -1954,7 +1955,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.sessionMenu",
+      "codez.sessionMenu",
       async (args?: unknown) => {
         if (!sessions) throw new Error("sessions is not initialized");
         const session = parseSessionArg(args, sessions);
@@ -1975,27 +1976,27 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!picked) return;
 
         if (picked.action === "copySessionId") {
-          await vscode.commands.executeCommand("codexMine.copySessionId", {
+          await vscode.commands.executeCommand("codez.copySessionId", {
             sessionId: session.id,
           });
           return;
         }
 
         if (picked.action === "rename") {
-          await vscode.commands.executeCommand("codexMine.renameSession", {
+          await vscode.commands.executeCommand("codez.renameSession", {
             sessionId: session.id,
           });
           return;
         }
 
         if (picked.action === "openPanel") {
-          await vscode.commands.executeCommand("codexMine.openSessionPanel", {
+          await vscode.commands.executeCommand("codez.openSessionPanel", {
             sessionId: session.id,
           });
           return;
         }
 
-        await vscode.commands.executeCommand("codexMine.hideSessionTab", {
+        await vscode.commands.executeCommand("codez.hideSessionTab", {
           sessionId: session.id,
         });
       },
@@ -2004,7 +2005,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.hideSessionTab",
+      "codez.hideSessionTab",
       async (args?: unknown) => {
         if (!sessions) throw new Error("sessions is not initialized");
         const session = parseSessionArg(args, sessions);
@@ -2035,7 +2036,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.closeSession",
+      "codez.closeSession",
       async (args?: unknown) => {
         if (!sessions) throw new Error("sessions is not initialized");
         if (!extensionContext) throw new Error("extensionContext is not set");
@@ -2072,7 +2073,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.copySessionId",
+      "codez.copySessionId",
       async (args?: unknown) => {
         if (!sessions) throw new Error("sessions is not initialized");
         const session = parseSessionArg(args, sessions);
@@ -2089,7 +2090,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.sendMessage",
+      "codez.sendMessage",
       async (args?: unknown) => {
         if (!backendManager)
           throw new Error("backendManager is not initialized");
@@ -2108,14 +2109,14 @@ export function activate(context: vscode.ExtensionContext): void {
         }
 
         setActiveSession(session.id);
-        await showCodexMineViewContainer();
+        await showCodezViewContainer();
       },
     ),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.openSession",
+      "codez.openSession",
       async (args?: unknown) => {
         if (!backendManager)
           throw new Error("backendManager is not initialized");
@@ -2132,14 +2133,14 @@ export function activate(context: vscode.ExtensionContext): void {
         hydrateRuntimeFromThread(session.id, res.thread);
         setActiveSession(session.id);
         refreshCustomPromptsFromDisk();
-        await showCodexMineViewContainer();
+        await showCodezViewContainer();
       },
     ),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.openSessionPanel",
+      "codez.openSessionPanel",
       async (args?: unknown) => {
         if (!backendManager)
           throw new Error("backendManager is not initialized");
@@ -2168,7 +2169,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.openLatestDiff",
+      "codez.openLatestDiff",
       async (args?: unknown) => {
         if (!backendManager)
           throw new Error("backendManager is not initialized");
@@ -2197,7 +2198,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.selectSession",
+      "codez.selectSession",
       async (args?: unknown) => {
         if (!backendManager)
           throw new Error("backendManager is not initialized");
@@ -2213,7 +2214,7 @@ export function activate(context: vscode.ExtensionContext): void {
         // have hydrated blocks for a session yet. In that case, treat the click as an explicit
         // "open" and resume once (only if nothing is currently running).
         setActiveSession(session.id, { markRead: false });
-        await showCodexMineViewContainer();
+        await showCodezViewContainer();
 
         const rt = ensureRuntime(session.id);
         if (hasConversationBlocks(rt)) {
@@ -2266,7 +2267,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.renameSession",
+      "codez.renameSession",
       async (args?: unknown) => {
         if (!sessions) throw new Error("sessions is not initialized");
 
@@ -2298,7 +2299,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "codexMine.respondApproval",
+      "codez.respondApproval",
       async (args?: unknown) => {
         if (typeof args !== "object" || args === null) return;
         const o = args as Record<string, unknown>;
@@ -2796,7 +2797,7 @@ async function handleSlashCommand(
   }
 
   if (cmd === "new") {
-    await vscode.commands.executeCommand("codexMine.newSession", {
+    await vscode.commands.executeCommand("codez.newSession", {
       workspaceFolderUri: session.workspaceFolderUri,
     });
     return true;
@@ -2813,7 +2814,7 @@ async function handleSlashCommand(
       schedulePersistRuntime(session.id);
       return true;
     }
-    await vscode.commands.executeCommand("codexMine.showStatus");
+    await vscode.commands.executeCommand("codez.showStatus");
     return true;
   }
   if (cmd === "init") {
@@ -2898,7 +2899,7 @@ async function handleSlashCommand(
         id: newLocalId("compactUnsupported"),
         type: "error",
         title: "Compact unsupported",
-        text: "/compact は codex-mine 選択時のみ対応です。Settings (⚙) から codex-mine を選択し、必要ならバックエンドを再起動してください。",
+        text: "/compact は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
       });
       chatView?.refresh();
       schedulePersistRuntime(session.id);
@@ -2920,7 +2921,7 @@ async function handleSlashCommand(
         return true;
       }
       try {
-        await ensureBackendMatchesConfiguredCli(folder, "mineFeature");
+        await ensureBackendMatchesConfiguredCli(folder, "codezFeature");
       } catch (err) {
         outputChannel?.appendLine(
           `[compact] Backend configuration check failed: ${String(err)}`,
@@ -2999,11 +3000,11 @@ async function handleSlashCommand(
     return true;
   }
   if (cmd === "resume") {
-    await vscode.commands.executeCommand("codexMine.resumeFromHistory");
+    await vscode.commands.executeCommand("codez.resumeFromHistory");
     return true;
   }
   if (cmd === "diff") {
-    await vscode.commands.executeCommand("codexMine.openLatestDiff", {
+    await vscode.commands.executeCommand("codez.openLatestDiff", {
       sessionId: session.id,
     });
     return true;
@@ -3017,19 +3018,19 @@ async function handleSlashCommand(
       chatView?.refresh();
       return true;
     }
-    await vscode.commands.executeCommand("codexMine.renameSession", {
+    await vscode.commands.executeCommand("codez.renameSession", {
       sessionId: session.id,
     });
     return true;
   }
   if (cmd === "skills") {
-    await vscode.commands.executeCommand("codexMine.showSkills", {
+    await vscode.commands.executeCommand("codez.showSkills", {
       sessionId: session.id,
     });
     return true;
   }
   if (cmd === "agents") {
-    await vscode.commands.executeCommand("codexMine.showAgents", {
+    await vscode.commands.executeCommand("codez.showAgents", {
       sessionId: session.id,
     });
     return true;
@@ -3212,7 +3213,7 @@ async function handleSlashCommand(
         "Slash commands:",
         mineSelected
           ? "- /compact: Compact context"
-          : "- /compact: (codex-mine 選択時のみ対応)",
+          : "- /compact: (codez 選択時のみ対応)",
         "- /new: New session",
         "- /init: Create AGENTS.md",
         "- /resume: Resume from history",
@@ -3222,7 +3223,7 @@ async function handleSlashCommand(
         "- /skills: Browse skills",
         mineSelected
           ? "- /agents: Browse agents"
-          : "- /agents: Browse agents (codex-mine 選択時のみ対応)",
+          : "- /agents: Browse agents (codez 選択時のみ対応)",
         "- /account: Account management",
         "- /help: Show help",
         customList ? "\nCustom prompts:" : null,
@@ -3408,8 +3409,8 @@ function looksOpaqueCommandToken(command: string): boolean {
   return true;
 }
 
-async function showCodexMineViewContainer(): Promise<void> {
-  await vscode.commands.executeCommand("workbench.view.extension.codexMine");
+async function showCodezViewContainer(): Promise<void> {
+  await vscode.commands.executeCommand("workbench.view.extension.codez");
 }
 
 function hasConversationBlocks(rt: SessionRuntime): boolean {
@@ -3678,34 +3679,34 @@ function resolveCodexHome(): string {
 
 function inferCliVariantFromCliVersion(
   cliVersion: string | null,
-): "unknown" | "codex" | "codex-mine" {
+): "unknown" | "codex" | "codez" {
   if (!cliVersion) return "unknown";
-  return cliVersion.includes("-mine.") ? "codex-mine" : "codex";
+  return cliVersion.includes("-codez.") ? "codez" : "codex";
 }
 
 function cliVariantForBackendKey(
   backendKey: string,
-): "unknown" | "codex" | "codex-mine" {
+): "unknown" | "codex" | "codez" {
   const detected = cliVariantByBackendKey.get(backendKey) ?? "unknown";
   if (detected !== "unknown") return detected;
 
   // No detected runtime variant yet (e.g. backend not started). Use config as a hint.
   const folderUri = vscode.Uri.parse(backendKey);
-  const cfg = vscode.workspace.getConfiguration("codexMine", folderUri);
+  const cfg = vscode.workspace.getConfiguration("codez", folderUri);
   const raw = cfg.get<string>("cli.variant") ?? "auto";
   const normalized =
-    raw === "mine" ? "codex-mine" : raw === "upstream" ? "codex" : raw;
-  if (normalized === "codex-mine") return "codex-mine";
+    raw === "mine" ? "codez" : raw === "upstream" ? "codex" : raw;
+  if (normalized === "codez") return "codez";
   if (normalized === "codex") return "codex";
   return "unknown";
 }
 
 function selectedCliVariantForBackendKey(
   backendKey: string,
-): "auto" | "codex" | "codex-mine" {
+): "auto" | "codex" | "codez" {
   try {
     const folderUri = vscode.Uri.parse(backendKey);
-    const cfg = vscode.workspace.getConfiguration("codexMine", folderUri);
+    const cfg = vscode.workspace.getConfiguration("codez", folderUri);
     return normalizeCliVariant(cfg.get<string>("cli.variant") ?? "auto");
   } catch {
     return "auto";
@@ -3713,7 +3714,7 @@ function selectedCliVariantForBackendKey(
 }
 
 function isMineSelectedForBackendKey(backendKey: string): boolean {
-  return selectedCliVariantForBackendKey(backendKey) === "codex-mine";
+  return selectedCliVariantForBackendKey(backendKey) === "codez";
 }
 
 function backendKeyForCwd(cwd: string | null): string | null {
@@ -3730,16 +3731,16 @@ function backendKeyForCwd(cwd: string | null): string | null {
 
 function normalizeCliVariant(
   raw: string | null,
-): "auto" | "codex" | "codex-mine" {
+): "auto" | "codex" | "codez" {
   const v = (raw ?? "auto").trim();
-  if (v === "mine") return "codex-mine";
+  if (v === "mine") return "codez";
   if (v === "upstream") return "codex";
-  if (v === "codex" || v === "codex-mine" || v === "auto") return v;
+  if (v === "codex" || v === "codez" || v === "auto") return v;
   return "auto";
 }
 
 function desiredCliCommandFromConfig(cfg: vscode.WorkspaceConfiguration): {
-  variant: "auto" | "codex" | "codex-mine";
+  variant: "auto" | "codex" | "codez";
   command: string | null;
 } {
   const variant = normalizeCliVariant(cfg.get<string>("cli.variant") ?? "auto");
@@ -3747,26 +3748,26 @@ function desiredCliCommandFromConfig(cfg: vscode.WorkspaceConfiguration): {
     cfg.get<string>("cli.commands.codex") ??
     cfg.get<string>("cli.commands.upstream") ??
     "codex";
-  const mineCmd =
-    cfg.get<string>("cli.commands.codexMine") ??
+  const codezCmd =
+    cfg.get<string>("cli.commands.codez") ??
     cfg.get<string>("cli.commands.mine") ??
-    "codex-mine";
+    "codez";
   const backendCmd = cfg.get<string>("backend.command") ?? null;
 
   if (variant === "codex") return { variant, command: codexCmd };
-  if (variant === "codex-mine") return { variant, command: mineCmd };
+  if (variant === "codez") return { variant, command: codezCmd };
   return { variant, command: backendCmd };
 }
 
 async function ensureBackendMatchesConfiguredCli(
   folder: vscode.WorkspaceFolder,
-  reason: "newSession" | "agents" | "mineFeature",
+  reason: "newSession" | "agents" | "codezFeature",
   notifyUser = true,
 ): Promise<void> {
   if (!backendManager) throw new Error("backendManager is not initialized");
   if (!outputChannel) throw new Error("outputChannel is not initialized");
 
-  const cfg = vscode.workspace.getConfiguration("codexMine", folder.uri);
+  const cfg = vscode.workspace.getConfiguration("codez", folder.uri);
   const desired = desiredCliCommandFromConfig(cfg);
   if (desired.variant === "auto" || !desired.command) return;
 
@@ -3774,7 +3775,7 @@ async function ensureBackendMatchesConfiguredCli(
   if (!running) {
     cliVariantByBackendKey.set(
       folder.uri.toString(),
-      desired.variant === "codex-mine" ? "codex-mine" : "codex",
+      desired.variant === "codez" ? "codez" : "codex",
     );
     return;
   }
@@ -3786,7 +3787,7 @@ async function ensureBackendMatchesConfiguredCli(
   await backendManager.restartForWorkspaceFolder(folder);
   cliVariantByBackendKey.set(
     folder.uri.toString(),
-    desired.variant === "codex-mine" ? "codex-mine" : "codex",
+    desired.variant === "codez" ? "codez" : "codex",
   );
   if (notifyUser) {
     void vscode.window.showInformationMessage(
@@ -3832,7 +3833,7 @@ async function probeCliVersion(
   });
 }
 
-// Agents are read from disk only when running codex-mine.
+// Agents are read from disk only when running codez.
 
 function parsePromptFrontmatter(content: string): {
   description: string | null;
@@ -6039,7 +6040,7 @@ function updatePendingApprovalsFromItem(
   }
 }
 
-const SESSIONS_KEY = "codexMine.sessions.v1";
+const SESSIONS_KEY = "codez.sessions.v1";
 type PersistedSession = Pick<
   Session,
   | "id"

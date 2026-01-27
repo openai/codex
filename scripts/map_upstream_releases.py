@@ -98,7 +98,7 @@ def parse_args() -> argparse.Namespace:
 def _http_get_json(url: str) -> Any:
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "codex-mine/scripts/map_upstream_releases.py",
+        "User-Agent": "codez/scripts/map_upstream_releases.py",
     }
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if token:

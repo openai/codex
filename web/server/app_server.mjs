@@ -149,7 +149,7 @@ export class AppServerProcess {
     this.rpc = new RpcClient(child, { log: this.log, logRpcPayloads: this.logRpcPayloads });
 
     const params = {
-      clientInfo: { name: "codex-mine-web", title: "Codex Mine Web", version: "0.0.1" },
+      clientInfo: { name: "codez-web", title: "Codez Web", version: "0.0.1" },
     };
     const result = await this.rpc.request({ method: "initialize", params });
     this.log(`Initialized app-server (userAgent=${String(result?.userAgent ?? "unknown")})`);

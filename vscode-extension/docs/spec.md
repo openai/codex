@@ -76,11 +76,11 @@ Supported commands (handled by the extension):
 - `/init` - generate an `AGENTS.md` (skips if it already exists)
 - `/resume` - resume from history
 - `/status` - show status
-- `/compact` - compact context (codex-mine backend only)
+- `/compact` - compact context (codez backend only)
 - `/diff` - open latest diff
 - `/rename <title>` - rename session
 - `/skills` - browse skills
-- `/agents` - browse agents (codex-mine backend only)
+- `/agents` - browse agents (codez backend only)
 - `/help` - show help
 
 Custom prompts:
@@ -122,7 +122,7 @@ Mentions follow a CLI-like rule: `@...` must start on a whitespace boundary.
 The webview provides in-input suggestions for:
 
 - Slash commands, in this order:
-  1. Built-in commands (e.g. `/compact` when using codex-mine)
+  1. Built-in commands (e.g. `/compact` when using codez)
   2. Custom prompts from `$CODEX_HOME/prompts`
   3. UI commands (`/new`, `/init`, `/resume`, `/status`, `/diff`, `/rename`, `/skills`, `/agents`, `/help`)
 - Mentions (`@selection`, file paths)

@@ -34,7 +34,7 @@
 - main の `harness_overrides` を、0.85側の新しいテストセットアップ（`make_config()`）にも引き継ぐべきか。
   - 0.85側は `config.cwd = ...` を直にセットしているが、main 側は `ConfigBuilder` の overrides 経由で `cwd` を入れている。
   - どちらが「テストとして正しい前提」かを決める必要がある（副作用として、Config の他フィールド解決に影響し得る）。
-- `Feature::ChildAgentsMd` の有効/無効により user instructions の末尾メッセージが変わるため、codex-mine 側の期待値（snapshots/テスト文言）もそれに合わせる必要がある。
+- `Feature::ChildAgentsMd` の有効/無効により user instructions の末尾メッセージが変わるため、codez 側の期待値（snapshots/テスト文言）もそれに合わせる必要がある。
 
 ## 競合 2: `vscode-extension/src/ui/chat_view.ts`
 

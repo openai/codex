@@ -37,7 +37,7 @@ export class SessionTreeDataProvider
         const idx = this.getWorkspaceColorIndex(element.workspaceFolderUri);
         item.iconPath = iconForColorIndex(this.extensionUri, idx);
       }
-      item.contextValue = "codexMine.folder";
+      item.contextValue = "codez.folder";
       return item;
     }
 
@@ -53,9 +53,9 @@ export class SessionTreeDataProvider
     item.iconPath = iconForColorIndex(this.extensionUri, idx);
     // Show full thread id in description for copyability; omit short id in label.
     item.description = element.session.threadId;
-    item.contextValue = "codexMine.session";
+    item.contextValue = "codez.session";
     item.command = {
-      command: "codexMine.openSession",
+      command: "codez.openSession",
       title: "Open Session",
       arguments: [{ sessionId: element.session.id }],
     };
