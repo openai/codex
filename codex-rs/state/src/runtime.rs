@@ -57,6 +57,7 @@ impl StateRuntime {
             runtime
                 .otel
                 .counter(METRIC_DB_INIT, 1, &[("status", "created")]);
+            warn!("state db created; performing initial backfill scan of sessions/ (may be slow)");
             match runtime
                 .db
                 .backfill_sessions(
@@ -211,6 +212,6 @@ impl StateRuntime {
 
     /// Emit a startup summary when the runtime is enabled.
     pub async fn startup_summary(&self) {
-        info!("state db enabled at {}", self.db.path().display(),);
+        info!("state db enabled at {}", self.db.path().display());
     }
 }

@@ -100,12 +100,14 @@ WHERE id = ?
         let mut builder =
             QueryBuilder::<Sqlite>::new("SELECT rollout_path FROM threads WHERE id = ");
         builder.push_bind(id.to_string());
-        if let Some(archived_only) = archived_only {
-            if archived_only {
+        match archived_only {
+            Some(true) => {
                 builder.push(" AND archived = 1");
-            } else {
+            }
+            Some(false) => {
                 builder.push(" AND archived = 0");
             }
+            None => {}
         }
         let row = builder.build().fetch_optional(&self.pool).await?;
         Ok(row

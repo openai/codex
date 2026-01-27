@@ -471,9 +471,8 @@ async fn rollout_writer(
         };
 
         // Write the SessionMeta as the first item in the file, wrapped in a rollout line
-        writer
-            .write_rollout_item(RolloutItem::SessionMeta(session_meta_line))
-            .await?;
+        let rollout_item = RolloutItem::SessionMeta(session_meta_line);
+        writer.write_rollout_item(&rollout_item).await?;
         state_db::reconcile_rollout(rollout_path.as_path()).await;
     }
 
@@ -484,8 +483,8 @@ async fn rollout_writer(
                 let mut persisted_items = Vec::new();
                 for item in items {
                     if is_persisted_response_item(&item) {
-                        persisted_items.push(item.clone());
-                        writer.write_rollout_item(item).await?;
+                        writer.write_rollout_item(&item).await?;
+                        persisted_items.push(item);
                     }
                 }
                 if persisted_items.is_empty() {
@@ -602,8 +601,15 @@ struct JsonlWriter {
     file: tokio::fs::File,
 }
 
+#[derive(serde::Serialize)]
+struct RolloutLineRef<'a> {
+    timestamp: String,
+    #[serde(flatten)]
+    item: &'a RolloutItem,
+}
+
 impl JsonlWriter {
-    async fn write_rollout_item(&mut self, rollout_item: RolloutItem) -> std::io::Result<()> {
+    async fn write_rollout_item(&mut self, rollout_item: &RolloutItem) -> std::io::Result<()> {
         let timestamp_format: &[FormatItem] = format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
         );
@@ -611,7 +617,7 @@ impl JsonlWriter {
             .format(timestamp_format)
             .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
 
-        let line = RolloutLine {
+        let line = RolloutLineRef {
             timestamp,
             item: rollout_item,
         };

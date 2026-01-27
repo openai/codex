@@ -2,6 +2,10 @@ use crate::config::Config;
 use crate::features::Feature;
 use crate::rollout::list::Cursor;
 use crate::rollout::list::ThreadSortKey;
+use chrono::DateTime;
+use chrono::NaiveDateTime;
+use chrono::SecondsFormat;
+use chrono::Utc;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
@@ -74,13 +78,20 @@ fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
     let cursor = cursor?;
     let value = serde_json::to_value(cursor).ok()?;
     let cursor_str = value.as_str()?;
-    let mut parts = cursor_str.split('|');
-    let ts = parts.next()?.to_string();
-    let id_str = parts.next()?;
-    if parts.next().is_some() {
+    let (ts_str, id_str) = cursor_str.split_once('|')?;
+    if id_str.contains('|') {
         return None;
     }
     let id = Uuid::parse_str(id_str).ok()?;
+    let ts = if let Ok(naive) = NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%dT%H-%M-%S") {
+        DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc)
+            .to_rfc3339_opts(SecondsFormat::Secs, true)
+    } else if let Ok(dt) = DateTime::parse_from_rfc3339(ts_str) {
+        dt.with_timezone(&Utc)
+            .to_rfc3339_opts(SecondsFormat::Secs, true)
+    } else {
+        return None;
+    };
     Some(codex_state::Anchor { ts, id })
 }
 
@@ -270,10 +281,13 @@ pub async fn mark_unarchived(thread_id: ThreadId, rollout_path: &Path) {
 /// Extract the thread id UUID string from a rollout path, if it matches the standard naming scheme.
 pub fn rollout_id_from_path(path: &Path) -> Option<String> {
     let file_name = path.file_name()?.to_string_lossy();
-    let id_str = file_name.strip_prefix("rollout-")?;
-    let id_str = id_str.strip_suffix(".jsonl")?;
-    let uuid_part = id_str.rsplit_once('-')?.1;
-    Some(uuid_part.to_string())
+    let core = file_name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    let (_sep_idx, uuid) = core.match_indices('-').rev().find_map(|(idx, _)| {
+        Uuid::parse_str(&core[idx + 1..])
+            .ok()
+            .map(|uuid| (idx, uuid))
+    })?;
+    Some(uuid.to_string())
 }
 
 /// Record a state discrepancy metric with a stage and reason tag.
@@ -298,4 +312,37 @@ pub async fn startup_summary(config: &Config) {
         return;
     };
     ctx.runtime.startup_summary().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rollout::list::parse_cursor;
+    use pretty_assertions::assert_eq;
+    use std::path::Path;
+
+    #[test]
+    fn rollout_id_from_path_parses_full_uuid() {
+        let uuid = Uuid::new_v4();
+        let path_str = format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl");
+        let path = Path::new(path_str.as_str());
+        assert_eq!(rollout_id_from_path(path), Some(uuid.to_string()));
+    }
+
+    #[test]
+    fn cursor_to_anchor_normalizes_timestamp_format() {
+        let uuid = Uuid::new_v4();
+        let ts_str = "2026-01-27T12-34-56";
+        let token = format!("{ts_str}|{uuid}");
+        let cursor = parse_cursor(token.as_str()).expect("cursor should parse");
+        let anchor = cursor_to_anchor(Some(&cursor)).expect("anchor should parse");
+
+        let naive =
+            NaiveDateTime::parse_from_str(ts_str, "%Y-%m-%dT%H-%M-%S").expect("ts should parse");
+        let expected_ts = DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc)
+            .to_rfc3339_opts(SecondsFormat::Secs, true);
+
+        assert_eq!(anchor.id, uuid);
+        assert_eq!(anchor.ts, expected_ts);
+    }
 }

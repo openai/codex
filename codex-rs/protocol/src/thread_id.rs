@@ -58,7 +58,7 @@ impl Default for ThreadId {
 
 impl Display for ThreadId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.uuid)
+        Display::fmt(&self.uuid, f)
     }
 }
 

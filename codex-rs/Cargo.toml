@@ -46,7 +46,8 @@ members = [
     "utils/readiness",
     "utils/string",
     "codex-client",
-    "codex-api", "state",
+    "codex-api",
+    "state",
 ]
 resolver = "2"
 
