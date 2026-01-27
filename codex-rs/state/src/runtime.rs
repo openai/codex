@@ -225,7 +225,10 @@ WHERE 1 = 1
             .build_query_as::<ThreadRow>()
             .fetch_all(self.pool.as_ref())
             .await?;
-        let mut items = rows.into_iter().map(ThreadMetadata::try_from).collect::<Result<Vec<_>, _>>()?;
+        let mut items = rows
+            .into_iter()
+            .map(ThreadMetadata::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
         let num_scanned_rows = items.len();
         let next_anchor = if items.len() > page_size {
             items
