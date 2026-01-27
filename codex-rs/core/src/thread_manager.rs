@@ -42,11 +42,13 @@ use tracing::warn;
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
 
 fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -> Arc<FileWatcher> {
+    #[cfg(any(test, feature = "test-support"))]
     if let Ok(handle) = Handle::try_current()
         && handle.runtime_flavor() == RuntimeFlavor::CurrentThread
     {
         // The real watcher spins background tasks that can starve the
         // current-thread test runtime and cause event waits to time out.
+        // Integration tests compile with the `test-support` feature.
         warn!("using noop file watcher under current-thread test runtime");
         return Arc::new(FileWatcher::noop());
     }
