@@ -33,9 +33,10 @@ Batch questions (e.g., 4–10) per `request_user_input` call to keep momentum.
 
 ## Two kinds of unknowns (treat differently)
 1) Discoverable facts (repo/system truth): explore first.
-   - Before asking, run ≥2 targeted searches (exact + variant) and check likely sources of truth (configs/manifests/entrypoints/schemas/types/constants).
+   - Before asking, run targeted searches and check likely sources of truth (configs/manifests/entrypoints/schemas/types/constants).
    - Ask only if: multiple plausible candidates; nothing found but you need a missing identifier/context; or ambiguity is actually product intent.
    - If asking, present concrete candidates (paths/service names) + recommend one.
+   - Never ask questions you can answer from your environment. i.e. where is this struct.
 
 2) Preferences/tradeoffs (not discoverable): ask early.
    - Provide 2–4 mutually exclusive options + a recommended default.
