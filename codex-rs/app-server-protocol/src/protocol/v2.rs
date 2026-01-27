@@ -1969,6 +1969,9 @@ pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ExitedReviewMode { id: String, review: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ContextCompaction { id: String },
 }
 
 impl From<CoreTurnItem> for ThreadItem {
@@ -1997,6 +2000,9 @@ impl From<CoreTurnItem> for ThreadItem {
                 id: search.id,
                 query: search.query,
             },
+            CoreTurnItem::ContextCompaction(compaction) => {
+                ThreadItem::ContextCompaction { id: compaction.id }
+            }
         }
     }
 }
@@ -2370,6 +2376,14 @@ pub struct ContextCompactedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ContextCompactionStartedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct CommandExecutionRequestApprovalParams {
     pub thread_id: String,
     pub turn_id: String,
@@ -2617,6 +2631,7 @@ mod tests {
     use super::*;
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::AgentMessageItem;
+    use codex_protocol::items::ContextCompactionItem;
     use codex_protocol::items::ReasoningItem;
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
@@ -2739,6 +2754,17 @@ mod tests {
             ThreadItem::WebSearch {
                 id: "search-1".to_string(),
                 query: "docs".to_string(),
+            }
+        );
+
+        let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem {
+            id: "compact-1".to_string(),
+        });
+
+        assert_eq!(
+            ThreadItem::from(compaction_item),
+            ThreadItem::ContextCompaction {
+                id: "compact-1".to_string(),
             }
         );
     }

@@ -202,7 +202,7 @@ async fn remote_compact_runs_automatically() -> Result<()> {
         })
         .await?;
     let message = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ContextCompacted(_) => Some(true),
+        EventMsg::ContextCompactionEnded(_) => Some(true),
         _ => None,
     })
     .await;

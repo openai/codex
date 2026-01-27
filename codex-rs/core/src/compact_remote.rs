@@ -3,13 +3,17 @@ use std::sync::Arc;
 use crate::Prompt;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::compact::emit_compaction_ended;
+use crate::compact::emit_compaction_started;
 use crate::error::Result as CodexResult;
 use crate::protocol::CompactedItem;
-use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::RolloutItem;
 use crate::protocol::TurnStartedEvent;
+use codex_protocol::items::ContextCompactionItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
+use uuid::Uuid;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -28,12 +32,19 @@ pub(crate) async fn run_remote_compact_task(sess: Arc<Session>, turn_context: Ar
 }
 
 async fn run_remote_compact_task_inner(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
+    let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem {
+        id: Uuid::new_v4().to_string(),
+    });
+    emit_compaction_started(sess, turn_context, &compaction_item).await;
+
     if let Err(err) = run_remote_compact_task_inner_impl(sess, turn_context).await {
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
         );
         sess.send_event(turn_context, event).await;
     }
+
+    emit_compaction_ended(sess, turn_context, compaction_item).await;
 }
 
 async fn run_remote_compact_task_inner_impl(
@@ -76,9 +87,6 @@ async fn run_remote_compact_task_inner_impl(
     };
     sess.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
         .await;
-
-    let event = EventMsg::ContextCompacted(ContextCompactedEvent {});
-    sess.send_event(turn_context, event).await;
 
     Ok(())
 }

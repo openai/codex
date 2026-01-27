@@ -24,6 +24,7 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ContextCompactedNotification;
+use codex_app_server_protocol::ContextCompactionStartedNotification;
 use codex_app_server_protocol::DeprecationNoticeNotification;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::ErrorNotification;
@@ -601,7 +602,18 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::AgentMessageDelta(notification))
                 .await;
         }
-        EventMsg::ContextCompacted(..) => {
+        EventMsg::ContextCompactionStarted(..) => {
+            let notification = ContextCompactionStartedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ContextCompactionStarted(
+                    notification,
+                ))
+                .await;
+        }
+        EventMsg::ContextCompactionEnded(..) => {
             let notification = ContextCompactedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),

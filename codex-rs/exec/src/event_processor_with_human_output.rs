@@ -590,8 +590,11 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(self, "task aborted: review ended");
                 }
             },
-            EventMsg::ContextCompacted(_) => {
-                ts_msg!(self, "context compacted");
+            EventMsg::ContextCompactionStarted(_) => {
+                ts_msg!(self, "context compaction started");
+            }
+            EventMsg::ContextCompactionEnded(_) => {
+                ts_msg!(self, "context compaction ended");
             }
             EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
                 call_id,

@@ -21,6 +21,7 @@ pub enum TurnItem {
     AgentMessage(AgentMessageItem),
     Reasoning(ReasoningItem),
     WebSearch(WebSearchItem),
+    ContextCompaction(ContextCompactionItem),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -55,6 +56,11 @@ pub struct WebSearchItem {
     pub id: String,
     pub query: String,
     pub action: WebSearchAction,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct ContextCompactionItem {
+    pub id: String,
 }
 
 impl UserMessageItem {
@@ -195,6 +201,7 @@ impl TurnItem {
             TurnItem::AgentMessage(item) => item.id.clone(),
             TurnItem::Reasoning(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
+            TurnItem::ContextCompaction(item) => item.id.clone(),
         }
     }
 
@@ -204,6 +211,7 @@ impl TurnItem {
             TurnItem::AgentMessage(item) => item.as_legacy_events(),
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
             TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
+            TurnItem::ContextCompaction(_) => Vec::new(),
         }
     }
 }

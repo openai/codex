@@ -10,7 +10,8 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
 use crate::protocol::CompactedItem;
-use crate::protocol::ContextCompactedEvent;
+use crate::protocol::ContextCompactionEndedEvent;
+use crate::protocol::ContextCompactionStartedEvent;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnContextItem;
 use crate::protocol::TurnStartedEvent;
@@ -20,6 +21,7 @@ use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_token_count;
 use crate::truncate::truncate_text;
 use crate::util::backoff;
+use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
@@ -28,6 +30,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
 use tracing::error;
+use uuid::Uuid;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
@@ -71,6 +74,9 @@ async fn run_compact_task_inner(
     turn_context: Arc<TurnContext>,
     input: Vec<UserInput>,
 ) {
+    let compaction_item = compaction_turn_item();
+    emit_compaction_started(&sess, &turn_context, &compaction_item).await;
+
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
@@ -131,6 +137,7 @@ async fn run_compact_task_inner(
                 break;
             }
             Err(CodexErr::Interrupted) => {
+                emit_compaction_ended(&sess, &turn_context, compaction_item.clone()).await;
                 return;
             }
             Err(e @ CodexErr::ContextWindowExceeded) => {
@@ -147,6 +154,7 @@ async fn run_compact_task_inner(
                 sess.set_total_tokens_full(turn_context.as_ref()).await;
                 let event = EventMsg::Error(e.to_error_event(None));
                 sess.send_event(&turn_context, event).await;
+                emit_compaction_ended(&sess, &turn_context, compaction_item.clone()).await;
                 return;
             }
             Err(e) => {
@@ -164,6 +172,7 @@ async fn run_compact_task_inner(
                 } else {
                     let event = EventMsg::Error(e.to_error_event(None));
                     sess.send_event(&turn_context, event).await;
+                    emit_compaction_ended(&sess, &turn_context, compaction_item.clone()).await;
                     return;
                 }
             }
@@ -193,13 +202,44 @@ async fn run_compact_task_inner(
     });
     sess.persist_rollout_items(&[rollout_item]).await;
 
-    let event = EventMsg::ContextCompacted(ContextCompactedEvent {});
-    sess.send_event(&turn_context, event).await;
+    emit_compaction_ended(&sess, &turn_context, compaction_item).await;
 
     let warning = EventMsg::Warning(WarningEvent {
         message: "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted.".to_string(),
     });
     sess.send_event(&turn_context, warning).await;
+}
+
+fn compaction_turn_item() -> TurnItem {
+    TurnItem::ContextCompaction(ContextCompactionItem {
+        id: Uuid::new_v4().to_string(),
+    })
+}
+
+pub(crate) async fn emit_compaction_started(
+    sess: &Session,
+    turn_context: &TurnContext,
+    item: &TurnItem,
+) {
+    sess.send_event(
+        turn_context,
+        EventMsg::ContextCompactionStarted(ContextCompactionStartedEvent {}),
+    )
+    .await;
+    sess.emit_turn_item_started(turn_context, item).await;
+}
+
+pub(crate) async fn emit_compaction_ended(
+    sess: &Session,
+    turn_context: &TurnContext,
+    item: TurnItem,
+) {
+    sess.emit_turn_item_completed(turn_context, item).await;
+    sess.send_event(
+        turn_context,
+        EventMsg::ContextCompactionEnded(ContextCompactionEndedEvent {}),
+    )
+    .await;
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
