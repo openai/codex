@@ -3,12 +3,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
-use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
 
 use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
+use crate::bottom_pane::selection_popup_common::menu_surface_inset;
+use crate::bottom_pane::selection_popup_common::menu_surface_padding_height;
+use crate::bottom_pane::selection_popup_common::render_menu_surface;
 use crate::bottom_pane::selection_popup_common::render_rows;
 use crate::key_hint;
 use crate::render::renderable::Renderable;
@@ -17,18 +18,28 @@ use super::RequestUserInputOverlay;
 
 impl Renderable for RequestUserInputOverlay {
     fn desired_height(&self, width: u16) -> u16 {
-        let sections = self.layout_sections(Rect::new(0, 0, width, u16::MAX));
-        let mut height = sections
-            .question_lines
-            .len()
-            .saturating_add(5)
-            .saturating_add(self.notes_input_height(width) as usize)
-            .saturating_add(sections.footer_lines as usize);
+        let outer = Rect::new(0, 0, width, u16::MAX);
+        let inner = menu_surface_inset(outer);
+        let inner_width = inner.width.max(1);
+        let sections = self.layout_sections(Rect::new(0, 0, inner_width, u16::MAX));
+        let question_height = sections.question_lines.len();
+        let notes_height = self.notes_input_height(inner_width) as usize;
+        let footer_height = sections.footer_lines as usize;
+
+        // Tight minimum height: progress + header + question + (optional) titles/options
+        // + notes composer + footer + menu padding.
+        let mut height = question_height
+            .saturating_add(notes_height)
+            .saturating_add(footer_height)
+            .saturating_add(2); // progress + header
         if self.has_options() {
-            height = height.saturating_add(2);
+            height = height
+                .saturating_add(1) // answer title
+                .saturating_add(self.options_len())
+                .saturating_add(1); // notes title
         }
-        height = height.max(8);
-        height as u16
+        height = height.saturating_add(menu_surface_padding_height() as usize);
+        height.max(8) as u16
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -46,7 +57,13 @@ impl RequestUserInputOverlay {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let sections = self.layout_sections(area);
+        // Paint the same menu surface used by other bottom-pane overlays and
+        // then render the overlay content inside its inset area.
+        let content_area = render_menu_surface(area, buf);
+        if content_area.width == 0 || content_area.height == 0 {
+            return;
+        }
+        let sections = self.layout_sections(content_area);
 
         // Progress header keeps the user oriented across multiple questions.
         let progress_line = if self.question_count() > 0 {
@@ -177,9 +194,9 @@ impl RequestUserInputOverlay {
             );
             Paragraph::new(Line::from(warning.dim())).render(
                 Rect {
-                    x: area.x,
+                    x: content_area.x,
                     y: footer_y,
-                    width: area.width,
+                    width: content_area.width,
                     height: 1,
                 },
                 buf,
@@ -218,9 +235,9 @@ impl RequestUserInputOverlay {
         ]);
         Paragraph::new(Line::from(hint_spans).dim()).render(
             Rect {
-                x: area.x,
+                x: content_area.x,
                 y: hint_y,
-                width: area.width,
+                width: content_area.width,
                 height: 1,
             },
             buf,
@@ -232,129 +249,24 @@ impl RequestUserInputOverlay {
         if !self.focus_is_notes() {
             return None;
         }
-        let sections = self.layout_sections(area);
-        let entry = self.current_notes_entry()?;
-        let input_area = sections.notes_area;
-        if input_area.width <= 2 || input_area.height == 0 {
+        let content_area = menu_surface_inset(area);
+        if content_area.width == 0 || content_area.height == 0 {
             return None;
         }
-        if input_area.height < 3 {
-            // Inline notes layout uses a prefix and a single-line text area.
-            let prefix = notes_prefix();
-            let prefix_width = prefix.len() as u16;
-            if input_area.width <= prefix_width {
-                return None;
-            }
-            let textarea_rect = Rect {
-                x: input_area.x.saturating_add(prefix_width),
-                y: input_area.y,
-                width: input_area.width.saturating_sub(prefix_width),
-                height: 1,
-            };
-            let state = *entry.state.borrow();
-            return entry.text.cursor_pos_with_state(textarea_rect, state);
+        let sections = self.layout_sections(content_area);
+        let input_area = sections.notes_area;
+        if input_area.width == 0 || input_area.height == 0 {
+            return None;
         }
-        let text_area_height = input_area.height.saturating_sub(2);
-        let textarea_rect = Rect {
-            x: input_area.x.saturating_add(1),
-            y: input_area.y.saturating_add(1),
-            width: input_area.width.saturating_sub(2),
-            height: text_area_height,
-        };
-        let state = *entry.state.borrow();
-        entry.text.cursor_pos_with_state(textarea_rect, state)
+        self.composer.cursor_pos(input_area)
     }
 
-    /// Render the notes input box or inline notes field.
+    /// Render the notes composer.
     fn render_notes_input(&self, area: Rect, buf: &mut Buffer) {
-        let Some(entry) = self.current_notes_entry() else {
-            return;
-        };
-        if area.width < 2 || area.height == 0 {
+        if area.width == 0 || area.height == 0 {
             return;
         }
-        if area.height < 3 {
-            // Inline notes field for tight layouts.
-            let prefix = notes_prefix();
-            let prefix_width = prefix.len() as u16;
-            if area.width <= prefix_width {
-                Paragraph::new(Line::from(prefix.dim())).render(area, buf);
-                return;
-            }
-            Paragraph::new(Line::from(prefix.dim())).render(
-                Rect {
-                    x: area.x,
-                    y: area.y,
-                    width: prefix_width,
-                    height: 1,
-                },
-                buf,
-            );
-            let textarea_rect = Rect {
-                x: area.x.saturating_add(prefix_width),
-                y: area.y,
-                width: area.width.saturating_sub(prefix_width),
-                height: 1,
-            };
-            let mut state = entry.state.borrow_mut();
-            Clear.render(textarea_rect, buf);
-            StatefulWidgetRef::render_ref(&(&entry.text), textarea_rect, buf, &mut state);
-            if entry.text.text().is_empty() {
-                Paragraph::new(Line::from(self.notes_placeholder().dim()))
-                    .render(textarea_rect, buf);
-            }
-            return;
-        }
-        // Draw a light ASCII frame around the notes area.
-        let top_border = format!("+{}+", "-".repeat(area.width.saturating_sub(2) as usize));
-        let bottom_border = top_border.clone();
-        Paragraph::new(Line::from(top_border)).render(
-            Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: 1,
-            },
-            buf,
-        );
-        Paragraph::new(Line::from(bottom_border)).render(
-            Rect {
-                x: area.x,
-                y: area.y.saturating_add(area.height.saturating_sub(1)),
-                width: area.width,
-                height: 1,
-            },
-            buf,
-        );
-        for row in 1..area.height.saturating_sub(1) {
-            Line::from(vec![
-                "|".into(),
-                " ".repeat(area.width.saturating_sub(2) as usize).into(),
-                "|".into(),
-            ])
-            .render(
-                Rect {
-                    x: area.x,
-                    y: area.y.saturating_add(row),
-                    width: area.width,
-                    height: 1,
-                },
-                buf,
-            );
-        }
-        let text_area_height = area.height.saturating_sub(2);
-        let textarea_rect = Rect {
-            x: area.x.saturating_add(1),
-            y: area.y.saturating_add(1),
-            width: area.width.saturating_sub(2),
-            height: text_area_height,
-        };
-        let mut state = entry.state.borrow_mut();
-        Clear.render(textarea_rect, buf);
-        StatefulWidgetRef::render_ref(&(&entry.text), textarea_rect, buf, &mut state);
-        if entry.text.text().is_empty() {
-            Paragraph::new(Line::from(self.notes_placeholder().dim())).render(textarea_rect, buf);
-        }
+        self.composer.render(area, buf);
     }
 
     fn focus_is_options(&self) -> bool {
@@ -368,8 +280,4 @@ impl RequestUserInputOverlay {
     fn focus_is_notes_without_options(&self) -> bool {
         !self.has_options() && self.focus_is_notes()
     }
-}
-
-fn notes_prefix() -> &'static str {
-    "Notes: "
 }

@@ -96,6 +96,13 @@ impl RequestUserInputOverlay {
                     .saturating_add(notes_title_height)
                     .saturating_add(notes_input_height);
                 options_height = remaining_content.saturating_sub(reserved);
+                if options_height > options_len {
+                    // Expand the notes composer with any leftover rows so we
+                    // do not leave a large blank gap between options and notes.
+                    let extra_rows = options_height.saturating_sub(options_len);
+                    options_height = options_len;
+                    notes_input_height = notes_input_height.saturating_add(extra_rows);
+                }
             }
         } else {
             let max_notes = remaining.saturating_sub(footer_lines);

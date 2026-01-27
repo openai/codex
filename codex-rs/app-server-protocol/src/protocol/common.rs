@@ -117,6 +117,10 @@ client_request_definitions! {
         params: v2::ThreadArchiveParams,
         response: v2::ThreadArchiveResponse,
     },
+    ThreadUnarchive => "thread/unarchive" {
+        params: v2::ThreadUnarchiveParams,
+        response: v2::ThreadUnarchiveResponse,
+    },
     ThreadRollback => "thread/rollback" {
         params: v2::ThreadRollbackParams,
         response: v2::ThreadRollbackResponse,
@@ -522,6 +526,12 @@ server_request_definitions! {
     ToolRequestUserInput => "item/tool/requestUserInput" {
         params: v2::ToolRequestUserInputParams,
         response: v2::ToolRequestUserInputResponse,
+    },
+
+    /// Execute a dynamic tool call on the client.
+    DynamicToolCall => "item/tool/call" {
+        params: v2::DynamicToolCallParams,
+        response: v2::DynamicToolCallResponse,
     },
 
     /// DEPRECATED APIs below
