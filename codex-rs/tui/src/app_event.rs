@@ -296,6 +296,11 @@ pub(crate) enum AppEvent {
 
     /// The last text output of the status line script execution.
     StatusLineUpdated(StatusLineValue),
+
+    /// Warns the user the first time the status line script times out.
+    StatusLineTimeoutWarning {
+        timeout_ms: u64,
+    },
 }
 
 /// The exit strategy requested by the UI layer.
