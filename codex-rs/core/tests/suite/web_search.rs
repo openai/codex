@@ -10,6 +10,8 @@ use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 
+const CONFIG_TOML: &str = "config.toml";
+
 fn sse_completed(id: &str) -> String {
     load_sse_fixture_with_id("../fixtures/completed_template.json", id)
 }
@@ -84,5 +86,42 @@ async fn web_search_mode_takes_precedence_over_legacy_flags_in_request_body() {
         tool.get("external_web_access").and_then(Value::as_bool),
         Some(false),
         "web_search mode should win over legacy web_search_request"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn danger_full_access_config_defaults_web_search_to_live() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let sse = sse_completed("resp-1");
+    let resp_mock = responses::mount_sse_once(&server, sse).await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5-codex")
+        .with_config(|config| {
+            config.features.disable(Feature::WebSearchCached);
+            config.features.disable(Feature::WebSearchRequest);
+        })
+        .with_pre_config_hook(|home| {
+            let config_path = home.join(CONFIG_TOML);
+            std::fs::write(config_path, "sandbox_mode = \"danger-full-access\"\n")
+                .expect("seed config.toml");
+        });
+    let test = builder
+        .build(&server)
+        .await
+        .expect("create test Codex conversation");
+
+    test.submit_turn("hello danger full access web search")
+        .await
+        .expect("submit turn");
+
+    let body = resp_mock.single_request().body_json();
+    let tool = find_web_search_tool(&body);
+    assert_eq!(
+        tool.get("external_web_access").and_then(Value::as_bool),
+        Some(true),
+        "danger-full-access should default web_search to live"
     );
 }

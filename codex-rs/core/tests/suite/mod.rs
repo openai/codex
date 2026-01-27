@@ -78,4 +78,4 @@ mod unstable_features_warning;
 mod user_notification;
 mod user_shell_cmd;
 mod view_image;
-mod web_search_cached;
+mod web_search;

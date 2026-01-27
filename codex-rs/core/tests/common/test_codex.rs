@@ -32,6 +32,7 @@ use wiremock::Match;
 use wiremock::matchers::path_regex;
 
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
+type PreConfigHook = dyn FnOnce(&Path) + Send + 'static;
 type PreBuildHook = dyn FnOnce(&Path) + Send + 'static;
 
 /// A collection of different ways the model can output an apply_patch call
@@ -56,6 +57,7 @@ pub enum ShellModelOutput {
 pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
     auth: CodexAuth,
+    pre_config_hooks: Vec<Box<PreConfigHook>>,
     pre_build_hooks: Vec<Box<PreBuildHook>>,
     home: Option<Arc<TempDir>>,
 }
@@ -86,6 +88,14 @@ impl TestCodexBuilder {
         F: FnOnce(&Path) + Send + 'static,
     {
         self.pre_build_hooks.push(Box::new(hook));
+        self
+    }
+
+    pub fn with_pre_config_hook<F>(mut self, hook: F) -> Self
+    where
+        F: FnOnce(&Path) + Send + 'static,
+    {
+        self.pre_config_hooks.push(Box::new(hook));
         self
     }
 
@@ -208,6 +218,9 @@ impl TestCodexBuilder {
             ..built_in_model_providers()["openai"].clone()
         };
         let cwd = Arc::new(TempDir::new()?);
+        for hook in self.pre_config_hooks.drain(..) {
+            hook(home.path());
+        }
         let mut config = load_default_config_for_test(home).await;
         config.cwd = cwd.path().to_path_buf();
         config.model_provider = model_provider;
@@ -446,6 +459,7 @@ pub fn test_codex() -> TestCodexBuilder {
     TestCodexBuilder {
         config_mutators: vec![],
         auth: CodexAuth::from_api_key("dummy"),
+        pre_config_hooks: vec![],
         pre_build_hooks: vec![],
         home: None,
     }
