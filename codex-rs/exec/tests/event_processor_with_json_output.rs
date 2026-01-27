@@ -20,6 +20,7 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::WarningEvent;
+use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use codex_exec::exec_events::AgentMessageItem;
@@ -149,6 +150,72 @@ fn web_search_end_emits_item_completed() {
                 }),
             },
         })]
+    );
+}
+
+#[test]
+fn web_search_begin_emits_item_started() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let out = ep.collect_thread_events(&event(
+        "w0",
+        EventMsg::WebSearchBegin(WebSearchBeginEvent {
+            call_id: "call-0".to_string(),
+        }),
+    ));
+
+    assert_eq!(out.len(), 1);
+    let ThreadEvent::ItemStarted(ItemStartedEvent { item }) = &out[0] else {
+        panic!("expected ItemStarted");
+    };
+    assert!(item.id.starts_with("item_"));
+    assert_eq!(
+        item.details,
+        ThreadItemDetails::WebSearch(WebSearchItem {
+            id: "call-0".to_string(),
+            query: String::new(),
+            action: WebSearchAction::Other,
+        })
+    );
+}
+
+#[test]
+fn web_search_begin_then_end_reuses_item_id() {
+    let mut ep = EventProcessorWithJsonOutput::new(None);
+    let begin = ep.collect_thread_events(&event(
+        "w0",
+        EventMsg::WebSearchBegin(WebSearchBeginEvent {
+            call_id: "call-1".to_string(),
+        }),
+    ));
+    let ThreadEvent::ItemStarted(ItemStartedEvent { item: started_item }) = &begin[0] else {
+        panic!("expected ItemStarted");
+    };
+    let action = WebSearchAction::Search {
+        query: Some("rust async await".to_string()),
+    };
+    let end = ep.collect_thread_events(&event(
+        "w1",
+        EventMsg::WebSearchEnd(WebSearchEndEvent {
+            call_id: "call-1".to_string(),
+            query: "rust async await".to_string(),
+            action: action.clone(),
+        }),
+    ));
+    let ThreadEvent::ItemCompleted(ItemCompletedEvent {
+        item: completed_item,
+    }) = &end[0]
+    else {
+        panic!("expected ItemCompleted");
+    };
+
+    assert_eq!(completed_item.id, started_item.id);
+    assert_eq!(
+        completed_item.details,
+        ThreadItemDetails::WebSearch(WebSearchItem {
+            id: "call-1".to_string(),
+            query: "rust async await".to_string(),
+            action,
+        })
     );
 }
 

@@ -21,6 +21,7 @@ use crate::instructions::SkillInstructions;
 use crate::instructions::UserInstructions;
 use crate::session_prefix::is_session_prefix;
 use crate::user_shell_command::is_user_shell_command_text;
+use crate::web_search::web_search_action_detail;
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
     if UserInstructions::is_user_instructions(message)
@@ -129,7 +130,7 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
         }
         ResponseItem::WebSearchCall { id, action, .. } => {
             let (action, query) = match action {
-                Some(action) => (action.clone(), action.detail()),
+                Some(action) => (action.clone(), web_search_action_detail(action)),
                 None => (WebSearchAction::Other, String::new()),
             };
             Some(TurnItem::WebSearch(WebSearchItem {

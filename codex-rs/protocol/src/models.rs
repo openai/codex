@@ -578,22 +578,6 @@ pub enum WebSearchAction {
     Other,
 }
 
-impl WebSearchAction {
-    pub fn detail(&self) -> String {
-        match self {
-            WebSearchAction::Search { query } => query.clone().unwrap_or_default(),
-            WebSearchAction::OpenPage { url } => url.clone().unwrap_or_default(),
-            WebSearchAction::FindInPage { url, pattern } => match (pattern, url) {
-                (Some(pattern), Some(url)) => format!("'{pattern}' in {url}"),
-                (Some(pattern), None) => format!("'{pattern}'"),
-                (None, Some(url)) => url.clone(),
-                (None, None) => String::new(),
-            },
-            WebSearchAction::Other => String::new(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReasoningItemReasoningSummary {
