@@ -2545,35 +2545,29 @@ impl Renderable for ChatComposer {
                         indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
+                        show_queue_hint,
                     )
                 };
                 let can_show_both =
                     can_show_left_with_context(hint_rect, left_width, context_width);
                 let has_override =
                     self.footer_flash_visible() || self.footer_hint_override.is_some();
-                let summary_layout =
-                    if !has_override && matches!(footer_props.mode, FooterMode::ShortcutSummary) {
-                        Some(shortcut_summary_layout(
-                            hint_rect,
-                            context_width,
-                            indicator,
-                            show_cycle_hint,
-                            show_shortcuts_hint,
-                        ))
-                    } else if !has_override
-                        && matches!(footer_props.mode, FooterMode::ContextOnly)
-                        && !show_queue_hint
-                    {
-                        Some(shortcut_summary_layout(
-                            hint_rect,
-                            context_width,
-                            indicator,
-                            show_cycle_hint,
-                            false,
-                        ))
-                    } else {
-                        None
-                    };
+                let summary_layout = if !has_override
+                    && matches!(
+                        footer_props.mode,
+                        FooterMode::ShortcutSummary | FooterMode::ContextOnly
+                    ) {
+                    Some(shortcut_summary_layout(
+                        hint_rect,
+                        context_width,
+                        indicator,
+                        show_cycle_hint,
+                        show_shortcuts_hint,
+                        show_queue_hint,
+                    ))
+                } else {
+                    None
+                };
                 let show_context = summary_layout
                     .as_ref()
                     .map(|(_, show_context)| *show_context)
@@ -2589,6 +2583,7 @@ impl Renderable for ChatComposer {
                                 indicator,
                                 show_cycle_hint,
                                 show_shortcuts_hint,
+                                show_queue_hint,
                             );
                         }
                         SummaryLeft::Custom(line) => {
@@ -2610,6 +2605,7 @@ impl Renderable for ChatComposer {
                         indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
+                        show_queue_hint,
                     );
                 }
 
@@ -2864,14 +2860,17 @@ mod tests {
         );
     }
 
-    fn snapshot_composer_state<F>(name: &str, enhanced_keys_supported: bool, setup: F)
-    where
+    fn snapshot_composer_state_with_width<F>(
+        name: &str,
+        width: u16,
+        enhanced_keys_supported: bool,
+        setup: F,
+    ) where
         F: FnOnce(&mut ChatComposer),
     {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let width = 100;
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -2891,6 +2890,13 @@ mod tests {
             .draw(|f| composer.render(f.area(), f.buffer_mut()))
             .unwrap();
         insta::assert_snapshot!(name, terminal.backend());
+    }
+
+    fn snapshot_composer_state<F>(name: &str, enhanced_keys_supported: bool, setup: F)
+    where
+        F: FnOnce(&mut ChatComposer),
+    {
+        snapshot_composer_state_with_width(name, 100, enhanced_keys_supported, setup);
     }
 
     #[test]
@@ -2943,6 +2949,100 @@ mod tests {
         snapshot_composer_state("footer_mode_hidden_while_typing", true, |composer| {
             type_chars_humanlike(composer, &['h']);
         });
+    }
+
+    #[test]
+    fn footer_collapse_snapshots() {
+        fn setup_collab_footer(
+            composer: &mut ChatComposer,
+            context_percent: i64,
+            indicator: CollaborationModeIndicator,
+        ) {
+            composer.set_collaboration_modes_enabled(true);
+            composer.set_collaboration_mode_indicator(Some(indicator));
+            composer.set_context_window(Some(context_percent), None);
+        }
+
+        // Empty textarea, agent idle: shortcuts hint can show, and cycle hint is available.
+        snapshot_composer_state_with_width("footer_collapse_empty_full", 120, true, |composer| {
+            setup_collab_footer(composer, 100, CollaborationModeIndicator::Code);
+        });
+        snapshot_composer_state_with_width(
+            "footer_collapse_empty_mode_cycle_with_context",
+            60,
+            true,
+            |composer| {
+                setup_collab_footer(composer, 100, CollaborationModeIndicator::Code);
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_collapse_empty_mode_cycle_without_context",
+            44,
+            true,
+            |composer| {
+                setup_collab_footer(composer, 100, CollaborationModeIndicator::Code);
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_collapse_empty_mode_only",
+            26,
+            true,
+            |composer| {
+                setup_collab_footer(composer, 100, CollaborationModeIndicator::Code);
+            },
+        );
+
+        // Textarea has content, agent running, steer enabled: queue hint is shown.
+        snapshot_composer_state_with_width("footer_collapse_queue_full", 120, true, |composer| {
+            setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+            composer.set_steer_enabled(true);
+            composer.set_task_running(true);
+            composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
+        });
+        snapshot_composer_state_with_width(
+            "footer_collapse_queue_short_with_context",
+            50,
+            true,
+            |composer| {
+                setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+                composer.set_steer_enabled(true);
+                composer.set_task_running(true);
+                composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_collapse_queue_message_without_context",
+            40,
+            true,
+            |composer| {
+                setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+                composer.set_steer_enabled(true);
+                composer.set_task_running(true);
+                composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_collapse_queue_short_without_context",
+            30,
+            true,
+            |composer| {
+                setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+                composer.set_steer_enabled(true);
+                composer.set_task_running(true);
+                composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_collapse_queue_mode_only",
+            20,
+            true,
+            |composer| {
+                setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+                composer.set_steer_enabled(true);
+                composer.set_task_running(true);
+                composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
+            },
+        );
     }
 
     #[test]

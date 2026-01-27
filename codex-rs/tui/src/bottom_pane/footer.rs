@@ -130,7 +130,7 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
 }
 
 pub(crate) fn footer_height(props: FooterProps) -> u16 {
-    footer_lines(props, None, false, true).len() as u16
+    footer_lines(props, None, false, true, false).len() as u16
 }
 
 pub(crate) fn render_footer(
@@ -140,9 +140,16 @@ pub(crate) fn render_footer(
     indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
+    show_queue_hint: bool,
 ) {
     Paragraph::new(prefix_lines(
-        footer_lines(props, indicator, show_cycle_hint, show_shortcuts_hint),
+        footer_lines(
+            props,
+            indicator,
+            show_cycle_hint,
+            show_shortcuts_hint,
+            show_queue_hint,
+        ),
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
     ))
@@ -163,22 +170,43 @@ pub(crate) fn left_fits(area: Rect, left_width: u16) -> bool {
     left_width <= max_width
 }
 
-pub(crate) fn shortcut_summary_line(
-    indicator: Option<CollaborationModeIndicator>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SummaryHintKind {
+    None,
+    Shortcuts,
+    QueueMessage,
+    QueueShort,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SummarySpec {
+    hint: SummaryHintKind,
     show_cycle_hint: bool,
-    show_shortcuts_hint: bool,
-) -> Line<'static> {
+}
+
+fn summary_line(indicator: Option<CollaborationModeIndicator>, spec: SummarySpec) -> Line<'static> {
     let mut line = Line::from("");
-    if show_shortcuts_hint {
-        line.push_span(key_hint::plain(KeyCode::Char('?')));
-        line.push_span(" for shortcuts".dim());
-    }
+    match spec.hint {
+        SummaryHintKind::None => {}
+        SummaryHintKind::Shortcuts => {
+            line.push_span(key_hint::plain(KeyCode::Char('?')));
+            line.push_span(" for shortcuts".dim());
+        }
+        SummaryHintKind::QueueMessage => {
+            line.push_span(key_hint::plain(KeyCode::Tab));
+            line.push_span(" to queue message".dim());
+        }
+        SummaryHintKind::QueueShort => {
+            line.push_span(key_hint::plain(KeyCode::Tab));
+            line.push_span(" to queue".dim());
+        }
+    };
 
     if let Some(indicator) = indicator {
-        if show_shortcuts_hint {
+        if !matches!(spec.hint, SummaryHintKind::None) {
             line.push_span(" · ".dim());
         }
-        line.push_span(indicator.styled_span(show_cycle_hint));
+        line.push_span(indicator.styled_span(spec.show_cycle_hint));
     }
 
     line
@@ -196,32 +224,129 @@ pub(crate) fn shortcut_summary_layout(
     indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
+    show_queue_hint: bool,
 ) -> (SummaryLeft, bool) {
-    let default_line = shortcut_summary_line(indicator, show_cycle_hint, show_shortcuts_hint);
+    let hint_kind = if show_queue_hint {
+        SummaryHintKind::QueueMessage
+    } else if show_shortcuts_hint {
+        SummaryHintKind::Shortcuts
+    } else {
+        SummaryHintKind::None
+    };
+    let default_spec = SummarySpec {
+        hint: hint_kind,
+        show_cycle_hint,
+    };
+    let default_line = summary_line(indicator, default_spec);
     let default_width = default_line.width() as u16;
     if default_width > 0 && can_show_left_with_context(area, default_width, context_width) {
         return (SummaryLeft::Default, true);
     }
 
-    let Some(indicator) = indicator else {
-        return (SummaryLeft::None, true);
+    let spec_width = |spec: SummarySpec| -> u16 {
+        if spec == default_spec {
+            default_width
+        } else {
+            summary_line(indicator, spec).width() as u16
+        }
+    };
+    let spec_line = |spec: SummarySpec| -> Line<'static> {
+        if spec == default_spec {
+            default_line.clone()
+        } else {
+            summary_line(indicator, spec)
+        }
     };
 
-    if show_cycle_hint {
-        let mode_with_cycle = shortcut_summary_line(Some(indicator), true, false);
-        let mode_with_cycle_width = mode_with_cycle.width() as u16;
-        if can_show_left_with_context(area, mode_with_cycle_width, context_width) {
-            return (SummaryLeft::Custom(mode_with_cycle), true);
+    if show_queue_hint {
+        // In queue mode, prefer dropping context before dropping the queue hint.
+        let queue_specs = [
+            default_spec,
+            SummarySpec {
+                hint: SummaryHintKind::QueueMessage,
+                show_cycle_hint: false,
+            },
+            SummarySpec {
+                hint: SummaryHintKind::QueueShort,
+                show_cycle_hint: false,
+            },
+        ];
+
+        let mut previous_spec: Option<SummarySpec> = None;
+        for spec in queue_specs {
+            if previous_spec == Some(spec) {
+                continue;
+            }
+            previous_spec = Some(spec);
+            let width = spec_width(spec);
+            if width > 0 && can_show_left_with_context(area, width, context_width) {
+                if spec == default_spec {
+                    return (SummaryLeft::Default, true);
+                }
+                return (SummaryLeft::Custom(spec_line(spec)), true);
+            }
+        }
+
+        let mut previous_spec: Option<SummarySpec> = None;
+        for spec in queue_specs {
+            if previous_spec == Some(spec) {
+                continue;
+            }
+            previous_spec = Some(spec);
+            let width = spec_width(spec);
+            if width > 0 && left_fits(area, width) {
+                if spec == default_spec {
+                    return (SummaryLeft::Default, false);
+                }
+                return (SummaryLeft::Custom(spec_line(spec)), false);
+            }
+        }
+    } else if indicator.is_some() {
+        if show_cycle_hint {
+            let cycle_spec = SummarySpec {
+                hint: SummaryHintKind::None,
+                show_cycle_hint: true,
+            };
+            let cycle_width = spec_width(cycle_spec);
+            if cycle_width > 0 && can_show_left_with_context(area, cycle_width, context_width) {
+                return (SummaryLeft::Custom(spec_line(cycle_spec)), true);
+            }
+            if cycle_width > 0 && left_fits(area, cycle_width) {
+                return (SummaryLeft::Custom(spec_line(cycle_spec)), false);
+            }
+        }
+
+        let mode_only_spec = SummarySpec {
+            hint: SummaryHintKind::None,
+            show_cycle_hint: false,
+        };
+        let mode_only_width = spec_width(mode_only_spec);
+        if mode_only_width > 0 && can_show_left_with_context(area, mode_only_width, context_width) {
+            return (SummaryLeft::Custom(spec_line(mode_only_spec)), true);
+        }
+        if mode_only_width > 0 && left_fits(area, mode_only_width) {
+            return (SummaryLeft::Custom(spec_line(mode_only_spec)), false);
         }
     }
 
-    let mode_only = shortcut_summary_line(Some(indicator), false, false);
-    let mode_only_width = mode_only.width() as u16;
-    if can_show_left_with_context(area, mode_only_width, context_width) {
-        return (SummaryLeft::Custom(mode_only), true);
-    }
-    if left_fits(area, mode_only_width) {
-        return (SummaryLeft::Custom(mode_only), false);
+    if let Some(indicator) = indicator {
+        let mode_only_spec = SummarySpec {
+            hint: SummaryHintKind::None,
+            show_cycle_hint: false,
+        };
+        let mode_only_width = summary_line(Some(indicator), mode_only_spec).width() as u16;
+        if can_show_left_with_context(area, mode_only_width, context_width) {
+            return (
+                SummaryLeft::Custom(summary_line(Some(indicator), mode_only_spec)),
+                true,
+            );
+        }
+        if left_fits(area, mode_only_width) {
+            return (
+                SummaryLeft::Custom(summary_line(Some(indicator), mode_only_spec)),
+                false,
+            );
+        }
     }
 
     (SummaryLeft::None, true)
@@ -306,6 +431,7 @@ fn footer_lines(
     indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
+    show_queue_hint: bool,
 ) -> Vec<Line<'static>> {
     // Render left-side hints only. The context indicator is rendered
     // separately, right-aligned by the caller.
@@ -314,11 +440,15 @@ fn footer_lines(
             vec![quit_shortcut_reminder_line(props.quit_shortcut_key)]
         }
         FooterMode::ShortcutSummary => {
-            vec![shortcut_summary_line(
-                indicator,
+            let spec = SummarySpec {
+                hint: if show_shortcuts_hint {
+                    SummaryHintKind::Shortcuts
+                } else {
+                    SummaryHintKind::None
+                },
                 show_cycle_hint,
-                show_shortcuts_hint,
-            )]
+            };
+            vec![summary_line(indicator, spec)]
         }
         FooterMode::ShortcutOverlay => {
             #[cfg(target_os = "linux")]
@@ -336,13 +466,15 @@ fn footer_lines(
         }
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
         FooterMode::ContextOnly => {
-            if props.is_task_running && props.steer_enabled {
-                return vec![Line::from(vec![
-                    key_hint::plain(KeyCode::Tab).into(),
-                    " to queue message".dim(),
-                ])];
-            }
-            vec![shortcut_summary_line(indicator, show_cycle_hint, false)]
+            let spec = SummarySpec {
+                hint: if show_queue_hint {
+                    SummaryHintKind::QueueMessage
+                } else {
+                    SummaryHintKind::None
+                },
+                show_cycle_hint,
+            };
+            vec![summary_line(indicator, spec)]
         }
     }
 }
@@ -352,11 +484,18 @@ pub(crate) fn footer_line_width(
     indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
+    show_queue_hint: bool,
 ) -> u16 {
-    footer_lines(props, indicator, show_cycle_hint, show_shortcuts_hint)
-        .last()
-        .map(|line| line.width() as u16)
-        .unwrap_or(0)
+    footer_lines(
+        props,
+        indicator,
+        show_cycle_hint,
+        show_shortcuts_hint,
+        show_queue_hint,
+    )
+    .last()
+    .map(|line| line.width() as u16)
+    .unwrap_or(0)
 }
 
 pub(crate) fn footer_hint_items_width(items: &[(String, String)]) -> u16 {
@@ -738,18 +877,25 @@ mod tests {
                 let show_queue_hint = matches!(props.mode, FooterMode::ContextOnly)
                     && props.is_task_running
                     && props.steer_enabled;
-                let left_width =
-                    footer_line_width(props, None, show_cycle_hint, show_shortcuts_hint);
+                let left_width = footer_line_width(
+                    props,
+                    None,
+                    show_cycle_hint,
+                    show_shortcuts_hint,
+                    show_queue_hint,
+                );
                 let can_show_both = can_show_left_with_context(area, left_width, context_width);
-                if matches!(props.mode, FooterMode::ShortcutSummary)
-                    || (matches!(props.mode, FooterMode::ContextOnly) && !show_queue_hint)
-                {
+                if matches!(
+                    props.mode,
+                    FooterMode::ShortcutSummary | FooterMode::ContextOnly
+                ) {
                     let (summary_left, show_context) = shortcut_summary_layout(
                         area,
                         context_width,
                         None,
                         show_cycle_hint,
                         show_shortcuts_hint,
+                        show_queue_hint,
                     );
                     match summary_left {
                         SummaryLeft::Default => {
@@ -760,6 +906,7 @@ mod tests {
                                 None,
                                 show_cycle_hint,
                                 show_shortcuts_hint,
+                                show_queue_hint,
                             );
                         }
                         SummaryLeft::Custom(line) => {
@@ -778,6 +925,7 @@ mod tests {
                         None,
                         show_cycle_hint,
                         show_shortcuts_hint,
+                        show_queue_hint,
                     );
                     if can_show_both {
                         render_context_right(area, f.buffer_mut(), &context_line);
@@ -809,18 +957,25 @@ mod tests {
                 let show_queue_hint = matches!(props.mode, FooterMode::ContextOnly)
                     && props.is_task_running
                     && props.steer_enabled;
-                let left_width =
-                    footer_line_width(props, indicator, show_cycle_hint, show_shortcuts_hint);
+                let left_width = footer_line_width(
+                    props,
+                    indicator,
+                    show_cycle_hint,
+                    show_shortcuts_hint,
+                    show_queue_hint,
+                );
                 let can_show_both = can_show_left_with_context(area, left_width, context_width);
-                if matches!(props.mode, FooterMode::ShortcutSummary)
-                    || (matches!(props.mode, FooterMode::ContextOnly) && !show_queue_hint)
-                {
+                if matches!(
+                    props.mode,
+                    FooterMode::ShortcutSummary | FooterMode::ContextOnly
+                ) {
                     let (summary_left, show_context) = shortcut_summary_layout(
                         area,
                         context_width,
                         indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
+                        show_queue_hint,
                     );
                     match summary_left {
                         SummaryLeft::Default => {
@@ -831,6 +986,7 @@ mod tests {
                                 indicator,
                                 show_cycle_hint,
                                 show_shortcuts_hint,
+                                show_queue_hint,
                             );
                         }
                         SummaryLeft::Custom(line) => {
@@ -849,6 +1005,7 @@ mod tests {
                         indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
+                        show_queue_hint,
                     );
                     if can_show_both {
                         render_context_right(area, f.buffer_mut(), &context_line);
