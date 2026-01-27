@@ -3483,11 +3483,7 @@ impl ChatWidget {
         if !self.is_session_configured() {
             return;
         }
-        if self.personality_nudge_hidden() {
-            self.personality_nudge = PersonalityNudgeState::Idle;
-            return;
-        }
-        if self.config.model_personality.is_some() || !self.current_model_supports_personality() {
+        if !self.personality_nudge_is_eligible() {
             self.personality_nudge = PersonalityNudgeState::Idle;
             return;
         }
@@ -3498,15 +3494,11 @@ impl ChatWidget {
     }
 
     fn maybe_show_pending_personality_nudge(&mut self) {
-        if self.personality_nudge_hidden() {
+        if !self.personality_nudge_is_eligible() {
             self.personality_nudge = PersonalityNudgeState::Idle;
             return;
         }
         if !matches!(self.personality_nudge, PersonalityNudgeState::Pending) {
-            return;
-        }
-        if self.config.model_personality.is_some() || !self.current_model_supports_personality() {
-            self.personality_nudge = PersonalityNudgeState::Idle;
             return;
         }
         if !self.bottom_pane.no_modal_or_popup_active() {
@@ -3515,6 +3507,12 @@ impl ChatWidget {
 
         self.open_personality_nudge();
         self.personality_nudge = PersonalityNudgeState::Shown;
+    }
+
+    fn personality_nudge_is_eligible(&self) -> bool {
+        !self.personality_nudge_hidden()
+            && self.config.model_personality.is_none()
+            && self.current_model_supports_personality()
     }
 
     fn open_personality_nudge(&mut self) {
