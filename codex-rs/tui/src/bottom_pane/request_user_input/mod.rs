@@ -370,6 +370,9 @@ impl RequestUserInputOverlay {
             if self.selected_option_index().is_some() && !notes_visible {
                 tips.push(FooterTip::highlighted("Tab: add notes"));
             }
+            if self.selected_option_index().is_some() && notes_visible && self.focus_is_notes() {
+                tips.push(FooterTip::new("Tab: clear notes"));
+            }
         }
 
         let question_count = self.question_count();
@@ -790,6 +793,18 @@ impl BottomPaneView for RequestUserInputOverlay {
             }
             Focus::Notes => {
                 let notes_empty = self.composer.current_text_with_pending().trim().is_empty();
+                if self.has_options() && matches!(key_event.code, KeyCode::Tab) {
+                    if let Some(answer) = self.current_answer_mut() {
+                        answer.draft = ComposerDraft::default();
+                        answer.notes_visible = false;
+                    }
+                    self.composer
+                        .set_text_content(String::new(), Vec::new(), Vec::new());
+                    self.composer.move_cursor_to_end();
+                    self.focus = Focus::Options;
+                    self.sync_composer_placeholder();
+                    return;
+                }
                 if self.has_options() && matches!(key_event.code, KeyCode::Backspace) && notes_empty
                 {
                     self.save_current_draft();
@@ -1315,6 +1330,36 @@ mod tests {
         let answer = overlay.current_answer().expect("answer missing");
         assert!(matches!(overlay.focus, Focus::Options));
         assert_eq!(overlay.notes_ui_visible(), false);
+        assert_eq!(answer.selected, Some(0));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn tab_in_notes_clears_notes_and_hides_ui() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let answer = overlay.current_answer_mut().expect("answer missing");
+        answer.option_state.selected_idx = Some(0);
+        answer.selected = Some(0);
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        overlay
+            .composer
+            .set_text_content("Some notes".to_string(), Vec::new(), Vec::new());
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
+
+        let answer = overlay.current_answer().expect("answer missing");
+        assert!(matches!(overlay.focus, Focus::Options));
+        assert_eq!(overlay.notes_ui_visible(), false);
+        assert_eq!(overlay.composer.current_text_with_pending(), "");
+        assert_eq!(answer.draft.text, "");
         assert_eq!(answer.selected, Some(0));
         assert!(rx.try_recv().is_err());
     }
