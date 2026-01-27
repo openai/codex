@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::ffi::OsStr;
 use std::io::{self};
 use std::num::NonZero;
 use std::ops::ControlFlow;
@@ -15,6 +16,7 @@ use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use uuid::Uuid;
 
+use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use crate::protocol::EventMsg;
 use codex_file_search as file_search;
@@ -1054,11 +1056,9 @@ fn truncate_to_seconds(dt: OffsetDateTime) -> Option<OffsetDateTime> {
     dt.replace_nanosecond(0).ok()
 }
 
-/// Locate a recorded thread rollout file by its UUID string using the existing
-/// paginated listing implementation. Returns `Ok(Some(path))` if found, `Ok(None)` if not present
-/// or the id is invalid.
-pub async fn find_thread_path_by_id_str(
+async fn find_thread_path_by_id_str_in_subdir(
     codex_home: &Path,
+    subdir: &str,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
     // Validate UUID format early.
@@ -1067,7 +1067,7 @@ pub async fn find_thread_path_by_id_str(
     }
 
     let mut root = codex_home.to_path_buf();
-    root.push(SESSIONS_SUBDIR);
+    root.push(subdir);
     if !root.exists() {
         return Ok(None);
     }
@@ -1098,4 +1098,32 @@ pub async fn find_thread_path_by_id_str(
         .into_iter()
         .next()
         .map(|m| root.join(m.path)))
+}
+
+/// Locate a recorded thread rollout file by its UUID string using the existing
+/// paginated listing implementation. Returns `Ok(Some(path))` if found, `Ok(None)` if not present
+/// or the id is invalid.
+pub async fn find_thread_path_by_id_str(
+    codex_home: &Path,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    find_thread_path_by_id_str_in_subdir(codex_home, SESSIONS_SUBDIR, id_str).await
+}
+
+/// Locate an archived thread rollout file by its UUID string.
+pub async fn find_archived_thread_path_by_id_str(
+    codex_home: &Path,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str).await
+}
+
+/// Extract the `YYYY/MM/DD` directory components from a rollout filename.
+pub fn rollout_date_parts(file_name: &OsStr) -> Option<(String, String, String)> {
+    let name = file_name.to_string_lossy();
+    let date = name.strip_prefix("rollout-")?.get(..10)?;
+    let year = date.get(..4)?.to_string();
+    let month = date.get(5..7)?.to_string();
+    let day = date.get(8..10)?.to_string();
+    Some((year, month, day))
 }

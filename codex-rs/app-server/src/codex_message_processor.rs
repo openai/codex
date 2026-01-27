@@ -31,6 +31,7 @@ use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::CommandExecParams;
 use codex_app_server_protocol::ConversationGitInfo;
 use codex_app_server_protocol::ConversationSummary;
+use codex_app_server_protocol::DynamicToolSpec as ApiDynamicToolSpec;
 use codex_app_server_protocol::ExecOneOffCommandResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
 use codex_app_server_protocol::FeedbackUploadResponse;
@@ -110,9 +111,12 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSortKey;
+use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::ThreadUnarchiveParams;
+use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -129,7 +133,6 @@ use codex_chatgpt::connectors;
 use codex_core::AuthManager;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
-use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::InitialHistory;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
@@ -150,6 +153,7 @@ use codex_core::error::CodexErr;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::features::Feature;
+use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::mcp::collect_mcp_snapshot;
@@ -163,6 +167,7 @@ use codex_core::protocol::ReviewTarget as CoreReviewTarget;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
+use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -171,6 +176,7 @@ use codex_login::run_login_server;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
+use codex_protocol::dynamic_tools::DynamicToolSpec as CoreDynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
@@ -202,6 +208,9 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
+
+use crate::filters::compute_source_filters;
+use crate::filters::source_kind_matches;
 
 type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
 pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ThreadId, PendingInterruptQueue>>>;
@@ -401,6 +410,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(request_id, params).await;
+            }
+            ClientRequest::ThreadUnarchive { request_id, params } => {
+                self.thread_unarchive(request_id, params).await;
             }
             ClientRequest::ThreadRollback { request_id, params } => {
                 self.thread_rollback(request_id, params).await;
@@ -1411,35 +1423,81 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_start(&mut self, request_id: RequestId, params: ThreadStartParams) {
+        let ThreadStartParams {
+            model,
+            model_provider,
+            cwd,
+            approval_policy,
+            sandbox,
+            config,
+            base_instructions,
+            developer_instructions,
+            dynamic_tools,
+            experimental_raw_events,
+            personality,
+            ephemeral,
+        } = params;
         let mut typesafe_overrides = self.build_thread_config_overrides(
-            params.model,
-            params.model_provider,
-            params.cwd,
-            params.approval_policy,
-            params.sandbox,
-            params.base_instructions,
-            params.developer_instructions,
-            params.personality,
+            model,
+            model_provider,
+            cwd,
+            approval_policy,
+            sandbox,
+            base_instructions,
+            developer_instructions,
+            personality,
         );
-        typesafe_overrides.ephemeral = Some(params.ephemeral.unwrap_or_default());
+        typesafe_overrides.ephemeral = ephemeral;
 
-        let config =
-            match derive_config_from_params(&self.cli_overrides, params.config, typesafe_overrides)
-                .await
-            {
-                Ok(config) => config,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("error deriving config: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            };
+        let config = match derive_config_from_params(
+            &self.cli_overrides,
+            config,
+            typesafe_overrides,
+        )
+        .await
+        {
+            Ok(config) => config,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("error deriving config: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
 
-        match self.thread_manager.start_thread(config).await {
+        let dynamic_tools = dynamic_tools.unwrap_or_default();
+        let core_dynamic_tools = if dynamic_tools.is_empty() {
+            Vec::new()
+        } else {
+            let snapshot = collect_mcp_snapshot(&config).await;
+            let mcp_tool_names = snapshot.tools.keys().cloned().collect::<HashSet<_>>();
+            if let Err(message) = validate_dynamic_tools(&dynamic_tools, &mcp_tool_names) {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message,
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            dynamic_tools
+                .into_iter()
+                .map(|tool| CoreDynamicToolSpec {
+                    name: tool.name,
+                    description: tool.description,
+                    input_schema: tool.input_schema,
+                })
+                .collect()
+        };
+
+        match self
+            .thread_manager
+            .start_thread_with_tools(config, core_dynamic_tools)
+            .await
+        {
             Ok(new_conv) => {
                 let NewThread {
                     thread_id,
@@ -1489,7 +1547,7 @@ impl CodexMessageProcessor {
                 if let Err(err) = self
                     .attach_conversation_listener(
                         thread_id,
-                        params.experimental_raw_events,
+                        experimental_raw_events,
                         ApiVersion::V2,
                     )
                     .await
@@ -1595,6 +1653,150 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn thread_unarchive(&mut self, request_id: RequestId, params: ThreadUnarchiveParams) {
+        let thread_id = match ThreadId::from_string(&params.thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid thread id: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let archived_path = match find_archived_thread_path_by_id_str(
+            &self.config.codex_home,
+            &thread_id.to_string(),
+        )
+        .await
+        {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("no archived rollout found for thread id {thread_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("failed to locate archived thread id {thread_id}: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let rollout_path_display = archived_path.display().to_string();
+        let fallback_provider = self.config.model_provider_id.clone();
+        let archived_folder = self
+            .config
+            .codex_home
+            .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
+
+        let result: Result<Thread, JSONRPCErrorError> = async {
+            let canonical_archived_dir = tokio::fs::canonicalize(&archived_folder).await.map_err(
+                |err| JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!(
+                        "failed to unarchive thread: unable to resolve archived directory: {err}"
+                    ),
+                    data: None,
+                },
+            )?;
+            let canonical_rollout_path = tokio::fs::canonicalize(&archived_path).await;
+            let canonical_rollout_path = if let Ok(path) = canonical_rollout_path
+                && path.starts_with(&canonical_archived_dir)
+            {
+                path
+            } else {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "rollout path `{rollout_path_display}` must be in archived directory"
+                    ),
+                    data: None,
+                });
+            };
+
+            let required_suffix = format!("{thread_id}.jsonl");
+            let Some(file_name) = canonical_rollout_path.file_name().map(OsStr::to_owned) else {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("rollout path `{rollout_path_display}` missing file name"),
+                    data: None,
+                });
+            };
+            if !file_name
+                .to_string_lossy()
+                .ends_with(required_suffix.as_str())
+            {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "rollout path `{rollout_path_display}` does not match thread id {thread_id}"
+                    ),
+                    data: None,
+                });
+            }
+
+            let Some((year, month, day)) = rollout_date_parts(&file_name) else {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "rollout path `{rollout_path_display}` missing filename timestamp"
+                    ),
+                    data: None,
+                });
+            };
+
+            let sessions_folder = self.config.codex_home.join(codex_core::SESSIONS_SUBDIR);
+            let dest_dir = sessions_folder.join(year).join(month).join(day);
+            let restored_path = dest_dir.join(&file_name);
+            tokio::fs::create_dir_all(&dest_dir)
+                .await
+                .map_err(|err| JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to unarchive thread: {err}"),
+                    data: None,
+                })?;
+            tokio::fs::rename(&canonical_rollout_path, &restored_path)
+                .await
+                .map_err(|err| JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to unarchive thread: {err}"),
+                    data: None,
+                })?;
+            let summary =
+                read_summary_from_rollout(restored_path.as_path(), fallback_provider.as_str())
+                    .await
+                    .map_err(|err| JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to read unarchived thread: {err}"),
+                        data: None,
+                    })?;
+            Ok(summary_to_thread(summary))
+        }
+        .await;
+
+        match result {
+            Ok(thread) => {
+                let response = ThreadUnarchiveResponse { thread };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+            }
+        }
+    }
+
     async fn thread_rollback(&mut self, request_id: RequestId, params: ThreadRollbackParams) {
         let ThreadRollbackParams {
             thread_id,
@@ -1646,6 +1848,7 @@ impl CodexMessageProcessor {
             limit,
             sort_key,
             model_providers,
+            source_kinds,
             archived,
         } = params;
 
@@ -1662,6 +1865,7 @@ impl CodexMessageProcessor {
                 requested_page_size,
                 cursor,
                 model_providers,
+                source_kinds,
                 core_sort_key,
                 archived.unwrap_or(false),
             )
@@ -2339,6 +2543,7 @@ impl CodexMessageProcessor {
                 requested_page_size,
                 cursor,
                 model_providers,
+                None,
                 CoreThreadSortKey::UpdatedAt,
                 false,
             )
@@ -2359,6 +2564,7 @@ impl CodexMessageProcessor {
         requested_page_size: usize,
         cursor: Option<String>,
         model_providers: Option<Vec<String>>,
+        source_kinds: Option<Vec<ThreadSourceKind>>,
         sort_key: CoreThreadSortKey,
         archived: bool,
     ) -> Result<(Vec<ConversationSummary>, Option<String>), JSONRPCErrorError> {
@@ -2388,6 +2594,8 @@ impl CodexMessageProcessor {
             None => Some(vec![self.config.model_provider_id.clone()]),
         };
         let fallback_provider = self.config.model_provider_id.clone();
+        let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
+        let allowed_sources = allowed_sources_vec.as_slice();
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
@@ -2397,7 +2605,7 @@ impl CodexMessageProcessor {
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
-                    INTERACTIVE_SESSION_SOURCES,
+                    allowed_sources,
                     model_provider_filter.as_deref(),
                     fallback_provider.as_str(),
                 )
@@ -2413,7 +2621,7 @@ impl CodexMessageProcessor {
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
-                    INTERACTIVE_SESSION_SOURCES,
+                    allowed_sources,
                     model_provider_filter.as_deref(),
                     fallback_provider.as_str(),
                 )
@@ -2441,6 +2649,11 @@ impl CodexMessageProcessor {
                         fallback_provider.as_str(),
                         updated_at,
                     )
+                })
+                .filter(|summary| {
+                    source_kind_filter
+                        .as_ref()
+                        .is_none_or(|filter| source_kind_matches(&summary.source, filter))
                 })
                 .collect::<Vec<_>>();
             if filtered.len() > remaining {
@@ -2651,6 +2864,8 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+
+        let scopes = scopes.or_else(|| server.scopes.clone());
 
         match perform_oauth_login_return_url(
             &name,
@@ -4322,6 +4537,41 @@ fn errors_to_info(
         .collect()
 }
 
+fn validate_dynamic_tools(
+    tools: &[ApiDynamicToolSpec],
+    mcp_tool_names: &HashSet<String>,
+) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for tool in tools {
+        let name = tool.name.trim();
+        if name.is_empty() {
+            return Err("dynamic tool name must not be empty".to_string());
+        }
+        if name != tool.name {
+            return Err(format!(
+                "dynamic tool name has leading/trailing whitespace: {}",
+                tool.name
+            ));
+        }
+        if name == "mcp" || name.starts_with("mcp__") {
+            return Err(format!("dynamic tool name is reserved: {name}"));
+        }
+        if mcp_tool_names.contains(name) {
+            return Err(format!("dynamic tool name conflicts with MCP tool: {name}"));
+        }
+        if !seen.insert(name.to_string()) {
+            return Err(format!("duplicate dynamic tool name: {name}"));
+        }
+
+        if let Err(err) = codex_core::parse_tool_input_schema(&tool.input_schema) {
+            return Err(format!(
+                "dynamic tool input schema is not supported for {name}: {err}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Derive the effective [`Config`] by layering three override sources.
 ///
 /// Precedence (lowest to highest):
@@ -4601,6 +4851,28 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::TempDir;
+
+    #[test]
+    fn validate_dynamic_tools_rejects_unsupported_input_schema() {
+        let tools = vec![ApiDynamicToolSpec {
+            name: "my_tool".to_string(),
+            description: "test".to_string(),
+            input_schema: json!({"type": "null"}),
+        }];
+        let err = validate_dynamic_tools(&tools, &HashSet::new()).expect_err("invalid schema");
+        assert!(err.contains("my_tool"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_dynamic_tools_accepts_sanitizable_input_schema() {
+        let tools = vec![ApiDynamicToolSpec {
+            name: "my_tool".to_string(),
+            description: "test".to_string(),
+            // Missing `type` is common; core sanitizes these to a supported schema.
+            input_schema: json!({"properties": {}}),
+        }];
+        validate_dynamic_tools(&tools, &HashSet::new()).expect("valid schema");
+    }
 
     #[test]
     fn extract_conversation_summary_prefers_plain_user_messages() -> Result<()> {

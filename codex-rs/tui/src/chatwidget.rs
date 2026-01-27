@@ -95,6 +95,7 @@ use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
@@ -132,12 +133,12 @@ use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
-use crate::bottom_pane::BetaFeatureItem;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::CollaborationModeIndicator;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
+use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
@@ -161,6 +162,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
@@ -738,6 +740,7 @@ impl ChatWidget {
             None,
         );
         self.refresh_model_display();
+        self.sync_personality_command_enabled();
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -1488,13 +1491,43 @@ impl ChatWidget {
         self.defer_or_handle(|q| q.push_mcp_end(ev), |s| s.handle_mcp_end_now(ev2));
     }
 
-    fn on_web_search_begin(&mut self, _ev: WebSearchBeginEvent) {
+    fn on_web_search_begin(&mut self, ev: WebSearchBeginEvent) {
         self.flush_answer_stream_with_separator();
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(history_cell::new_active_web_search_call(
+            ev.call_id,
+            String::new(),
+            self.config.animations,
+        )));
+        self.bump_active_cell_revision();
+        self.request_redraw();
     }
 
     fn on_web_search_end(&mut self, ev: WebSearchEndEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_web_search_call(ev.query));
+        let WebSearchEndEvent {
+            call_id,
+            query,
+            action,
+        } = ev;
+        let mut handled = false;
+        if let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|cell| cell.as_any_mut().downcast_mut::<WebSearchCell>())
+            && cell.call_id() == call_id
+        {
+            cell.update(action.clone(), query.clone());
+            cell.complete();
+            self.bump_active_cell_revision();
+            self.flush_active_cell();
+            handled = true;
+        }
+
+        if !handled {
+            self.add_to_history(history_cell::new_web_search_call(call_id, query, action));
+        }
+        self.had_work_activity = true;
     }
 
     fn on_collab_event(&mut self, cell: PlainHistoryCell) {
@@ -2023,6 +2056,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
+        widget.sync_personality_command_enabled();
         widget.update_collaboration_mode_indicator();
 
         widget
@@ -2147,6 +2181,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
+        widget.sync_personality_command_enabled();
 
         widget
     }
@@ -2272,6 +2307,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
+        widget.sync_personality_command_enabled();
         widget.update_collaboration_mode_indicator();
 
         widget
@@ -2506,6 +2542,9 @@ impl ChatWidget {
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::Personality => {
+                self.open_personality_popup();
             }
             SlashCommand::Collab => {
                 if self.collaboration_modes_enabled() {
@@ -2830,6 +2869,10 @@ impl ChatWidget {
         } else {
             None
         };
+        let personality = self
+            .config
+            .model_personality
+            .filter(|_| self.current_model_supports_personality());
         let op = Op::UserTurn {
             items,
             cwd: self.config.cwd.clone(),
@@ -2840,7 +2883,7 @@ impl ChatWidget {
             summary: self.config.model_reasoning_summary,
             final_output_json_schema: None,
             collaboration_mode,
-            personality: None,
+            personality,
         };
 
         self.codex_op_tx.send(op).unwrap_or_else(|e| {
@@ -3031,7 +3074,8 @@ impl ChatWidget {
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ReasoningRawContentDelta(_) => {}
+            | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::DynamicToolCallRequest(_) => {}
         }
     }
 
@@ -3380,6 +3424,76 @@ impl ChatWidget {
             }
         };
         self.open_model_popup_with_presets(presets);
+    }
+
+    pub(crate) fn open_personality_popup(&mut self) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Personality selection is disabled until startup completes.".to_string(),
+                None,
+            );
+            return;
+        }
+        self.open_personality_popup_for_current_model();
+    }
+
+    fn open_personality_popup_for_current_model(&mut self) {
+        let current_model = self.current_model();
+        let current_personality = self.config.model_personality;
+        let personalities = [Personality::Friendly, Personality::Pragmatic];
+        let supports_personality = self.current_model_supports_personality();
+        let disabled_message = (!supports_personality).then(|| {
+            format!(
+                "Current model ({current_model}) doesn't support personalities. Try /model to switch to a newer model."
+            )
+        });
+
+        let items: Vec<SelectionItem> = personalities
+            .into_iter()
+            .map(|personality| {
+                let name = Self::personality_label(personality).to_string();
+                let description = Some(Self::personality_description(personality).to_string());
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        model: None,
+                        effort: None,
+                        summary: None,
+                        collaboration_mode: None,
+                        personality: Some(personality),
+                    }));
+                    tx.send(AppEvent::UpdatePersonality(personality));
+                    tx.send(AppEvent::PersistPersonalitySelection { personality });
+                })];
+                SelectionItem {
+                    name,
+                    description,
+                    is_current: current_personality == Some(personality),
+                    is_disabled: !supports_personality,
+                    actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from("Select Personality".bold()));
+        header.push(Line::from(
+            "Choose a communication style for future responses.".dim(),
+        ));
+        if let Some(message) = disabled_message {
+            header.push(Line::from(message.red()));
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
     }
 
     fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
@@ -3946,12 +4060,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_experimental_popup(&mut self) {
-        let features: Vec<BetaFeatureItem> = FEATURES
+        let features: Vec<ExperimentalFeatureItem> = FEATURES
             .iter()
             .filter_map(|spec| {
-                let name = spec.stage.beta_menu_name()?;
-                let description = spec.stage.beta_menu_description()?;
-                Some(BetaFeatureItem {
+                let name = spec.stage.experimental_menu_name()?;
+                let description = spec.stage.experimental_menu_description()?;
+                Some(ExperimentalFeatureItem {
                     feature: spec.id,
                     name: name.to_string(),
                     description: description.to_string(),
@@ -4608,6 +4722,11 @@ impl ChatWidget {
         }
     }
 
+    /// Set the personality in the widget's config copy.
+    pub(crate) fn set_personality(&mut self, personality: Personality) {
+        self.config.model_personality = Some(personality);
+    }
+
     /// Set the model in the widget's config copy and stored collaboration mode.
     pub(crate) fn set_model(&mut self, model: &str) {
         self.current_collaboration_mode =
@@ -4619,6 +4738,7 @@ impl ChatWidget {
             mask.model = Some(model.to_string());
         }
         self.refresh_model_display();
+        self.sync_personality_command_enabled();
     }
 
     pub(crate) fn current_model(&self) -> &str {
@@ -4629,6 +4749,25 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.model.as_deref())
             .unwrap_or_else(|| self.current_collaboration_mode.model())
+    }
+
+    fn sync_personality_command_enabled(&mut self) {
+        self.bottom_pane
+            .set_personality_command_enabled(self.current_model_supports_personality());
+    }
+
+    fn current_model_supports_personality(&self) -> bool {
+        let model = self.current_model();
+        self.models_manager
+            .try_list_models(&self.config)
+            .ok()
+            .and_then(|models| {
+                models
+                    .into_iter()
+                    .find(|preset| preset.model == model)
+                    .map(|preset| preset.supports_personality)
+            })
+            .unwrap_or(false)
     }
 
     #[allow(dead_code)] // Used in tests
@@ -4662,8 +4801,10 @@ impl ChatWidget {
         if !config.features.enabled(Feature::CollaborationModes) {
             return None;
         }
-        let kind = config.experimental_mode?;
-        let mut mask = collaboration_modes::mask_for_kind(models_manager, kind)?;
+        let mut mask = match config.experimental_mode {
+            Some(kind) => collaboration_modes::mask_for_kind(models_manager, kind)?,
+            None => collaboration_modes::default_mask(models_manager)?,
+        };
         if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
         }
@@ -4742,6 +4883,20 @@ impl ChatWidget {
     fn update_collaboration_mode_indicator(&mut self) {
         let indicator = self.collaboration_mode_indicator();
         self.bottom_pane.set_collaboration_mode_indicator(indicator);
+    }
+
+    fn personality_label(personality: Personality) -> &'static str {
+        match personality {
+            Personality::Friendly => "Friendly",
+            Personality::Pragmatic => "Pragmatic",
+        }
+    }
+
+    fn personality_description(personality: Personality) -> &'static str {
+        match personality {
+            Personality::Friendly => "Warm, collaborative, and helpful.",
+            Personality::Pragmatic => "Concise, task-focused, and direct.",
+        }
     }
 
     /// Cycle to the next collaboration mode variant (Plan -> Code -> Plan).

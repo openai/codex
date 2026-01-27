@@ -12,6 +12,7 @@ use crate::CodexAuth;
 use crate::SandboxState;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
+use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
@@ -21,6 +22,7 @@ use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::features::maybe_push_unstable_features_warning;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -38,6 +40,8 @@ use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::BaseInstructions;
@@ -50,6 +54,7 @@ use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -236,24 +241,21 @@ fn maybe_push_chat_wire_api_deprecation(
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn(
-        config: Config,
+        mut config: Config,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
         skills_manager: Arc<SkillsManager>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
         agent_control: AgentControl,
+        dynamic_tools: Vec<DynamicToolSpec>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
         let loaded_skills = skills_manager.skills_for_config(&config);
-        // let loaded_skills = if config.features.enabled(Feature::Skills) {
-        //     Some(skills_manager.skills_for_config(&config))
-        // } else {
-        //     None
-        // };
 
         for err in &loaded_skills.errors {
             error!(
@@ -261,6 +263,12 @@ impl Codex {
                 err.path.display(),
                 err.message
             );
+        }
+
+        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
+            && depth >= MAX_THREAD_SPAWN_DEPTH
+        {
+            config.features.disable(Feature::Collab);
         }
 
         let enabled_skills = loaded_skills.enabled_skills();
@@ -320,6 +328,7 @@ impl Codex {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             session_source,
+            dynamic_tools,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -443,6 +452,7 @@ pub(crate) struct TurnContext {
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
+    pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
 }
 
 impl TurnContext {
@@ -500,6 +510,7 @@ pub(crate) struct SessionConfiguration {
     original_config_do_not_use: Arc<Config>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
+    dynamic_tools: Vec<DynamicToolSpec>,
 }
 
 impl SessionConfiguration {
@@ -616,6 +627,7 @@ impl Session {
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
+            dynamic_tools: session_configuration.dynamic_tools.clone(),
         }
     }
 
@@ -743,6 +755,7 @@ impl Session {
             });
         }
         maybe_push_chat_wire_api_deprecation(&config, &mut post_session_configured_events);
+        maybe_push_unstable_features_warning(&config, &mut post_session_configured_events);
 
         let auth = auth.as_ref();
         let otel_manager = OtelManager::new(
@@ -1495,6 +1508,27 @@ impl Session {
         }
     }
 
+    pub async fn notify_dynamic_tool_response(&self, call_id: &str, response: DynamicToolResponse) {
+        let entry = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.remove_pending_dynamic_tool(call_id)
+                }
+                None => None,
+            }
+        };
+        match entry {
+            Some(tx_response) => {
+                tx_response.send(response).ok();
+            }
+            None => {
+                warn!("No pending dynamic tool call found for call_id: {call_id}");
+            }
+        }
+    }
+
     pub async fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
         let entry = {
             let mut active = self.active_turn.lock().await;
@@ -2156,6 +2190,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::UserInputAnswer { id, response } => {
                 handlers::request_user_input_response(&sess, id, response).await;
             }
+            Op::DynamicToolResponse { id, response } => {
+                handlers::dynamic_tool_response(&sess, id, response).await;
+            }
             Op::AddToHistory { text } => {
                 handlers::add_to_history(&sess, &config, text).await;
             }
@@ -2252,6 +2289,7 @@ mod handlers {
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
+    use codex_protocol::dynamic_tools::DynamicToolResponse;
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
@@ -2487,6 +2525,14 @@ mod handlers {
         response: RequestUserInputResponse,
     ) {
         sess.notify_user_input_response(&id, response).await;
+    }
+
+    pub async fn dynamic_tool_response(
+        sess: &Arc<Session>,
+        id: String,
+        response: DynamicToolResponse,
+    ) {
+        sess.notify_dynamic_tool_response(&id, response).await;
     }
 
     pub async fn add_to_history(sess: &Arc<Session>, config: &Arc<Config>, text: String) {
@@ -2778,7 +2824,7 @@ async fn spawn_review_thread(
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
         features: &review_features,
-        web_search_mode: Some(review_web_search_mode),
+        web_search_mode: review_web_search_mode,
     });
 
     let review_prompt = resolved.prompt.clone();
@@ -2790,7 +2836,7 @@ async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
-    per_turn_config.web_search_mode = Some(review_web_search_mode);
+    per_turn_config.web_search_mode = review_web_search_mode;
 
     let otel_manager = parent_turn_context
         .client
@@ -2826,6 +2872,7 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
+        dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
     };
 
@@ -3162,6 +3209,7 @@ async fn run_sampling_request(
                 .map(|(name, tool)| (name, tool.tool))
                 .collect(),
         ),
+        turn_context.dynamic_tools.as_slice(),
     ));
 
     let model_supports_parallel = turn_context
@@ -3391,10 +3439,8 @@ async fn try_run_sampling_request(
             }
             ResponseEvent::OutputItemAdded(item) => {
                 if let Some(turn_item) = handle_non_tool_response_item(&item).await {
-                    let tracked_item = turn_item.clone();
                     sess.emit_turn_item_started(&turn_context, &turn_item).await;
-
-                    active_item = Some(tracked_item);
+                    active_item = Some(turn_item);
                 }
             }
             ResponseEvent::ServerReasoningIncluded(included) => {
@@ -3549,6 +3595,7 @@ mod tests {
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
 
+    use codex_protocol::ThreadId;
     use codex_protocol::models::FunctionCallOutputPayload;
 
     use crate::protocol::CompactedItem;
@@ -3942,6 +3989,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
+            dynamic_tools: Vec::new(),
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -4021,6 +4069,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
+            dynamic_tools: Vec::new(),
         };
 
         let mut state = SessionState::new(session_configuration);
@@ -4284,6 +4333,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
+            dynamic_tools: Vec::new(),
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_info = ModelsManager::construct_model_info_offline(
@@ -4392,6 +4442,7 @@ mod tests {
             cwd: config.cwd.clone(),
             original_config_do_not_use: Arc::clone(&config),
             session_source: SessionSource::Exec,
+            dynamic_tools: Vec::new(),
         };
         let per_turn_config = Session::build_per_turn_config(&session_configuration);
         let model_info = ModelsManager::construct_model_info_offline(
@@ -4712,6 +4763,7 @@ mod tests {
                     .map(|(name, tool)| (name, tool.tool))
                     .collect(),
             ),
+            turn_context.dynamic_tools.as_slice(),
         );
         let item = ResponseItem::CustomToolCall {
             id: None,

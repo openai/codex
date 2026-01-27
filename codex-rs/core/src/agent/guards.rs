@@ -1,6 +1,8 @@
 use crate::error::CodexErr;
 use crate::error::Result;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -17,6 +19,25 @@ use std::sync::atomic::Ordering;
 pub(crate) struct Guards {
     threads_set: Mutex<HashSet<ThreadId>>,
     total_count: AtomicUsize,
+}
+
+/// Initial agent is depth 0.
+pub(crate) const MAX_THREAD_SPAWN_DEPTH: i32 = 1;
+
+fn session_depth(session_source: &SessionSource) -> i32 {
+    match session_source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) => *depth,
+        SessionSource::SubAgent(_) => 0,
+        _ => 0,
+    }
+}
+
+pub(crate) fn next_thread_spawn_depth(session_source: &SessionSource) -> i32 {
+    session_depth(session_source).saturating_add(1)
+}
+
+pub(crate) fn exceeds_thread_spawn_depth_limit(depth: i32) -> bool {
+    depth > MAX_THREAD_SPAWN_DEPTH
 }
 
 impl Guards {
@@ -101,6 +122,30 @@ impl Drop for SpawnReservation {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn session_depth_defaults_to_zero_for_root_sources() {
+        assert_eq!(session_depth(&SessionSource::Cli), 0);
+    }
+
+    #[test]
+    fn thread_spawn_depth_increments_and_enforces_limit() {
+        let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::new(),
+            depth: 1,
+        });
+        let child_depth = next_thread_spawn_depth(&session_source);
+        assert_eq!(child_depth, 2);
+        assert!(exceeds_thread_spawn_depth_limit(child_depth));
+    }
+
+    #[test]
+    fn non_thread_spawn_subagents_default_to_depth_zero() {
+        let session_source = SessionSource::SubAgent(SubAgentSource::Review);
+        assert_eq!(session_depth(&session_source), 0);
+        assert_eq!(next_thread_spawn_depth(&session_source), 1);
+        assert!(!exceeds_thread_spawn_depth_limit(1));
+    }
 
     #[test]
     fn reservation_drop_releases_slot() {

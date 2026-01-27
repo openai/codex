@@ -57,6 +57,7 @@ pub struct TestCodexBuilder {
     config_mutators: Vec<Box<ConfigMutator>>,
     auth: CodexAuth,
     pre_build_hooks: Vec<Box<PreBuildHook>>,
+    home: Option<Arc<TempDir>>,
 }
 
 impl TestCodexBuilder {
@@ -88,8 +89,16 @@ impl TestCodexBuilder {
         self
     }
 
+    pub fn with_home(mut self, home: Arc<TempDir>) -> Self {
+        self.home = Some(home);
+        self
+    }
+
     pub async fn build(&mut self, server: &wiremock::MockServer) -> anyhow::Result<TestCodex> {
-        let home = Arc::new(TempDir::new()?);
+        let home = match self.home.clone() {
+            Some(home) => home,
+            None => Arc::new(TempDir::new()?),
+        };
         self.build_with_home(server, home, None).await
     }
 
@@ -98,7 +107,10 @@ impl TestCodexBuilder {
         server: &StreamingSseServer,
     ) -> anyhow::Result<TestCodex> {
         let base_url = server.uri();
-        let home = Arc::new(TempDir::new()?);
+        let home = match self.home.clone() {
+            Some(home) => home,
+            None => Arc::new(TempDir::new()?),
+        };
         self.build_with_home_and_base_url(format!("{base_url}/v1"), home, None)
             .await
     }
@@ -108,7 +120,10 @@ impl TestCodexBuilder {
         server: &WebSocketTestServer,
     ) -> anyhow::Result<TestCodex> {
         let base_url = format!("{}/v1", server.uri());
-        let home = Arc::new(TempDir::new()?);
+        let home = match self.home.clone() {
+            Some(home) => home,
+            None => Arc::new(TempDir::new()?),
+        };
         let base_url_clone = base_url.clone();
         self.config_mutators.push(Box::new(move |config| {
             config.model_provider.base_url = Some(base_url_clone);
@@ -432,5 +447,6 @@ pub fn test_codex() -> TestCodexBuilder {
         config_mutators: vec![],
         auth: CodexAuth::from_api_key("dummy"),
         pre_build_hooks: vec![],
+        home: None,
     }
 }

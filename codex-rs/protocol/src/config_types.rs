@@ -2,6 +2,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
+use strum_macros::EnumIter;
 use ts_rs::TS;
 
 use crate::openai_models::ReasoningEffort;
@@ -78,6 +79,7 @@ pub enum SandboxMode {
     TS,
     PartialOrd,
     Ord,
+    EnumIter,
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
@@ -92,8 +94,8 @@ pub enum Personality {
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum WebSearchMode {
-    #[default]
     Disabled,
+    #[default]
     Cached,
     Live,
 }
