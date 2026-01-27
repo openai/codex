@@ -94,15 +94,15 @@ pub(crate) enum FooterMode {
     QuitShortcutReminder,
     /// Base single-line footer when the composer is empty.
     ComposerEmpty,
-    /// Multi-line shortcut overlay shown after pressing `?`.
-    ShortcutOverlay,
-    /// Transient "press Esc again" hint shown after the first Esc while idle.
-    EscHint,
     /// Base single-line footer when the composer contains a draft.
     ///
     /// The shortcuts hint is suppressed here; when a task is running with
     /// steer enabled, this mode can show the queue hint instead.
     ComposerHasDraft,
+    /// Multi-line shortcut overlay shown after pressing `?`.
+    ShortcutOverlay,
+    /// Transient "press Esc again" hint shown after the first Esc while idle.
+    EscHint,
 }
 
 pub(crate) fn toggle_shortcut_mode(current: FooterMode, ctrl_c_hint: bool) -> FooterMode {
