@@ -24,6 +24,8 @@ use crate::bottom_pane::ChatComposerConfig;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::scroll_state::ScrollState;
+use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
+use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::render::renderable::Renderable;
 
 use codex_core::protocol::Op;
@@ -162,6 +164,62 @@ impl RequestUserInputOverlay {
             .and_then(|question| question.options.as_ref())
             .and_then(|options| options.get(idx))
             .map(|option| option.label.as_str())
+    }
+
+    pub(super) fn wrapped_question_lines(&self, width: u16) -> Vec<String> {
+        self.current_question()
+            .map(|q| {
+                textwrap::wrap(&q.question, width.max(1) as usize)
+                    .into_iter()
+                    .map(|line| line.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    pub(super) fn option_rows(&self) -> Vec<GenericDisplayRow> {
+        self.current_question()
+            .and_then(|question| question.options.as_ref())
+            .map(|options| {
+                options
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, opt)| {
+                        let selected = self
+                            .current_answer()
+                            .and_then(|answer| answer.selected)
+                            .is_some_and(|sel| sel == idx);
+                        let prefix = if selected { "(x)" } else { "( )" };
+                        GenericDisplayRow {
+                            name: format!("{prefix} {}", opt.label),
+                            description: Some(opt.description.clone()),
+                            ..Default::default()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    pub(super) fn options_required_height(&self, width: u16) -> u16 {
+        if !self.has_options() {
+            return 0;
+        }
+
+        let rows = self.option_rows();
+        if rows.is_empty() {
+            return 1;
+        }
+
+        let mut state = self
+            .current_answer()
+            .map(|answer| answer.option_state)
+            .unwrap_or_default();
+        if state.selected_idx.is_none() {
+            state.selected_idx = Some(0);
+        }
+
+        measure_rows_height(&rows, &state, rows.len(), width.max(1))
     }
 
     fn capture_composer_draft(&self) -> ComposerDraft {
@@ -594,6 +652,35 @@ mod tests {
         }
     }
 
+    fn question_with_wrapped_options(id: &str, header: &str) -> RequestUserInputQuestion {
+        RequestUserInputQuestion {
+            id: id.to_string(),
+            header: header.to_string(),
+            question: "Choose the next step for this task.".to_string(),
+            is_other: false,
+            options: Some(vec![
+                RequestUserInputQuestionOption {
+                    label: "Discuss a code change".to_string(),
+                    description:
+                        "Walk through a plan, then implement it together with careful checks."
+                            .to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Run targeted tests".to_string(),
+                    description:
+                        "Pick the most relevant crate and validate the current behavior first."
+                            .to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Review the diff".to_string(),
+                    description:
+                        "Summarize the changes and highlight the most important risks and gaps."
+                            .to_string(),
+                },
+            ]),
+        }
+    }
+
     fn question_without_options(id: &str, header: &str) -> RequestUserInputQuestion {
         RequestUserInputQuestion {
             id: id.to_string(),
@@ -793,6 +880,60 @@ mod tests {
         let area = Rect::new(0, 0, 60, 8);
         insta::assert_snapshot!(
             "request_user_input_tight_height",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn layout_allocates_all_wrapped_options_when_space_allows() {
+        let (tx, _rx) = test_sender();
+        let overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![question_with_wrapped_options("q1", "Next Step")],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        let width = 48u16;
+        let question_height = overlay.wrapped_question_lines(width).len() as u16;
+        let options_height = overlay.options_required_height(width);
+        let height = 1u16
+            .saturating_add(question_height)
+            .saturating_add(options_height)
+            .saturating_add(4);
+        let sections = overlay.layout_sections(Rect::new(0, 0, width, height));
+
+        assert_eq!(sections.options_area.height, options_height);
+    }
+
+    #[test]
+    fn request_user_input_wrapped_options_snapshot() {
+        let (tx, _rx) = test_sender();
+        let overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![question_with_wrapped_options("q1", "Next Step")],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        let width = 52u16;
+        let question_height = overlay.wrapped_question_lines(width).len() as u16;
+        let options_height = overlay.options_required_height(width);
+        let height = 1u16
+            .saturating_add(question_height)
+            .saturating_add(options_height)
+            .saturating_add(4);
+        let area = Rect::new(0, 0, width, height);
+        insta::assert_snapshot!(
+            "request_user_input_wrapped_options",
             render_snapshot(&overlay, area)
         );
     }
