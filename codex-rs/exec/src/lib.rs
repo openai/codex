@@ -538,7 +538,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             CodexStatus::InitiateShutdown => {
                 thread.submit(Op::Shutdown).await?;
             }
-            CodexStatus::Shutdown => break,
+            CodexStatus::Shutdown if thread_id == primary_thread_id => break,
+            CodexStatus::Shutdown => continue,
         }
     }
     event_processor.print_final_output();
