@@ -1778,8 +1778,11 @@ impl CodexMessageProcessor {
                     message: format!("failed to unarchive thread: {err}"),
                     data: None,
                 })?;
-            state_db::mark_unarchived(state_db_ctx.as_deref(), thread_id, restored_path.as_path())
-                .await;
+            if let Some(ctx) = state_db_ctx {
+                let _ = ctx
+                    .mark_archived(thread_id, restored_path.as_path(), Utc::now())
+                    .await;
+            }
             let summary =
                 read_summary_from_rollout(restored_path.as_path(), fallback_provider.as_str())
                     .await
@@ -3577,8 +3580,9 @@ impl CodexMessageProcessor {
             tokio::fs::create_dir_all(&archive_folder).await?;
             let archived_path = archive_folder.join(&file_name);
             tokio::fs::rename(&canonical_rollout_path, &archived_path).await?;
-            state_db::mark_archived(state_db_ctx.as_deref(), thread_id, archived_path.as_path())
-                .await;
+            if let Some(ctx) = state_db_ctx {
+                let _ = ctx.mark_archived(thread_id, rollout_path, Utc::now()).await;
+            }
             Ok(())
         }
         .await;

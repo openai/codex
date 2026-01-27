@@ -844,8 +844,6 @@ impl Session {
             state_db: state_db_ctx.clone(),
         };
 
-        state_db::startup_summary(state_db_ctx.as_deref(), &config).await;
-
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),

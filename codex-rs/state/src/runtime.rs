@@ -1,13 +1,30 @@
-use crate::StateDb;
+use crate::DB_ERROR_METRIC;
+use crate::SortKey;
+use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
+use crate::ThreadsPage;
+use crate::apply_rollout_item;
+use crate::db::datetime_to_epoch_seconds;
+use crate::extract::rollout_has_user_event;
+use crate::migrations::MIGRATOR;
+use crate::paths::file_modified_time_utc;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
+use sqlx::QueryBuilder;
+use sqlx::Row;
+use sqlx::Sqlite;
+use sqlx::SqlitePool;
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::sqlite::SqliteJournalMode;
+use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::SqliteSynchronous;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::info;
 use tracing::warn;
 
@@ -15,12 +32,11 @@ pub const STATE_DB_FILENAME: &str = "state.sqlite";
 
 const METRIC_DB_INIT: &str = "codex.db.init";
 
-/// A runtime wrapper around [`StateDb`] that owns configuration.
 #[derive(Clone)]
 pub struct StateRuntime {
-    db: Arc<StateDb>,
     codex_home: PathBuf,
     default_provider: String,
+    pool: Arc<sqlx::SqlitePool>,
 }
 
 impl StateRuntime {
@@ -34,7 +50,7 @@ impl StateRuntime {
     ) -> anyhow::Result<Arc<Self>> {
         let state_path = codex_home.join(STATE_DB_FILENAME);
         let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
-        let db = match StateDb::open(&state_path).await {
+        let pool = match open_sqlite(&state_path).await {
             Ok(db) => Arc::new(db),
             Err(err) => {
                 warn!("failed to open state db at {}: {err}", state_path.display());
@@ -48,7 +64,7 @@ impl StateRuntime {
             otel.counter(METRIC_DB_INIT, 1, &[("status", "opened")]);
         }
         let runtime = Arc::new(Self {
-            db,
+            pool,
             codex_home,
             default_provider,
         });
@@ -65,7 +81,32 @@ impl StateRuntime {
 
     /// Load thread metadata by id using the underlying database.
     pub async fn get_thread(&self, id: ThreadId) -> anyhow::Result<Option<crate::ThreadMetadata>> {
-        self.db.get_thread(id).await
+        let row = sqlx::query_as::<_, crate::db::ThreadRow>(
+            r#"
+SELECT
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    source,
+    model_provider,
+    cwd,
+    title,
+    sandbox_policy,
+    approval_mode,
+    tokens_used,
+    archived_at,
+    git_sha,
+    git_branch,
+    git_origin_url
+FROM threads
+WHERE id = ?
+            "#,
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(ThreadMetadata::try_from).transpose()
     }
 
     /// Find a rollout path by thread id using the underlying database.
@@ -74,7 +115,22 @@ impl StateRuntime {
         id: ThreadId,
         archived_only: Option<bool>,
     ) -> anyhow::Result<Option<PathBuf>> {
-        self.db.find_rollout_path_by_id(id, archived_only).await
+        let mut builder =
+            QueryBuilder::<Sqlite>::new("SELECT rollout_path FROM threads WHERE id = ");
+        builder.push_bind(id.to_string());
+        match archived_only {
+            Some(true) => {
+                builder.push(" AND archived = 1");
+            }
+            Some(false) => {
+                builder.push(" AND archived = 0");
+            }
+            None => {}
+        }
+        let row = builder.build().fetch_optional(&self.pool).await?;
+        Ok(row
+            .and_then(|r| r.try_get::<String, _>("rollout_path").ok())
+            .map(PathBuf::from))
     }
 
     /// List threads using the underlying database.
@@ -87,16 +143,71 @@ impl StateRuntime {
         model_providers: Option<&[String]>,
         archived_only: bool,
     ) -> anyhow::Result<crate::ThreadsPage> {
-        self.db
-            .list_threads(
-                page_size,
-                anchor,
-                sort_key,
-                allowed_sources,
-                model_providers,
-                archived_only,
-            )
-            .await
+        let batch_size = page_size.saturating_mul(4).clamp(64, 512);
+        let mut scan_anchor = anchor.cloned();
+        let mut num_scanned_rows = 0usize;
+        let mut items = Vec::new();
+
+        loop {
+            let batch = self
+                .list_threads_batch(
+                    batch_size,
+                    scan_anchor.as_ref(),
+                    sort_key,
+                    allowed_sources,
+                    model_providers,
+                    archived_only,
+                )
+                .await?;
+            let batch_len = batch.len();
+            if batch_len == 0 {
+                break;
+            }
+            num_scanned_rows = num_scanned_rows.saturating_add(batch_len);
+
+            for candidate in batch {
+                let candidate_anchor = crate::db::anchor_from_item(&candidate, sort_key);
+                scan_anchor = candidate_anchor;
+                let has_user_event =
+                    match rollout_has_user_event(candidate.rollout_path.as_path()).await {
+                        Ok(has_user_event) => has_user_event,
+                        Err(err) => {
+                            warn!(
+                                "failed to scan rollout for user events {}: {err}",
+                                candidate.rollout_path.display()
+                            );
+                            true
+                        }
+                    };
+                if has_user_event {
+                    items.push(candidate);
+                }
+                if items.len() > page_size {
+                    break;
+                }
+            }
+
+            if items.len() > page_size {
+                break;
+            }
+            if batch_len < batch_size {
+                break;
+            }
+        }
+
+        let next_anchor = if items.len() > page_size {
+            match items.pop() {
+                Some(extra) => crate::db::anchor_from_item(&extra, sort_key),
+                None => None,
+            }
+        } else {
+            None
+        };
+        Ok(ThreadsPage {
+            items,
+            next_anchor,
+            num_scanned_rows,
+        })
     }
 
     /// List thread ids using the underlying database (no rollout scanning).
@@ -109,21 +220,130 @@ impl StateRuntime {
         model_providers: Option<&[String]>,
         archived_only: bool,
     ) -> anyhow::Result<Vec<ThreadId>> {
-        self.db
-            .list_thread_ids(
-                limit,
-                anchor,
-                sort_key,
-                allowed_sources,
-                model_providers,
-                archived_only,
-            )
-            .await
+        let mut builder = QueryBuilder::<Sqlite>::new("SELECT id FROM threads WHERE 1 = 1");
+        if archived_only {
+            builder.push(" AND archived = 1");
+        } else {
+            builder.push(" AND archived = 0");
+        }
+        if !allowed_sources.is_empty() {
+            builder.push(" AND source IN (");
+            let mut separated = builder.separated(", ");
+            for source in allowed_sources {
+                separated.push_bind(source);
+            }
+            separated.push_unseparated(")");
+        }
+        if let Some(model_providers) = model_providers
+            && !model_providers.is_empty()
+        {
+            builder.push(" AND model_provider IN (");
+            let mut separated = builder.separated(", ");
+            for provider in model_providers {
+                separated.push_bind(provider);
+            }
+            separated.push_unseparated(")");
+        }
+        if let Some(anchor) = anchor {
+            let anchor_ts = datetime_to_epoch_seconds(anchor.ts);
+            let column = match sort_key {
+                SortKey::CreatedAt => "created_at",
+                SortKey::UpdatedAt => "updated_at",
+            };
+            builder.push(" AND (");
+            builder.push(column);
+            builder.push(" < ");
+            builder.push_bind(anchor_ts);
+            builder.push(" OR (");
+            builder.push(column);
+            builder.push(" = ");
+            builder.push_bind(anchor_ts);
+            builder.push(" AND id < ");
+            builder.push_bind(anchor.id.to_string());
+            builder.push("))");
+        }
+        let order_column = match sort_key {
+            SortKey::CreatedAt => "created_at",
+            SortKey::UpdatedAt => "updated_at",
+        };
+        builder.push(" ORDER BY ");
+        builder.push(order_column);
+        builder.push(" DESC, id DESC");
+        builder.push(" LIMIT ");
+        builder.push_bind(limit as i64);
+
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .map(|row| {
+                let id: String = row.try_get("id")?;
+                Ok(ThreadId::try_from(id)?)
+            })
+            .collect()
     }
 
     /// Insert or replace thread metadata directly.
     pub async fn upsert_thread(&self, metadata: &crate::ThreadMetadata) -> anyhow::Result<()> {
-        self.db.upsert_thread(metadata).await
+        sqlx::query(
+            r#"
+INSERT INTO threads (
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    source,
+    model_provider,
+    cwd,
+    title,
+    sandbox_policy,
+    approval_mode,
+    tokens_used,
+    archived,
+    archived_at,
+    git_sha,
+    git_branch,
+    git_origin_url
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    rollout_path = excluded.rollout_path,
+    created_at = excluded.created_at,
+    updated_at = excluded.updated_at,
+    source = excluded.source,
+    model_provider = excluded.model_provider,
+    cwd = excluded.cwd,
+    title = excluded.title,
+    sandbox_policy = excluded.sandbox_policy,
+    approval_mode = excluded.approval_mode,
+    tokens_used = excluded.tokens_used,
+    archived = excluded.archived,
+    archived_at = excluded.archived_at,
+    git_sha = excluded.git_sha,
+    git_branch = excluded.git_branch,
+    git_origin_url = excluded.git_origin_url
+            "#,
+        )
+        .bind(metadata.id.to_string())
+        .bind(metadata.rollout_path.display().to_string())
+        .bind(crate::db::datetime_to_epoch_seconds(metadata.created_at))
+        .bind(crate::db::datetime_to_epoch_seconds(metadata.updated_at))
+        .bind(metadata.source)
+        .bind(metadata.model_provider)
+        .bind(metadata.cwd.display().to_string())
+        .bind(metadata.title)
+        .bind(metadata.sandbox_policy)
+        .bind(metadata.approval_mode)
+        .bind(metadata.tokens_used)
+        .bind(metadata.archived_at.is_some())
+        .bind(
+            metadata
+                .archived_at
+                .map(crate::db::datetime_to_epoch_seconds),
+        )
+        .bind(metadata.git_sha.as_deref())
+        .bind(metadata.git_branch.as_deref())
+        .bind(metadata.git_origin_url.as_deref())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// Apply rollout items incrementally using the underlying database.
@@ -133,9 +353,27 @@ impl StateRuntime {
         items: &[RolloutItem],
         otel: Option<&OtelManager>,
     ) -> anyhow::Result<()> {
-        self.db
-            .apply_rollout_items(builder, self.default_provider.as_str(), items, otel)
-            .await
+        if items.is_empty() {
+            return Ok(());
+        }
+        let mut metadata = self
+            .get_thread(builder.id)
+            .await?
+            .unwrap_or_else(|| builder.build(&self.default_provider));
+        metadata.rollout_path = builder.rollout_path.clone();
+        for item in items {
+            apply_rollout_item(&mut metadata, item, &self.default_provider);
+        }
+        if let Some(updated_at) = file_modified_time_utc(builder.rollout_path.as_path()).await {
+            metadata.updated_at = updated_at;
+        }
+        if let Err(err) = self.upsert_thread(&metadata).await {
+            if let Some(otel) = otel {
+                otel.counter(DB_ERROR_METRIC, 1, &[("stage", "apply_rollout_items")]);
+            }
+            return Err(err);
+        }
+        Ok(())
     }
 
     /// Mark a thread as archived using the underlying database.
@@ -145,9 +383,21 @@ impl StateRuntime {
         rollout_path: &Path,
         archived_at: DateTime<Utc>,
     ) -> anyhow::Result<()> {
-        self.db
-            .mark_archived(thread_id, rollout_path, archived_at)
-            .await
+        let Some(mut metadata) = self.get_thread(thread_id).await? else {
+            return Ok(());
+        };
+        metadata.archived_at = Some(archived_at);
+        metadata.rollout_path = rollout_path.to_path_buf();
+        if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
+            metadata.updated_at = updated_at;
+        }
+        if metadata.id != thread_id {
+            warn!(
+                "thread id mismatch during archive: expected {thread_id}, got {}",
+                metadata.id
+            );
+        }
+        self.upsert_thread(&metadata).await
     }
 
     /// Mark a thread as unarchived using the underlying database.
@@ -156,11 +406,35 @@ impl StateRuntime {
         thread_id: ThreadId,
         rollout_path: &Path,
     ) -> anyhow::Result<()> {
-        self.db.mark_unarchived(thread_id, rollout_path).await
+        let Some(mut metadata) = self.get_thread(thread_id).await? else {
+            return Ok(());
+        };
+        metadata.archived_at = None;
+        metadata.rollout_path = rollout_path.to_path_buf();
+        if let Some(updated_at) = file_modified_time_utc(rollout_path).await {
+            metadata.updated_at = updated_at;
+        }
+        if metadata.id != thread_id {
+            warn!(
+                "thread id mismatch during unarchive: expected {thread_id}, got {}",
+                metadata.id
+            );
+        }
+        self.upsert_thread(&metadata).await
     }
+}
 
-    /// Emit a startup summary when the runtime is enabled.
-    pub async fn startup_summary(&self) {
-        info!("state db enabled at {}", self.db.path().display());
-    }
+async fn open_sqlite(path: &Path) -> anyhow::Result<SqlitePool> {
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(Duration::from_secs(5));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await?;
+    MIGRATOR.run(&pool).await?;
+    Ok(pool)
 }

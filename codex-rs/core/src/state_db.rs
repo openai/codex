@@ -94,15 +94,6 @@ pub async fn open_if_present(codex_home: &Path, default_provider: &str) -> Optio
     Some(runtime)
 }
 
-/// Extract rollout metadata by scanning the rollout file in core.
-pub async fn extract_metadata_from_rollout(
-    rollout_path: &Path,
-    default_provider: &str,
-    otel: Option<&OtelManager>,
-) -> anyhow::Result<codex_state::ExtractionOutcome> {
-    metadata::extract_metadata_from_rollout(rollout_path, default_provider, otel).await
-}
-
 fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
     let cursor = cursor?;
     let value = serde_json::to_value(cursor).ok()?;
@@ -121,28 +112,6 @@ fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
     }
     .with_nanosecond(0)?;
     Some(codex_state::Anchor { ts, id })
-}
-
-fn thread_sort_key(sort_key: ThreadSortKey) -> codex_state::SortKey {
-    match sort_key {
-        ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
-        ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
-    }
-}
-
-fn sources_to_strings(sources: &[SessionSource]) -> Vec<String> {
-    sources
-        .iter()
-        .map(|value| match serde_json::to_value(value) {
-            Ok(Value::String(s)) => s,
-            Ok(other) => other.to_string(),
-            Err(_) => String::new(),
-        })
-        .collect()
-}
-
-fn model_providers_to_vec(model_providers: Option<&[String]>) -> Option<Vec<String>> {
-    model_providers.map(<[String]>::to_vec)
 }
 
 /// Query parameters for listing threads from SQLite.
@@ -181,13 +150,23 @@ pub async fn list_thread_ids_db(
     }
 
     let anchor = cursor_to_anchor(cursor);
-    let allowed_sources = sources_to_strings(allowed_sources);
-    let model_providers = model_providers_to_vec(model_providers);
+    let allowed_sources = allowed_sources
+        .iter()
+        .map(|value| match serde_json::to_value(value) {
+            Ok(Value::String(s)) => s,
+            Ok(other) => other.to_string(),
+            Err(_) => String::new(),
+        })
+        .collect();
+    let model_providers = model_providers.map(<[String]>::to_vec);
     match ctx
         .list_thread_ids(
             page_size,
             anchor.as_ref(),
-            thread_sort_key(sort_key),
+            match sort_key {
+                ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
+                ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+            },
             allowed_sources.as_slice(),
             model_providers.as_deref(),
             archived_only,
@@ -295,55 +274,6 @@ pub async fn apply_rollout_items(
     }
 }
 
-/// Mark a thread as archived in SQLite using the canonical archived rollout path.
-pub async fn mark_archived(
-    context: Option<&codex_state::StateRuntime>,
-    thread_id: ThreadId,
-    rollout_path: &Path,
-) {
-    let Some(ctx) = context else {
-        return;
-    };
-    if let Err(err) = ctx
-        .mark_archived(thread_id, rollout_path, chrono::Utc::now())
-        .await
-    {
-        warn!(
-            "failed to mark archived in state db {}: {err}",
-            rollout_path.display()
-        );
-    }
-}
-
-/// Mark a thread as unarchived in SQLite using the canonical restored rollout path.
-pub async fn mark_unarchived(
-    context: Option<&codex_state::StateRuntime>,
-    thread_id: ThreadId,
-    rollout_path: &Path,
-) {
-    let Some(ctx) = context else {
-        return;
-    };
-    if let Err(err) = ctx.mark_unarchived(thread_id, rollout_path).await {
-        warn!(
-            "failed to mark unarchived in state db {}: {err}",
-            rollout_path.display()
-        );
-    }
-}
-
-/// Extract the thread id UUID string from a rollout path, if it matches the standard naming scheme.
-pub fn rollout_id_from_path(path: &Path) -> Option<String> {
-    let file_name = path.file_name()?.to_string_lossy();
-    let core = file_name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
-    let (_sep_idx, uuid) = core.match_indices('-').rev().find_map(|(idx, _)| {
-        Uuid::parse_str(&core[idx + 1..])
-            .ok()
-            .map(|uuid| (idx, uuid))
-    })?;
-    Some(uuid.to_string())
-}
-
 /// Record a state discrepancy metric with a stage and reason tag.
 pub fn record_discrepancy(stage: &str, reason: &str) {
     // We access the global metric because the call sites might not have access to the broader
@@ -357,29 +287,12 @@ pub fn record_discrepancy(stage: &str, reason: &str) {
     }
 }
 
-/// Emit a startup summary when SQLite state is enabled and initialized.
-pub async fn startup_summary(context: Option<&codex_state::StateRuntime>, config: &Config) {
-    if config.features.enabled(Feature::Sqlite)
-        && let Some(ctx) = context
-    {
-        ctx.startup_summary().await;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::rollout::list::parse_cursor;
     use pretty_assertions::assert_eq;
     use std::path::Path;
-
-    #[test]
-    fn rollout_id_from_path_parses_full_uuid() {
-        let uuid = Uuid::new_v4();
-        let path_str = format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl");
-        let path = Path::new(path_str.as_str());
-        assert_eq!(rollout_id_from_path(path), Some(uuid.to_string()));
-    }
 
     #[test]
     fn cursor_to_anchor_normalizes_timestamp_format() {

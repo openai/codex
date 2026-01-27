@@ -17,7 +17,6 @@ pub use runtime::StateRuntime;
 /// Low-level storage engine: useful for focused tests.
 ///
 /// Most consumers should prefer [`StateRuntime`].
-pub use db::StateDb;
 pub use extract::apply_rollout_item;
 pub use model::Anchor;
 pub use model::BackfillStats;

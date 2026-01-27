@@ -62,7 +62,21 @@ pub(crate) fn builder_from_items(
     {
         return Some(builder);
     }
-    builder_from_rollout_filename(rollout_path)
+
+    let file_name = rollout_path.file_name()?.to_str()?;
+    if !file_name.starts_with(ROLLOUT_PREFIX) || !file_name.ends_with(ROLLOUT_SUFFIX) {
+        return None;
+    }
+    let (created_ts, uuid) = parse_timestamp_uuid_from_filename(file_name)?;
+    let created_at =
+        DateTime::<Utc>::from_timestamp(created_ts.unix_timestamp(), 0)?.with_nanosecond(0)?;
+    let id = ThreadId::from_string(&uuid.to_string()).ok()?;
+    Some(ThreadMetadataBuilder::new(
+        id,
+        rollout_path.to_path_buf(),
+        created_at,
+        SessionSource::default(),
+    ))
 }
 
 pub(crate) async fn extract_metadata_from_rollout(
@@ -169,23 +183,6 @@ pub(crate) async fn backfill_sessions(
         }
     }
     stats
-}
-
-fn builder_from_rollout_filename(rollout_path: &Path) -> Option<ThreadMetadataBuilder> {
-    let file_name = rollout_path.file_name()?.to_str()?;
-    if !file_name.starts_with(ROLLOUT_PREFIX) || !file_name.ends_with(ROLLOUT_SUFFIX) {
-        return None;
-    }
-    let (created_ts, uuid) = parse_timestamp_uuid_from_filename(file_name)?;
-    let created_at =
-        DateTime::<Utc>::from_timestamp(created_ts.unix_timestamp(), 0)?.with_nanosecond(0)?;
-    let id = ThreadId::from_string(&uuid.to_string()).ok()?;
-    Some(ThreadMetadataBuilder::new(
-        id,
-        rollout_path.to_path_buf(),
-        created_at,
-        SessionSource::default(),
-    ))
 }
 
 async fn file_modified_time_utc(path: &Path) -> Option<DateTime<Utc>> {
