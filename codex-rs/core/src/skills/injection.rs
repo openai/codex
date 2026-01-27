@@ -191,7 +191,7 @@ fn text_mentions_skill(text: &str, skill_name: &str) -> bool {
 
         let after_index = name_start + skill_bytes.len();
         let after = text_bytes.get(after_index).copied();
-        if after.map_or(true, |b| !is_skill_name_char(b)) {
+        if after.is_none_or(|b| !is_skill_name_char(b)) {
             return true;
         }
     }
