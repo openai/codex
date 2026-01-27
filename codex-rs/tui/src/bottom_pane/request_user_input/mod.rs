@@ -781,13 +781,6 @@ impl BottomPaneView for RequestUserInputOverlay {
                         }
                         self.go_next_or_submit();
                     }
-                    KeyCode::Char(_) => {
-                        // Any typing while in options switches to notes for fast freeform input.
-                        self.focus = Focus::Notes;
-                        self.ensure_selected_for_notes();
-                        let (result, _) = self.composer.handle_key_event(key_event);
-                        self.handle_composer_input_result(result);
-                    }
                     _ => {}
                 }
             }
@@ -1136,7 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn typing_in_options_enters_notes() {
+    fn typing_in_options_does_not_open_notes() {
         let (tx, _rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
             request_event(
@@ -1154,12 +1147,11 @@ mod tests {
 
         assert_eq!(overlay.current_index(), 0);
         assert_eq!(overlay.notes_ui_visible(), false);
-        overlay.composer.set_disable_paste_burst(true);
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('h')));
         assert_eq!(overlay.current_index(), 0);
-        assert_eq!(overlay.notes_ui_visible(), true);
-        assert!(matches!(overlay.focus, Focus::Notes));
-        assert_eq!(overlay.composer.current_text_with_pending(), "h");
+        assert_eq!(overlay.notes_ui_visible(), false);
+        assert!(matches!(overlay.focus, Focus::Options));
+        assert_eq!(overlay.composer.current_text_with_pending(), "");
     }
 
     #[test]
