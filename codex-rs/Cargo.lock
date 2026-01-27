@@ -1388,6 +1388,7 @@ dependencies = [
  "libc",
  "maplit",
  "mcp-types",
+ "notify",
  "once_cell",
  "openssl-sys",
  "os_info",

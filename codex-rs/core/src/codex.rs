@@ -110,6 +110,8 @@ use crate::error::Result as CodexResult;
 use crate::exec::StreamOutput;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
+use crate::file_watcher::FileWatcher;
+use crate::file_watcher::FileWatcherEvent;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
@@ -247,6 +249,7 @@ impl Codex {
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
         skills_manager: Arc<SkillsManager>,
+        file_watcher: Arc<FileWatcher>,
         conversation_history: InitialHistory,
         session_source: SessionSource,
         agent_control: AgentControl,
@@ -296,7 +299,7 @@ impl Codex {
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
-        // 3. base_intructions for current model
+        // 3. base_instructions for current model
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
         let base_instructions = config
             .base_instructions
@@ -346,6 +349,7 @@ impl Codex {
             conversation_history,
             session_source_clone,
             skills_manager,
+            file_watcher,
             agent_control,
         )
         .await
@@ -427,6 +431,8 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
+    agents_changed: Arc<AtomicBool>,
+    agents_watch_dirs: Vec<PathBuf>,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -576,6 +582,54 @@ impl Session {
         per_turn_config
     }
 
+    // Build the directories we watch for `AGENTS.md` changes: project search
+    // roots (falling back to `cwd`) plus the user's `codex_home`.
+    fn build_agents_watch_dirs(config: &Config) -> Vec<PathBuf> {
+        let mut dirs = match crate::project_doc::project_doc_search_dirs(config) {
+            Ok(dirs) => dirs,
+            Err(err) => {
+                warn!("failed to compute AGENTS.md search dirs: {err}");
+                vec![config.cwd.clone()]
+            }
+        };
+        dirs.push(config.codex_home.clone());
+        dirs
+    }
+
+    fn start_file_watcher_listener(self: &Arc<Self>) {
+        let mut rx = self.services.file_watcher.subscribe();
+        let agents_changed = Arc::clone(&self.agents_changed);
+        let agents_watch_dirs = self.agents_watch_dirs.clone();
+        let sess = Arc::clone(self);
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(FileWatcherEvent::AgentsChanged { paths }) => {
+                        if paths
+                            .iter()
+                            .any(|path| agents_watch_dirs.iter().any(|root| path.starts_with(root)))
+                            && !agents_changed.swap(true, Ordering::SeqCst)
+                        {
+                            info!(
+                                "AGENTS change detected; will refresh instructions next turn: {:?}",
+                                paths
+                            );
+                        }
+                    }
+                    Ok(FileWatcherEvent::SkillsChanged { .. }) => {
+                        let event = Event {
+                            id: sess.next_internal_sub_id_with_prefix("skills-update"),
+                            msg: EventMsg::SkillsUpdateAvailable,
+                        };
+                        sess.send_event_raw(event).await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                }
+            }
+        });
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
@@ -643,6 +697,7 @@ impl Session {
         initial_history: InitialHistory,
         session_source: SessionSource,
         skills_manager: Arc<SkillsManager>,
+        file_watcher: Arc<FileWatcher>,
         agent_control: AgentControl,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -806,6 +861,7 @@ impl Session {
             );
         }
         let state = SessionState::new(session_configuration.clone());
+        let agents_watch_dirs = Self::build_agents_watch_dirs(&config);
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -821,6 +877,7 @@ impl Session {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            file_watcher,
             agent_control,
         };
 
@@ -833,8 +890,12 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            agents_changed: Arc::new(AtomicBool::new(false)),
+            agents_watch_dirs,
             next_internal_sub_id: AtomicU64::new(0),
         });
+
+        sess.start_file_watcher_listener();
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
@@ -908,10 +969,14 @@ impl Session {
     }
 
     fn next_internal_sub_id(&self) -> String {
+        self.next_internal_sub_id_with_prefix("auto-compact")
+    }
+
+    fn next_internal_sub_id_with_prefix(&self, prefix: &str) -> String {
         let id = self
             .next_internal_sub_id
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        format!("auto-compact-{id}")
+        format!("{prefix}-{id}")
     }
 
     async fn get_total_token_usage(&self) -> i64 {
@@ -1665,6 +1730,32 @@ impl Session {
         state.session_configuration.collaboration_mode.clone()
     }
 
+    // If `AGENTS.md` changed, reload skills, recompute user instructions, and
+    // update session state; otherwise return `None`.
+    pub(crate) async fn refresh_user_instructions_if_needed(&self) -> Option<String> {
+        if !self.agents_changed.swap(false, Ordering::SeqCst) {
+            return None;
+        }
+
+        let config = {
+            let state = self.state.lock().await;
+            Arc::clone(&state.session_configuration.original_config_do_not_use)
+        };
+        let skills_outcome = self.services.skills_manager.skills_for_config(&config);
+        for err in &skills_outcome.errors {
+            error!(
+                "failed to load skill {}: {}",
+                err.path.display(),
+                err.message
+            );
+        }
+        let enabled_skills = skills_outcome.enabled_skills();
+        let user_instructions = get_user_instructions(&config, Some(&enabled_skills)).await;
+        let mut state = self.state.lock().await;
+        state.session_configuration.user_instructions = user_instructions.clone();
+        user_instructions
+    }
+
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
         for item in items {
             self.send_event(
@@ -2259,6 +2350,7 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
+    use crate::instructions::UserInstructions;
 
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
@@ -2408,6 +2500,7 @@ mod handlers {
             .collaboration_mode
             .clone();
         let next_collaboration_mode = updates.collaboration_mode.clone();
+        let refreshed_user_instructions = sess.refresh_user_instructions_if_needed().await;
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
@@ -2419,12 +2512,21 @@ mod handlers {
 
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
-            let update_items = sess.build_settings_update_items(
+            let mut update_items = sess.build_settings_update_items(
                 previous_context.as_ref(),
                 &current_context,
                 &previous_collaboration_mode,
                 next_collaboration_mode.as_ref(),
             );
+            if let Some(user_instructions) = refreshed_user_instructions {
+                update_items.push(
+                    UserInstructions {
+                        text: user_instructions,
+                        directory: current_context.cwd.to_string_lossy().into_owned(),
+                    }
+                    .into(),
+                );
+            }
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
                     .await;
@@ -4350,6 +4452,7 @@ mod tests {
         let state = SessionState::new(session_configuration.clone());
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
+        let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -4364,6 +4467,7 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            file_watcher,
             agent_control,
         };
 
@@ -4387,6 +4491,8 @@ mod tests {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            agents_changed: Arc::new(AtomicBool::new(false)),
+            agents_watch_dirs: Session::build_agents_watch_dirs(&config),
             next_internal_sub_id: AtomicU64::new(0),
         };
 
@@ -4459,6 +4565,7 @@ mod tests {
         let state = SessionState::new(session_configuration.clone());
         let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone()));
 
+        let file_watcher = Arc::new(FileWatcher::noop());
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
@@ -4473,6 +4580,7 @@ mod tests {
             models_manager: Arc::clone(&models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
+            file_watcher,
             agent_control,
         };
 
@@ -4496,6 +4604,8 @@ mod tests {
             pending_mcp_server_refresh_config: Mutex::new(None),
             active_turn: Mutex::new(None),
             services,
+            agents_changed: Arc::new(AtomicBool::new(false)),
+            agents_watch_dirs: Session::build_agents_watch_dirs(&config),
             next_internal_sub_id: AtomicU64::new(0),
         });
 
@@ -4636,7 +4746,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn abort_gracefuly_emits_turn_aborted_only() {
+    async fn abort_gracefully_emits_turn_aborted_only() {
         let (sess, tc, rx) = make_session_and_context_with_rx().await;
         let input = vec![UserInput::Text {
             text: "hello".to_string(),

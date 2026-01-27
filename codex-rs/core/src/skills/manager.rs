@@ -6,6 +6,7 @@ use std::sync::RwLock;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 use toml::Value as TomlValue;
+use tracing::info;
 use tracing::warn;
 
 use crate::config::Config;
@@ -119,8 +120,17 @@ impl SkillsManager {
 
     pub fn clear_cache(&self) {
         match self.cache_by_cwd.write() {
-            Ok(mut cache) => cache.clear(),
-            Err(err) => err.into_inner().clear(),
+            Ok(mut cache) => {
+                let cleared = cache.len();
+                cache.clear();
+                info!("skills cache cleared ({} entries)", cleared);
+            }
+            Err(err) => {
+                let mut cache = err.into_inner();
+                let cleared = cache.len();
+                cache.clear();
+                info!("skills cache cleared ({} entries)", cleared);
+            }
         }
     }
 }
