@@ -36,6 +36,7 @@ use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::line_utils::prefix_lines;
 use crate::status::format_tokens_compact;
+use crate::status_line::StatusLineValue;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
@@ -53,7 +54,7 @@ use ratatui::widgets::Widget;
 /// (`render_footer_from_props` or the single-line collapse logic). The footer
 /// treats these values as authoritative and does not attempt to infer missing
 /// state (for example, it does not query whether a task is running).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct FooterProps {
     pub(crate) mode: FooterMode,
     pub(crate) esc_backtrack_hint: bool,
@@ -68,6 +69,7 @@ pub(crate) struct FooterProps {
     pub(crate) quit_shortcut_key: KeyBinding,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
+    pub(crate) status_line_value: Option<StatusLineValue>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -166,7 +168,7 @@ pub(crate) fn reset_mode_after_activity(current: FooterMode) -> FooterMode {
     }
 }
 
-pub(crate) fn footer_height(props: FooterProps) -> u16 {
+pub(crate) fn footer_height(props: &FooterProps) -> u16 {
     let show_shortcuts_hint = match props.mode {
         FooterMode::ComposerEmpty => true,
         FooterMode::QuitShortcutReminder
@@ -212,7 +214,7 @@ pub(crate) fn render_footer_from_props(
 ) {
     Paragraph::new(prefix_lines(
         footer_from_props_lines(
-            props,
+            &props,
             collaboration_mode_indicator,
             show_cycle_hint,
             show_shortcuts_hint,
@@ -532,12 +534,22 @@ pub(crate) fn render_footer_hint_items(area: Rect, buf: &mut Buffer, items: &[(S
 /// fallback decisions live in `single_line_footer_layout`; this function only
 /// formats the chosen/default content.
 fn footer_from_props_lines(
-    props: FooterProps,
+    props: &FooterProps,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
 ) -> Vec<Line<'static>> {
+    // If status line content is present, show it for base modes.
+    if let Some(status_line) = &props.status_line_value
+        && matches!(
+            props.mode,
+            FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
+        )
+    {
+        return vec![status_line.as_line()];
+    }
+
     match props.mode {
         FooterMode::QuitShortcutReminder => {
             vec![quit_shortcut_reminder_line(props.quit_shortcut_key)]
@@ -578,7 +590,7 @@ fn footer_from_props_lines(
 }
 
 pub(crate) fn footer_line_width(
-    props: FooterProps,
+    props: &FooterProps,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
@@ -961,16 +973,16 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn snapshot_footer(name: &str, props: FooterProps) {
-        snapshot_footer_with_mode_indicator(name, 80, props, None);
+        snapshot_footer_with_mode_indicator(name, 80, &props, None);
     }
 
     fn snapshot_footer_with_mode_indicator(
         name: &str,
         width: u16,
-        props: FooterProps,
+        props: &FooterProps,
         collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     ) {
-        let height = footer_height(props).max(1);
+        let height = footer_height(&props).max(1);
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|f| {
@@ -1077,6 +1089,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                status_line_value: None,
             },
         );
 
@@ -1093,6 +1106,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                status_line_value: None,
             },
         );
 
@@ -1109,6 +1123,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                status_line_value: None,
             },
         );
 
@@ -1125,6 +1140,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                status_line_value: None,
             },
         );
 
@@ -1141,6 +1157,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                status_line_value: None,
             },
         );
 
@@ -1157,6 +1174,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                status_line_value: None,
             },
         );
 
@@ -1173,6 +1191,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                status_line_value: None,
             },
         );
 
@@ -1189,6 +1208,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
+                status_line_value: None,
             },
         );
 
@@ -1205,6 +1225,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
+                status_line_value: None,
             },
         );
 
@@ -1221,6 +1242,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                status_line_value: None,
             },
         );
 
@@ -1237,6 +1259,7 @@ mod tests {
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
+                status_line_value: None,
             },
         );
 
@@ -1251,19 +1274,20 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
+            status_line_value: None,
         };
 
         snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_wide",
             120,
-            props,
+            &props,
             Some(CollaborationModeIndicator::Plan),
         );
 
         snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_narrow_overlap_hides",
             50,
-            props,
+            &props,
             Some(CollaborationModeIndicator::Plan),
         );
 
@@ -1278,12 +1302,13 @@ mod tests {
             quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
             context_window_percent: None,
             context_window_used_tokens: None,
+            status_line_value: None,
         };
 
         snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_running_hides_hint",
             120,
-            props,
+            &props,
             Some(CollaborationModeIndicator::Plan),
         );
     }
