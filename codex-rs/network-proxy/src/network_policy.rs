@@ -26,16 +26,27 @@ pub struct NetworkPolicyRequest {
     pub exec_policy_hint: Option<String>,
 }
 
+pub struct NetworkPolicyRequestArgs {
+    pub protocol: NetworkProtocol,
+    pub host: String,
+    pub port: u16,
+    pub client_addr: Option<String>,
+    pub method: Option<String>,
+    pub command: Option<String>,
+    pub exec_policy_hint: Option<String>,
+}
+
 impl NetworkPolicyRequest {
-    pub fn new(
-        protocol: NetworkProtocol,
-        host: String,
-        port: u16,
-        client_addr: Option<String>,
-        method: Option<String>,
-        command: Option<String>,
-        exec_policy_hint: Option<String>,
-    ) -> Self {
+    pub fn new(args: NetworkPolicyRequestArgs) -> Self {
+        let NetworkPolicyRequestArgs {
+            protocol,
+            host,
+            port,
+            client_addr,
+            method,
+            command,
+            exec_policy_hint,
+        } = args;
         Self {
             protocol,
             host,
@@ -139,15 +150,15 @@ mod tests {
             }
         });
 
-        let request = NetworkPolicyRequest::new(
-            NetworkProtocol::Http,
-            "example.com".to_string(),
-            80,
-            None,
-            Some("GET".to_string()),
-            None,
-            None,
-        );
+        let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
+            protocol: NetworkProtocol::Http,
+            host: "example.com".to_string(),
+            port: 80,
+            client_addr: None,
+            method: Some("GET".to_string()),
+            command: None,
+            exec_policy_hint: None,
+        });
 
         let decision = evaluate_host_policy(&state, Some(&decider), &request)
             .await
@@ -172,15 +183,15 @@ mod tests {
             }
         });
 
-        let request = NetworkPolicyRequest::new(
-            NetworkProtocol::Http,
-            "blocked.com".to_string(),
-            80,
-            None,
-            Some("GET".to_string()),
-            None,
-            None,
-        );
+        let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
+            protocol: NetworkProtocol::Http,
+            host: "blocked.com".to_string(),
+            port: 80,
+            client_addr: None,
+            method: Some("GET".to_string()),
+            command: None,
+            exec_policy_hint: None,
+        });
 
         let decision = evaluate_host_policy(&state, Some(&decider), &request)
             .await
@@ -210,15 +221,15 @@ mod tests {
             }
         });
 
-        let request = NetworkPolicyRequest::new(
-            NetworkProtocol::Http,
-            "127.0.0.1".to_string(),
-            80,
-            None,
-            Some("GET".to_string()),
-            None,
-            None,
-        );
+        let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
+            protocol: NetworkProtocol::Http,
+            host: "127.0.0.1".to_string(),
+            port: 80,
+            client_addr: None,
+            method: Some("GET".to_string()),
+            command: None,
+            exec_policy_hint: None,
+        });
 
         let decision = evaluate_host_policy(&state, Some(&decider), &request)
             .await
