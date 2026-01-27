@@ -34,6 +34,7 @@ pub(crate) struct CommandPopupFlags {
     pub(crate) collaboration_modes_enabled: bool,
     pub(crate) connectors_enabled: bool,
     pub(crate) personality_command_enabled: bool,
+    pub(crate) windows_degraded_sandbox_active: bool,
 }
 
 impl CommandPopup {
@@ -43,6 +44,7 @@ impl CommandPopup {
             flags.collaboration_modes_enabled,
             flags.connectors_enabled,
             flags.personality_command_enabled,
+            flags.windows_degraded_sandbox_active,
         );
         // Exclude prompts that collide with builtin command names and sort by name.
         let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
@@ -464,6 +466,7 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 personality_command_enabled: true,
+                windows_degraded_sandbox_active: false,
             },
         );
         popup.on_composer_text_change("/collab".to_string());
@@ -482,6 +485,7 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 personality_command_enabled: false,
+                windows_degraded_sandbox_active: false,
             },
         );
         popup.on_composer_text_change("/pers".to_string());
@@ -508,6 +512,7 @@ mod tests {
                 collaboration_modes_enabled: true,
                 connectors_enabled: false,
                 personality_command_enabled: true,
+                windows_degraded_sandbox_active: false,
             },
         );
         popup.on_composer_text_change("/personality".to_string());
