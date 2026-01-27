@@ -100,9 +100,7 @@ The final plan must be plan-only and include:
 * Exact file paths to change
 * Exact structures or shapes to introduce or modify
 * Exact function, method, type, and variable names and signatures
-* Step-by-step edits or patches described precisely
-* Test cases and commands
-* Acceptance criteria tied to observable outcomes
+* Test cases
 * Explicit assumptions and defaults chosen where needed
 
 Do not ask "should I proceed?" in the final output.
