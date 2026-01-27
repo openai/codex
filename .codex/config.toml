@@ -7,6 +7,16 @@ sandbox_mode = "danger-full-access"
 # notify（システム通知/外部連携）は今回は無効化（音が連打されて確認がしづらいため）
 # notify = ["bash", "-lc", "afplay /System/Library/Sounds/Ping.aiff"]
 
+[features]
+remote_compaction = false
+skills = true
+streamable_shell = true
+# tui2 = true
+unified_exec = true
+view_image_tool = true
+web_search_request = true
+ask_user_question_tool = true
+
 # repo-local Hooks (Codez)
 # - Each hook receives a single JSON payload via stdin.
 # - `when = "tool.call.begin"` で `blocking = true` を指定した hook は、tool の実行前に拒否できます（exit code 2）。
@@ -182,15 +192,6 @@ timeout_ms = 2000
 # ]
 # command = ["python3", ".codex/hooks/dump_payload.py", ".memo/logs/hooks-debug.jsonl"]
 # timeout_ms = 2000
-
-[features]
-skills = true
-streamable_shell = true
-# tui2 = true
-unified_exec = true
-view_image_tool = true
-web_search_request = true
-ask_user_question_tool = true
 
 [shell_environment_policy]
 ignore_default_excludes = false
