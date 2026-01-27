@@ -1,5 +1,6 @@
 use ratatui::layout::Rect;
 
+use super::DESIRED_SPACERS_WHEN_NOTES_HIDDEN;
 use super::RequestUserInputOverlay;
 
 pub(super) struct LayoutSections {
@@ -36,12 +37,14 @@ impl RequestUserInputOverlay {
             footer_lines,
         ) = if has_options {
             self.layout_with_options(
-                area.height,
-                area.width,
-                question_height,
-                notes_pref_height,
-                footer_pref,
-                notes_visible,
+                OptionsLayoutArgs {
+                    available_height: area.height,
+                    width: area.width,
+                    question_height,
+                    notes_pref_height,
+                    footer_pref,
+                    notes_visible,
+                },
                 &mut question_lines,
             )
         } else {
@@ -88,19 +91,25 @@ impl RequestUserInputOverlay {
     /// Returns: (question_height, progress_height, spacer_after_question, options_height, spacer_after_options, notes_title_height, notes_height, footer_lines)
     fn layout_with_options(
         &self,
-        available_height: u16,
-        width: u16,
-        question_height: u16,
-        notes_pref_height: u16,
-        footer_pref: u16,
-        notes_visible: bool,
+        args: OptionsLayoutArgs,
         question_lines: &mut Vec<String>,
     ) -> (u16, u16, u16, u16, u16, u16, u16, u16) {
-        let options_required_height = self.options_required_height(width);
+        let OptionsLayoutArgs {
+            available_height,
+            width,
+            question_height,
+            notes_pref_height,
+            footer_pref,
+            notes_visible,
+        } = args;
+        let options_heights = OptionsHeights {
+            preferred: self.options_preferred_height(width),
+            full: self.options_required_height(width),
+        };
         let min_options_height = 1u16;
         let required = 1u16
             .saturating_add(question_height)
-            .saturating_add(options_required_height);
+            .saturating_add(options_heights.preferred);
 
         if required > available_height {
             self.layout_with_options_tight(
@@ -111,12 +120,14 @@ impl RequestUserInputOverlay {
             )
         } else {
             self.layout_with_options_normal(
-                available_height,
-                question_height,
-                options_required_height,
-                notes_pref_height,
-                footer_pref,
-                notes_visible,
+                OptionsNormalArgs {
+                    available_height,
+                    question_height,
+                    notes_pref_height,
+                    footer_pref,
+                    notes_visible,
+                },
+                options_heights,
             )
         }
     }
@@ -144,23 +155,30 @@ impl RequestUserInputOverlay {
     /// only allocate notes (and its label) when explicitly visible.
     fn layout_with_options_normal(
         &self,
-        available_height: u16,
-        question_height: u16,
-        options_required_height: u16,
-        notes_pref_height: u16,
-        footer_pref: u16,
-        notes_visible: bool,
+        args: OptionsNormalArgs,
+        options: OptionsHeights,
     ) -> (u16, u16, u16, u16, u16, u16, u16, u16) {
+        let OptionsNormalArgs {
+            available_height,
+            question_height,
+            notes_pref_height,
+            footer_pref,
+            notes_visible,
+        } = args;
         let min_options_height = 1u16;
-        let mut options_height = options_required_height;
+        let mut options_height = options.preferred.max(min_options_height);
         let used = 1u16
             .saturating_add(question_height)
             .saturating_add(options_height);
         let mut remaining = available_height.saturating_sub(used);
 
         // When notes are hidden, prefer to reserve room for progress, footer,
-        // and at least one spacer by shrinking the options window if needed.
-        let desired_spacers = if notes_visible { 0 } else { 1 };
+        // and spacers by shrinking the options window if needed.
+        let desired_spacers = if notes_visible {
+            0
+        } else {
+            DESIRED_SPACERS_WHEN_NOTES_HIDDEN
+        };
         let required_extra = footer_pref
             .saturating_add(1) // progress line
             .saturating_add(desired_spacers);
@@ -189,7 +207,10 @@ impl RequestUserInputOverlay {
             let mut spacer_after_question = 0;
             if remaining > 0 {
                 spacer_after_question = 1;
+                remaining = remaining.saturating_sub(1);
             }
+            let grow_by = remaining.min(options.full.saturating_sub(options_height));
+            options_height = options_height.saturating_add(grow_by);
             return (
                 question_height,
                 progress_height,
@@ -389,4 +410,29 @@ struct LayoutHeights {
     spacer_after_options: u16,
     notes_title_height: u16,
     notes_height: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OptionsLayoutArgs {
+    available_height: u16,
+    width: u16,
+    question_height: u16,
+    notes_pref_height: u16,
+    footer_pref: u16,
+    notes_visible: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OptionsNormalArgs {
+    available_height: u16,
+    question_height: u16,
+    notes_pref_height: u16,
+    footer_pref: u16,
+    notes_visible: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OptionsHeights {
+    preferred: u16,
+    full: u16,
 }

@@ -40,6 +40,8 @@ const ANSWER_PLACEHOLDER: &str = "Type your answer (optional)";
 // Keep in sync with ChatComposer's minimum composer height.
 const MIN_COMPOSER_HEIGHT: u16 = 3;
 const SELECT_OPTION_PLACEHOLDER: &str = "Select an option to add notes (optional)";
+pub(super) const MAX_VISIBLE_OPTION_ROWS: usize = 4;
+pub(super) const DESIRED_SPACERS_WHEN_NOTES_HIDDEN: u16 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
@@ -242,6 +244,28 @@ impl RequestUserInputOverlay {
         measure_rows_height(&rows, &state, rows.len(), width.max(1))
     }
 
+    pub(super) fn options_preferred_height(&self, width: u16) -> u16 {
+        if !self.has_options() {
+            return 0;
+        }
+
+        let rows = self.option_rows();
+        if rows.is_empty() {
+            return 1;
+        }
+
+        let mut state = self
+            .current_answer()
+            .map(|answer| answer.option_state)
+            .unwrap_or_default();
+        if state.selected_idx.is_none() {
+            state.selected_idx = Some(0);
+        }
+
+        let visible_items = rows.len().min(MAX_VISIBLE_OPTION_ROWS);
+        measure_rows_height(&rows, &state, visible_items, width.max(1))
+    }
+
     fn capture_composer_draft(&self) -> ComposerDraft {
         ComposerDraft {
             text: self.composer.current_text_with_pending(),
@@ -311,6 +335,11 @@ impl RequestUserInputOverlay {
             if let Some(answer) = self.current_answer_mut() {
                 answer.notes_visible = true;
             }
+            return;
+        }
+        if matches!(self.focus, Focus::Notes) && !self.notes_ui_visible() {
+            self.focus = Focus::Options;
+            self.sync_composer_placeholder();
         }
     }
 
@@ -529,19 +558,21 @@ impl BottomPaneView for RequestUserInputOverlay {
         }
 
         if matches!(key_event.code, KeyCode::Esc) {
-            if self.has_options() && matches!(self.focus, Focus::Notes) {
-                // Let the composer flush any pending paste-burst state (e.g., held first char).
-                let _ = self
-                    .composer
-                    .handle_key_event(KeyEvent::from(KeyCode::Left));
-                self.composer.move_cursor_to_end();
-                let notes_empty = self.composer.current_text_with_pending().trim().is_empty();
-                self.save_current_draft();
-                if notes_empty && let Some(answer) = self.current_answer_mut() {
-                    answer.notes_visible = false;
+            if matches!(self.focus, Focus::Notes) {
+                if self.has_options() {
+                    // Let the composer flush any pending paste-burst state (e.g., held first char).
+                    let _ = self
+                        .composer
+                        .handle_key_event(KeyEvent::from(KeyCode::Left));
+                    self.composer.move_cursor_to_end();
+                    let notes_empty = self.composer.current_text_with_pending().trim().is_empty();
+                    self.save_current_draft();
+                    if notes_empty && let Some(answer) = self.current_answer_mut() {
+                        answer.notes_visible = false;
+                    }
+                    self.focus = Focus::Options;
+                    self.sync_composer_placeholder();
                 }
-                self.focus = Focus::Options;
-                self.sync_composer_placeholder();
                 return;
             }
             self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
@@ -716,6 +747,7 @@ impl BottomPaneView for RequestUserInputOverlay {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::bottom_pane::selection_popup_common::menu_surface_inset;
     use crate::render::renderable::Renderable;
     use codex_protocol::request_user_input::RequestUserInputQuestion;
     use codex_protocol::request_user_input::RequestUserInputQuestionOption;
@@ -910,6 +942,71 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
         assert_eq!(overlay.notes_ui_visible(), true);
         assert!(matches!(overlay.focus, Focus::Notes));
+    }
+
+    #[test]
+    fn switching_to_options_resets_notes_focus_when_notes_hidden() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_without_options("q1", "Notes"),
+                    question_with_options("q2", "Pick one"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        assert!(matches!(overlay.focus, Focus::Notes));
+        overlay.move_question(true);
+
+        let answer = overlay.current_answer().expect("answer missing");
+        assert!(matches!(overlay.focus, Focus::Options));
+        assert_eq!(answer.selected, None);
+        assert_eq!(overlay.notes_ui_visible(), false);
+    }
+
+    #[test]
+    fn esc_in_notes_mode_without_options_does_not_interrupt() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_without_options("q1", "Notes")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+        assert!(matches!(overlay.focus, Focus::Notes));
+        assert_eq!(overlay.done, false);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn esc_in_options_mode_interrupts() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+        assert_eq!(overlay.done, true);
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(op) = event else {
+            panic!("expected CodexOp");
+        };
+        assert_eq!(op, Op::Interrupt);
     }
 
     #[test]
@@ -1178,6 +1275,35 @@ mod tests {
         let sections = overlay.layout_sections(Rect::new(0, 0, width, height));
 
         assert_eq!(sections.options_area.height, options_height);
+    }
+
+    #[test]
+    fn desired_height_keeps_spacers_and_preferred_options_visible() {
+        let (tx, _rx) = test_sender();
+        let overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![question_with_wrapped_options("q1", "Next Step")],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        let width = 110u16;
+        let height = overlay.desired_height(width);
+        let content_area = menu_surface_inset(Rect::new(0, 0, width, height));
+        let sections = overlay.layout_sections(content_area);
+        let preferred = overlay.options_preferred_height(content_area.width);
+
+        assert_eq!(sections.options_area.height, preferred);
+        let question_bottom = sections.question_area.y + sections.question_area.height;
+        let options_bottom = sections.options_area.y + sections.options_area.height;
+        let spacer_after_question = sections.options_area.y.saturating_sub(question_bottom);
+        let spacer_after_options = sections.notes_title_area.y.saturating_sub(options_bottom);
+        assert_eq!(spacer_after_question, 1);
+        assert_eq!(spacer_after_options, 1);
     }
 
     #[test]

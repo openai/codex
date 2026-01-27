@@ -16,6 +16,7 @@ use crate::bottom_pane::selection_popup_common::render_rows;
 use crate::key_hint;
 use crate::render::renderable::Renderable;
 
+use super::DESIRED_SPACERS_WHEN_NOTES_HIDDEN;
 use super::RequestUserInputOverlay;
 
 impl Renderable for RequestUserInputOverlay {
@@ -23,11 +24,21 @@ impl Renderable for RequestUserInputOverlay {
         let outer = Rect::new(0, 0, width, u16::MAX);
         let inner = menu_surface_inset(outer);
         let inner_width = inner.width.max(1);
+        let has_options = self.has_options();
         let question_height = self.wrapped_question_lines(inner_width).len();
-        let options_height = self.options_required_height(inner_width) as usize;
-        let notes_visible = !self.has_options() || self.notes_ui_visible();
+        let options_height = if has_options {
+            self.options_preferred_height(inner_width) as usize
+        } else {
+            0
+        };
+        let notes_visible = !has_options || self.notes_ui_visible();
         let notes_height = if notes_visible {
             self.notes_input_height(inner_width) as usize
+        } else {
+            0
+        };
+        let spacer_rows = if has_options && !notes_visible {
+            DESIRED_SPACERS_WHEN_NOTES_HIDDEN as usize
         } else {
             0
         };
@@ -37,10 +48,11 @@ impl Renderable for RequestUserInputOverlay {
         // + notes composer + footer + menu padding.
         let mut height = question_height
             .saturating_add(options_height)
+            .saturating_add(spacer_rows)
             .saturating_add(notes_height)
             .saturating_add(footer_height)
             .saturating_add(2); // progress + header
-        if self.has_options() && notes_visible {
+        if has_options && notes_visible {
             height = height.saturating_add(1); // notes title
         }
         height = height.saturating_add(menu_surface_padding_height() as usize);
@@ -196,7 +208,7 @@ impl RequestUserInputOverlay {
                 " scroll | ".into(),
             ]);
             if self.selected_option_index().is_some() && !notes_visible {
-                hint_spans.extend(vec!["Tab".dim(), ": add notes | ".into()]);
+                hint_spans.extend(vec!["Tab".blue().bold().not_dim(), ": add notes | ".into()]);
             }
         }
         let question_count = self.question_count();
