@@ -2,6 +2,7 @@
 
 use indexmap::IndexMap;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -73,6 +74,7 @@ pub(crate) struct TurnState {
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
+    pending_skill_mentions: Vec<(String, PathBuf)>,
 }
 
 impl TurnState {
@@ -96,6 +98,7 @@ impl TurnState {
         self.pending_user_input.clear();
         self.pending_dynamic_tools.clear();
         self.pending_input.clear();
+        self.pending_skill_mentions.clear();
     }
 
     pub(crate) fn insert_pending_user_input(
@@ -140,6 +143,14 @@ impl TurnState {
             std::mem::swap(&mut ret, &mut self.pending_input);
             ret
         }
+    }
+
+    pub(crate) fn push_pending_skill_mentions(&mut self, skills: Vec<(String, PathBuf)>) {
+        self.pending_skill_mentions.extend(skills);
+    }
+
+    pub(crate) fn take_pending_skill_mentions(&mut self) -> Vec<(String, PathBuf)> {
+        std::mem::take(&mut self.pending_skill_mentions)
     }
 
     pub(crate) fn has_pending_input(&self) -> bool {
