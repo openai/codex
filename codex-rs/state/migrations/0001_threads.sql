@@ -10,6 +10,7 @@ CREATE TABLE threads (
     sandbox_policy TEXT NOT NULL,
     approval_mode TEXT NOT NULL,
     tokens_used INTEGER NOT NULL DEFAULT 0,
+    has_user_event INTEGER NOT NULL DEFAULT 0,
     archived INTEGER NOT NULL DEFAULT 0,
     archived_at INTEGER,
     git_sha TEXT,

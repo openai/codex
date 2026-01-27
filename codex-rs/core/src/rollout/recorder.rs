@@ -133,15 +133,13 @@ impl RolloutRecorder {
         if let Some(db_ids) = state_db::list_thread_ids_db(
             state_db_ctx.as_deref(),
             codex_home,
-            state_db::ListThreadsDbQuery {
-                page_size,
-                cursor,
-                sort_key,
-                allowed_sources,
-                model_providers,
-                archived_only: false,
-                stage,
-            },
+            page_size,
+            cursor,
+            sort_key,
+            allowed_sources,
+            model_providers,
+            false,
+            stage,
         )
         .await
         {
@@ -189,15 +187,13 @@ impl RolloutRecorder {
         if let Some(db_ids) = state_db::list_thread_ids_db(
             state_db_ctx.as_deref(),
             codex_home,
-            state_db::ListThreadsDbQuery {
-                page_size,
-                cursor,
-                sort_key,
-                allowed_sources,
-                model_providers,
-                archived_only: true,
-                stage,
-            },
+            page_size,
+            cursor,
+            sort_key,
+            allowed_sources,
+            model_providers,
+            true,
+            stage,
         )
         .await
         {
@@ -519,6 +515,7 @@ fn create_log_file(config: &Config, conversation_id: ThreadId) -> std::io::Resul
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn rollout_writer(
     file: tokio::fs::File,
     mut rx: mpsc::Receiver<RolloutCmd>,

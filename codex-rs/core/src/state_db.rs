@@ -79,6 +79,8 @@ pub async fn init_if_enabled(config: &Config, otel: Option<&OtelManager>) -> Opt
 }
 
 /// Open the state runtime when the SQLite file exists, without feature gating.
+///
+/// This is used for parity checks during the SQLite migration phase.
 pub async fn open_if_present(codex_home: &Path, default_provider: &str) -> Option<StateDbHandle> {
     let db_path = codex_home.join(STATE_DB_FILENAME);
     if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
@@ -114,33 +116,20 @@ fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
     Some(codex_state::Anchor { ts, id })
 }
 
-/// Query parameters for listing threads from SQLite.
-pub struct ListThreadsDbQuery<'a> {
-    pub page_size: usize,
-    pub cursor: Option<&'a Cursor>,
-    pub sort_key: ThreadSortKey,
-    pub allowed_sources: &'a [SessionSource],
-    pub model_providers: Option<&'a [String]>,
-    pub archived_only: bool,
-    pub stage: &'a str,
-}
-
 /// List thread ids from SQLite for parity checks without rollout scanning.
+#[allow(clippy::too_many_arguments)]
 pub async fn list_thread_ids_db(
     context: Option<&codex_state::StateRuntime>,
     codex_home: &Path,
-    query: ListThreadsDbQuery<'_>,
+    page_size: usize,
+    cursor: Option<&Cursor>,
+    sort_key: ThreadSortKey,
+    allowed_sources: &[SessionSource],
+    model_providers: Option<&[String]>,
+    archived_only: bool,
+    stage: &str,
 ) -> Option<Vec<ThreadId>> {
     let ctx = context?;
-    let ListThreadsDbQuery {
-        page_size,
-        cursor,
-        sort_key,
-        allowed_sources,
-        model_providers,
-        archived_only,
-        stage,
-    } = query;
     if ctx.codex_home() != codex_home {
         warn!(
             "state db codex_home mismatch: expected {}, got {}",
@@ -150,7 +139,7 @@ pub async fn list_thread_ids_db(
     }
 
     let anchor = cursor_to_anchor(cursor);
-    let allowed_sources = allowed_sources
+    let allowed_sources: Vec<String> = allowed_sources
         .iter()
         .map(|value| match serde_json::to_value(value) {
             Ok(Value::String(s)) => s,
@@ -292,7 +281,6 @@ mod tests {
     use super::*;
     use crate::rollout::list::parse_cursor;
     use pretty_assertions::assert_eq;
-    use std::path::Path;
 
     #[test]
     fn cursor_to_anchor_normalizes_timestamp_format() {

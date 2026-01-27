@@ -1,3 +1,4 @@
+use anyhow::Result;
 use chrono::DateTime;
 use chrono::Timelike;
 use chrono::Utc;
@@ -71,6 +72,8 @@ pub struct ThreadMetadata {
     pub approval_mode: String,
     /// The last observed token usage.
     pub tokens_used: i64,
+    /// Whether the thread has observed a user message.
+    pub has_user_event: bool,
     /// The archive timestamp, if the thread is archived.
     pub archived_at: Option<DateTime<Utc>>,
     /// The git commit SHA, if known.
@@ -162,6 +165,7 @@ impl ThreadMetadataBuilder {
             sandbox_policy,
             approval_mode,
             tokens_used: 0,
+            has_user_event: false,
             archived_at: self.archived_at.map(canonicalize_datetime),
             git_sha: self.git_sha.clone(),
             git_branch: self.git_branch.clone(),
@@ -207,6 +211,9 @@ impl ThreadMetadata {
         if self.tokens_used != other.tokens_used {
             diffs.push("tokens_used");
         }
+        if self.has_user_event != other.has_user_event {
+            diffs.push("has_user_event");
+        }
         if self.archived_at != other.archived_at {
             diffs.push("archived_at");
         }
@@ -225,6 +232,87 @@ impl ThreadMetadata {
 
 fn canonicalize_datetime(dt: DateTime<Utc>) -> DateTime<Utc> {
     dt.with_nanosecond(0).unwrap_or(dt)
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub(crate) struct ThreadRow {
+    id: String,
+    rollout_path: String,
+    created_at: i64,
+    updated_at: i64,
+    source: String,
+    model_provider: String,
+    cwd: String,
+    title: String,
+    sandbox_policy: String,
+    approval_mode: String,
+    tokens_used: i64,
+    has_user_event: bool,
+    archived_at: Option<i64>,
+    git_sha: Option<String>,
+    git_branch: Option<String>,
+    git_origin_url: Option<String>,
+}
+
+impl TryFrom<ThreadRow> for ThreadMetadata {
+    type Error = anyhow::Error;
+
+    fn try_from(row: ThreadRow) -> std::result::Result<Self, Self::Error> {
+        let ThreadRow {
+            id,
+            rollout_path,
+            created_at,
+            updated_at,
+            source,
+            model_provider,
+            cwd,
+            title,
+            sandbox_policy,
+            approval_mode,
+            tokens_used,
+            has_user_event,
+            archived_at,
+            git_sha,
+            git_branch,
+            git_origin_url,
+        } = row;
+        Ok(Self {
+            id: ThreadId::try_from(id)?,
+            rollout_path: PathBuf::from(rollout_path),
+            created_at: epoch_seconds_to_datetime(created_at)?,
+            updated_at: epoch_seconds_to_datetime(updated_at)?,
+            source,
+            model_provider,
+            cwd: PathBuf::from(cwd),
+            title,
+            sandbox_policy,
+            approval_mode,
+            tokens_used,
+            has_user_event,
+            archived_at: archived_at.map(epoch_seconds_to_datetime).transpose()?,
+            git_sha,
+            git_branch,
+            git_origin_url,
+        })
+    }
+}
+
+pub(crate) fn anchor_from_item(item: &ThreadMetadata, sort_key: SortKey) -> Option<Anchor> {
+    let id = Uuid::parse_str(&item.id.to_string()).ok()?;
+    let ts = match sort_key {
+        SortKey::CreatedAt => item.created_at,
+        SortKey::UpdatedAt => item.updated_at,
+    };
+    Some(Anchor { ts, id })
+}
+
+pub(crate) fn datetime_to_epoch_seconds(dt: DateTime<Utc>) -> i64 {
+    dt.timestamp()
+}
+
+pub(crate) fn epoch_seconds_to_datetime(secs: i64) -> Result<DateTime<Utc>> {
+    DateTime::<Utc>::from_timestamp(secs, 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp: {secs}"))
 }
 
 /// Statistics about a backfill operation.

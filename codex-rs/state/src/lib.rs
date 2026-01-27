@@ -4,7 +4,6 @@
 //! from JSONL rollouts and mirrors it into a local SQLite database. Backfill
 //! orchestration and rollout scanning live in `codex-core`.
 
-mod db;
 mod extract;
 mod migrations;
 mod model;

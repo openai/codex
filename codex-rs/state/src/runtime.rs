@@ -4,9 +4,10 @@ use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
 use crate::ThreadsPage;
 use crate::apply_rollout_item;
-use crate::db::datetime_to_epoch_seconds;
-use crate::extract::rollout_has_user_event;
 use crate::migrations::MIGRATOR;
+use crate::model::ThreadRow;
+use crate::model::anchor_from_item;
+use crate::model::datetime_to_epoch_seconds;
 use crate::paths::file_modified_time_utc;
 use chrono::DateTime;
 use chrono::Utc;
@@ -25,7 +26,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::info;
 use tracing::warn;
 
 pub const STATE_DB_FILENAME: &str = "state.sqlite";
@@ -81,7 +81,7 @@ impl StateRuntime {
 
     /// Load thread metadata by id using the underlying database.
     pub async fn get_thread(&self, id: ThreadId) -> anyhow::Result<Option<crate::ThreadMetadata>> {
-        let row = sqlx::query_as::<_, crate::db::ThreadRow>(
+        let row = sqlx::query_as::<_, ThreadRow>(
             r#"
 SELECT
     id,
@@ -95,6 +95,7 @@ SELECT
     sandbox_policy,
     approval_mode,
     tokens_used,
+    has_user_event,
     archived_at,
     git_sha,
     git_branch,
@@ -104,7 +105,7 @@ WHERE id = ?
             "#,
         )
         .bind(id.to_string())
-        .fetch_optional(&self.pool)
+        .fetch_optional(self.pool.as_ref())
         .await?;
         row.map(ThreadMetadata::try_from).transpose()
     }
@@ -127,7 +128,7 @@ WHERE id = ?
             }
             None => {}
         }
-        let row = builder.build().fetch_optional(&self.pool).await?;
+        let row = builder.build().fetch_optional(self.pool.as_ref()).await?;
         Ok(row
             .and_then(|r| r.try_get::<String, _>("rollout_path").ok())
             .map(PathBuf::from))
@@ -143,89 +144,37 @@ WHERE id = ?
         model_providers: Option<&[String]>,
         archived_only: bool,
     ) -> anyhow::Result<crate::ThreadsPage> {
-        let batch_size = page_size.saturating_mul(4).clamp(64, 512);
-        let mut scan_anchor = anchor.cloned();
-        let mut num_scanned_rows = 0usize;
-        let mut items = Vec::new();
+        let limit = page_size.saturating_add(1);
 
-        loop {
-            let batch = self
-                .list_threads_batch(
-                    batch_size,
-                    scan_anchor.as_ref(),
-                    sort_key,
-                    allowed_sources,
-                    model_providers,
-                    archived_only,
-                )
-                .await?;
-            let batch_len = batch.len();
-            if batch_len == 0 {
-                break;
-            }
-            num_scanned_rows = num_scanned_rows.saturating_add(batch_len);
-
-            for candidate in batch {
-                let candidate_anchor = crate::db::anchor_from_item(&candidate, sort_key);
-                scan_anchor = candidate_anchor;
-                let has_user_event =
-                    match rollout_has_user_event(candidate.rollout_path.as_path()).await {
-                        Ok(has_user_event) => has_user_event,
-                        Err(err) => {
-                            warn!(
-                                "failed to scan rollout for user events {}: {err}",
-                                candidate.rollout_path.display()
-                            );
-                            true
-                        }
-                    };
-                if has_user_event {
-                    items.push(candidate);
-                }
-                if items.len() > page_size {
-                    break;
-                }
-            }
-
-            if items.len() > page_size {
-                break;
-            }
-            if batch_len < batch_size {
-                break;
-            }
-        }
-
-        let next_anchor = if items.len() > page_size {
-            match items.pop() {
-                Some(extra) => crate::db::anchor_from_item(&extra, sort_key),
-                None => None,
-            }
-        } else {
-            None
-        };
-        Ok(ThreadsPage {
-            items,
-            next_anchor,
-            num_scanned_rows,
-        })
-    }
-
-    /// List thread ids using the underlying database (no rollout scanning).
-    pub async fn list_thread_ids(
-        &self,
-        limit: usize,
-        anchor: Option<&crate::Anchor>,
-        sort_key: crate::SortKey,
-        allowed_sources: &[String],
-        model_providers: Option<&[String]>,
-        archived_only: bool,
-    ) -> anyhow::Result<Vec<ThreadId>> {
-        let mut builder = QueryBuilder::<Sqlite>::new("SELECT id FROM threads WHERE 1 = 1");
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            r#"
+SELECT
+    id,
+    rollout_path,
+    created_at,
+    updated_at,
+    source,
+    model_provider,
+    cwd,
+    title,
+    sandbox_policy,
+    approval_mode,
+    tokens_used,
+    has_user_event,
+    archived_at,
+    git_sha,
+    git_branch,
+    git_origin_url
+FROM threads
+WHERE 1 = 1
+            "#,
+        );
         if archived_only {
             builder.push(" AND archived = 1");
         } else {
             builder.push(" AND archived = 0");
         }
+        builder.push(" AND has_user_event = 1");
         if !allowed_sources.is_empty() {
             builder.push(" AND source IN (");
             let mut separated = builder.separated(", ");
@@ -272,7 +221,90 @@ WHERE id = ?
         builder.push(" LIMIT ");
         builder.push_bind(limit as i64);
 
-        let rows = builder.build().fetch_all(&self.pool).await?;
+        let rows = builder
+            .build_query_as::<ThreadRow>()
+            .fetch_all(self.pool.as_ref())
+            .await?;
+        let mut items = rows.into_iter().map(ThreadMetadata::try_from).collect::<Result<Vec<_>, _>>()?;
+        let num_scanned_rows = items.len();
+        let next_anchor = if items.len() > page_size {
+            items
+                .pop()
+                .and_then(|extra| anchor_from_item(&extra, sort_key))
+        } else {
+            None
+        };
+        Ok(ThreadsPage {
+            items,
+            next_anchor,
+            num_scanned_rows,
+        })
+    }
+
+    /// List thread ids using the underlying database (no rollout scanning).
+    pub async fn list_thread_ids(
+        &self,
+        limit: usize,
+        anchor: Option<&crate::Anchor>,
+        sort_key: crate::SortKey,
+        allowed_sources: &[String],
+        model_providers: Option<&[String]>,
+        archived_only: bool,
+    ) -> anyhow::Result<Vec<ThreadId>> {
+        let mut builder = QueryBuilder::<Sqlite>::new("SELECT id FROM threads WHERE 1 = 1");
+        if archived_only {
+            builder.push(" AND archived = 1");
+        } else {
+            builder.push(" AND archived = 0");
+        }
+        builder.push(" AND has_user_event = 1");
+        if !allowed_sources.is_empty() {
+            builder.push(" AND source IN (");
+            let mut separated = builder.separated(", ");
+            for source in allowed_sources {
+                separated.push_bind(source);
+            }
+            separated.push_unseparated(")");
+        }
+        if let Some(model_providers) = model_providers
+            && !model_providers.is_empty()
+        {
+            builder.push(" AND model_provider IN (");
+            let mut separated = builder.separated(", ");
+            for provider in model_providers {
+                separated.push_bind(provider);
+            }
+            separated.push_unseparated(")");
+        }
+        if let Some(anchor) = anchor {
+            let anchor_ts = datetime_to_epoch_seconds(anchor.ts);
+            let column = match sort_key {
+                SortKey::CreatedAt => "created_at",
+                SortKey::UpdatedAt => "updated_at",
+            };
+            builder.push(" AND (");
+            builder.push(column);
+            builder.push(" < ");
+            builder.push_bind(anchor_ts);
+            builder.push(" OR (");
+            builder.push(column);
+            builder.push(" = ");
+            builder.push_bind(anchor_ts);
+            builder.push(" AND id < ");
+            builder.push_bind(anchor.id.to_string());
+            builder.push("))");
+        }
+        let order_column = match sort_key {
+            SortKey::CreatedAt => "created_at",
+            SortKey::UpdatedAt => "updated_at",
+        };
+        builder.push(" ORDER BY ");
+        builder.push(order_column);
+        builder.push(" DESC, id DESC");
+        builder.push(" LIMIT ");
+        builder.push_bind(limit as i64);
+
+        let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         rows.into_iter()
             .map(|row| {
                 let id: String = row.try_get("id")?;
@@ -297,12 +329,13 @@ INSERT INTO threads (
     sandbox_policy,
     approval_mode,
     tokens_used,
+    has_user_event,
     archived,
     archived_at,
     git_sha,
     git_branch,
     git_origin_url
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -314,6 +347,7 @@ ON CONFLICT(id) DO UPDATE SET
     sandbox_policy = excluded.sandbox_policy,
     approval_mode = excluded.approval_mode,
     tokens_used = excluded.tokens_used,
+    has_user_event = excluded.has_user_event,
     archived = excluded.archived,
     archived_at = excluded.archived_at,
     git_sha = excluded.git_sha,
@@ -323,25 +357,22 @@ ON CONFLICT(id) DO UPDATE SET
         )
         .bind(metadata.id.to_string())
         .bind(metadata.rollout_path.display().to_string())
-        .bind(crate::db::datetime_to_epoch_seconds(metadata.created_at))
-        .bind(crate::db::datetime_to_epoch_seconds(metadata.updated_at))
-        .bind(metadata.source)
-        .bind(metadata.model_provider)
+        .bind(datetime_to_epoch_seconds(metadata.created_at))
+        .bind(datetime_to_epoch_seconds(metadata.updated_at))
+        .bind(metadata.source.as_str())
+        .bind(metadata.model_provider.as_str())
         .bind(metadata.cwd.display().to_string())
-        .bind(metadata.title)
-        .bind(metadata.sandbox_policy)
-        .bind(metadata.approval_mode)
+        .bind(metadata.title.as_str())
+        .bind(metadata.sandbox_policy.as_str())
+        .bind(metadata.approval_mode.as_str())
         .bind(metadata.tokens_used)
+        .bind(metadata.has_user_event)
         .bind(metadata.archived_at.is_some())
-        .bind(
-            metadata
-                .archived_at
-                .map(crate::db::datetime_to_epoch_seconds),
-        )
+        .bind(metadata.archived_at.map(datetime_to_epoch_seconds))
         .bind(metadata.git_sha.as_deref())
         .bind(metadata.git_branch.as_deref())
         .bind(metadata.git_origin_url.as_deref())
-        .execute(&self.pool)
+        .execute(self.pool.as_ref())
         .await?;
         Ok(())
     }

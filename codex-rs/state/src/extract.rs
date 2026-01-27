@@ -1,18 +1,15 @@
 use crate::model::ThreadMetadata;
-use anyhow::Result;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::is_local_image_close_tag_text;
 use codex_protocol::models::is_local_image_open_tag_text;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use serde::Serialize;
 use serde_json::Value;
-use tokio::io::AsyncBufReadExt;
 
 /// Apply a rollout item to the metadata structure.
 pub fn apply_rollout_item(
@@ -30,34 +27,6 @@ pub fn apply_rollout_item(
     if metadata.model_provider.is_empty() {
         metadata.model_provider = default_provider.to_string();
     }
-}
-
-pub(crate) async fn rollout_has_user_event(path: &std::path::Path) -> Result<bool> {
-    let file = tokio::fs::File::open(path).await?;
-    let reader = tokio::io::BufReader::new(file);
-    let mut lines = reader.lines();
-    while let Some(line) = lines.next_line().await? {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
-            continue;
-        };
-        match rollout_line.item {
-            RolloutItem::EventMsg(EventMsg::UserMessage(_)) => return Ok(true),
-            RolloutItem::ResponseItem(item) => {
-                if extract_user_message_text(&item).is_some() {
-                    return Ok(true);
-                }
-            }
-            RolloutItem::SessionMeta(_)
-            | RolloutItem::TurnContext(_)
-            | RolloutItem::Compacted(_) => {}
-            RolloutItem::EventMsg(_) => {}
-        }
-    }
-    Ok(false)
 }
 
 fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &SessionMetaLine) {
@@ -90,6 +59,7 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
             }
         }
         EventMsg::UserMessage(user) => {
+            metadata.has_user_event = true;
             if metadata.title.is_empty() {
                 metadata.title = strip_user_message_prefix(user.message.as_str()).to_string();
             }
@@ -99,10 +69,11 @@ fn apply_event_msg(metadata: &mut ThreadMetadata, event: &EventMsg) {
 }
 
 fn apply_response_item(metadata: &mut ThreadMetadata, item: &ResponseItem) {
-    if let Some(text) = extract_user_message_text(item)
-        && metadata.title.is_empty()
-    {
-        metadata.title = text;
+    if let Some(text) = extract_user_message_text(item) {
+        metadata.has_user_event = true;
+        if metadata.title.is_empty() {
+            metadata.title = text;
+        }
     }
 }
 
@@ -196,6 +167,7 @@ mod tests {
             sandbox_policy: "read-only".to_string(),
             approval_mode: "on-request".to_string(),
             tokens_used: 1,
+            has_user_event: false,
             archived_at: None,
             git_sha: None,
             git_branch: None,
