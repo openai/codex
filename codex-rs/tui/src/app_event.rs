@@ -20,6 +20,7 @@ use codex_protocol::openai_models::ModelPreset;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
+use crate::status_line::StatusLineValue;
 
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
@@ -292,6 +293,9 @@ pub(crate) enum AppEvent {
 
     /// Launch the external editor after a normal draw has completed.
     LaunchExternalEditor,
+
+    /// The last text output of the status line script execution.
+    StatusLineUpdated(StatusLineValue),
 }
 
 /// The exit strategy requested by the UI layer.

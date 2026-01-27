@@ -29,6 +29,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::status_line::StatusLineValue;
 use crate::version::CODEX_CLI_VERSION;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
@@ -522,6 +523,8 @@ pub(crate) struct ChatWidget {
     full_reasoning_buffer: String,
     // Current status header shown in the status indicator.
     current_status_header: String,
+    // Latest status line value from external command (if any).
+    status_line_value: Option<StatusLineValue>,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     thread_id: Option<ThreadId>,
@@ -791,6 +794,12 @@ impl ChatWidget {
     /// updates the status indicator header and clears any existing details.
     fn set_status_header(&mut self, header: String) {
         self.set_status(header, None);
+    }
+
+    pub(crate) fn set_status_line(&mut self, status_line: Option<StatusLineValue>) {
+        self.status_line_value = status_line.clone();
+        self.bottom_pane.set_status_line(status_line);
+        self.request_redraw();
     }
 
     fn restore_retry_status_header_if_present(&mut self) {
@@ -2310,6 +2319,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
+            status_line_value: None,
             retry_status_header: None,
             thread_id: None,
             thread_name: None,
@@ -2458,6 +2468,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
+            status_line_value: None,
             retry_status_header: None,
             thread_id: None,
             thread_name: None,
@@ -2595,6 +2606,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status_header: String::from("Working"),
+            status_line_value: None,
             retry_status_header: None,
             thread_id: None,
             thread_name: None,
@@ -6167,10 +6179,6 @@ impl ChatWidget {
     }
     pub(crate) fn rollout_path(&self) -> Option<PathBuf> {
         self.current_rollout_path.clone()
-    }
-
-    pub(crate) fn current_cwd(&self) -> Option<PathBuf> {
-        self.current_cwd.clone()
     }
 
     /// Returns a cache key describing the current in-flight active cell for the transcript overlay.

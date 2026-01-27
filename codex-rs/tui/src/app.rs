@@ -13,6 +13,7 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
+use crate::chatwidget::build_status_line_payload;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -908,6 +909,7 @@ impl App {
         for event in snapshot.events {
             self.handle_codex_event_replay(event);
         }
+        self.refresh_status_line();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1368,6 +1370,10 @@ impl App {
                                 self.config = resume_config;
                                 tui.set_notification_method(self.config.tui_notification_method);
                                 self.file_search.update_search_dir(self.config.cwd.clone());
+                                self.status_line_runner = StatusLineRunner::new(
+                                    self.config.clone(),
+                                    self.app_event_tx.clone(),
+                                );
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
                                     self.config.clone(),
@@ -1566,12 +1572,15 @@ impl App {
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
+                self.refresh_status_line();
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(&model);
+                self.refresh_status_line();
             }
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
+                self.refresh_status_line();
             }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
@@ -2205,11 +2214,18 @@ impl App {
                     ));
                 }
             },
+            AppEvent::StatusLineUpdated(status_line_value) => {
+                self.chat_widget.set_status_line(Some(status_line_value));
+            }
         }
         Ok(AppRunControl::Continue)
     }
 
     fn handle_codex_event_now(&mut self, event: Event) {
+        let needs_refresh = matches!(
+            event.msg,
+            EventMsg::SessionConfigured(_) | EventMsg::TokenCount(_)
+        );
         if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
             self.suppress_shutdown_complete = false;
             return;
@@ -2221,6 +2237,10 @@ impl App {
         }
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
+
+        if needs_refresh {
+            self.refresh_status_line();
+        }
     }
 
     fn handle_codex_event_replay(&mut self, event: Event) {
@@ -2473,6 +2493,17 @@ impl App {
                 // Ignore Release key events.
             }
         };
+    }
+
+    fn refresh_status_line(&mut self) {
+        let payload = build_status_line_payload(&self.chat_widget, &self.config).to_string();
+        if let Err(err) = self.status_line_runner.update_payload(payload) {
+            tracing::warn!(error = %err, "status line: update_payload failed");
+            return;
+        }
+        if let Err(err) = self.status_line_runner.request_update() {
+            tracing::warn!(error = %err, "status line: request_update failed");
+        }
     }
 
     #[cfg(target_os = "windows")]
