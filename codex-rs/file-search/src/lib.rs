@@ -108,11 +108,8 @@ pub trait SessionReporter: Send + Sync + 'static {
     /// Called when the debounced top-N changes.
     fn on_update(&self, snapshot: &FileSearchSnapshot);
 
-    /// Called when the session becomes idle.
+    /// Called when the session becomes idle or is cancelled. Guaranteed to be called at least once per update_query.
     fn on_complete(&self);
-
-    /// Optional hook for non-fatal errors.
-    fn on_error(&self, _error: &anyhow::Error) {}
 }
 
 pub struct FileSearchSession {
@@ -580,6 +577,9 @@ fn matcher_worker(
         }
     }
 
+    // If we cancelled or otherwise exited the loop, make sure the reporter is notified.
+    inner.reporter.on_complete();
+
     Ok(())
 }
 
@@ -911,5 +911,61 @@ mod tests {
 
         let updates = reporter.updates();
         assert_eq!(updates.len(), 1);
+    }
+
+    #[test]
+    fn run_returns_matches_for_query() {
+        let dir = create_temp_tree(40);
+        let results = run(
+            "file-000",
+            NonZero::new(20).unwrap(),
+            dir.path(),
+            Vec::new(),
+            NonZero::new(2).unwrap(),
+            Arc::new(AtomicBool::new(false)),
+            false,
+            true,
+        )
+        .expect("run ok");
+
+        assert!(!results.matches.is_empty());
+        assert!(results.total_match_count >= results.matches.len());
+        assert!(
+            results
+                .matches
+                .iter()
+                .any(|m| m.path.contains("file-0000.txt"))
+        );
+    }
+
+    #[test]
+    fn cancel_exits_run() {
+        let dir = create_temp_tree(200);
+        let cancel_flag = Arc::new(AtomicBool::new(true));
+        let search_dir = dir.path().to_path_buf();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let handle = thread::spawn(move || {
+            let result = run(
+                "file-",
+                NonZero::new(20).unwrap(),
+                &search_dir,
+                Vec::new(),
+                NonZero::new(2).unwrap(),
+                cancel_flag,
+                false,
+                true,
+            );
+            let _ = tx.send(result);
+        });
+
+        let result = rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("run should exit after cancellation");
+        handle.join().unwrap();
+
+        let results = result.expect("run ok");
+        assert_eq!(results.matches, Vec::new());
+        assert_eq!(results.total_match_count, 0);
     }
 }
