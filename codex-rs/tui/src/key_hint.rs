@@ -7,13 +7,13 @@ use ratatui::style::Stylize;
 use ratatui::text::Span;
 
 #[cfg(test)]
-const ALT_PREFIX: &str = "⌥ + ";
+const ALT_PREFIX: &str = "⌥+";
 #[cfg(all(not(test), target_os = "macos"))]
-const ALT_PREFIX: &str = "⌥ + ";
+const ALT_PREFIX: &str = "⌥+";
 #[cfg(all(not(test), not(target_os = "macos")))]
-const ALT_PREFIX: &str = "alt + ";
-const CTRL_PREFIX: &str = "ctrl + ";
-const SHIFT_PREFIX: &str = "shift + ";
+const ALT_PREFIX: &str = "Alt+";
+const CTRL_PREFIX: &str = "Ctrl+";
+const SHIFT_PREFIX: &str = "Shift+";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct KeyBinding {

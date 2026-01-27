@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 mod layout;
 mod render;
 
@@ -54,7 +55,7 @@ struct ComposerDraft {
 }
 
 struct AnswerState {
-    // Final selection for the question (always set for option questions).
+    // Final selection for the question (may be None when unanswered).
     selected: Option<usize>,
     // Scrollable cursor state for option navigation/highlight.
     option_state: ScrollState,
@@ -272,6 +273,11 @@ impl RequestUserInputOverlay {
         }
     }
 
+    fn sync_composer_placeholder(&mut self) {
+        self.composer
+            .set_placeholder_text(self.notes_placeholder().to_string());
+    }
+
     /// Ensure the focus mode is valid for the current question.
     fn ensure_focus_available(&mut self) {
         if self.question_count() == 0 {
@@ -288,15 +294,10 @@ impl RequestUserInputOverlay {
             .request
             .questions
             .iter()
-            .map(|question| {
-                let mut option_state = ScrollState::new();
-                if let Some(options) = question.options.as_ref()
-                    && !options.is_empty()
-                {
-                    option_state.selected_idx = Some(0);
-                }
+            .map(|_| {
+                let option_state = ScrollState::new();
                 AnswerState {
-                    selected: option_state.selected_idx,
+                    selected: None,
                     option_state,
                     draft: ComposerDraft::default(),
                 }
@@ -328,11 +329,16 @@ impl RequestUserInputOverlay {
             return;
         }
         let options_len = self.options_len();
-        let Some(answer) = self.current_answer_mut() else {
-            return;
+        let updated = if let Some(answer) = self.current_answer_mut() {
+            answer.option_state.clamp_selection(options_len);
+            answer.selected = answer.option_state.selected_idx;
+            true
+        } else {
+            false
         };
-        answer.option_state.clamp_selection(options_len);
-        answer.selected = answer.option_state.selected_idx;
+        if updated {
+            self.sync_composer_placeholder();
+        }
     }
 
     /// Ensure there is a selection before allowing notes entry.
@@ -344,6 +350,7 @@ impl RequestUserInputOverlay {
         {
             self.select_current_option();
         }
+        self.sync_composer_placeholder();
     }
 
     /// Advance to next question, or submit when on the last one.
@@ -362,7 +369,7 @@ impl RequestUserInputOverlay {
         for (idx, question) in self.request.questions.iter().enumerate() {
             let answer_state = &self.answers[idx];
             let options = question.options.as_ref();
-            // For option questions we always produce a selection.
+            // For option questions we may still produce no selection.
             let selected_idx = if options.is_some_and(|opts| !opts.is_empty()) {
                 answer_state
                     .selected
@@ -489,12 +496,20 @@ impl BottomPaneView for RequestUserInputOverlay {
         }
 
         // Question navigation is always available.
-        match key_event.code {
-            KeyCode::PageUp => {
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
                 self.move_question(false);
                 return;
             }
-            KeyCode::PageDown => {
+            KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
                 self.move_question(true);
                 return;
             }
@@ -507,15 +522,27 @@ impl BottomPaneView for RequestUserInputOverlay {
                 // Keep selection synchronized as the user moves.
                 match key_event.code {
                     KeyCode::Up => {
-                        if let Some(answer) = self.current_answer_mut() {
+                        let moved = if let Some(answer) = self.current_answer_mut() {
                             answer.option_state.move_up_wrap(options_len);
                             answer.selected = answer.option_state.selected_idx;
+                            true
+                        } else {
+                            false
+                        };
+                        if moved {
+                            self.sync_composer_placeholder();
                         }
                     }
                     KeyCode::Down => {
-                        if let Some(answer) = self.current_answer_mut() {
+                        let moved = if let Some(answer) = self.current_answer_mut() {
                             answer.option_state.move_down_wrap(options_len);
                             answer.selected = answer.option_state.selected_idx;
+                            true
+                        } else {
+                            false
+                        };
+                        if moved {
+                            self.sync_composer_placeholder();
                         }
                     }
                     KeyCode::Char(' ') => {
@@ -548,15 +575,27 @@ impl BottomPaneView for RequestUserInputOverlay {
                     let options_len = self.options_len();
                     match key_event.code {
                         KeyCode::Up => {
-                            if let Some(answer) = self.current_answer_mut() {
+                            let moved = if let Some(answer) = self.current_answer_mut() {
                                 answer.option_state.move_up_wrap(options_len);
                                 answer.selected = answer.option_state.selected_idx;
+                                true
+                            } else {
+                                false
+                            };
+                            if moved {
+                                self.sync_composer_placeholder();
                             }
                         }
                         KeyCode::Down => {
-                            if let Some(answer) = self.current_answer_mut() {
+                            let moved = if let Some(answer) = self.current_answer_mut() {
                                 answer.option_state.move_down_wrap(options_len);
                                 answer.selected = answer.option_state.selected_idx;
+                                true
+                            } else {
+                                false
+                            };
+                            if moved {
+                                self.sync_composer_placeholder();
                             }
                         }
                         _ => {}
@@ -747,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn options_always_return_a_selection() {
+    fn options_can_submit_empty_when_unanswered() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
@@ -765,7 +804,7 @@ mod tests {
         };
         assert_eq!(id, "turn-1");
         let answer = response.answers.get("q1").expect("answer missing");
-        assert_eq!(answer.answers, vec!["Option 1".to_string()]);
+        assert_eq!(answer.answers, Vec::<String>::new());
     }
 
     #[test]

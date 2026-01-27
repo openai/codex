@@ -9,5 +9,6 @@ expression: "render_snapshot(&overlay, area)"
                                                                 
   › Type your answer (optional)                                 
                                                                 
-  Unanswered: 1 | Will submit as skipped                        
-  ↑/↓ scroll | enter next question | esc interrupt
+  Unanswered: 1                                                 
+  Enter to submit all answers | Esc to interrupt                
+                                                                

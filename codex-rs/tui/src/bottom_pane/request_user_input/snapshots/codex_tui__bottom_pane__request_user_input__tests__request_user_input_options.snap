@@ -7,13 +7,14 @@ expression: "render_snapshot(&overlay, area)"
   Area                                                          
   Choose an option.                                             
   Answer                                                        
-  (x) Option 1  First choice.                                   
+  ( ) Option 1  First choice.                                   
   ( ) Option 2  Second choice.                                  
   ( ) Option 3  Third choice.                                   
-  Notes for Option 1 (optional)                                 
+  Notes (optional)                                              
                                                                 
-  › Add notes (optional)                                        
+  › Select an option to add notes (optional)                    
                                                                 
                                                                 
                                                                 
-  Option 1 of 3 | ↑/↓ scroll | enter next question | esc inter
+                                                                
+  No option selected | ↑/↓ scroll | Enter to submit all answer  

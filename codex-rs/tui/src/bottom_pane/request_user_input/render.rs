@@ -102,13 +102,7 @@ impl RequestUserInputOverlay {
         }
 
         if sections.answer_title_area.height > 0 {
-            let answer_label = "Answer";
-            let answer_title = if self.focus_is_options() || self.focus_is_notes_without_options() {
-                answer_label.cyan().bold()
-            } else {
-                answer_label.dim()
-            };
-            Paragraph::new(Line::from(answer_title)).render(sections.answer_title_area, buf);
+            Paragraph::new(Line::from("Answer".dim())).render(sections.answer_title_area, buf);
         }
 
         // Build rows with selection markers for the shared selection renderer.
@@ -148,7 +142,15 @@ impl RequestUserInputOverlay {
             } else {
                 "Notes (optional)".to_string()
             };
-            let notes_title = if self.focus_is_notes() {
+            let notes_active = if self.has_options() {
+                self.focus_is_notes()
+                    && self
+                        .current_answer()
+                        .is_some_and(|answer| answer.selected.is_some())
+            } else {
+                self.focus_is_notes()
+            };
+            let notes_title = if notes_active {
                 notes_label.as_str().cyan().bold()
             } else {
                 notes_label.as_str().dim()
@@ -166,10 +168,7 @@ impl RequestUserInputOverlay {
             .saturating_add(sections.notes_area.height);
         if sections.footer_lines == 2 {
             // Status line for unanswered count when any question is empty.
-            let warning = format!(
-                "Unanswered: {} | Will submit as skipped",
-                self.unanswered_count()
-            );
+            let warning = format!("Unanswered: {}", self.unanswered_count());
             Paragraph::new(Line::from(warning.dim())).render(
                 Rect {
                     x: content_area.x,
@@ -185,32 +184,39 @@ impl RequestUserInputOverlay {
         let mut hint_spans = Vec::new();
         if self.has_options() {
             let options_len = self.options_len();
-            let option_index = self.selected_option_index().map_or(0, |idx| idx + 1);
+            if let Some(selected_idx) = self.selected_option_index() {
+                let option_index = selected_idx + 1;
+                hint_spans.extend(vec![
+                    format!("Option {option_index} of {options_len}").into(),
+                    " | ".into(),
+                ]);
+            } else {
+                hint_spans.extend(vec!["No option selected".into(), " | ".into()]);
+            }
             hint_spans.extend(vec![
-                format!("Option {option_index} of {options_len}").into(),
-                " | ".into(),
+                key_hint::plain(KeyCode::Up).into(),
+                "/".into(),
+                key_hint::plain(KeyCode::Down).into(),
+                " scroll | ".into(),
             ]);
         }
-        hint_spans.extend(vec![
-            key_hint::plain(KeyCode::Up).into(),
-            "/".into(),
-            key_hint::plain(KeyCode::Down).into(),
-            " scroll | ".into(),
-            key_hint::plain(KeyCode::Enter).into(),
-            " next question | ".into(),
-        ]);
+        let is_last_question =
+            self.question_count() > 0 && self.current_index() + 1 >= self.question_count();
+        let enter_hint = if is_last_question {
+            "Enter to submit all answers"
+        } else {
+            "Enter to submit answer"
+        };
+        hint_spans.extend(vec![enter_hint.dim(), " | ".into()]);
         if self.question_count() > 1 {
             hint_spans.extend(vec![
-                key_hint::plain(KeyCode::PageUp).into(),
+                key_hint::ctrl(KeyCode::Char('p')).into(),
                 " prev | ".into(),
-                key_hint::plain(KeyCode::PageDown).into(),
+                key_hint::ctrl(KeyCode::Char('n')).into(),
                 " next | ".into(),
             ]);
         }
-        hint_spans.extend(vec![
-            key_hint::plain(KeyCode::Esc).into(),
-            " interrupt".into(),
-        ]);
+        hint_spans.extend(vec!["Esc to interrupt".dim()]);
         Paragraph::new(Line::from(hint_spans).dim()).render(
             Rect {
                 x: content_area.x,
@@ -224,7 +230,16 @@ impl RequestUserInputOverlay {
 
     /// Return the cursor position when editing notes, if visible.
     pub(super) fn cursor_pos_impl(&self, area: Rect) -> Option<(u16, u16)> {
-        if !self.focus_is_notes() {
+        let has_options = self.has_options();
+        let has_selected_option = self
+            .current_answer()
+            .is_some_and(|answer| answer.selected.is_some());
+
+        if !self.focus_is_notes() && !(has_options && has_selected_option) {
+            return None;
+        }
+        // When options exist, only show the cursor after a concrete selection.
+        if has_options && !has_selected_option {
             return None;
         }
         let content_area = menu_surface_inset(area);
@@ -247,15 +262,7 @@ impl RequestUserInputOverlay {
         self.composer.render(area, buf);
     }
 
-    fn focus_is_options(&self) -> bool {
-        matches!(self.focus, super::Focus::Options)
-    }
-
     fn focus_is_notes(&self) -> bool {
         matches!(self.focus, super::Focus::Notes)
-    }
-
-    fn focus_is_notes_without_options(&self) -> bool {
-        !self.has_options() && self.focus_is_notes()
     }
 }
