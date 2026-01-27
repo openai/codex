@@ -111,9 +111,12 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSortKey;
+use codex_app_server_protocol::ThreadSourceKind;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
+use codex_app_server_protocol::ThreadUnarchiveParams;
+use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptParams;
@@ -130,7 +133,6 @@ use codex_chatgpt::connectors;
 use codex_core::AuthManager;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
-use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::InitialHistory;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
@@ -151,6 +153,7 @@ use codex_core::error::CodexErr;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::features::Feature;
+use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::mcp::collect_mcp_snapshot;
@@ -164,6 +167,7 @@ use codex_core::protocol::ReviewTarget as CoreReviewTarget;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
+use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -204,6 +208,9 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
+
+use crate::filters::compute_source_filters;
+use crate::filters::source_kind_matches;
 
 type PendingInterruptQueue = Vec<(RequestId, ApiVersion)>;
 pub(crate) type PendingInterrupts = Arc<Mutex<HashMap<ThreadId, PendingInterruptQueue>>>;
@@ -403,6 +410,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ThreadArchive { request_id, params } => {
                 self.thread_archive(request_id, params).await;
+            }
+            ClientRequest::ThreadUnarchive { request_id, params } => {
+                self.thread_unarchive(request_id, params).await;
             }
             ClientRequest::ThreadRollback { request_id, params } => {
                 self.thread_rollback(request_id, params).await;
@@ -1643,6 +1653,150 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn thread_unarchive(&mut self, request_id: RequestId, params: ThreadUnarchiveParams) {
+        let thread_id = match ThreadId::from_string(&params.thread_id) {
+            Ok(id) => id,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("invalid thread id: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let archived_path = match find_archived_thread_path_by_id_str(
+            &self.config.codex_home,
+            &thread_id.to_string(),
+        )
+        .await
+        {
+            Ok(Some(path)) => path,
+            Ok(None) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("no archived rollout found for thread id {thread_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("failed to locate archived thread id {thread_id}: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let rollout_path_display = archived_path.display().to_string();
+        let fallback_provider = self.config.model_provider_id.clone();
+        let archived_folder = self
+            .config
+            .codex_home
+            .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
+
+        let result: Result<Thread, JSONRPCErrorError> = async {
+            let canonical_archived_dir = tokio::fs::canonicalize(&archived_folder).await.map_err(
+                |err| JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!(
+                        "failed to unarchive thread: unable to resolve archived directory: {err}"
+                    ),
+                    data: None,
+                },
+            )?;
+            let canonical_rollout_path = tokio::fs::canonicalize(&archived_path).await;
+            let canonical_rollout_path = if let Ok(path) = canonical_rollout_path
+                && path.starts_with(&canonical_archived_dir)
+            {
+                path
+            } else {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "rollout path `{rollout_path_display}` must be in archived directory"
+                    ),
+                    data: None,
+                });
+            };
+
+            let required_suffix = format!("{thread_id}.jsonl");
+            let Some(file_name) = canonical_rollout_path.file_name().map(OsStr::to_owned) else {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("rollout path `{rollout_path_display}` missing file name"),
+                    data: None,
+                });
+            };
+            if !file_name
+                .to_string_lossy()
+                .ends_with(required_suffix.as_str())
+            {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "rollout path `{rollout_path_display}` does not match thread id {thread_id}"
+                    ),
+                    data: None,
+                });
+            }
+
+            let Some((year, month, day)) = rollout_date_parts(&file_name) else {
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "rollout path `{rollout_path_display}` missing filename timestamp"
+                    ),
+                    data: None,
+                });
+            };
+
+            let sessions_folder = self.config.codex_home.join(codex_core::SESSIONS_SUBDIR);
+            let dest_dir = sessions_folder.join(year).join(month).join(day);
+            let restored_path = dest_dir.join(&file_name);
+            tokio::fs::create_dir_all(&dest_dir)
+                .await
+                .map_err(|err| JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to unarchive thread: {err}"),
+                    data: None,
+                })?;
+            tokio::fs::rename(&canonical_rollout_path, &restored_path)
+                .await
+                .map_err(|err| JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to unarchive thread: {err}"),
+                    data: None,
+                })?;
+            let summary =
+                read_summary_from_rollout(restored_path.as_path(), fallback_provider.as_str())
+                    .await
+                    .map_err(|err| JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to read unarchived thread: {err}"),
+                        data: None,
+                    })?;
+            Ok(summary_to_thread(summary))
+        }
+        .await;
+
+        match result {
+            Ok(thread) => {
+                let response = ThreadUnarchiveResponse { thread };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+            }
+        }
+    }
+
     async fn thread_rollback(&mut self, request_id: RequestId, params: ThreadRollbackParams) {
         let ThreadRollbackParams {
             thread_id,
@@ -1694,6 +1848,7 @@ impl CodexMessageProcessor {
             limit,
             sort_key,
             model_providers,
+            source_kinds,
             archived,
         } = params;
 
@@ -1710,6 +1865,7 @@ impl CodexMessageProcessor {
                 requested_page_size,
                 cursor,
                 model_providers,
+                source_kinds,
                 core_sort_key,
                 archived.unwrap_or(false),
             )
@@ -2387,6 +2543,7 @@ impl CodexMessageProcessor {
                 requested_page_size,
                 cursor,
                 model_providers,
+                None,
                 CoreThreadSortKey::UpdatedAt,
                 false,
             )
@@ -2407,6 +2564,7 @@ impl CodexMessageProcessor {
         requested_page_size: usize,
         cursor: Option<String>,
         model_providers: Option<Vec<String>>,
+        source_kinds: Option<Vec<ThreadSourceKind>>,
         sort_key: CoreThreadSortKey,
         archived: bool,
     ) -> Result<(Vec<ConversationSummary>, Option<String>), JSONRPCErrorError> {
@@ -2436,6 +2594,8 @@ impl CodexMessageProcessor {
             None => Some(vec![self.config.model_provider_id.clone()]),
         };
         let fallback_provider = self.config.model_provider_id.clone();
+        let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
+        let allowed_sources = allowed_sources_vec.as_slice();
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
@@ -2445,7 +2605,7 @@ impl CodexMessageProcessor {
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
-                    INTERACTIVE_SESSION_SOURCES,
+                    allowed_sources,
                     model_provider_filter.as_deref(),
                     fallback_provider.as_str(),
                 )
@@ -2461,7 +2621,7 @@ impl CodexMessageProcessor {
                     page_size,
                     cursor_obj.as_ref(),
                     sort_key,
-                    INTERACTIVE_SESSION_SOURCES,
+                    allowed_sources,
                     model_provider_filter.as_deref(),
                     fallback_provider.as_str(),
                 )
@@ -2489,6 +2649,11 @@ impl CodexMessageProcessor {
                         fallback_provider.as_str(),
                         updated_at,
                     )
+                })
+                .filter(|summary| {
+                    source_kind_filter
+                        .as_ref()
+                        .is_none_or(|filter| source_kind_matches(&summary.source, filter))
                 })
                 .collect::<Vec<_>>();
             if filtered.len() > remaining {
@@ -2699,6 +2864,8 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+
+        let scopes = scopes.or_else(|| server.scopes.clone());
 
         match perform_oauth_login_return_url(
             &name,
