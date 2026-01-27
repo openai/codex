@@ -5,14 +5,20 @@
 //! booleans through multiple types, call sites consult a single `Features`
 //! container attached to `Config`.
 
+use crate::config::CONFIG_TOML_FILE;
+use crate::config::Config;
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
+use crate::protocol::Event;
+use crate::protocol::EventMsg;
+use crate::protocol::WarningEvent;
 use codex_otel::OtelManager;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use toml::Value as TomlValue;
 
 mod legacy;
 pub(crate) use legacy::LegacyFeatureToggles;
@@ -466,3 +472,54 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
 ];
+
+/// Push a warning event if any under-development features are enabled.
+pub fn maybe_push_unstable_features_warning(
+    config: &Config,
+    post_session_configured_events: &mut Vec<Event>,
+) {
+    if config.suppress_unstable_features_warning {
+        return;
+    }
+
+    let mut under_development_feature_keys = Vec::new();
+    if let Some(table) = config
+        .config_layer_stack
+        .effective_config()
+        .get("features")
+        .and_then(TomlValue::as_table)
+    {
+        for (key, value) in table {
+            if value.as_bool() != Some(true) {
+                continue;
+            }
+            let Some(spec) = FEATURES.iter().find(|spec| spec.key == key.as_str()) else {
+                continue;
+            };
+            if !config.features.enabled(spec.id) {
+                continue;
+            }
+            if matches!(spec.stage, Stage::UnderDevelopment) {
+                under_development_feature_keys.push(spec.key.to_string());
+            }
+        }
+    }
+
+    if under_development_feature_keys.is_empty() {
+        return;
+    }
+
+    let under_development_feature_keys = under_development_feature_keys.join(", ");
+    let config_path = config
+        .codex_home
+        .join(CONFIG_TOML_FILE)
+        .display()
+        .to_string();
+    let message = format!(
+        "Under-development features enabled: {under_development_feature_keys}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {config_path}."
+    );
+    post_session_configured_events.push(Event {
+        id: "".to_owned(),
+        msg: EventMsg::Warning(WarningEvent { message }),
+    });
+}
