@@ -262,7 +262,7 @@ mod tests {
     fn collect_explicit_skill_mentions_ignores_structured_inputs() {
         let alpha = make_skill("alpha-skill", "/tmp/alpha");
         let beta = make_skill("beta-skill", "/tmp/beta");
-        let skills = vec![alpha.clone(), beta.clone()];
+        let skills = vec![alpha.clone(), beta];
         let inputs = vec![
             UserInput::Text {
                 text: "please run $alpha-skill".to_string(),
