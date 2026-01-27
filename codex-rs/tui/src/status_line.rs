@@ -57,6 +57,11 @@ impl StatusLineRunner {
             state.in_flight = true;
         }
 
+        let timeout = self
+            .config
+            .tui_status_line_timeout_ms
+            .map(Duration::from_millis)
+            .unwrap_or(DEFAULT_STATUS_LINE_TIMEOUT);
         let state = self.state.clone();
         let app_tx = self.app_tx.clone();
         let run = async move {
@@ -71,11 +76,12 @@ impl StatusLineRunner {
                 let request = StatusLineRequest {
                     command: command.clone(),
                     payload,
-                    timeout: DEFAULT_STATUS_LINE_TIMEOUT,
+                    timeout,
                 };
                 let result = run_request(&request).await;
                 let mut update = None;
                 let mut rerun = false;
+                let mut emit_timeout_warning = None;
 
                 {
                     let mut state = state.lock().expect("status line lock poisoned");
@@ -93,6 +99,15 @@ impl StatusLineRunner {
                         }
                         Err(err) => {
                             tracing::warn!("status line execution failed: {}", err);
+                            if err == TIMEOUT_ERR && !state.warned_timeout {
+                                state.warned_timeout = true;
+                                tracing::warn!(
+                                    "status line command timed out. Consider increasing the timeout or optimizing the command."
+                                );
+                                emit_timeout_warning = Some(AppEvent::StatusLineTimeoutWarning {
+                                    timeout_ms: request.timeout.as_millis() as u64,
+                                });
+                            }
                             state.last_error = Some(err);
                         }
                     }
@@ -103,6 +118,10 @@ impl StatusLineRunner {
                     } else {
                         state.in_flight = false;
                     }
+                }
+
+                if let Some(event) = emit_timeout_warning {
+                    app_tx.send(event);
                 }
 
                 if let Some(status_line_value) = update {
@@ -131,6 +150,7 @@ impl StatusLineRunner {
     }
 }
 
+const TIMEOUT_ERR: &str = "status line command timed out";
 const DEFAULT_STATUS_LINE_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone)]
@@ -150,6 +170,8 @@ struct StatusLine {
     in_flight: bool,
     /// refresh requested while in flight
     pending: bool,
+    /// whether a timeout warning has been emitted
+    warned_timeout: bool,
     // nice to haves
     //  - last_error: Option<String>
     //      - Script failure/timeout; used for fallback or logs.
@@ -206,7 +228,7 @@ async fn run_request(request: &StatusLineRequest) -> Result<String, String> {
 
     let output = tokio::time::timeout(request.timeout, child.wait_with_output())
         .await
-        .map_err(|_| "status line command timed out".to_string())?
+        .map_err(|_| TIMEOUT_ERR.to_string())?
         .map_err(|err| format!("failed to read status line output: {err}"))?;
 
     if !output.status.success() {
