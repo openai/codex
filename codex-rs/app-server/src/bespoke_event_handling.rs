@@ -24,7 +24,6 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::CompactionEndedNotification;
-use codex_app_server_protocol::CompactionStartedNotification;
 use codex_app_server_protocol::DeprecationNoticeNotification;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::ErrorNotification;
@@ -603,24 +602,32 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::CompactionStarted(..) => {
-            let notification = CompactionStartedNotification {
+            let item = compaction_item(&event_turn_id);
+            let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
+                item,
             };
             outgoing
-                .send_server_notification(ServerNotification::CompactionStarted(notification))
+                .send_server_notification(ServerNotification::ItemStarted(notification))
                 .await;
         }
         EventMsg::CompactionEnded(..) => {
-            let notification = CompactionEndedNotification {
+            let item = compaction_item(&event_turn_id);
+            let completed = ItemCompletedNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                item,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::ItemCompleted(completed))
+                .await;
+            let legacy = CompactionEndedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
             };
             outgoing
-                .send_server_notification(ServerNotification::CompactionEnded(notification.clone()))
-                .await;
-            outgoing
-                .send_server_notification(ServerNotification::ContextCompacted(notification))
+                .send_server_notification(ServerNotification::ContextCompacted(legacy))
                 .await;
         }
         EventMsg::DeprecationNotice(event) => {
@@ -1281,6 +1288,12 @@ async fn maybe_emit_raw_response_item_completed(
     outgoing
         .send_server_notification(ServerNotification::RawResponseItemCompleted(notification))
         .await;
+}
+
+fn compaction_item(turn_id: &str) -> ThreadItem {
+    ThreadItem::Compaction {
+        id: format!("{turn_id}-compaction"),
+    }
 }
 
 async fn find_and_remove_turn_summary(

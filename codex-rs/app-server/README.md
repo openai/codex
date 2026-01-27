@@ -431,9 +431,8 @@ Today both notifications carry an empty `items` array even when item events were
 - `imageView` — `{id, path}` emitted when the agent invokes the image viewer tool.
 - `enteredReviewMode` — `{id, review}` sent when the reviewer starts; `review` is a short user-facing label such as `"current changes"` or the requested target description.
 - `exitedReviewMode` — `{id, review}` emitted when the reviewer finishes; `review` is the full plain-text review (usually, overall notes plus bullet point findings).
-- `compactionStarted` - `{threadId, turnId}` when codex begins compacting conversation history.
-- `compactionEnded` - `{threadId, turnId}` when compaction completes.
-- `thread/compacted` is deprecated and should be treated as `compactionEnded`.
+- `compaction` — `{id}` emitted via `item/started` and `item/completed` when Codex compacts conversation history for the current turn.
+- `thread/compacted` is deprecated and should be treated as the compaction completion signal.
 
 All items emit two shared lifecycle events:
 

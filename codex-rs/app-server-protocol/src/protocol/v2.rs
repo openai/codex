@@ -1962,6 +1962,9 @@ pub enum ThreadItem {
     WebSearch { id: String, query: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    Compaction { id: String },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     ImageView { id: String, path: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
