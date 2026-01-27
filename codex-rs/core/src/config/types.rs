@@ -486,6 +486,14 @@ pub struct Tui {
     /// scrollback in terminal multiplexers like Zellij that follow the xterm spec.
     #[serde(default)]
     pub alternate_screen: AltScreenMode,
+
+    /// Optional command (argv form) to generate a custom TUI status line.
+    ///
+    /// When set, Codex will execute the command with a JSON payload on stdin and
+    /// render the first line of stdout as the status line. Unset disables the
+    /// custom status line.
+    #[serde(default)]
+    pub status_line: Option<Vec<String>>,
 }
 
 const fn default_true() -> bool {
