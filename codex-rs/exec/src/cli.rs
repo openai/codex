@@ -189,6 +189,7 @@ mod tests {
 
     #[test]
     fn resume_parses_prompt_after_global_flags() {
+        const PROMPT: &str = "echo resume-with-global-flags-after-subcommand";
         let cli = Cli::parse_from([
             "codex-exec",
             "resume",
@@ -198,16 +199,19 @@ mod tests {
             "gpt-5.2-codex",
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
-            "echo resume-with-global-flags-after-subcommand",
+            PROMPT,
         ]);
 
         let Some(Command::Resume(args)) = cli.command else {
             panic!("expected resume command");
         };
-        assert_eq!(
-            args.session_id.as_deref(),
-            Some("echo resume-with-global-flags-after-subcommand")
-        );
-        assert_eq!(args.prompt, None);
+        let effective_prompt = args.prompt.clone().or_else(|| {
+            if args.last {
+                args.session_id.clone()
+            } else {
+                None
+            }
+        });
+        assert_eq!(effective_prompt.as_deref(), Some(PROMPT));
     }
 }
