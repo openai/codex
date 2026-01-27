@@ -100,7 +100,7 @@ use toml_edit::Array as TomlArray;
 use toml_edit::Item as TomlItem;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
-const THREAD_EVENT_CHANNEL_CAPACITY: usize = 1024;
+const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 const MCP_SEARCH_TOOL_NAME: &str = "MCPSearch";
 
 #[derive(Debug, Clone)]
