@@ -17,9 +17,6 @@ concurrency:
   cancel-in-progress: ${{ github.ref_name != 'main' }}
 jobs:
   test:
-    # This workflow relies on `secrets.BUILDBUDDY_API_KEY`, which is not available for PRs
-    # from forks. Skip the Bazel jobs in that case rather than failing with UNAUTHENTICATED.
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     strategy:
       fail-fast: false
       matrix:
