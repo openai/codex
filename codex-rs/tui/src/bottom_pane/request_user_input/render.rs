@@ -100,8 +100,13 @@ impl RequestUserInputOverlay {
 
         // Question title and wrapped prompt text.
         let question_header = self.current_question().map(|q| q.header.clone());
+        let answered = self.current_question_answered();
         let header_line = if let Some(header) = question_header {
-            Line::from(header.bold())
+            if answered {
+                Line::from(header.bold())
+            } else {
+                Line::from(header.cyan().bold())
+            }
         } else {
             Line::from("No questions".dim())
         };
@@ -162,14 +167,7 @@ impl RequestUserInputOverlay {
             } else {
                 "Notes".to_string()
             };
-            let notes_active = if self.has_options() {
-                self.focus_is_notes()
-                    && self
-                        .current_answer()
-                        .is_some_and(|answer| answer.selected.is_some())
-            } else {
-                self.focus_is_notes()
-            };
+            let notes_active = self.focus_is_notes();
             let notes_title = if notes_active {
                 notes_label.as_str().cyan().bold()
             } else {
@@ -228,15 +226,11 @@ impl RequestUserInputOverlay {
     pub(super) fn cursor_pos_impl(&self, area: Rect) -> Option<(u16, u16)> {
         let has_options = self.has_options();
         let notes_visible = self.notes_ui_visible();
-        let has_selected_option = self
-            .current_answer()
-            .is_some_and(|answer| answer.selected.is_some());
 
         if !self.focus_is_notes() {
             return None;
         }
-        // When options exist, only show the cursor after a concrete selection.
-        if has_options && (!notes_visible || !has_selected_option) {
+        if has_options && !notes_visible {
             return None;
         }
         let content_area = menu_surface_inset(area);
