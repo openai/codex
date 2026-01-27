@@ -2362,23 +2362,7 @@ pub struct WindowsWorldWritableWarningNotification {
     pub failed_scan: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct CompactionStartedNotification {
-    pub thread_id: String,
-    pub turn_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct CompactionEndedNotification {
-    pub thread_id: String,
-    pub turn_id: String,
-}
-
-/// Deprecated: use `CompactionEndedNotification`.
+/// Deprecated: use the compaction item lifecycle.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

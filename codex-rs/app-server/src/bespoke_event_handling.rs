@@ -23,7 +23,7 @@ use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
-use codex_app_server_protocol::CompactionEndedNotification;
+use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::DeprecationNoticeNotification;
 use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::ErrorNotification;
@@ -622,7 +622,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing
                 .send_server_notification(ServerNotification::ItemCompleted(completed))
                 .await;
-            let legacy = CompactionEndedNotification {
+            let legacy = ContextCompactedNotification {
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id.clone(),
             };

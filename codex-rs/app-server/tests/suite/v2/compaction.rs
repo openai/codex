@@ -2,7 +2,7 @@ use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use codex_app_server_protocol::ClientInfo;
-use codex_app_server_protocol::CompactionEndedNotification;
+use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -106,7 +106,7 @@ async fn compaction_emits_item_lifecycle_and_legacy_completion_notification() ->
         turn_id: turn_id.clone(),
         item: ThreadItem::Compaction { id: compaction_id },
     };
-    let expected_legacy = CompactionEndedNotification {
+    let expected_legacy = ContextCompactedNotification {
         thread_id: thread.id.clone(),
         turn_id,
     };
@@ -146,12 +146,12 @@ async fn read_compaction_item_completed(mcp: &mut McpProcess) -> Result<ItemComp
 
 async fn read_legacy_compacted_notification(
     mcp: &mut McpProcess,
-) -> Result<CompactionEndedNotification> {
+) -> Result<ContextCompactedNotification> {
     let notification: JSONRPCNotification = mcp
         .read_stream_until_notification_message("thread/compacted")
         .await?;
     let params = notification.params.expect("thread/compacted params");
-    let legacy: CompactionEndedNotification = serde_json::from_value(params)?;
+    let legacy: ContextCompactedNotification = serde_json::from_value(params)?;
     Ok(legacy)
 }
 
