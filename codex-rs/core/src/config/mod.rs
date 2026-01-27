@@ -1355,15 +1355,15 @@ impl Config {
             || cfg.sandbox_mode.is_some();
 
         let mut model_providers = built_in_model_providers();
+        // Merge user-defined providers into the built-in list.
+        for (key, provider) in cfg.model_providers.into_iter() {
+            model_providers.insert(key, provider);
+        }
         if features.enabled(Feature::ResponsesWebsockets)
             && let Some(provider) = model_providers.get_mut("openai")
             && provider.is_openai()
         {
             provider.wire_api = crate::model_provider_info::WireApi::ResponsesWebsocket;
-        }
-        // Merge user-defined providers into the built-in list.
-        for (key, provider) in cfg.model_providers.into_iter() {
-            model_providers.entry(key).or_insert(provider);
         }
 
         let model_provider_id = model_provider
@@ -2525,6 +2525,33 @@ profile = "project"
         assert_eq!(
             config.model_provider.wire_api,
             crate::model_provider_info::WireApi::ResponsesWebsocket
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn config_overrides_openai_base_url() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let mut provider = built_in_model_providers()
+            .get("openai")
+            .expect("openai provider should exist")
+            .clone();
+        provider.base_url = Some("https://us.api.openai.com/v1".to_string());
+        let cfg = ConfigToml {
+            model_providers: HashMap::from([("openai".to_string(), provider)]),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.model_provider.base_url.as_deref(),
+            Some("https://us.api.openai.com/v1")
         );
 
         Ok(())
