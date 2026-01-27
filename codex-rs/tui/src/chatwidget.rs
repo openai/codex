@@ -680,6 +680,16 @@ impl ChatWidget {
             .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
     }
 
+    fn set_running_optimistically(&mut self) {
+        if self.agent_turn_running {
+            return;
+        }
+        self.agent_turn_running = true;
+        self.update_task_running_state();
+        self.bottom_pane.set_interrupt_hint_visible(true);
+        self.request_redraw();
+    }
+
     fn restore_reasoning_status_header(&mut self) {
         if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
             self.set_status_header(header);
@@ -2443,6 +2453,7 @@ impl ChatWidget {
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
                         self.set_status_header(String::from("Working"));
+                        self.set_running_optimistically();
                         self.submit_user_message(user_message);
                     } else {
                         self.queue_user_message(user_message);
