@@ -34,6 +34,16 @@ const PERSONALITY_PRAGMATIC: &str = include_str!("../../templates/personalities/
 
 pub(crate) const CONTEXT_WINDOW_272K: i64 = 272_000;
 
+fn gpt_5_2_codex_personality_template() -> ModelInstructionsTemplate {
+    ModelInstructionsTemplate {
+        template: GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string(),
+        personality_messages: Some(PersonalityMessages(BTreeMap::from([
+            (Personality::Friendly, PERSONALITY_FRIENDLY.to_string()),
+            (Personality::Pragmatic, PERSONALITY_PRAGMATIC.to_string()),
+        ]))),
+    }
+}
+
 macro_rules! model_info {
     (
         $slug:expr $(, $key:ident : $value:expr )* $(,)?
@@ -169,16 +179,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model_info!(
             slug,
             base_instructions: GPT_5_2_CODEX_INSTRUCTIONS.to_string(),
-            model_instructions_template: Some(ModelInstructionsTemplate {
-                template: GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string(),
-                personality_messages: Some(PersonalityMessages(BTreeMap::from([(
-                    Personality::Friendly,
-                    PERSONALITY_FRIENDLY.to_string(),
-                ), (
-                    Personality::Pragmatic,
-                    PERSONALITY_PRAGMATIC.to_string(),
-                )]))),
-            }),
+            model_instructions_template: Some(gpt_5_2_codex_personality_template()),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,
@@ -205,6 +206,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model_info!(
             slug,
             base_instructions: GPT_5_2_CODEX_INSTRUCTIONS.to_string(),
+            model_instructions_template: Some(gpt_5_2_codex_personality_template()),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,

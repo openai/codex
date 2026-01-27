@@ -755,6 +755,7 @@ impl ChatWidget {
         self.refresh_model_display();
         self.sync_personality_command_enabled();
         self.schedule_personality_nudge_if_needed();
+        self.maybe_show_pending_personality_nudge();
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -2438,50 +2439,57 @@ impl ChatWidget {
                     self.request_redraw();
                 }
             }
-            _ => match self.bottom_pane.handle_key_event(key_event) {
-                InputResult::Submitted {
-                    text,
-                    text_elements,
-                } => {
-                    let user_message = UserMessage {
+            _ => {
+                let had_modal_or_popup = !self.bottom_pane.no_modal_or_popup_active();
+                let input_result = self.bottom_pane.handle_key_event(key_event);
+                if had_modal_or_popup && self.bottom_pane.no_modal_or_popup_active() {
+                    self.on_bottom_pane_view_closed();
+                }
+                match input_result {
+                    InputResult::Submitted {
                         text,
-                        local_images: self
-                            .bottom_pane
-                            .take_recent_submission_images_with_placeholders(),
                         text_elements,
-                    };
-                    if self.is_session_configured() {
-                        // Submitted is only emitted when steer is enabled (Enter sends immediately).
-                        // Reset any reasoning header only when we are actually submitting a turn.
-                        self.reasoning_buffer.clear();
-                        self.full_reasoning_buffer.clear();
-                        self.set_status_header(String::from("Working"));
-                        self.submit_user_message(user_message);
-                    } else {
+                    } => {
+                        let user_message = UserMessage {
+                            text,
+                            local_images: self
+                                .bottom_pane
+                                .take_recent_submission_images_with_placeholders(),
+                            text_elements,
+                        };
+                        if self.is_session_configured() {
+                            // Submitted is only emitted when steer is enabled (Enter sends immediately).
+                            // Reset any reasoning header only when we are actually submitting a turn.
+                            self.reasoning_buffer.clear();
+                            self.full_reasoning_buffer.clear();
+                            self.set_status_header(String::from("Working"));
+                            self.submit_user_message(user_message);
+                        } else {
+                            self.queue_user_message(user_message);
+                        }
+                    }
+                    InputResult::Queued {
+                        text,
+                        text_elements,
+                    } => {
+                        let user_message = UserMessage {
+                            text,
+                            local_images: self
+                                .bottom_pane
+                                .take_recent_submission_images_with_placeholders(),
+                            text_elements,
+                        };
                         self.queue_user_message(user_message);
                     }
+                    InputResult::Command(cmd) => {
+                        self.dispatch_command(cmd);
+                    }
+                    InputResult::CommandWithArgs(cmd, args) => {
+                        self.dispatch_command_with_args(cmd, args);
+                    }
+                    InputResult::None => {}
                 }
-                InputResult::Queued {
-                    text,
-                    text_elements,
-                } => {
-                    let user_message = UserMessage {
-                        text,
-                        local_images: self
-                            .bottom_pane
-                            .take_recent_submission_images_with_placeholders(),
-                        text_elements,
-                    };
-                    self.queue_user_message(user_message);
-                }
-                InputResult::Command(cmd) => {
-                    self.dispatch_command(cmd);
-                }
-                InputResult::CommandWithArgs(cmd, args) => {
-                    self.dispatch_command_with_args(cmd, args);
-                }
-                InputResult::None => {}
-            },
+            }
         }
     }
 
@@ -3361,6 +3369,20 @@ impl ChatWidget {
         self.maybe_show_pending_personality_nudge();
     }
 
+    fn on_bottom_pane_view_closed(&mut self) {
+        if matches!(self.personality_nudge, PersonalityNudgeState::Pending) {
+            self.maybe_show_pending_personality_nudge();
+            return;
+        }
+        if matches!(self.personality_nudge, PersonalityNudgeState::Shown)
+            && !self.personality_nudge_hidden()
+            && self.config.model_personality.is_none()
+        {
+            // Allow the nudge to re-trigger on future model switches after Esc dismissal.
+            self.personality_nudge = PersonalityNudgeState::Idle;
+        }
+    }
+
     fn maybe_show_pending_rate_limit_prompt(&mut self) {
         if self.rate_limit_switch_prompt_hidden() {
             self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
@@ -3487,18 +3509,21 @@ impl ChatWidget {
             self.personality_nudge = PersonalityNudgeState::Idle;
             return;
         }
+        if !self.bottom_pane.no_modal_or_popup_active() {
+            return;
+        }
 
         self.open_personality_nudge();
         self.personality_nudge = PersonalityNudgeState::Shown;
-        self.app_event_tx
-            .send(AppEvent::UpdatePersonalityNudgeHidden(true));
-        self.app_event_tx
-            .send(AppEvent::PersistPersonalityNudgeHidden);
     }
 
     fn open_personality_nudge(&mut self) {
         let choose_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
             tx.send(AppEvent::OpenPersonalityPopup);
+        })];
+        let not_now_actions: Vec<SelectionAction> = vec![Box::new(|tx| {
+            tx.send(AppEvent::UpdatePersonalityNudgeHidden(true));
+            tx.send(AppEvent::PersistPersonalityNudgeHidden);
         })];
         let items = vec![
             SelectionItem {
@@ -3511,6 +3536,7 @@ impl ChatWidget {
             SelectionItem {
                 name: "Not now".to_string(),
                 description: Some("You can run /personality any time.".to_string()),
+                actions: not_now_actions,
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -4892,6 +4918,7 @@ impl ChatWidget {
         self.refresh_model_display();
         self.sync_personality_command_enabled();
         self.schedule_personality_nudge_if_needed();
+        self.maybe_show_pending_personality_nudge();
     }
 
     pub(crate) fn current_model(&self) -> &str {
@@ -4910,17 +4937,8 @@ impl ChatWidget {
     }
 
     fn current_model_supports_personality(&self) -> bool {
-        let model = self.current_model();
         self.models_manager
-            .try_list_models(&self.config)
-            .ok()
-            .and_then(|models| {
-                models
-                    .into_iter()
-                    .find(|preset| preset.model == model)
-                    .map(|preset| preset.supports_personality)
-            })
-            .unwrap_or(false)
+            .supports_personality(self.current_model(), &self.config)
     }
 
     #[allow(dead_code)] // Used in tests

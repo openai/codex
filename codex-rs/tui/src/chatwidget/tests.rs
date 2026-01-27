@@ -1169,14 +1169,12 @@ async fn personality_nudge_shows_once_and_hides_after_seen() {
     chat.handle_codex_event(session_configured_event_for("bengalfox"));
     assert!(matches!(
         chat.personality_nudge,
-        PersonalityNudgeState::Pending
-    ));
-
-    chat.maybe_show_post_turn_nudges();
-    assert!(matches!(
-        chat.personality_nudge,
         PersonalityNudgeState::Shown
     ));
+
+    // Select "Not now" to persist the hide flag.
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let mut saw_update = false;
     let mut saw_persist = false;
@@ -1196,6 +1194,75 @@ async fn personality_nudge_shows_once_and_hides_after_seen() {
     assert!(matches!(
         chat.personality_nudge,
         PersonalityNudgeState::Idle
+    ));
+}
+
+#[tokio::test]
+async fn personality_nudge_escape_does_not_persist_hidden() {
+    let (mut chat, mut rx, _) = make_chatwidget_manual(Some("bengalfox")).await;
+
+    chat.handle_codex_event(session_configured_event_for("bengalfox"));
+    assert!(matches!(
+        chat.personality_nudge,
+        PersonalityNudgeState::Shown
+    ));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+    let mut saw_update = false;
+    let mut saw_persist = false;
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::UpdatePersonalityNudgeHidden(true) => saw_update = true,
+            AppEvent::PersistPersonalityNudgeHidden => saw_persist = true,
+            _ => {}
+        }
+    }
+
+    assert!(!saw_update, "Esc should not hide the personality nudge");
+    assert!(
+        !saw_persist,
+        "Esc should not persist the personality nudge hide flag"
+    );
+    assert_eq!(chat.config.notices.hide_personality_nudge, None);
+    assert!(matches!(
+        chat.personality_nudge,
+        PersonalityNudgeState::Idle
+    ));
+}
+
+#[tokio::test]
+async fn gpt_52_codex_supports_personality_command() {
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    assert!(chat.current_model_supports_personality());
+}
+
+#[tokio::test]
+async fn personality_nudge_shows_on_model_switch_after_escape() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
+
+    chat.handle_codex_event(session_configured_event_for("bengalfox"));
+    assert!(matches!(
+        chat.personality_nudge,
+        PersonalityNudgeState::Shown
+    ));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
+    assert!(matches!(
+        chat.personality_nudge,
+        PersonalityNudgeState::Idle
+    ));
+
+    chat.set_model("gpt-5");
+    assert!(matches!(
+        chat.personality_nudge,
+        PersonalityNudgeState::Idle
+    ));
+
+    chat.set_model("bengalfox");
+    assert!(matches!(
+        chat.personality_nudge,
+        PersonalityNudgeState::Shown
     ));
 }
 
@@ -2485,6 +2552,7 @@ async fn collab_mode_enabling_keeps_custom_until_selected() {
 async fn user_turn_includes_personality_from_config() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
     chat.thread_id = Some(ThreadId::new());
+    chat.set_personality_nudge_hidden(true);
     chat.set_model("bengalfox");
     chat.set_personality(Personality::Friendly);
 
@@ -3058,7 +3126,6 @@ async fn personality_selection_popup_snapshot() {
 async fn personality_nudge_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("bengalfox")).await;
     chat.handle_codex_event(session_configured_event_for("bengalfox"));
-    chat.maybe_show_post_turn_nudges();
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("personality_nudge_popup", popup);

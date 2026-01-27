@@ -103,6 +103,38 @@ impl ModelsManager {
         Ok(self.build_available_models(remote_models))
     }
 
+    /// Determine whether a model supports personalities, with a local fallback when
+    /// remote metadata omits the instructions template.
+    pub fn supports_personality(&self, model: &str, config: &Config) -> bool {
+        let remote_supports = self
+            .try_get_remote_models(config)
+            .ok()
+            .and_then(|remote_models| remote_models.into_iter().find(|info| info.slug == model))
+            .is_some_and(|info| info.supports_personality());
+        if remote_supports {
+            return true;
+        }
+
+        if self
+            .local_models
+            .iter()
+            .find(|preset| preset.model == model)
+            .is_some_and(|preset| preset.supports_personality)
+        {
+            return true;
+        }
+
+        self.try_list_models(config)
+            .ok()
+            .and_then(|models| {
+                models
+                    .into_iter()
+                    .find(|preset| preset.model == model)
+                    .map(|preset| preset.supports_personality)
+            })
+            .unwrap_or(false)
+    }
+
     // todo(aibrahim): should be visible to core only and sent on session_configured event
     /// Get the model identifier to use, refreshing according to the specified strategy.
     ///
@@ -136,15 +168,19 @@ impl ModelsManager {
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
+        let local = model_info::find_model_info_for_slug(model);
         let remote = self
             .get_remote_models(config)
             .await
             .into_iter()
             .find(|m| m.slug == model);
-        let model = if let Some(remote) = remote {
+        let model = if let Some(mut remote) = remote {
+            if !remote.supports_personality() && local.supports_personality() {
+                remote.model_instructions_template = local.model_instructions_template.clone();
+            }
             remote
         } else {
-            model_info::find_model_info_for_slug(model)
+            local
         };
         model_info::with_config_overrides(model, config)
     }
@@ -365,6 +401,7 @@ mod tests {
     use crate::features::Feature;
     use crate::model_provider_info::WireApi;
     use chrono::Utc;
+    use codex_protocol::openai_models::ModelInstructionsTemplate;
     use codex_protocol::openai_models::ModelsResponse;
     use core_test_support::responses::mount_models_once;
     use pretty_assertions::assert_eq;
@@ -697,6 +734,34 @@ mod tests {
         let available = manager.build_available_models(vec![hidden_model, visible_model]);
 
         assert_eq!(available, vec![expected_hidden, expected_visible]);
+    }
+
+    #[tokio::test]
+    async fn supports_personality_falls_back_to_local_presets() {
+        let codex_home = tempdir().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        config.features.enable(Feature::RemoteModels);
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let provider = provider_for("http://example.test".to_string());
+        let manager =
+            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
+
+        // Remote metadata without personality messages should not disable local support.
+        let mut remote = remote_model("gpt-5.2-codex", "Remote gpt-5.2-codex", 0);
+        remote.model_instructions_template = Some(ModelInstructionsTemplate {
+            template: "{{ personality_message }}".to_string(),
+            personality_messages: None,
+        });
+        *manager.remote_models.write().await = vec![remote];
+
+        assert!(manager.supports_personality("gpt-5.2-codex", &config));
+        let model = manager.get_model_info("gpt-5.2-codex", &config).await;
+        assert!(model.supports_personality());
     }
 
     #[test]
