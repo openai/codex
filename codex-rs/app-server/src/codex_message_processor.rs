@@ -1914,7 +1914,7 @@ impl CodexMessageProcessor {
             personality,
         } = params;
 
-        let thread_history = if let Some(history) = history {
+        let mut thread_history = if let Some(history) = history {
             if history.is_empty() {
                 self.send_invalid_request_error(
                     request_id,
@@ -1987,6 +1987,24 @@ impl CodexMessageProcessor {
                 }
             }
         };
+
+        let has_request_overrides = request_overrides
+            .as_ref()
+            .is_some_and(|overrides| !overrides.is_empty());
+
+        let has_resume_overrides = model.is_some()
+            || model_provider.is_some()
+            || cwd.is_some()
+            || approval_policy.is_some()
+            || sandbox.is_some()
+            || has_request_overrides
+            || base_instructions.is_some()
+            || developer_instructions.is_some()
+            || personality.is_some();
+
+        if !has_resume_overrides && let InitialHistory::Resumed(resumed) = &mut thread_history {
+            resumed.persist_initial_context = false;
+        }
 
         let history_cwd = thread_history.session_cwd();
         let typesafe_overrides = self.build_thread_config_overrides(

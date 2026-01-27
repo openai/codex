@@ -934,12 +934,14 @@ impl Session {
                 // Ensure initial items are visible to immediate readers (e.g., tests, forks).
                 self.flush_rollout().await;
             }
-            InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
-                let rollout_items = conversation_history.get_rollout_items();
-                let persist = matches!(conversation_history, InitialHistory::Forked(_));
+            InitialHistory::Resumed(resumed_history) => {
+                let rollout_items = resumed_history.history;
+                let persist_rollout_items = false;
+                let persist_initial_context = resumed_history.persist_initial_context;
+                let is_resumed = true;
 
                 // If resuming, warn when the last recorded model differs from the current one.
-                if let InitialHistory::Resumed(_) = conversation_history
+                if is_resumed
                     && let Some(prev) = rollout_items.iter().rev().find_map(|it| {
                         if let RolloutItem::TurnContext(ctx) = it {
                             Some(ctx.model.as_str())
@@ -983,7 +985,41 @@ impl Session {
                 }
 
                 // If persisting, persist all rollout items as-is (recorder filters)
-                if persist && !rollout_items.is_empty() {
+                if persist_rollout_items && !rollout_items.is_empty() {
+                    self.persist_rollout_items(&rollout_items).await;
+                }
+
+                // Append the current session's initial context after the reconstructed history.
+                let initial_context = self.build_initial_context(&turn_context).await;
+                if persist_initial_context {
+                    self.record_conversation_items(&turn_context, &initial_context)
+                        .await;
+                } else {
+                    self.record_into_history(&initial_context, &turn_context)
+                        .await;
+                }
+                // Flush after seeding history and any persisted rollout copy.
+                self.flush_rollout().await;
+            }
+            InitialHistory::Forked(rollout_items) => {
+                // Always add response items to conversation history
+                let reconstructed_history = self
+                    .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+                    .await;
+                if !reconstructed_history.is_empty() {
+                    self.record_into_history(&reconstructed_history, &turn_context)
+                        .await;
+                }
+
+                // Seed usage info from the recorded rollout so UIs can show token counts
+                // immediately on resume/fork.
+                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
+                    let mut state = self.state.lock().await;
+                    state.set_token_info(Some(info));
+                }
+
+                // If persisting, persist all rollout items as-is (recorder filters)
+                if !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
                 }
 
@@ -3727,6 +3763,7 @@ mod tests {
                 conversation_id: ThreadId::default(),
                 history: rollout_items,
                 rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+                persist_initial_context: true,
             }))
             .await;
 
@@ -3805,6 +3842,7 @@ mod tests {
                 conversation_id: ThreadId::default(),
                 history: rollout_items,
                 rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+                persist_initial_context: true,
             }))
             .await;
 

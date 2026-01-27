@@ -349,6 +349,7 @@ impl RolloutRecorder {
             conversation_id,
             history: items,
             rollout_path: path.to_path_buf(),
+            persist_initial_context: true,
         }))
     }
 

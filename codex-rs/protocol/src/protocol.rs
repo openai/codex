@@ -1418,6 +1418,11 @@ pub struct ResumedHistory {
     pub conversation_id: ThreadId,
     pub history: Vec<RolloutItem>,
     pub rollout_path: PathBuf,
+    /// Whether to persist the initial context when resuming this rollout.
+    ///
+    /// Defaults to true to preserve existing behavior for older serialized data.
+    #[serde(default = "resumed_history_default_persist_initial_context")]
+    pub persist_initial_context: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -1501,6 +1506,10 @@ impl InitialHistory {
             }),
         }
     }
+}
+
+fn resumed_history_default_persist_initial_context() -> bool {
+    true
 }
 
 fn session_cwd_from_items(items: &[RolloutItem]) -> Option<PathBuf> {
