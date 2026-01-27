@@ -54,6 +54,7 @@ use codex_exec::exec_events::TurnStartedEvent;
 use codex_exec::exec_events::Usage;
 use codex_exec::exec_events::WebSearchItem;
 use codex_protocol::ThreadId;
+use codex_protocol::models::WebSearchAction;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -124,11 +125,15 @@ fn task_started_produces_turn_started_event() {
 fn web_search_end_emits_item_completed() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
     let query = "rust async await".to_string();
+    let action = WebSearchAction::Search {
+        query: Some(query.clone()),
+    };
     let out = ep.collect_thread_events(&event(
         "w1",
         EventMsg::WebSearchEnd(WebSearchEndEvent {
             call_id: "call-123".to_string(),
             query: query.clone(),
+            action: action.clone(),
         }),
     ));
 
@@ -137,7 +142,11 @@ fn web_search_end_emits_item_completed() {
         vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
             item: ThreadItem {
                 id: "item_0".to_string(),
-                details: ThreadItemDetails::WebSearch(WebSearchItem { query }),
+                details: ThreadItemDetails::WebSearch(WebSearchItem {
+                    id: "call-123".to_string(),
+                    query,
+                    action,
+                }),
             },
         })]
     );

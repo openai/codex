@@ -10,6 +10,7 @@ use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::models::WebSearchAction;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 
@@ -138,6 +139,49 @@ fn filters_non_api_messages() {
             }
         ]
     );
+}
+
+#[test]
+fn filters_partial_web_search_calls() {
+    let mut history = ContextManager::default();
+    let policy = TruncationPolicy::Tokens(10_000);
+    let partial = ResponseItem::WebSearchCall {
+        id: Some("ws_partial".to_string()),
+        status: Some("in_progress".to_string()),
+        action: None,
+    };
+    let complete = ResponseItem::WebSearchCall {
+        id: Some("ws_complete".to_string()),
+        status: Some("completed".to_string()),
+        action: Some(WebSearchAction::Search {
+            query: Some("weather".to_string()),
+        }),
+    };
+
+    history.record_items([&partial, &complete], policy);
+
+    let expected = vec![complete];
+    assert_eq!(history.raw_items(), expected.as_slice());
+}
+
+#[test]
+fn for_prompt_drops_partial_web_search_calls() {
+    let partial = ResponseItem::WebSearchCall {
+        id: Some("ws_partial".to_string()),
+        status: Some("in_progress".to_string()),
+        action: None,
+    };
+    let complete = ResponseItem::WebSearchCall {
+        id: Some("ws_complete".to_string()),
+        status: Some("completed".to_string()),
+        action: Some(WebSearchAction::Search {
+            query: Some("weather".to_string()),
+        }),
+    };
+    let mut history = ContextManager::new();
+    history.replace(vec![partial, complete.clone()]);
+
+    assert_eq!(history.for_prompt(), vec![complete]);
 }
 
 #[test]

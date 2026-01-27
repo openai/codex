@@ -75,6 +75,8 @@ impl ContextManager {
         self.items
             .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
         self.items
+            .retain(|item| !matches!(item, ResponseItem::WebSearchCall { action: None, .. }));
+        self.items
     }
 
     /// Returns raw items in the history.
@@ -307,17 +309,17 @@ impl ContextManager {
 }
 
 /// API messages include every non-system item (user/assistant messages, reasoning,
-/// tool calls, tool outputs, shell calls, and web-search calls).
+/// tool calls, tool outputs, shell calls, and complete web-search calls).
 fn is_api_message(message: &ResponseItem) -> bool {
     match message {
         ResponseItem::Message { role, .. } => role.as_str() != "system",
+        ResponseItem::WebSearchCall { action, .. } => action.is_some(),
         ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Reasoning { .. }
-        | ResponseItem::WebSearchCall { .. }
         | ResponseItem::Compaction { .. } => true,
         ResponseItem::GhostSnapshot { .. } => false,
         ResponseItem::Other => false,

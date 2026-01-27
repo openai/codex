@@ -49,6 +49,7 @@ use codex_core::protocol::CollabCloseBeginEvent;
 use codex_core::protocol::CollabCloseEndEvent;
 use codex_core::protocol::CollabWaitingBeginEvent;
 use codex_core::protocol::CollabWaitingEndEvent;
+use codex_protocol::models::WebSearchAction;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use serde_json::Value as JsonValue;
@@ -66,6 +67,7 @@ pub struct EventProcessorWithJsonOutput {
     last_total_token_usage: Option<codex_core::protocol::TokenUsage>,
     running_mcp_tool_calls: HashMap<String, RunningMcpToolCall>,
     running_collab_tool_calls: HashMap<String, RunningCollabToolCall>,
+    running_web_search_calls: HashMap<String, String>,
     last_critical_error: Option<ThreadErrorEvent>,
 }
 
@@ -107,6 +109,7 @@ impl EventProcessorWithJsonOutput {
             last_total_token_usage: None,
             running_mcp_tool_calls: HashMap::new(),
             running_collab_tool_calls: HashMap::new(),
+            running_web_search_calls: HashMap::new(),
             last_critical_error: None,
         }
     }
@@ -138,7 +141,7 @@ impl EventProcessorWithJsonOutput {
             protocol::EventMsg::CollabCloseEnd(ev) => self.handle_collab_close_end(ev),
             protocol::EventMsg::PatchApplyBegin(ev) => self.handle_patch_apply_begin(ev),
             protocol::EventMsg::PatchApplyEnd(ev) => self.handle_patch_apply_end(ev),
-            protocol::EventMsg::WebSearchBegin(_) => Vec::new(),
+            protocol::EventMsg::WebSearchBegin(ev) => self.handle_web_search_begin(ev),
             protocol::EventMsg::WebSearchEnd(ev) => self.handle_web_search_end(ev),
             protocol::EventMsg::TokenCount(ev) => {
                 if let Some(info) = &ev.info {
@@ -195,11 +198,36 @@ impl EventProcessorWithJsonOutput {
         })]
     }
 
-    fn handle_web_search_end(&self, ev: &protocol::WebSearchEndEvent) -> Vec<ThreadEvent> {
+    fn handle_web_search_begin(&mut self, ev: &protocol::WebSearchBeginEvent) -> Vec<ThreadEvent> {
+        if self.running_web_search_calls.contains_key(&ev.call_id) {
+            return Vec::new();
+        }
+        let item_id = self.get_next_item_id();
+        self.running_web_search_calls
+            .insert(ev.call_id.clone(), item_id.clone());
         let item = ThreadItem {
-            id: self.get_next_item_id(),
+            id: item_id,
             details: ThreadItemDetails::WebSearch(WebSearchItem {
+                id: ev.call_id.clone(),
+                query: String::new(),
+                action: WebSearchAction::Other,
+            }),
+        };
+
+        vec![ThreadEvent::ItemStarted(ItemStartedEvent { item })]
+    }
+
+    fn handle_web_search_end(&mut self, ev: &protocol::WebSearchEndEvent) -> Vec<ThreadEvent> {
+        let item_id = self
+            .running_web_search_calls
+            .remove(&ev.call_id)
+            .unwrap_or_else(|| self.get_next_item_id());
+        let item = ThreadItem {
+            id: item_id,
+            details: ThreadItemDetails::WebSearch(WebSearchItem {
+                id: ev.call_id.clone(),
                 query: ev.query.clone(),
+                action: ev.action.clone(),
             }),
         };
 

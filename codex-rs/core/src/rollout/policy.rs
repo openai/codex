@@ -19,6 +19,7 @@ pub(crate) fn is_persisted_response_item(item: &RolloutItem) -> bool {
 #[inline]
 pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
     match item {
+        ResponseItem::WebSearchCall { action, .. } => action.is_some(),
         ResponseItem::Message { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
@@ -26,7 +27,6 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
-        | ResponseItem::WebSearchCall { .. }
         | ResponseItem::GhostSnapshot { .. }
         | ResponseItem::Compaction { .. } => true,
         ResponseItem::Other => false,
@@ -101,5 +101,31 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::CollabWaitingEnd(_)
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabCloseEnd(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_persist_response_item;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::models::WebSearchAction;
+
+    #[test]
+    fn web_search_calls_require_actions_to_persist() {
+        let partial = ResponseItem::WebSearchCall {
+            id: Some("ws_partial".to_string()),
+            status: Some("in_progress".to_string()),
+            action: None,
+        };
+        let complete = ResponseItem::WebSearchCall {
+            id: Some("ws_complete".to_string()),
+            status: Some("completed".to_string()),
+            action: Some(WebSearchAction::Search {
+                query: Some("weather".to_string()),
+            }),
+        };
+
+        assert!(!should_persist_response_item(&partial));
+        assert!(should_persist_response_item(&complete));
     }
 }

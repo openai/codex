@@ -1288,9 +1288,9 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     prompt.input.push(ResponseItem::WebSearchCall {
         id: Some("web-search-id".into()),
         status: Some("completed".into()),
-        action: WebSearchAction::Search {
+        action: Some(WebSearchAction::Search {
             query: Some("weather".into()),
-        },
+        }),
     });
     prompt.input.push(ResponseItem::FunctionCall {
         id: Some("function-id".into()),

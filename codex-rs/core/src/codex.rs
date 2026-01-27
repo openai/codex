@@ -3437,10 +3437,8 @@ async fn try_run_sampling_request(
             }
             ResponseEvent::OutputItemAdded(item) => {
                 if let Some(turn_item) = handle_non_tool_response_item(&item).await {
-                    let tracked_item = turn_item.clone();
                     sess.emit_turn_item_started(&turn_context, &turn_item).await;
-
-                    active_item = Some(tracked_item);
+                    active_item = Some(turn_item);
                 }
             }
             ResponseEvent::ServerReasoningIncluded(included) => {
