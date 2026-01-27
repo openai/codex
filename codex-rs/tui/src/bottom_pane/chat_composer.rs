@@ -2174,23 +2174,21 @@ impl ChatComposer {
     /// modes (Esc hint, overlay, quit reminder) can override that base when
     /// their conditions are active.
     fn footer_mode(&self) -> FooterMode {
-        let base = if self.is_empty() {
+        let base_mode = if self.is_empty() {
             FooterMode::ComposerEmpty
         } else {
             FooterMode::ComposerHasDraft
         };
 
-        if matches!(self.footer_mode, FooterMode::EscHint) && self.is_empty() {
-            return FooterMode::EscHint;
+        match self.footer_mode {
+            FooterMode::EscHint => FooterMode::EscHint,
+            FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
+            FooterMode::QuitShortcutReminder if self.quit_shortcut_hint_visible() => {
+                FooterMode::QuitShortcutReminder
+            }
+            FooterMode::QuitShortcutReminder => base_mode,
+            FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft => base_mode,
         }
-        if matches!(self.footer_mode, FooterMode::ShortcutOverlay) && self.is_empty() {
-            return FooterMode::ShortcutOverlay;
-        }
-        if self.quit_shortcut_hint_visible() {
-            return FooterMode::QuitShortcutReminder;
-        }
-
-        base
     }
 
     fn custom_footer_height(&self) -> Option<u16> {
