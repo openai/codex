@@ -412,7 +412,7 @@ impl RequestUserInputOverlay {
         }
     }
 
-    /// Count freeform-only questions that have no notes.
+    /// Count questions that would submit an empty answer list.
     fn unanswered_count(&self) -> usize {
         let current_text = self.composer.current_text();
         self.request
@@ -421,16 +421,22 @@ impl RequestUserInputOverlay {
             .enumerate()
             .filter(|(idx, question)| {
                 let answer = &self.answers[*idx];
-                let options = question.options.as_ref();
-                if options.is_some_and(|opts| !opts.is_empty()) {
-                    false
+                let notes = if *idx == self.current_index() {
+                    current_text.as_str()
                 } else {
-                    let notes = if *idx == self.current_index() {
-                        current_text.as_str()
-                    } else {
-                        answer.draft.text.as_str()
-                    };
-                    notes.trim().is_empty()
+                    answer.draft.text.as_str()
+                };
+                let notes_empty = notes.trim().is_empty();
+                let has_options = question
+                    .options
+                    .as_ref()
+                    .is_some_and(|options| !options.is_empty());
+
+                if has_options {
+                    let selected_idx = answer.selected.or(answer.option_state.selected_idx);
+                    selected_idx.is_none() && notes_empty
+                } else {
+                    notes_empty
                 }
             })
             .count()
@@ -808,6 +814,36 @@ mod tests {
     }
 
     #[test]
+    fn skipped_option_questions_count_as_unanswered() {
+        let (tx, _rx) = test_sender();
+        let overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        assert_eq!(overlay.unanswered_count(), 1);
+    }
+
+    #[test]
+    fn highlighted_option_questions_are_not_unanswered() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let answer = overlay.current_answer_mut().expect("answer missing");
+        answer.option_state.selected_idx = Some(0);
+
+        assert_eq!(overlay.unanswered_count(), 0);
+    }
+
+    #[test]
     fn freeform_questions_submit_empty_when_empty() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
@@ -916,7 +952,7 @@ mod tests {
             false,
             false,
         );
-        let area = Rect::new(0, 0, 120, 8);
+        let area = Rect::new(0, 0, 120, 10);
         insta::assert_snapshot!(
             "request_user_input_tight_height",
             render_snapshot(&overlay, area)
@@ -952,7 +988,7 @@ mod tests {
     #[test]
     fn request_user_input_wrapped_options_snapshot() {
         let (tx, _rx) = test_sender();
-        let overlay = RequestUserInputOverlay::new(
+        let mut overlay = RequestUserInputOverlay::new(
             request_event(
                 "turn-1",
                 vec![question_with_wrapped_options("q1", "Next Step")],
@@ -963,13 +999,19 @@ mod tests {
             false,
         );
 
-        let width = 52u16;
+        {
+            let answer = overlay.current_answer_mut().expect("answer missing");
+            answer.option_state.selected_idx = Some(0);
+            answer.selected = Some(0);
+        }
+
+        let width = 110u16;
         let question_height = overlay.wrapped_question_lines(width).len() as u16;
         let options_height = overlay.options_required_height(width);
         let height = 1u16
             .saturating_add(question_height)
             .saturating_add(options_height)
-            .saturating_add(4);
+            .saturating_add(8);
         let area = Rect::new(0, 0, width, height);
         insta::assert_snapshot!(
             "request_user_input_wrapped_options",
@@ -1022,7 +1064,7 @@ mod tests {
             answer.option_state.selected_idx = Some(3);
             answer.selected = Some(3);
         }
-        let area = Rect::new(0, 0, 120, 10);
+        let area = Rect::new(0, 0, 120, 12);
         insta::assert_snapshot!(
             "request_user_input_scrolling_options",
             render_snapshot(&overlay, area)
@@ -1062,7 +1104,7 @@ mod tests {
             false,
             false,
         );
-        let area = Rect::new(0, 0, 120, 12);
+        let area = Rect::new(0, 0, 120, 14);
         insta::assert_snapshot!(
             "request_user_input_multi_question_first",
             render_snapshot(&overlay, area)
