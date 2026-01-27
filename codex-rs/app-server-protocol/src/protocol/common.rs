@@ -121,6 +121,10 @@ client_request_definitions! {
         params: v2::ThreadRollbackParams,
         response: v2::ThreadRollbackResponse,
     },
+    ThreadCompact => "thread/compact" {
+        params: v2::ThreadCompactParams,
+        response: v2::ThreadCompactResponse,
+    },
     ThreadList => "thread/list" {
         params: v2::ThreadListParams,
         response: v2::ThreadListResponse,
