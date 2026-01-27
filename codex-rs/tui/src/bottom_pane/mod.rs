@@ -493,7 +493,7 @@ impl BottomPane {
                 }
                 self.request_redraw();
             }
-        } else {
+        } else if was_running {
             // Hide the status indicator when a task completes, but keep other modal views.
             self.hide_status_indicator();
         }

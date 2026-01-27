@@ -444,6 +444,69 @@ async fn auto_compact_keeps_status_indicator_before_turn_started() {
 }
 
 #[tokio::test]
+async fn late_turn_complete_does_not_hide_pending_status_indicator() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+        }),
+    });
+    assert!(
+        chat.bottom_pane.is_task_running(),
+        "expected task running after TurnStarted"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+    assert!(
+        !chat.bottom_pane.is_task_running(),
+        "expected task running to stop after TurnAborted"
+    );
+
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let _ = next_submit_op(&mut op_rx);
+
+    assert!(
+        chat.bottom_pane.status_indicator_visible(),
+        "expected status indicator to show while waiting for TurnStarted"
+    );
+    assert!(
+        !chat.bottom_pane.is_task_running(),
+        "expected pending submission not to mark task running"
+    );
+    assert_eq!(chat.current_status_header, "Working");
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    assert!(
+        chat.bottom_pane.status_indicator_visible(),
+        "expected status indicator to remain visible after late TurnComplete"
+    );
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("expected status widget");
+    assert!(
+        !status.interrupt_hint_visible(),
+        "expected interrupt hint to stay hidden before TurnStarted"
+    );
+}
+
+#[tokio::test]
 async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
