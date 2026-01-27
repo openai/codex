@@ -20,6 +20,7 @@ use serde::Deserialize;
 use std::collections::HashSet;
 
 pub use crate::runtime::BlockedRequest;
+pub use crate::runtime::BlockedRequestArgs;
 pub use crate::runtime::NetworkProxyState;
 #[cfg(test)]
 pub(crate) use crate::runtime::network_proxy_state_for_policy;

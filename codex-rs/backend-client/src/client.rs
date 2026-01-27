@@ -1,4 +1,5 @@
 use crate::types::CodeTaskDetailsResponse;
+use crate::types::ConfigFileResponse;
 use crate::types::CreditStatusDetails;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitStatusPayload;
@@ -242,6 +243,20 @@ impl Client {
         let req = self.http.get(&url).headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json::<TurnAttemptsSiblingTurnsResponse>(&url, &ct, &body)
+    }
+
+    /// Fetch the managed requirements file from codex-backend.
+    ///
+    /// `GET /api/codex/config/requirements` (Codex API style) or
+    /// `GET /wham/config/requirements` (ChatGPT backend-api style).
+    pub async fn get_config_requirements_file(&self) -> Result<ConfigFileResponse> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/config/requirements", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/config/requirements", self.base_url),
+        };
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request(req, "GET", &url).await?;
+        self.decode_json::<ConfigFileResponse>(&url, &ct, &body)
     }
 
     /// Create a new task (user turn) by POSTing to the appropriate backend path

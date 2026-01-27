@@ -252,6 +252,7 @@ jobs:
           # Path that contains the uncompressed binaries for the current
           # ${{ matrix.target }}
           dest="dist/${{ matrix.target }}"
+          repo_root=$PWD
 
           # We want to ship the raw Windows executables in the GitHub Release
           # in addition to the compressed archives. Keep the originals for
@@ -305,7 +306,7 @@ jobs:
                   cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
                   # Use an absolute path so bundle zips land in the real dist
                   # dir even when 7z runs from a temp directory.
-                  (cd "$bundle_dir" && 7z a "$(pwd)/$dest/${base}.zip" .)
+                  (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)
                 else
                   echo "warning: missing sandbox binaries; falling back to single-binary zip"
                   echo "warning: expected $runner_src and $setup_src"

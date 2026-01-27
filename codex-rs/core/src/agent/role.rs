@@ -44,6 +44,8 @@ pub struct AgentProfile {
     pub reasoning_effort: Option<ReasoningEffort>,
     /// Whether to force a read-only sandbox policy.
     pub read_only: bool,
+    /// Description to include in the tool specs.
+    pub description: &'static str,
 }
 
 impl AgentRole {
@@ -51,7 +53,19 @@ impl AgentRole {
     pub fn enum_values() -> Vec<String> {
         ALL_ROLES
             .iter()
-            .filter_map(|role| serde_json::to_string(role).ok())
+            .filter_map(|role| {
+                let description = role.profile().description;
+                serde_json::to_string(role)
+                    .map(|role| {
+                        let description = if !description.is_empty() {
+                            format!(r#", "description": {description}"#)
+                        } else {
+                            String::new()
+                        };
+                        format!(r#"{{ "name": {role}{description}}}"#)
+                    })
+                    .ok()
+            })
             .collect()
     }
 
@@ -66,11 +80,33 @@ impl AgentRole {
             AgentRole::Worker => AgentProfile {
                 // base_instructions: Some(WORKER_PROMPT),
                 // model: Some(WORKER_MODEL),
+                description: r#"Use for execution and production work.
+Typical tasks:
+- Implement part of a feature
+- Fix tests or bugs
+- Split large refactors into independent chunks
+Rules:
+- Explicitly assign **ownership** of the task (files / responsibility).
+- Always tell workers they are **not alone in the codebase**, and they should ignore edits made by others without touching them"#,
                 ..Default::default()
             },
             AgentRole::Explorer => AgentProfile {
                 model: Some(EXPLORER_MODEL),
                 reasoning_effort: Some(ReasoningEffort::Low),
+                description: r#"Use for fast codebase understanding and information gathering.
+`explorer` are extremely fast agents so use them as much as you can to speed up the resolution of the global task.
+Typical tasks:
+- Locate usages of a symbol or concept
+- Understand how X is handled in Y
+- Review a section of code for issues
+- Assess impact of a potential change
+Rules:
+- Be explicit in what you are looking for. A good usage of `explorer` would mean that don't need to read the same code after the explorer send you the result.
+- **Always** prefer asking explorers rather than exploring the codebase yourself.
+- Spawn multiple explorers in parallel when useful and wait for all results.
+- You can ask the `explorer` to return file name, lines, entire code snippets, ...
+- Reuse the same explorer when it is relevant. If later in your process you have more questions on some code an explorer already covered, reuse this same explorer to be more efficient.
+                "#,
                 ..Default::default()
             },
         }
