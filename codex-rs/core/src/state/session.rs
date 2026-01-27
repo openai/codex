@@ -1,6 +1,7 @@
 //! Session-wide mutable state.
 
 use codex_protocol::models::ResponseItem;
+use std::collections::HashSet;
 
 use crate::codex::SessionConfiguration;
 use crate::context_manager::ContextManager;
@@ -15,6 +16,7 @@ pub(crate) struct SessionState {
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
+    pub(crate) mcp_dependency_prompted: HashSet<String>,
 }
 
 impl SessionState {
@@ -26,6 +28,7 @@ impl SessionState {
             history,
             latest_rate_limits: None,
             server_reasoning_included: false,
+            mcp_dependency_prompted: HashSet::new(),
         }
     }
 
@@ -91,6 +94,17 @@ impl SessionState {
 
     pub(crate) fn server_reasoning_included(&self) -> bool {
         self.server_reasoning_included
+    }
+
+    pub(crate) fn record_mcp_dependency_prompted<I>(&mut self, names: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        self.mcp_dependency_prompted.extend(names);
+    }
+
+    pub(crate) fn mcp_dependency_prompted(&self) -> HashSet<String> {
+        self.mcp_dependency_prompted.clone()
     }
 }
 

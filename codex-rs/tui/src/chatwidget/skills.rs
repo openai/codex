@@ -15,8 +15,10 @@ use crate::skills_helpers::skill_display_name;
 use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
 use codex_core::protocol::SkillsListEntry;
+use codex_core::skills::model::SkillDependencies;
 use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
+use codex_core::skills::model::SkillToolDependency;
 
 impl ChatWidget {
     pub(crate) fn open_skills_list(&mut self) {
@@ -168,6 +170,23 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
             brand_color: interface.brand_color,
             default_prompt: interface.default_prompt,
         }),
+        dependencies: skill
+            .dependencies
+            .clone()
+            .map(|dependencies| SkillDependencies {
+                tools: dependencies
+                    .tools
+                    .into_iter()
+                    .map(|tool| SkillToolDependency {
+                        r#type: tool.r#type,
+                        value: tool.value,
+                        description: tool.description,
+                        transport: tool.transport,
+                        command: tool.command,
+                        url: tool.url,
+                    })
+                    .collect(),
+            }),
         path: skill.path.clone(),
         scope: skill.scope,
     }

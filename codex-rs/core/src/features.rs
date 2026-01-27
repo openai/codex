@@ -103,6 +103,8 @@ pub enum Feature {
     Collab,
     /// Enable connectors (apps).
     Connectors,
+    /// Allow prompting and installing missing MCP dependencies.
+    SkillMcpDependencyInstall,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
@@ -442,6 +444,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "connectors",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SkillMcpDependencyInstall,
+        key: "skill_mcp_dependency_install",
+        stage: Stage::Experimental {
+            name: "MCP dependency install",
+            menu_description: "Prompt to install missing MCP tool dependencies for skills.",
+            announcement: "NEW! Codex can prompt to install missing MCP dependencies. Toggle in /experimental.",
+        },
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Steer,
