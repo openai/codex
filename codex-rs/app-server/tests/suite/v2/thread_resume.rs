@@ -202,6 +202,81 @@ async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -
 }
 
 #[tokio::test]
+async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let preview = "Saved user message";
+    let filename_ts = "2025-01-05T12-00-00";
+    let meta_rfc3339 = "2025-01-05T12:00:00Z";
+    let expected_updated_at_rfc3339 = "2025-01-07T00:00:00Z";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        filename_ts,
+        meta_rfc3339,
+        preview,
+        Vec::new(),
+        Some("mock_provider"),
+        None,
+    )?;
+    let rollout_file_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    set_rollout_mtime(rollout_file_path.as_path(), expected_updated_at_rfc3339)?;
+    let before_modified = std::fs::metadata(&rollout_file_path)?.modified()?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id.clone(),
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    let expected_updated_at = chrono::DateTime::parse_from_rfc3339(expected_updated_at_rfc3339)?
+        .with_timezone(&Utc)
+        .timestamp();
+    assert_eq!(thread.updated_at, expected_updated_at);
+
+    let after_resume_modified = std::fs::metadata(&rollout_file_path)?.modified()?;
+    assert_eq!(after_resume_modified, before_modified);
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: conversation_id,
+            input: vec![UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let after_turn_modified = std::fs::metadata(&rollout_file_path)?.modified()?;
+    assert!(after_turn_modified > before_modified);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

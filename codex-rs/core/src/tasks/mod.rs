@@ -115,6 +115,8 @@ impl Session {
         task: T,
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
+        self.seed_initial_context_if_needed(turn_context.as_ref())
+            .await;
 
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
