@@ -291,7 +291,7 @@ pub fn process_responses_event(
                 if let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) {
                     return Ok(Some(ResponseEvent::OutputItemAdded(item)));
                 }
-                debug!("failed to parse ResponseItem from output_item.done");
+                debug!("failed to parse ResponseItem from output_item.added");
             }
         }
         "response.reasoning_summary_part.added" => {

@@ -464,8 +464,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
-    #[cfg(target_os = "linux")]
-    use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
     use std::process::Command;
     #[cfg(target_os = "linux")]
@@ -562,27 +560,16 @@ mod tests {
         use tokio::time::sleep;
 
         let dir = tempdir()?;
-        let shell_path = dir.path().join("hanging-shell.sh");
         let pid_path = dir.path().join("pid");
-
-        let script = format!(
-            "#!/bin/sh\n\
-             echo $$ > {}\n\
-             sleep 30\n",
-            pid_path.display()
-        );
-        fs::write(&shell_path, script).await?;
-        let mut permissions = std::fs::metadata(&shell_path)?.permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&shell_path, permissions)?;
+        let script = format!("echo $$ > \"{}\"; sleep 30", pid_path.display());
 
         let shell = Shell {
             shell_type: ShellType::Sh,
-            shell_path,
+            shell_path: PathBuf::from("/bin/sh"),
             shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
         };
 
-        let err = run_script_with_timeout(&shell, "ignored", Duration::from_millis(500), true)
+        let err = run_script_with_timeout(&shell, &script, Duration::from_secs(1), true)
             .await
             .expect_err("snapshot shell should time out");
         assert!(

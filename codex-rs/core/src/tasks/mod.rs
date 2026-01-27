@@ -41,7 +41,7 @@ pub(crate) use undo::UndoTask;
 pub(crate) use user_shell::UserShellCommandTask;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
-const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn. Do not continue or repeat work from that turn unless the user explicitly asks. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
+const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
 #[derive(Clone)]
@@ -253,7 +253,7 @@ impl Session {
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
                     text: format!(
-                        "{TURN_ABORTED_OPEN_TAG}\n  <turn_id>{sub_id}</turn_id>\n  <reason>interrupted</reason>\n  <guidance>{TURN_ABORTED_INTERRUPTED_GUIDANCE}</guidance>\n</turn_aborted>"
+                        "{TURN_ABORTED_OPEN_TAG}\n{TURN_ABORTED_INTERRUPTED_GUIDANCE}\n</turn_aborted>"
                     ),
                 }],
                 end_turn: None,

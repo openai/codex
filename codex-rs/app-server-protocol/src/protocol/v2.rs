@@ -1226,6 +1226,20 @@ pub struct ThreadArchiveResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadUnarchiveParams {
+    pub thread_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadUnarchiveResponse {
+    pub thread: Thread,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadRollbackParams {
     pub thread_id: String,
     /// The number of turns to drop from the end of the thread. Must be >= 1.
@@ -1260,9 +1274,30 @@ pub struct ThreadListParams {
     /// Optional provider filter; when set, only sessions recorded under these
     /// providers are returned. When present but empty, includes all providers.
     pub model_providers: Option<Vec<String>>,
+    /// Optional source filter; when set, only sessions from these source kinds
+    /// are returned. When omitted or empty, defaults to interactive sources.
+    pub source_kinds: Option<Vec<ThreadSourceKind>>,
     /// Optional archived filter; when set to true, only archived threads are returned.
     /// If false or null, only non-archived threads are returned.
     pub archived: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub enum ThreadSourceKind {
+    Cli,
+    #[serde(rename = "vscode")]
+    #[ts(rename = "vscode")]
+    VsCode,
+    Exec,
+    AppServer,
+    SubAgent,
+    SubAgentReview,
+    SubAgentCompact,
+    SubAgentThreadSpawn,
+    SubAgentOther,
+    Unknown,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, JsonSchema, TS)]
@@ -2420,6 +2455,8 @@ pub struct ToolRequestUserInputQuestion {
     pub id: String,
     pub header: String,
     pub question: String,
+    #[serde(default)]
+    pub is_other: bool,
     pub options: Option<Vec<ToolRequestUserInputOption>>,
 }
 
@@ -2584,6 +2621,7 @@ mod tests {
     use codex_protocol::items::TurnItem;
     use codex_protocol::items::UserMessageItem;
     use codex_protocol::items::WebSearchItem;
+    use codex_protocol::models::WebSearchAction;
     use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
     use codex_protocol::user_input::UserInput as CoreUserInput;
     use pretty_assertions::assert_eq;
@@ -2691,6 +2729,9 @@ mod tests {
         let search_item = TurnItem::WebSearch(WebSearchItem {
             id: "search-1".to_string(),
             query: "docs".to_string(),
+            action: WebSearchAction::Search {
+                query: Some("docs".to_string()),
+            },
         });
 
         assert_eq!(

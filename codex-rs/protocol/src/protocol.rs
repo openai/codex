@@ -24,6 +24,7 @@ use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
+use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
@@ -1041,6 +1042,7 @@ impl HasLegacyEvent for ReasoningRawContentDeltaEvent {
 impl HasLegacyEvent for EventMsg {
     fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
         match self {
+            EventMsg::ItemStarted(event) => event.as_legacy_events(show_raw_agent_reasoning),
             EventMsg::ItemCompleted(event) => event.as_legacy_events(show_raw_agent_reasoning),
             EventMsg::AgentMessageContentDelta(event) => {
                 event.as_legacy_events(show_raw_agent_reasoning)
@@ -1402,6 +1404,7 @@ pub struct WebSearchBeginEvent {
 pub struct WebSearchEndEvent {
     pub call_id: String,
     pub query: String,
+    pub action: WebSearchAction,
 }
 
 // Conversation kept for backward compatibility.
@@ -2375,6 +2378,9 @@ mod tests {
             item: TurnItem::WebSearch(WebSearchItem {
                 id: "search-1".into(),
                 query: "find docs".into(),
+                action: WebSearchAction::Search {
+                    query: Some("find docs".into()),
+                },
             }),
         };
 
