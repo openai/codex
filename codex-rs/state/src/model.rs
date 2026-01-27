@@ -6,6 +6,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
+use sqlx::Row;
+use sqlx::sqlite::SqliteRow;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -234,7 +236,7 @@ fn canonicalize_datetime(dt: DateTime<Utc>) -> DateTime<Utc> {
     dt.with_nanosecond(0).unwrap_or(dt)
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug)]
 pub(crate) struct ThreadRow {
     id: String,
     rollout_path: String,
@@ -252,6 +254,29 @@ pub(crate) struct ThreadRow {
     git_sha: Option<String>,
     git_branch: Option<String>,
     git_origin_url: Option<String>,
+}
+
+impl ThreadRow {
+    pub(crate) fn try_from_row(row: &SqliteRow) -> Result<Self> {
+        Ok(Self {
+            id: row.try_get("id")?,
+            rollout_path: row.try_get("rollout_path")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+            source: row.try_get("source")?,
+            model_provider: row.try_get("model_provider")?,
+            cwd: row.try_get("cwd")?,
+            title: row.try_get("title")?,
+            sandbox_policy: row.try_get("sandbox_policy")?,
+            approval_mode: row.try_get("approval_mode")?,
+            tokens_used: row.try_get("tokens_used")?,
+            has_user_event: row.try_get("has_user_event")?,
+            archived_at: row.try_get("archived_at")?,
+            git_sha: row.try_get("git_sha")?,
+            git_branch: row.try_get("git_branch")?,
+            git_origin_url: row.try_get("git_origin_url")?,
+        })
+    }
 }
 
 impl TryFrom<ThreadRow> for ThreadMetadata {

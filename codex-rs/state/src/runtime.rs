@@ -81,7 +81,7 @@ impl StateRuntime {
 
     /// Load thread metadata by id using the underlying database.
     pub async fn get_thread(&self, id: ThreadId) -> anyhow::Result<Option<crate::ThreadMetadata>> {
-        let row = sqlx::query_as::<_, ThreadRow>(
+        let row = sqlx::query(
             r#"
 SELECT
     id,
@@ -107,7 +107,8 @@ WHERE id = ?
         .bind(id.to_string())
         .fetch_optional(self.pool.as_ref())
         .await?;
-        row.map(ThreadMetadata::try_from).transpose()
+        row.map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
+            .transpose()
     }
 
     /// Find a rollout path by thread id using the underlying database.
@@ -221,13 +222,10 @@ WHERE 1 = 1
         builder.push(" LIMIT ");
         builder.push_bind(limit as i64);
 
-        let rows = builder
-            .build_query_as::<ThreadRow>()
-            .fetch_all(self.pool.as_ref())
-            .await?;
+        let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         let mut items = rows
             .into_iter()
-            .map(ThreadMetadata::try_from)
+            .map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
             .collect::<Result<Vec<_>, _>>()?;
         let num_scanned_rows = items.len();
         let next_anchor = if items.len() > page_size {
