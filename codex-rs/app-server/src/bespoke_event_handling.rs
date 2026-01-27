@@ -617,7 +617,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 turn_id: event_turn_id.clone(),
             };
             outgoing
-                .send_server_notification(ServerNotification::CompactionEnded(notification))
+                .send_server_notification(ServerNotification::CompactionEnded(notification.clone()))
+                .await;
+            outgoing
+                .send_server_notification(ServerNotification::ContextCompacted(notification))
                 .await;
         }
         EventMsg::DeprecationNotice(event) => {
