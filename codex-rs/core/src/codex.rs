@@ -2824,7 +2824,7 @@ async fn spawn_review_thread(
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
         features: &review_features,
-        web_search_mode: Some(review_web_search_mode),
+        web_search_mode: review_web_search_mode,
     });
 
     let review_prompt = resolved.prompt.clone();
@@ -2836,7 +2836,7 @@ async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
-    per_turn_config.web_search_mode = Some(review_web_search_mode);
+    per_turn_config.web_search_mode = review_web_search_mode;
 
     let otel_manager = parent_turn_context
         .client
