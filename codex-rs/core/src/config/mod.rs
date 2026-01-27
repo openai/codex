@@ -316,8 +316,8 @@ pub struct Config {
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
 
-    /// When `true`, suppress warnings about unstable (experimental or under development) features.
-    pub suppress_experimental_warning: bool,
+    /// When `true`, suppress warnings about unstable (under development) features.
+    pub suppress_unstable_features_warning: bool,
 
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
@@ -910,7 +910,7 @@ pub struct ConfigToml {
     pub features: Option<FeaturesToml>,
 
     /// Suppress warnings about unstable (experimental or under development) features.
-    pub suppress_experimental_warning: Option<bool>,
+    pub suppress_unstable_features_warning: Option<bool>,
 
     /// Settings for ghost snapshots (used for undo).
     #[serde(default)]
@@ -1570,7 +1570,7 @@ impl Config {
             use_experimental_unified_exec_tool,
             ghost_snapshot,
             features,
-            suppress_experimental_warning: cfg.suppress_experimental_warning.unwrap_or(false),
+            suppress_unstable_features_warning: cfg.suppress_unstable_features_warning.unwrap_or(false),
             active_profile: active_profile_name,
             active_project,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
@@ -3739,7 +3739,7 @@ model_verbosity = "high"
                 use_experimental_unified_exec_tool: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
-                suppress_experimental_warning: false,
+                suppress_unstable_features_warning: false,
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
                 windows_wsl_setup_acknowledged: false,
@@ -3822,7 +3822,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
-            suppress_experimental_warning: false,
+            suppress_unstable_features_warning: false,
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
@@ -3920,7 +3920,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
-            suppress_experimental_warning: false,
+            suppress_unstable_features_warning: false,
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
@@ -4004,7 +4004,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
-            suppress_experimental_warning: false,
+            suppress_unstable_features_warning: false,
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,

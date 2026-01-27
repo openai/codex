@@ -1465,7 +1465,7 @@
       ],
       "description": "User-level skill config entries keyed by SKILL.md path."
     },
-    "suppress_experimental_warning": {
+    "suppress_unstable_features_warning": {
       "description": "Suppress warnings about unstable (under development) features.",
       "type": "boolean"
     },

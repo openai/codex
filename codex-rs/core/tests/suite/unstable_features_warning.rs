@@ -51,7 +51,7 @@ async fn emits_warning_when_unstable_features_enabled_via_config() {
     };
     assert!(message.contains("child_agents_md"));
     assert!(message.contains("Under-development features enabled"));
-    assert!(message.contains("suppress_experimental_warning = true"));
+    assert!(message.contains("suppress_unstable_features_warning = true"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -59,7 +59,7 @@ async fn suppresses_warning_when_configured() {
     let home = TempDir::new().expect("tempdir");
     let mut config = load_default_config_for_test(&home).await;
     config.features.enable(Feature::ChildAgentsMd);
-    config.suppress_experimental_warning = true;
+    config.suppress_unstable_features_warning = true;
     let user_config_path =
         AbsolutePathBuf::from_absolute_path(config.codex_home.join(CONFIG_TOML_FILE))
             .expect("absolute user config path");

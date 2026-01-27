@@ -478,7 +478,7 @@ pub fn maybe_push_unstable_features_warning(
     config: &Config,
     post_session_configured_events: &mut Vec<Event>,
 ) {
-    if config.suppress_experimental_warning {
+    if config.suppress_unstable_features_warning {
         return;
     }
 
@@ -516,7 +516,7 @@ pub fn maybe_push_unstable_features_warning(
         .display()
         .to_string();
     let message = format!(
-        "Under-development features enabled: {under_development_feature_keys}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_experimental_warning = true` in {config_path}."
+        "Under-development features enabled: {under_development_feature_keys}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {config_path}."
     );
     post_session_configured_events.push(Event {
         id: "".to_owned(),

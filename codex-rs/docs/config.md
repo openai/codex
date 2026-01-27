@@ -8,7 +8,7 @@ startup.
 To suppress this warning, set the following in `~/.codex/config.toml`:
 
 ```toml
-suppress_experimental_warning = true
+suppress_unstable_features_warning = true
 ```
 
 Example enabling an experimental feature and suppressing the warning:
@@ -17,5 +17,5 @@ Example enabling an experimental feature and suppressing the warning:
 [features]
 collaboration_modes = true
 
-suppress_experimental_warning = true
+suppress_unstable_features_warning = true
 ```
