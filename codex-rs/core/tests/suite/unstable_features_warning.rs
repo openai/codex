@@ -15,6 +15,7 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
 use toml::toml;
+use toml::Value as TomlValue;
 use tokio::time::timeout;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
