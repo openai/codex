@@ -14,6 +14,7 @@ use nucleo::Utf32String;
 use nucleo::pattern::CaseMatching;
 use nucleo::pattern::Normalization;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::num::NonZero;
 use std::path::Path;
 use std::path::PathBuf;
@@ -86,6 +87,7 @@ pub struct SessionOptions {
     pub threads: NonZero<usize>,
     pub compute_indices: bool,
     pub respect_gitignore: bool,
+    pub include_directories: bool,
 }
 
 impl Default for SessionOptions {
@@ -98,6 +100,7 @@ impl Default for SessionOptions {
             threads: NonZero::new(2).unwrap(),
             compute_indices: false,
             respect_gitignore: true,
+            include_directories: false,
         }
     }
 }
@@ -151,6 +154,7 @@ fn create_session_inner(
         threads,
         compute_indices,
         respect_gitignore,
+        include_directories,
     } = options;
 
     let override_matcher = build_override_matcher(search_directory, &exclude)?;
@@ -176,6 +180,7 @@ fn create_session_inner(
         threads: threads.get(),
         compute_indices,
         respect_gitignore,
+        include_directories,
         cancelled: cancelled.clone(),
         shutdown: Arc::new(AtomicBool::new(false)),
         reporter,
@@ -288,6 +293,7 @@ pub fn run(
             threads,
             compute_indices,
             respect_gitignore,
+            include_directories: false,
         },
         reporter.clone(),
         Some(cancel_flag),
@@ -344,6 +350,7 @@ struct SessionInner {
     threads: usize,
     compute_indices: bool,
     respect_gitignore: bool,
+    include_directories: bool,
     cancelled: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     reporter: Arc<dyn SessionReporter>,
@@ -401,20 +408,33 @@ fn walker_worker(
 
     let walker = walk_builder.build_parallel();
 
-    fn get_file_path<'a>(
+    fn get_entry_path<'a>(
         entry_result: &'a Result<ignore::DirEntry, ignore::Error>,
         search_directory: &Path,
-    ) -> Option<&'a str> {
+        include_directories: bool,
+    ) -> Option<Cow<'a, str>> {
         let entry = match entry_result {
             Ok(entry) => entry,
             Err(_) => return None,
         };
-        if entry.file_type().is_some_and(|ft| ft.is_dir()) {
+        let is_dir = entry.file_type().is_some_and(|ft| ft.is_dir());
+        if is_dir && !include_directories {
             return None;
         }
         let path = entry.path();
         match path.strip_prefix(search_directory) {
-            Ok(rel_path) => rel_path.to_str(),
+            Ok(rel_path) => {
+                if rel_path.as_os_str().is_empty() {
+                    return None;
+                }
+                let rel_str = rel_path.to_str()?;
+                if is_dir {
+                    let mut with_sep = rel_str.to_string();
+                    with_sep.push(std::path::MAIN_SEPARATOR);
+                    return Some(Cow::Owned(with_sep));
+                }
+                Some(Cow::Borrowed(rel_str))
+            }
             Err(_) => None,
         }
     }
@@ -423,13 +443,14 @@ fn walker_worker(
         const CHECK_INTERVAL: usize = 1024;
         let mut n = 0;
         let search_directory = inner.search_directory.clone();
+        let include_directories = inner.include_directories;
         let injector = injector.clone();
         let cancelled = inner.cancelled.clone();
         let shutdown = inner.shutdown.clone();
 
         Box::new(move |entry| {
-            if let Some(path) = get_file_path(&entry, &search_directory) {
-                injector.push(Arc::from(path), |path, cols| {
+            if let Some(path) = get_entry_path(&entry, &search_directory, include_directories) {
+                injector.push(Arc::from(path.as_ref()), |path, cols| {
                     cols[0] = Utf32String::from(path.as_ref());
                 });
             }
@@ -647,6 +668,55 @@ mod tests {
     #[test]
     fn file_name_from_path_falls_back_to_full_path() {
         assert_eq!(file_name_from_path(""), "");
+    }
+
+    #[test]
+    fn session_does_not_include_directory_entries_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src").join("main.rs"), "fn main() {}").unwrap();
+
+        let reporter = Arc::new(RecordingReporter::default());
+        let session = create_session(dir.path(), SessionOptions::default(), reporter.clone())
+            .expect("session");
+
+        session.update_query("src");
+        assert!(reporter.wait_for_complete(Duration::from_secs(5)));
+
+        let snapshot = reporter.snapshot();
+        let dir_entry = format!("src{}", std::path::MAIN_SEPARATOR);
+        assert!(
+            !snapshot.matches.iter().any(|m| m.path == dir_entry),
+            "unexpected directory entry in matches: {snapshot:?}",
+        );
+    }
+
+    #[test]
+    fn session_includes_directory_entries_when_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src").join("main.rs"), "fn main() {}").unwrap();
+
+        let reporter = Arc::new(RecordingReporter::default());
+        let session = create_session(
+            dir.path(),
+            SessionOptions {
+                include_directories: true,
+                ..SessionOptions::default()
+            },
+            reporter.clone(),
+        )
+        .expect("session");
+
+        session.update_query("src");
+        assert!(reporter.wait_for_complete(Duration::from_secs(5)));
+
+        let snapshot = reporter.snapshot();
+        let dir_entry = format!("src{}", std::path::MAIN_SEPARATOR);
+        assert!(
+            snapshot.matches.iter().any(|m| m.path == dir_entry),
+            "expected directory entry in matches: {snapshot:?}",
+        );
     }
 
     #[derive(Default)]

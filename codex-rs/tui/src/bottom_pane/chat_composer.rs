@@ -1723,17 +1723,28 @@ impl ChatComposer {
             path.to_string()
         };
 
-        // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
+        let ends_with_path_separator = path.ends_with(std::path::MAIN_SEPARATOR)
+            || path.ends_with('/')
+            || path.ends_with('\\');
+        let add_trailing_space = !ends_with_path_separator;
+
+        // Replace the slice `[start_idx, end_idx)` with the chosen path.
         let mut new_text =
             String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
         new_text.push_str(&text[..start_idx]);
         new_text.push_str(&inserted);
-        new_text.push(' ');
+        if add_trailing_space {
+            new_text.push(' ');
+        }
         new_text.push_str(&text[end_idx..]);
 
         // Path replacement is plain text; rebuild without carrying elements.
         self.textarea.set_text_clearing_elements(&new_text);
-        let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
+        let new_cursor = if add_trailing_space {
+            start_idx.saturating_add(inserted.len()).saturating_add(1)
+        } else {
+            start_idx.saturating_add(inserted.len())
+        };
         self.textarea.set_cursor(new_cursor);
     }
 
@@ -3787,6 +3798,33 @@ mod tests {
                 "Failed for whitespace boundary case: {description} - input: '{input}', cursor: {cursor_pos}",
             );
         }
+    }
+
+    #[test]
+    fn insert_selected_path_adds_space_for_files_but_not_directories() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.textarea.insert_str("@s");
+        composer.textarea.set_cursor(2);
+
+        composer.insert_selected_path("src/main.rs");
+        assert_eq!(composer.textarea.text(), "src/main.rs ");
+
+        // Simulate completing a directory (paths from file-search include a trailing separator).
+        composer.textarea.set_text_clearing_elements("@s");
+        composer.textarea.set_cursor(2);
+        let dir_path = format!("src{}", std::path::MAIN_SEPARATOR);
+        composer.insert_selected_path(&dir_path);
+        assert_eq!(composer.textarea.text(), dir_path);
+        assert_eq!(composer.textarea.cursor(), dir_path.len());
     }
 
     /// Behavior: if the ASCII path has a pending first char (flicker suppression) and a non-ASCII

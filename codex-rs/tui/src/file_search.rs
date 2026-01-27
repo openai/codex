@@ -81,6 +81,7 @@ impl FileSearchManager {
                 threads: NUM_FILE_SEARCH_THREADS,
                 compute_indices: true,
                 respect_gitignore: true,
+                include_directories: true,
             },
             reporter,
         );
