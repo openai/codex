@@ -561,8 +561,15 @@ impl RequestUserInputOverlay {
             } else {
                 None
             };
-            // Notes are appended as extra answers.
-            let notes = answer_state.draft.text.trim().to_string();
+            // Notes are appended as extra answers. For freeform questions, only submit when
+            // the user explicitly committed the draft.
+            let notes = if options.is_some_and(|opts| !opts.is_empty()) {
+                answer_state.draft.text.trim().to_string()
+            } else if answer_state.freeform_committed {
+                answer_state.draft.text.trim().to_string()
+            } else {
+                String::new()
+            };
             let selected_label = selected_idx.and_then(|selected_idx| {
                 question
                     .options
@@ -699,23 +706,6 @@ impl BottomPaneView for RequestUserInputOverlay {
         }
 
         if matches!(key_event.code, KeyCode::Esc) {
-            if matches!(self.focus, Focus::Notes) {
-                if self.has_options() {
-                    // Let the composer flush any pending paste-burst state (e.g., held first char).
-                    let _ = self
-                        .composer
-                        .handle_key_event(KeyEvent::from(KeyCode::Left));
-                    self.composer.move_cursor_to_end();
-                    let notes_empty = self.composer.current_text_with_pending().trim().is_empty();
-                    self.save_current_draft();
-                    if notes_empty && let Some(answer) = self.current_answer_mut() {
-                        answer.notes_visible = false;
-                    }
-                    self.focus = Focus::Options;
-                    self.sync_composer_placeholder();
-                }
-                return;
-            }
             self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
             self.done = true;
             return;
@@ -1268,7 +1258,7 @@ mod tests {
     }
 
     #[test]
-    fn esc_in_notes_mode_without_options_does_not_interrupt() {
+    fn esc_in_notes_mode_without_options_interrupts() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_without_options("q1", "Notes")]),
@@ -1280,9 +1270,12 @@ mod tests {
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
-        assert!(matches!(overlay.focus, Focus::Notes));
-        assert_eq!(overlay.done, false);
-        assert!(rx.try_recv().is_err());
+        assert_eq!(overlay.done, true);
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(op) = event else {
+            panic!("expected CodexOp");
+        };
+        assert_eq!(op, Op::Interrupt);
     }
 
     #[test]
@@ -1307,7 +1300,7 @@ mod tests {
     }
 
     #[test]
-    fn esc_in_notes_mode_returns_to_options_without_interrupt() {
+    fn esc_in_notes_mode_interrupts() {
         let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
@@ -1323,15 +1316,17 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
-        assert!(matches!(overlay.focus, Focus::Options));
-        assert_eq!(overlay.notes_ui_visible(), false);
-        assert_eq!(overlay.done, false);
-        assert!(rx.try_recv().is_err());
+        assert_eq!(overlay.done, true);
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(op) = event else {
+            panic!("expected CodexOp");
+        };
+        assert_eq!(op, Op::Interrupt);
     }
 
     #[test]
-    fn esc_keeps_notes_visible_when_notes_present() {
-        let (tx, _rx) = test_sender();
+    fn esc_in_notes_mode_interrupts_with_notes_visible() {
+        let (tx, mut rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
             request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
             tx,
@@ -1347,8 +1342,12 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('a')));
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
-        assert!(matches!(overlay.focus, Focus::Options));
-        assert_eq!(overlay.notes_ui_visible(), true);
+        assert_eq!(overlay.done, true);
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(op) = event else {
+            panic!("expected CodexOp");
+        };
+        assert_eq!(op, Op::Interrupt);
     }
 
     #[test]
@@ -1523,6 +1522,31 @@ mod tests {
             false,
             false,
         );
+
+        overlay.submit_answers();
+
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let answer = response.answers.get("q1").expect("answer missing");
+        assert_eq!(answer.answers, Vec::<String>::new());
+    }
+
+    #[test]
+    fn freeform_draft_is_not_submitted_without_enter() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_without_options("q1", "Notes")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+        overlay
+            .composer
+            .set_text_content("Draft text".to_string(), Vec::new(), Vec::new());
+        overlay.composer.move_cursor_to_end();
 
         overlay.submit_answers();
 
