@@ -729,22 +729,6 @@ impl BottomPaneView for RequestUserInputOverlay {
                 self.move_question(true);
                 return;
             }
-            KeyEvent {
-                code: KeyCode::Char('h'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } if self.has_options() && matches!(self.focus, Focus::Options) => {
-                self.move_question(false);
-                return;
-            }
-            KeyEvent {
-                code: KeyCode::Char('l'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } if self.has_options() && matches!(self.focus, Focus::Options) => {
-                self.move_question(true);
-                return;
-            }
             _ => {}
         }
 
@@ -1149,7 +1133,7 @@ mod tests {
     }
 
     #[test]
-    fn vim_keys_move_between_questions_in_options() {
+    fn typing_in_options_enters_notes() {
         let (tx, _rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
             request_event(
@@ -1166,10 +1150,13 @@ mod tests {
         );
 
         assert_eq!(overlay.current_index(), 0);
-        overlay.handle_key_event(KeyEvent::from(KeyCode::Char('l')));
-        assert_eq!(overlay.current_index(), 1);
+        assert_eq!(overlay.notes_ui_visible(), false);
+        overlay.composer.set_disable_paste_burst(true);
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('h')));
         assert_eq!(overlay.current_index(), 0);
+        assert_eq!(overlay.notes_ui_visible(), true);
+        assert!(matches!(overlay.focus, Focus::Notes));
+        assert_eq!(overlay.composer.current_text_with_pending(), "h");
     }
 
     #[test]
