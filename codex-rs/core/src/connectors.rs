@@ -113,6 +113,12 @@ pub fn merge_connectors(
             if existing.logo_url.is_none() && connector.logo_url.is_some() {
                 existing.logo_url = connector.logo_url;
             }
+            if existing.logo_url_dark.is_none() && connector.logo_url_dark.is_some() {
+                existing.logo_url_dark = connector.logo_url_dark;
+            }
+            if existing.distribution_channel.is_none() && connector.distribution_channel.is_some() {
+                existing.distribution_channel = connector.distribution_channel;
+            }
         } else {
             merged.insert(connector_id, connector);
         }
@@ -156,6 +162,8 @@ where
             name: connector_name.clone(),
             description: None,
             logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
             install_url: Some(connector_install_url(&connector_name, &connector_id)),
             is_accessible: true,
         })

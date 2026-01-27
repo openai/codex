@@ -2176,6 +2176,7 @@ impl ChatWidget {
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
             mcp_startup_status: None,
+            connectors_cache: ConnectorsCacheState::default(),
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -5056,28 +5057,31 @@ impl ChatWidget {
             return;
         }
 
-        if matches!(self.connectors_cache, ConnectorsCacheState::Uninitialized) {
-            self.prefetch_connectors();
-        }
-        let connectors_snapshot = match &self.connectors_cache {
-            ConnectorsCacheState::Ready(snapshot) => Some(snapshot.clone()),
-            ConnectorsCacheState::Failed(err) => {
-                self.add_to_history(history_cell::new_error_event(err.clone()));
-                None
+        match self.connectors_cache.clone() {
+            ConnectorsCacheState::Ready(snapshot) => {
+                if snapshot.connectors.is_empty() {
+                    self.add_info_message("No apps available.".to_string(), None);
+                } else {
+                    self.open_connectors_popup(&snapshot.connectors);
+                }
             }
-            ConnectorsCacheState::Loading | ConnectorsCacheState::Uninitialized => {
+            ConnectorsCacheState::Failed(err) => {
+                self.add_to_history(history_cell::new_error_event(err));
+                // Retry on demand so `/apps` can recover after transient failures.
+                self.prefetch_connectors();
+            }
+            ConnectorsCacheState::Loading => {
                 self.add_to_history(history_cell::new_info_event(
                     "Apps are still loading.".to_string(),
                     Some("Try again in a moment.".to_string()),
                 ));
-                None
             }
-        };
-        if let Some(snapshot) = connectors_snapshot {
-            if snapshot.connectors.is_empty() {
-                self.add_info_message("No apps available.".to_string(), None);
-            } else {
-                self.open_connectors_popup(&snapshot.connectors);
+            ConnectorsCacheState::Uninitialized => {
+                self.prefetch_connectors();
+                self.add_to_history(history_cell::new_info_event(
+                    "Apps are still loading.".to_string(),
+                    Some("Try again in a moment.".to_string()),
+                ));
             }
         }
         self.request_redraw();

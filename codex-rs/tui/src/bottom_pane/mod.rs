@@ -40,6 +40,7 @@ use std::time::Duration;
 mod app_link_view;
 mod approval_overlay;
 mod request_user_input;
+pub(crate) use app_link_view::AppLinkView;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use request_user_input::RequestUserInputOverlay;

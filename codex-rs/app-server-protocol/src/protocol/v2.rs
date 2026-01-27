@@ -1001,6 +1001,8 @@ pub struct AppInfo {
     pub name: String,
     pub description: Option<String>,
     pub logo_url: Option<String>,
+    pub logo_url_dark: Option<String>,
+    pub distribution_channel: Option<String>,
     pub install_url: Option<String>,
     #[serde(default)]
     pub is_accessible: bool,

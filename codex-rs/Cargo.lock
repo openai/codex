@@ -1207,10 +1207,12 @@ dependencies = [
  "codex-core",
  "codex-git",
  "codex-utils-cargo-bin",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "urlencoding",
 ]
 
 [[package]]

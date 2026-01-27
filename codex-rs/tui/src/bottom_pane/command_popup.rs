@@ -480,6 +480,7 @@ mod tests {
             Vec::new(),
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
+                connectors_enabled: false,
                 personality_command_enabled: false,
             },
         );
@@ -505,6 +506,7 @@ mod tests {
             Vec::new(),
             CommandPopupFlags {
                 collaboration_modes_enabled: true,
+                connectors_enabled: false,
                 personality_command_enabled: true,
             },
         );
