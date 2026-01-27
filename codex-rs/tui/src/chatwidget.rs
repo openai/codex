@@ -3981,7 +3981,8 @@ impl ChatWidget {
             } else if preset.id == "auto" {
                 #[cfg(target_os = "windows")]
                 {
-                    if WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled
+                    if WindowsSandboxLevel::from_config(&self.config)
+                        == WindowsSandboxLevel::Disabled
                     {
                         let preset_clone = preset.clone();
                         if codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED

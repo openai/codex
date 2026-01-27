@@ -1843,7 +1843,8 @@ impl App {
                 }
                 #[cfg(target_os = "windows")]
                 if !matches!(&policy, codex_core::protocol::SandboxPolicy::ReadOnly)
-                    || WindowsSandboxLevel::from_config(&self.config) != WindowsSandboxLevel::Disabled
+                    || WindowsSandboxLevel::from_config(&self.config)
+                        != WindowsSandboxLevel::Disabled
                 {
                     self.config.forced_auto_mode_downgraded_on_windows = false;
                 }
