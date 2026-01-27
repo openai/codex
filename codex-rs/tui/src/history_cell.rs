@@ -1429,7 +1429,18 @@ pub(crate) fn new_web_search_call(
     cell
 }
 
-/// If any content is an image, return a new cell with the first decodable image.
+/// Returns an additional history cell if an MCP tool result includes a decodable image.
+///
+/// This intentionally returns at most one cell: the first image in `CallToolResult.content` that
+/// successfully base64-decodes and parses as an image. This is used as a lightweight “image output
+/// exists” affordance separate from the main MCP tool call cell.
+///
+/// Manual testing tip:
+/// - Run the rmcp stdio test server (`codex-rs/rmcp-client/src/bin/test_stdio_server.rs`) and
+///   register it as an MCP server via `codex mcp add`.
+/// - Use its `image_scenario` tool with cases like `text_then_image`,
+///   `invalid_base64_then_image`, or `invalid_image_bytes_then_image` to ensure this path triggers
+///   even when the first block is not a valid image.
 fn try_new_completed_mcp_tool_call_with_image_output(
     result: &Result<mcp_types::CallToolResult, String>,
 ) -> Option<CompletedMcpToolCallWithImageOutput> {
@@ -1443,6 +1454,10 @@ fn try_new_completed_mcp_tool_call_with_image_output(
     Some(CompletedMcpToolCallWithImageOutput { _image: image })
 }
 
+/// Decodes an MCP `ImageContent` block into an in-memory image.
+///
+/// Returns `None` when the block is not an image, when base64 decoding fails, when the format
+/// cannot be inferred, or when the image decoder rejects the bytes.
 fn decode_mcp_image(block: &mcp_types::ContentBlock) -> Option<DynamicImage> {
     let image = match block {
         mcp_types::ContentBlock::ImageContent(image) => image,
