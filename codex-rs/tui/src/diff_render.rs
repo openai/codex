@@ -325,7 +325,7 @@ pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
     chosen.display().to_string()
 }
 
-fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
+pub(crate) fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
     if let Ok(patch) = diffy::Patch::from_str(diff) {
         patch
             .hunks()
