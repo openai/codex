@@ -7,7 +7,6 @@ use std::fs::{self};
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
@@ -37,7 +36,7 @@ use crate::default_client::originator;
 use crate::git_info::collect_git_info;
 use crate::path_utils;
 use crate::state_db;
-use crate::state_db::StateDbContext;
+use crate::state_db::StateDbHandle;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
@@ -45,6 +44,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_state::ThreadMetadataSeed;
 
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
 /// every update.
@@ -59,7 +59,7 @@ use codex_protocol::protocol::SessionSource;
 pub struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
     pub(crate) rollout_path: PathBuf,
-    state_db: Option<Arc<StateDbContext>>,
+    state_db: Option<StateDbHandle>,
 }
 
 #[derive(Clone)]
@@ -117,6 +117,7 @@ impl RolloutRecorder {
         model_providers: Option<&[String]>,
         default_provider: &str,
     ) -> std::io::Result<ThreadsPage> {
+        let stage = "list_threads";
         let page = get_threads(
             codex_home,
             page_size,
@@ -127,21 +128,33 @@ impl RolloutRecorder {
             default_provider,
         )
         .await?;
+
+        // TODO(jif): drop after sqlite migration phase 1
         let state_db_ctx = state_db::open_if_present(codex_home, default_provider).await;
-        compare_threads_page_with_db(
-            codex_home,
-            &page,
+        if let Some(db_ids) = state_db::list_thread_ids_db(
             state_db_ctx.as_deref(),
-            CompareThreadsDbQuery {
+            codex_home,
+            state_db::ListThreadsDbQuery {
+                page_size,
                 cursor,
                 sort_key,
                 allowed_sources,
                 model_providers,
                 archived_only: false,
-                stage: "list_threads",
+                stage,
             },
-        )
-        .await;
+        ).await {
+            if page.items.len() != db_ids.len() {
+                state_db::record_discrepancy(stage, "bad_len");
+                return Ok(page);
+            }
+            for (id, item) in db_ids.iter().zip(page.items.iter()) {
+                if !item.path.display().to_string().contains(&id.to_string()) {
+                    state_db::record_discrepancy(stage, "bad_id");
+                }
+            }
+
+        }
         Ok(page)
     }
 
@@ -155,6 +168,7 @@ impl RolloutRecorder {
         model_providers: Option<&[String]>,
         default_provider: &str,
     ) -> std::io::Result<ThreadsPage> {
+        let stage = "list_archived_threads";
         let root = codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
         let page = get_threads_in_root(
             root,
@@ -169,21 +183,33 @@ impl RolloutRecorder {
             },
         )
         .await?;
+
+        // TODO(jif): drop after sqlite migration phase 1
         let state_db_ctx = state_db::open_if_present(codex_home, default_provider).await;
-        compare_threads_page_with_db(
-            codex_home,
-            &page,
+        if let Some(db_ids) = state_db::list_thread_ids_db(
             state_db_ctx.as_deref(),
-            CompareThreadsDbQuery {
+            codex_home,
+            state_db::ListThreadsDbQuery {
+                page_size,
                 cursor,
                 sort_key,
                 allowed_sources,
                 model_providers,
                 archived_only: true,
-                stage: "list_archived_threads",
+                stage,
             },
-        )
-        .await;
+        ).await {
+            if page.items.len() != db_ids.len() {
+                state_db::record_discrepancy(stage, "bad_len");
+                return Ok(page);
+            }
+            for (id, item) in db_ids.iter().zip(page.items.iter()) {
+                if !item.path.display().to_string().contains(&id.to_string()) {
+                    state_db::record_discrepancy(stage, "bad_id");
+                }
+            }
+
+        }
         Ok(page)
     }
 
@@ -538,81 +564,6 @@ async fn rollout_writer(
     }
 
     Ok(())
-}
-
-struct CompareThreadsDbQuery<'a> {
-    cursor: Option<&'a Cursor>,
-    sort_key: ThreadSortKey,
-    allowed_sources: &'a [SessionSource],
-    model_providers: Option<&'a [String]>,
-    archived_only: bool,
-    stage: &'a str,
-}
-
-async fn compare_threads_page_with_db(
-    codex_home: &Path,
-    canonical_page: &ThreadsPage,
-    state_db_ctx: Option<&StateDbContext>,
-    query: CompareThreadsDbQuery<'_>,
-) {
-    let CompareThreadsDbQuery {
-        cursor,
-        sort_key,
-        allowed_sources,
-        model_providers,
-        archived_only,
-        stage,
-    } = query;
-    let Some(state_db_ctx) = state_db_ctx else {
-        return;
-    };
-    let query_stage = format!("{stage}_query");
-    let Some(db_ids) = state_db::list_thread_ids_db(
-        Some(state_db_ctx),
-        codex_home,
-        state_db::ListThreadsDbQuery {
-            page_size: canonical_page.items.len(),
-            cursor,
-            sort_key,
-            allowed_sources,
-            model_providers,
-            archived_only,
-            stage: query_stage.as_str(),
-        },
-    )
-    .await
-    else {
-        return;
-    };
-
-    let mut canonical_paths = HashMap::new();
-    for item in canonical_page.items.iter() {
-        if let Some(id_str) = state_db::rollout_id_from_path(item.path.as_path())
-            && let Ok(thread_id) = ThreadId::from_string(id_str.as_str())
-        {
-            canonical_paths.insert(thread_id, item.path.as_path());
-        }
-    }
-
-    let canonical_ids: HashSet<ThreadId> = canonical_paths.keys().copied().collect();
-    let db_ids: HashSet<ThreadId> = db_ids.into_iter().collect();
-
-    for thread_id in db_ids.difference(&canonical_ids) {
-        warn!("state db has extra thread {thread_id} during {stage} compare");
-        state_db::record_discrepancy(stage, "extra_db_row");
-    }
-
-    for thread_id in canonical_ids.difference(&db_ids) {
-        if let Some(path) = canonical_paths.get(thread_id) {
-            warn!(
-                "state db missing thread {thread_id} during {stage} compare at {}",
-                path.display()
-            );
-        } else {
-            warn!("state db missing thread {thread_id} during {stage} compare");
-        }
-        state_db::record_discrepancy(stage, "missing_db_row");
-    }
 }
 
 struct JsonlWriter {
