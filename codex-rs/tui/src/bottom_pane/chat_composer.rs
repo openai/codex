@@ -150,6 +150,8 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
+use textwrap::Options as TextwrapOptions;
+use unicode_width::UnicodeWidthStr;
 
 fn windows_degraded_sandbox_active() -> bool {
     cfg!(target_os = "windows")
@@ -2652,6 +2654,16 @@ impl Renderable for ChatComposer {
                 let text_x = textarea_rect.x;
                 let text_y = textarea_rect.y;
                 let text_width = textarea_rect.width;
+                let max_width = text_width.max(1) as usize;
+                let text = if UnicodeWidthStr::width(text.as_str()) <= max_width {
+                    text
+                } else {
+                    let opts = TextwrapOptions::new(max_width).break_words(false);
+                    textwrap::wrap(text.as_str(), opts)
+                        .first()
+                        .map(std::string::ToString::to_string)
+                        .unwrap_or(text)
+                };
                 let placeholder = text.dim();
                 buf.set_span(text_x, text_y, &placeholder, text_width);
             }
