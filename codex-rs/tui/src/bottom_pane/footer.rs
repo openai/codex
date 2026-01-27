@@ -12,9 +12,19 @@
 //! Single-line collapse overview:
 //! 1. The composer decides the current `FooterMode` and hint flags, then calls
 //!    `single_line_footer_layout` for the base single-line modes.
-//! 2. That layout helper applies the width-based fallback rules: prefer the
-//!    fullest left-side hint that still allows the right-side context indicator
-//!    to fit, then progressively drop hint text and finally context as needed.
+//! 2. `single_line_footer_layout` applies the width-based fallback rules:
+//!    (If this description is hard to follow, just try it out by resizing
+//!    your terminal width; these rules were built out of trial and error.)
+//!    - Start with the fullest left-side hint plus the right-side context.
+//!    - When the queue hint is active, prefer keeping that queue hint visible,
+//!      even if it means dropping the right-side context earlier; the queue
+//!      hint may also be shortened before it is removed.
+//!    - When the queue hint is not active but the mode cycle hint is applicable,
+//!      drop "? for shortcuts" before dropping "(shift+tab to cycle)".
+//!    - If "(shift+tab to cycle)" cannot fit, also hide the right-side
+//!      context to avoid too many state transitions in quick succession.
+//!    - Finally, try a mode-only line (with and without context), and fall
+//!      back to no left-side footer if nothing can fit.
 //! 3. When collapse chooses a specific line, callers render it via
 //!    `render_footer_line`. Otherwise, callers render the straightforward
 //!    mode-to-text mapping via `render_footer_from_props`.
@@ -544,9 +554,6 @@ fn footer_from_props_lines(
             vec![left_side_line(collaboration_mode_indicator, state)]
         }
         FooterMode::ShortcutOverlay => {
-            // Intentionally suppress the mode indicator here: the overlay is a
-            // transient "what can I do next?" state and we want the next action
-            // hints to take full priority.
             #[cfg(target_os = "linux")]
             let is_wsl = is_probably_wsl();
             #[cfg(not(target_os = "linux"))]
