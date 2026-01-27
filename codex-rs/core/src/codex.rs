@@ -898,8 +898,6 @@ impl Session {
             next_internal_sub_id: AtomicU64::new(0),
         });
 
-        sess.start_file_watcher_listener();
-
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = initial_history.get_event_msgs();
@@ -924,6 +922,9 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
+
+        // Start the watcher after SessionConfigured so it cannot emit earlier events.
+        sess.start_file_watcher_listener();
 
         // Construct sandbox_state before initialize() so it can be sent to each
         // MCP server immediately after it becomes ready (avoiding blocking).
