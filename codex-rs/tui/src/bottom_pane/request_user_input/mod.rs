@@ -899,7 +899,7 @@ mod tests {
             false,
             false,
         );
-        let area = Rect::new(0, 0, 64, 16);
+        let area = Rect::new(0, 0, 120, 16);
         insta::assert_snapshot!(
             "request_user_input_options",
             render_snapshot(&overlay, area)
@@ -916,7 +916,7 @@ mod tests {
             false,
             false,
         );
-        let area = Rect::new(0, 0, 60, 8);
+        let area = Rect::new(0, 0, 120, 8);
         insta::assert_snapshot!(
             "request_user_input_tight_height",
             render_snapshot(&overlay, area)
@@ -1022,7 +1022,7 @@ mod tests {
             answer.option_state.selected_idx = Some(3);
             answer.selected = Some(3);
         }
-        let area = Rect::new(0, 0, 68, 10);
+        let area = Rect::new(0, 0, 120, 10);
         insta::assert_snapshot!(
             "request_user_input_scrolling_options",
             render_snapshot(&overlay, area)
@@ -1039,9 +1039,56 @@ mod tests {
             false,
             false,
         );
-        let area = Rect::new(0, 0, 64, 10);
+        let area = Rect::new(0, 0, 120, 10);
         insta::assert_snapshot!(
             "request_user_input_freeform",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn request_user_input_multi_question_first_snapshot() {
+        let (tx, _rx) = test_sender();
+        let overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "Area"),
+                    question_without_options("q2", "Goal"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let area = Rect::new(0, 0, 120, 12);
+        insta::assert_snapshot!(
+            "request_user_input_multi_question_first",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn request_user_input_multi_question_last_snapshot() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "Area"),
+                    question_without_options("q2", "Goal"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+        overlay.move_question(true);
+        let area = Rect::new(0, 0, 120, 12);
+        insta::assert_snapshot!(
+            "request_user_input_multi_question_last",
             render_snapshot(&overlay, area)
         );
     }
@@ -1056,6 +1103,7 @@ mod tests {
             false,
             false,
         );
+        overlay.select_current_option();
         overlay.focus = Focus::Notes;
         overlay
             .composer

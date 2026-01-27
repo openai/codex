@@ -3,8 +3,11 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
 
 use crate::bottom_pane::selection_popup_common::menu_surface_inset;
 use crate::bottom_pane::selection_popup_common::menu_surface_padding_height;
@@ -200,15 +203,15 @@ impl RequestUserInputOverlay {
                 " scroll | ".into(),
             ]);
         }
-        let is_last_question =
-            self.question_count() > 0 && self.current_index() + 1 >= self.question_count();
-        let enter_hint = if is_last_question {
+        let question_count = self.question_count();
+        let is_last_question = question_count > 0 && self.current_index() + 1 >= question_count;
+        let enter_hint = if question_count > 1 && is_last_question {
             "Enter to submit all answers"
         } else {
             "Enter to submit answer"
         };
         hint_spans.extend(vec![enter_hint.dim(), " | ".into()]);
-        if self.question_count() > 1 {
+        if question_count > 1 {
             hint_spans.extend(vec![
                 key_hint::ctrl(KeyCode::Char('p')).into(),
                 " prev | ".into(),
@@ -217,7 +220,10 @@ impl RequestUserInputOverlay {
             ]);
         }
         hint_spans.extend(vec!["Esc to interrupt".dim()]);
-        Paragraph::new(Line::from(hint_spans).dim()).render(
+        let hint_line = Line::from(hint_spans).dim();
+        let hint_line =
+            truncate_line_word_boundary_with_ellipsis(hint_line, content_area.width as usize);
+        Paragraph::new(hint_line).render(
             Rect {
                 x: content_area.x,
                 y: hint_y,
@@ -265,4 +271,108 @@ impl RequestUserInputOverlay {
     fn focus_is_notes(&self) -> bool {
         matches!(self.focus, super::Focus::Notes)
     }
+}
+
+fn line_width(line: &Line<'_>) -> usize {
+    line.iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
+}
+
+fn truncate_line_word_boundary_with_ellipsis(
+    line: Line<'static>,
+    max_width: usize,
+) -> Line<'static> {
+    if max_width == 0 {
+        return Line::from(Vec::<Span<'static>>::new());
+    }
+
+    if line_width(&line) <= max_width {
+        return line;
+    }
+
+    let ellipsis = "…";
+    let ellipsis_width = UnicodeWidthStr::width(ellipsis);
+    if ellipsis_width >= max_width {
+        return Line::from(ellipsis);
+    }
+    let limit = max_width.saturating_sub(ellipsis_width);
+
+    #[derive(Clone, Copy)]
+    struct BreakPoint {
+        span_idx: usize,
+        byte_end: usize,
+    }
+
+    let mut used = 0usize;
+    let mut last_fit: Option<BreakPoint> = None;
+    let mut last_word_break: Option<BreakPoint> = None;
+    let mut overflowed = false;
+
+    'outer: for (span_idx, span) in line.spans.iter().enumerate() {
+        let text = span.content.as_ref();
+        for (byte_idx, ch) in text.char_indices() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used.saturating_add(ch_width) > limit {
+                overflowed = true;
+                break 'outer;
+            }
+            used = used.saturating_add(ch_width);
+            let bp = BreakPoint {
+                span_idx,
+                byte_end: byte_idx + ch.len_utf8(),
+            };
+            last_fit = Some(bp);
+            if ch.is_whitespace() {
+                last_word_break = Some(bp);
+            }
+        }
+    }
+
+    if !overflowed {
+        return line;
+    }
+
+    let chosen_break = last_word_break.or(last_fit);
+    let Some(chosen_break) = chosen_break else {
+        return Line::from(ellipsis);
+    };
+
+    let line_style = line.style;
+    let mut spans_out: Vec<Span<'static>> = Vec::new();
+    for (idx, span) in line.spans.into_iter().enumerate() {
+        if idx < chosen_break.span_idx {
+            spans_out.push(span);
+            continue;
+        }
+        if idx == chosen_break.span_idx {
+            let text = span.content.into_owned();
+            let truncated = text[..chosen_break.byte_end].to_string();
+            if !truncated.is_empty() {
+                spans_out.push(Span::styled(truncated, span.style));
+            }
+        }
+        break;
+    }
+
+    while let Some(last) = spans_out.last_mut() {
+        let trimmed = last
+            .content
+            .trim_end_matches(char::is_whitespace)
+            .to_string();
+        if trimmed.is_empty() {
+            spans_out.pop();
+        } else {
+            last.content = trimmed.into();
+            break;
+        }
+    }
+
+    let ellipsis_style = spans_out
+        .last()
+        .map(|span| span.style)
+        .unwrap_or(line_style);
+    spans_out.push(Span::styled(ellipsis, ellipsis_style));
+
+    Line::from(spans_out).style(line_style)
 }
