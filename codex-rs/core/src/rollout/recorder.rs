@@ -7,6 +7,7 @@ use std::fs::{self};
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
@@ -36,6 +37,7 @@ use crate::default_client::originator;
 use crate::git_info::collect_git_info;
 use crate::path_utils;
 use crate::state_db;
+use crate::state_db::StateDbContext;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
@@ -57,6 +59,7 @@ use codex_protocol::protocol::SessionSource;
 pub struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
     pub(crate) rollout_path: PathBuf,
+    state_db: Option<Arc<StateDbContext>>,
 }
 
 #[derive(Clone)]
@@ -124,9 +127,11 @@ impl RolloutRecorder {
             default_provider,
         )
         .await?;
+        let state_db_ctx = state_db::open_if_present(codex_home, default_provider).await;
         compare_threads_page_with_db(
             codex_home,
             &page,
+            state_db_ctx.as_deref(),
             CompareThreadsDbQuery {
                 cursor,
                 sort_key,
@@ -164,9 +169,11 @@ impl RolloutRecorder {
             },
         )
         .await?;
+        let state_db_ctx = state_db::open_if_present(codex_home, default_provider).await;
         compare_threads_page_with_db(
             codex_home,
             &page,
+            state_db_ctx.as_deref(),
             CompareThreadsDbQuery {
                 cursor,
                 sort_key,
@@ -217,7 +224,11 @@ impl RolloutRecorder {
     /// Attempt to create a new [`RolloutRecorder`]. If the sessions directory
     /// cannot be created or the rollout file cannot be opened we return the
     /// error so the caller can decide whether to disable persistence.
-    pub async fn new(config: &Config, params: RolloutRecorderParams) -> std::io::Result<Self> {
+    pub async fn new(
+        config: &Config,
+        params: RolloutRecorderParams,
+        state_db_ctx: Option<Arc<StateDbContext>>,
+    ) -> std::io::Result<Self> {
         let (file, rollout_path, meta) = match params {
             RolloutRecorderParams::Create {
                 conversation_id,
@@ -277,13 +288,28 @@ impl RolloutRecorder {
         // Spawn a Tokio task that owns the file handle and performs async
         // writes. Using `tokio::fs::File` keeps everything on the async I/O
         // driver instead of blocking the runtime.
-        tokio::task::spawn(rollout_writer(file, rx, meta, cwd, rollout_path.clone()));
+        tokio::task::spawn(rollout_writer(
+            file,
+            rx,
+            meta,
+            cwd,
+            rollout_path.clone(),
+            state_db_ctx.clone(),
+        ));
 
-        Ok(Self { tx, rollout_path })
+        Ok(Self {
+            tx,
+            rollout_path,
+            state_db: state_db_ctx,
+        })
     }
 
     pub fn rollout_path(&self) -> &Path {
         self.rollout_path.as_path()
+    }
+
+    pub fn state_db(&self) -> Option<Arc<StateDbContext>> {
+        self.state_db.clone()
     }
 
     pub(crate) async fn record_items(&self, items: &[RolloutItem]) -> std::io::Result<()> {
@@ -379,7 +405,6 @@ impl RolloutRecorder {
             return Ok(InitialHistory::New);
         }
 
-        state_db::compare_rollout(path, "get_rollout_history").await;
         info!("Resumed rollout successfully from {path:?}");
         Ok(InitialHistory::Resumed(ResumedHistory {
             conversation_id,
@@ -459,6 +484,7 @@ async fn rollout_writer(
     mut meta: Option<SessionMeta>,
     cwd: std::path::PathBuf,
     rollout_path: PathBuf,
+    state_db_ctx: Option<Arc<StateDbContext>>,
 ) -> std::io::Result<()> {
     let mut writer = JsonlWriter { file };
 
@@ -473,7 +499,7 @@ async fn rollout_writer(
         // Write the SessionMeta as the first item in the file, wrapped in a rollout line
         let rollout_item = RolloutItem::SessionMeta(session_meta_line);
         writer.write_rollout_item(&rollout_item).await?;
-        state_db::reconcile_rollout(rollout_path.as_path()).await;
+        state_db::reconcile_rollout(state_db_ctx.as_deref(), rollout_path.as_path()).await;
     }
 
     // Process rollout commands
@@ -490,8 +516,12 @@ async fn rollout_writer(
                 if persisted_items.is_empty() {
                     continue;
                 }
-                state_db::apply_rollout_items(rollout_path.as_path(), persisted_items.as_slice())
-                    .await;
+                state_db::apply_rollout_items(
+                    state_db_ctx.as_deref(),
+                    rollout_path.as_path(),
+                    persisted_items.as_slice(),
+                )
+                .await;
             }
             RolloutCmd::Flush { ack } => {
                 // Ensure underlying file is flushed and then ack.
@@ -522,6 +552,7 @@ struct CompareThreadsDbQuery<'a> {
 async fn compare_threads_page_with_db(
     codex_home: &Path,
     canonical_page: &ThreadsPage,
+    state_db_ctx: Option<&StateDbContext>,
     query: CompareThreadsDbQuery<'_>,
 ) {
     let CompareThreadsDbQuery {
@@ -532,8 +563,12 @@ async fn compare_threads_page_with_db(
         archived_only,
         stage,
     } = query;
+    let Some(state_db_ctx) = state_db_ctx else {
+        return;
+    };
     let query_stage = format!("{stage}_query");
-    let Some(db_page) = state_db::list_threads_db(
+    let Some(db_ids) = state_db::list_thread_ids_db(
+        Some(state_db_ctx),
         codex_home,
         state_db::ListThreadsDbQuery {
             page_size: canonical_page.items.len(),
@@ -550,49 +585,32 @@ async fn compare_threads_page_with_db(
         return;
     };
 
-    let mut canonical_by_id = HashMap::new();
+    let mut canonical_paths = HashMap::new();
     for item in canonical_page.items.iter() {
         if let Some(id_str) = state_db::rollout_id_from_path(item.path.as_path())
             && let Ok(thread_id) = ThreadId::from_string(id_str.as_str())
         {
-            canonical_by_id.insert(thread_id, item);
+            canonical_paths.insert(thread_id, item.path.as_path());
         }
     }
 
-    let db_ids: HashSet<ThreadId> = db_page.items.iter().map(|item| item.id).collect();
+    let canonical_ids: HashSet<ThreadId> = canonical_paths.keys().copied().collect();
+    let db_ids: HashSet<ThreadId> = db_ids.into_iter().collect();
 
-    for db_item in db_page.items.iter() {
-        if let Some(canonical_item) = canonical_by_id.get(&db_item.id) {
-            if let Some(rollout_metadata) =
-                state_db::extract_rollout_metadata(canonical_item.path.as_path()).await
-            {
-                let diffs = rollout_metadata.diff_fields(db_item);
-                if !diffs.is_empty() {
-                    let diffs_display = diffs.join(", ");
-                    warn!(
-                        "state db discrepancy for thread {} during {stage}: {diffs_display}",
-                        db_item.id
-                    );
-                    state_db::record_discrepancy(stage, "field_mismatch");
-                }
-            }
-        } else {
+    for thread_id in db_ids.difference(&canonical_ids) {
+        warn!("state db has extra thread {thread_id} during {stage} compare");
+        state_db::record_discrepancy(stage, "extra_db_row");
+    }
+
+    for thread_id in canonical_ids.difference(&db_ids) {
+        if let Some(path) = canonical_paths.get(thread_id) {
             warn!(
-                "state db has extra thread {} during {stage} compare",
-                db_item.id
+                "state db missing thread {thread_id} during {stage} compare at {}",
+                path.display()
             );
-            state_db::record_discrepancy(stage, "extra_db_row");
+        } else {
+            warn!("state db missing thread {thread_id} during {stage} compare");
         }
-    }
-
-    for (thread_id, canonical_item) in canonical_by_id {
-        if db_ids.contains(&thread_id) {
-            continue;
-        }
-        warn!(
-            "state db missing thread {thread_id} during {stage} compare at {}",
-            canonical_item.path.display()
-        );
         state_db::record_discrepancy(stage, "missing_db_row");
     }
 }

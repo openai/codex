@@ -257,6 +257,76 @@ ON CONFLICT(id) DO UPDATE SET
         })
     }
 
+    /// List thread ids using keyset pagination without rollout scanning.
+    pub async fn list_thread_ids(
+        &self,
+        limit: usize,
+        anchor: Option<&Anchor>,
+        sort_key: SortKey,
+        allowed_sources: &[String],
+        model_providers: Option<&[String]>,
+        archived_only: bool,
+    ) -> Result<Vec<ThreadId>> {
+        let mut builder = QueryBuilder::<Sqlite>::new("SELECT id FROM threads WHERE 1 = 1");
+        if archived_only {
+            builder.push(" AND archived = 1");
+        } else {
+            builder.push(" AND archived = 0");
+        }
+        if !allowed_sources.is_empty() {
+            builder.push(" AND source IN (");
+            let mut separated = builder.separated(", ");
+            for source in allowed_sources {
+                separated.push_bind(source);
+            }
+            separated.push_unseparated(")");
+        }
+        if let Some(model_providers) = model_providers
+            && !model_providers.is_empty()
+        {
+            builder.push(" AND model_provider IN (");
+            let mut separated = builder.separated(", ");
+            for provider in model_providers {
+                separated.push_bind(provider);
+            }
+            separated.push_unseparated(")");
+        }
+        if let Some(anchor) = anchor {
+            let column = match sort_key {
+                SortKey::CreatedAt => "created_at",
+                SortKey::UpdatedAt => "updated_at",
+            };
+            builder.push(" AND (");
+            builder.push(column);
+            builder.push(" < ");
+            builder.push_bind(anchor.ts.as_str());
+            builder.push(" OR (");
+            builder.push(column);
+            builder.push(" = ");
+            builder.push_bind(anchor.ts.as_str());
+            builder.push(" AND id < ");
+            builder.push_bind(anchor.id.to_string());
+            builder.push("))");
+        }
+        let order_column = match sort_key {
+            SortKey::CreatedAt => "created_at",
+            SortKey::UpdatedAt => "updated_at",
+        };
+        builder.push(" ORDER BY ");
+        builder.push(order_column);
+        builder.push(" DESC, id DESC");
+        builder.push(" LIMIT ");
+        builder.push_bind(limit as i64);
+
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .map(|row| {
+                let id: String = row.try_get("id")?;
+                Ok(ThreadId::try_from(id)?)
+            })
+            .collect()
+    }
+
     /// Mark a thread as archived, ignoring requests for missing rows.
     pub async fn mark_archived(
         &self,
@@ -306,7 +376,7 @@ ON CONFLICT(id) DO UPDATE SET
         rollout_path: &Path,
         default_provider: &str,
         items: &[RolloutItem],
-        otel: &OtelManager,
+        otel: Option<&OtelManager>,
     ) -> Result<()> {
         if items.is_empty() {
             return Ok(());
@@ -323,7 +393,9 @@ ON CONFLICT(id) DO UPDATE SET
             metadata.updated_at = updated_at;
         }
         if let Err(err) = self.upsert_thread(&metadata).await {
-            otel.counter(DB_ERROR_METRIC, 1, &[("stage", "apply_rollout_items")]);
+            if let Some(otel) = otel {
+                otel.counter(DB_ERROR_METRIC, 1, &[("stage", "apply_rollout_items")]);
+            }
             return Err(err);
         }
         Ok(())

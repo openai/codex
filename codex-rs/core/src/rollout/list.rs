@@ -1108,9 +1108,17 @@ async fn find_thread_path_by_id_str_in_subdir(
         ARCHIVED_SESSIONS_SUBDIR => Some(true),
         _ => None,
     };
-    if let Ok(thread_id) = ThreadId::from_string(id_str) {
-        let db_path =
-            state_db::find_rollout_path_by_id(thread_id, archived_only, "find_path_query").await;
+    let state_db_ctx = state_db::open_if_present(codex_home, "").await;
+    if let Some(state_db_ctx) = state_db_ctx.as_deref()
+        && let Ok(thread_id) = ThreadId::from_string(id_str)
+    {
+        let db_path = state_db::find_rollout_path_by_id(
+            Some(state_db_ctx),
+            thread_id,
+            archived_only,
+            "find_path_query",
+        )
+        .await;
         let canonical_path = found.as_deref();
         if db_path.as_deref() != canonical_path {
             tracing::warn!(

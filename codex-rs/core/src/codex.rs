@@ -412,6 +412,10 @@ impl Codex {
         let state = self.session.state.lock().await;
         state.session_configuration.thread_config_snapshot()
     }
+
+    pub(crate) fn state_db(&self) -> Option<Arc<state_db::StateDbContext>> {
+        self.session.state_db()
+    }
 }
 
 /// Context for an initialized model agent
@@ -688,11 +692,12 @@ impl Session {
         // - load history metadata
         let rollout_fut = async {
             if config.ephemeral {
-                Ok(None)
+                Ok::<_, anyhow::Error>((None, None))
             } else {
-                RolloutRecorder::new(&config, rollout_params)
-                    .await
-                    .map(Some)
+                let state_db_ctx = state_db::init_if_enabled(&config, None).await;
+                let rollout_recorder =
+                    RolloutRecorder::new(&config, rollout_params, state_db_ctx.clone()).await?;
+                Ok((Some(rollout_recorder), state_db_ctx))
             }
         };
 
@@ -712,14 +717,14 @@ impl Session {
 
         // Join all independent futures.
         let (
-            rollout_recorder,
+            rollout_recorder_and_state_db,
             (history_log_id, history_entry_count),
             (auth, mcp_servers, auth_statuses),
         ) = tokio::join!(rollout_fut, history_meta_fut, auth_and_mcp_fut);
 
-        let rollout_recorder = rollout_recorder.map_err(|e| {
+        let (rollout_recorder, state_db_ctx) = rollout_recorder_and_state_db.map_err(|e| {
             error!("failed to initialize rollout recorder: {e:#}");
-            anyhow::Error::from(e)
+            e
         })?;
         let rollout_path = rollout_recorder
             .as_ref()
@@ -796,9 +801,6 @@ impl Session {
             config.active_profile.clone(),
         );
 
-        let state_db_enabled = state_db::init_if_enabled(&config, &otel_manager)
-            .await
-            .is_some();
         let mut default_shell = shell::default_user_shell();
         // Create the mutable state for the Session.
         if config.features.enabled(Feature::ShellSnapshot) {
@@ -826,17 +828,11 @@ impl Session {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            state_db: state_db_ctx.clone(),
         };
 
-        if state_db_enabled {
-            let mut rollout_for_state = {
-                let guard = services.rollout.lock().await;
-                guard.clone()
-            };
-            if let Some(rollout_for_state) = rollout_for_state.as_mut() {
-                state_db::reconcile_rollout(rollout_for_state.rollout_path()).await;
-            }
-            state_db::startup_summary(&config).await;
+        if let Some(state_db_ctx) = state_db_ctx.as_ref() {
+            state_db::startup_summary(Some(state_db_ctx), &config).await;
         }
 
         let sess = Arc::new(Session {
@@ -907,6 +903,10 @@ impl Session {
 
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
         self.tx_event.clone()
+    }
+
+    pub(crate) fn state_db(&self) -> Option<Arc<state_db::StateDbContext>> {
+        self.services.state_db.clone()
     }
 
     /// Ensure all rollout writes are durably flushed.
@@ -4380,6 +4380,7 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            state_db: None,
         };
 
         let turn_context = Session::make_turn_context(
@@ -4489,6 +4490,7 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            state_db: None,
         };
 
         let turn_context = Arc::new(Session::make_turn_context(

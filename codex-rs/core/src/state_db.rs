@@ -15,7 +15,6 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::OnceCell;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -27,51 +26,68 @@ pub struct StateDbContext {
     runtime: StateRuntimeHandle,
 }
 
-static STATE_DB: OnceCell<Option<Arc<StateDbContext>>> = OnceCell::const_new();
+impl StateDbContext {
+    pub fn new(runtime: StateRuntimeHandle) -> Self {
+        Self { runtime }
+    }
 
-/// Return the initialized state runtime context, if available.
-pub async fn context() -> Option<Arc<StateDbContext>> {
-    STATE_DB.get().cloned().flatten()
+    pub fn codex_home(&self) -> &Path {
+        self.runtime.codex_home()
+    }
 }
 
 /// Initialize the state runtime when the `sqlite` feature flag is enabled.
-pub async fn init_if_enabled(config: &Config, otel: &OtelManager) -> Option<Arc<StateDbContext>> {
-    STATE_DB
-        .get_or_init(|| async move {
-            if !config.features.enabled(Feature::Sqlite) {
-                // We delete the file on best effort basis to maintain retro-compatibility in the future.
-                tokio::fs::remove_file(config.codex_home.join(STATE_DB_FILENAME))
-                    .await
-                    .ok();
-                return None;
-            }
-            let runtime = match codex_state::StateRuntime::init(
-                config.codex_home.clone(),
-                config.model_provider_id.clone(),
-                otel.clone(),
-            )
+pub async fn init_if_enabled(
+    config: &Config,
+    otel: Option<&OtelManager>,
+) -> Option<Arc<StateDbContext>> {
+    if !config.features.enabled(Feature::Sqlite) {
+        // We delete the file on best effort basis to maintain retro-compatibility in the future.
+        tokio::fs::remove_file(config.codex_home.join(STATE_DB_FILENAME))
             .await
-            {
-                Ok(runtime) => runtime,
-                Err(err) => {
-                    warn!(
-                        "failed to initialize state runtime at {}: {err}",
-                        config.codex_home.display()
-                    );
-                    otel.counter("codex.db.init", 1, &[("status", "init_error")]);
-                    return None;
-                }
-            };
-            Some(Arc::new(StateDbContext { runtime }))
-        })
-        .await
-        .clone()
+            .ok();
+        return None;
+    }
+
+    let runtime = match codex_state::StateRuntime::init(
+        config.codex_home.clone(),
+        config.model_provider_id.clone(),
+        otel.cloned(),
+    )
+    .await
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            warn!(
+                "failed to initialize state runtime at {}: {err}",
+                config.codex_home.display()
+            );
+            if let Some(otel) = otel {
+                otel.counter("codex.db.init", 1, &[("status", "init_error")]);
+            }
+            return None;
+        }
+    };
+    Some(Arc::new(StateDbContext::new(runtime)))
 }
 
-/// Extract rollout metadata using the state runtime.
-pub async fn extract_rollout_metadata(path: &Path) -> Option<codex_state::ThreadMetadata> {
-    let ctx = context().await?;
-    ctx.runtime.extract(path).await
+/// Open the state runtime when the SQLite file exists, without feature gating.
+pub async fn open_if_present(
+    codex_home: &Path,
+    default_provider: &str,
+) -> Option<Arc<StateDbContext>> {
+    let db_path = codex_home.join(STATE_DB_FILENAME);
+    if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
+        return None;
+    }
+    let runtime = codex_state::StateRuntime::init(
+        codex_home.to_path_buf(),
+        default_provider.to_string(),
+        None,
+    )
+    .await
+    .ok()?;
+    Some(Arc::new(StateDbContext::new(runtime)))
 }
 
 fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
@@ -128,12 +144,13 @@ pub struct ListThreadsDbQuery<'a> {
     pub stage: &'a str,
 }
 
-/// List threads from SQLite for comparison against canonical rollout listings.
-pub async fn list_threads_db(
+/// List thread ids from SQLite for parity checks without rollout scanning.
+pub async fn list_thread_ids_db(
+    context: Option<&StateDbContext>,
     codex_home: &Path,
     query: ListThreadsDbQuery<'_>,
-) -> Option<codex_state::ThreadsPage> {
-    let ctx = context().await?;
+) -> Option<Vec<ThreadId>> {
+    let ctx = context?;
     let ListThreadsDbQuery {
         page_size,
         cursor,
@@ -143,10 +160,10 @@ pub async fn list_threads_db(
         archived_only,
         stage,
     } = query;
-    if ctx.runtime.codex_home() != codex_home {
+    if ctx.codex_home() != codex_home {
         warn!(
             "state db codex_home mismatch: expected {}, got {}",
-            ctx.runtime.codex_home().display(),
+            ctx.codex_home().display(),
             codex_home.display()
         );
     }
@@ -156,7 +173,7 @@ pub async fn list_threads_db(
     let model_providers = model_providers_to_vec(model_providers);
     match ctx
         .runtime
-        .list_threads(
+        .list_thread_ids(
             page_size,
             anchor.as_ref(),
             thread_sort_key(sort_key),
@@ -166,62 +183,22 @@ pub async fn list_threads_db(
         )
         .await
     {
-        Ok(page) => Some(page),
+        Ok(ids) => Some(ids),
         Err(err) => {
-            warn!("state db list_threads failed during {stage}: {err}");
+            warn!("state db list_thread_ids failed during {stage}: {err}");
             None
-        }
-    }
-}
-
-/// Load a thread's metadata from SQLite by id.
-pub async fn get_thread(thread_id: ThreadId, stage: &str) -> Option<codex_state::ThreadMetadata> {
-    let ctx = context().await?;
-    ctx.runtime
-        .get_thread(thread_id)
-        .await
-        .unwrap_or_else(|err| {
-            warn!("failed to load thread {thread_id} from state db during {stage}: {err}");
-            None
-        })
-}
-
-/// Compare a rollout file against the database and record discrepancies.
-pub async fn compare_rollout(path: &Path, stage: &str) {
-    let Some(rollout_metadata) = extract_rollout_metadata(path).await else {
-        return;
-    };
-    let get_stage = format!("{stage}.get_thread");
-    match get_thread(rollout_metadata.id, get_stage.as_str()).await {
-        Some(db_metadata) => {
-            let diffs = rollout_metadata.diff_fields(&db_metadata);
-            if diffs.is_empty() {
-                return;
-            }
-            let diffs_display = diffs.join(", ");
-            warn!(
-                "state db discrepancy for thread {} during {stage}: {diffs_display}",
-                rollout_metadata.id
-            );
-            record_discrepancy(stage, "field_mismatch");
-        }
-        None => {
-            warn!(
-                "state db missing thread {} during {stage} compare",
-                rollout_metadata.id
-            );
-            record_discrepancy(stage, "missing_db_row");
         }
     }
 }
 
 /// Look up the rollout path for a thread id using SQLite.
 pub async fn find_rollout_path_by_id(
+    context: Option<&StateDbContext>,
     thread_id: ThreadId,
     archived_only: Option<bool>,
     stage: &str,
 ) -> Option<PathBuf> {
-    let ctx = context().await?;
+    let ctx = context?;
     ctx.runtime
         .find_rollout_path_by_id(thread_id, archived_only)
         .await
@@ -232,24 +209,32 @@ pub async fn find_rollout_path_by_id(
 }
 
 /// Reconcile a rollout file into SQLite by extracting and upserting metadata.
-pub async fn reconcile_rollout(path: &Path) {
-    let Some(ctx) = context().await else {
+pub async fn reconcile_rollout(context: Option<&StateDbContext>, path: &Path) {
+    let Some(ctx) = context else {
         return;
     };
-    ctx.runtime.ingest_rollout_file(path).await;
+    ctx.runtime.ingest_rollout_file(path, None).await;
 }
 
 /// Apply rollout items incrementally to SQLite.
-pub async fn apply_rollout_items(path: &Path, items: &[RolloutItem]) {
-    let Some(ctx) = context().await else {
+pub async fn apply_rollout_items(
+    context: Option<&StateDbContext>,
+    path: &Path,
+    items: &[RolloutItem],
+) {
+    let Some(ctx) = context else {
         return;
     };
-    ctx.runtime.apply_rollout_items(path, items).await;
+    ctx.runtime.apply_rollout_items(path, items, None).await;
 }
 
 /// Mark a thread as archived in SQLite using the canonical archived rollout path.
-pub async fn mark_archived(thread_id: ThreadId, rollout_path: &Path) {
-    let Some(ctx) = context().await else {
+pub async fn mark_archived(
+    context: Option<&StateDbContext>,
+    thread_id: ThreadId,
+    rollout_path: &Path,
+) {
+    let Some(ctx) = context else {
         return;
     };
     let archived_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -266,8 +251,12 @@ pub async fn mark_archived(thread_id: ThreadId, rollout_path: &Path) {
 }
 
 /// Mark a thread as unarchived in SQLite using the canonical restored rollout path.
-pub async fn mark_unarchived(thread_id: ThreadId, rollout_path: &Path) {
-    let Some(ctx) = context().await else {
+pub async fn mark_unarchived(
+    context: Option<&StateDbContext>,
+    thread_id: ThreadId,
+    rollout_path: &Path,
+) {
+    let Some(ctx) = context else {
         return;
     };
     if let Err(err) = ctx.runtime.mark_unarchived(thread_id, rollout_path).await {
@@ -304,14 +293,12 @@ pub fn record_discrepancy(stage: &str, reason: &str) {
 }
 
 /// Emit a startup summary when SQLite state is enabled and initialized.
-pub async fn startup_summary(config: &Config) {
-    if !config.features.enabled(Feature::Sqlite) {
-        return;
+pub async fn startup_summary(context: Option<&StateDbContext>, config: &Config) {
+    if config.features.enabled(Feature::Sqlite)
+        && let Some(ctx) = context
+    {
+        ctx.runtime.startup_summary().await;
     }
-    let Some(ctx) = context().await else {
-        return;
-    };
-    ctx.runtime.startup_summary().await;
 }
 
 #[cfg(test)]

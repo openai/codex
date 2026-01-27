@@ -16,15 +16,12 @@ pub const STATE_DB_FILENAME: &str = "state.sqlite";
 
 const METRIC_DB_INIT: &str = "codex.db.init";
 
-/// A runtime wrapper around [`StateDb`] that owns configuration and metrics.
-///
-/// This should be the entry point of the crate.
+/// A runtime wrapper around [`StateDb`] that owns configuration.
 #[derive(Clone)]
 pub struct StateRuntime {
     db: Arc<StateDb>,
     codex_home: PathBuf,
     default_provider: String,
-    otel: OtelManager,
 }
 
 impl StateRuntime {
@@ -36,7 +33,7 @@ impl StateRuntime {
     pub async fn init(
         codex_home: PathBuf,
         default_provider: String,
-        otel: OtelManager,
+        otel: Option<OtelManager>,
     ) -> anyhow::Result<Arc<Self>> {
         let state_path = codex_home.join(STATE_DB_FILENAME);
         let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
@@ -44,48 +41,53 @@ impl StateRuntime {
             Ok(db) => Arc::new(db),
             Err(err) => {
                 warn!("failed to open state db at {}: {err}", state_path.display());
-                otel.counter(METRIC_DB_INIT, 1, &[("status", "open_error")]);
+                if let Some(otel) = otel.as_ref() {
+                    otel.counter(METRIC_DB_INIT, 1, &[("status", "open_error")]);
+                }
                 return Err(err);
             }
         };
-        otel.counter(METRIC_DB_INIT, 1, &[("status", "opened")]);
+        if let Some(otel) = otel.as_ref() {
+            otel.counter(METRIC_DB_INIT, 1, &[("status", "opened")]);
+        }
         let runtime = Arc::new(Self {
             db,
             codex_home,
             default_provider,
-            otel,
         });
         if !existed {
-            runtime
-                .otel
-                .counter(METRIC_DB_INIT, 1, &[("status", "created")]);
+            if let Some(otel) = otel.as_ref() {
+                otel.counter(METRIC_DB_INIT, 1, &[("status", "created")]);
+            }
             warn!("state db created; performing initial backfill scan of sessions/ (may be slow)");
             match runtime
                 .db
                 .backfill_sessions(
                     runtime.codex_home.as_path(),
                     runtime.default_provider.as_str(),
-                    Some(&runtime.otel),
+                    otel.as_ref(),
                 )
                 .await
             {
                 Ok(stats) => {
-                    runtime.otel.counter(
-                        DB_METRIC_BACKFILL,
-                        stats.upserted as i64,
-                        &[("status", "upserted")],
-                    );
-                    runtime.otel.counter(
-                        DB_METRIC_BACKFILL,
-                        stats.failed as i64,
-                        &[("status", "failed")],
-                    );
+                    if let Some(otel) = otel.as_ref() {
+                        otel.counter(
+                            DB_METRIC_BACKFILL,
+                            stats.upserted as i64,
+                            &[("status", "upserted")],
+                        );
+                        otel.counter(
+                            DB_METRIC_BACKFILL,
+                            stats.failed as i64,
+                            &[("status", "failed")],
+                        );
+                    }
                 }
                 Err(err) => {
                     warn!("state db backfill failed: {err}");
-                    runtime
-                        .otel
-                        .counter(DB_METRIC_BACKFILL, 1, &[("status", "error")]);
+                    if let Some(otel) = otel.as_ref() {
+                        otel.counter(DB_METRIC_BACKFILL, 1, &[("status", "error")]);
+                    }
                 }
             }
         }
@@ -133,30 +135,54 @@ impl StateRuntime {
             .await
     }
 
-    /// Extract rollout metadata.
-    pub async fn extract(&self, path: &Path) -> Option<crate::ThreadMetadata> {
-        // TODO(jif) add a cache if this is too slow.
-        let outcome = match extract_metadata_from_rollout(
-            path,
-            self.default_provider.as_str(),
-            Some(&self.otel),
-        )
-        .await
-        {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                warn!(
-                    "failed to extract rollout metadata {}: {err}",
-                    path.display()
-                );
-                self.otel
-                    .counter(DB_METRIC_COMPARE_ERROR, 1, &[("stage", "extract")]);
-                return None;
-            }
-        };
+    /// List thread ids using the underlying database (no rollout scanning).
+    pub async fn list_thread_ids(
+        &self,
+        limit: usize,
+        anchor: Option<&crate::Anchor>,
+        sort_key: crate::SortKey,
+        allowed_sources: &[String],
+        model_providers: Option<&[String]>,
+        archived_only: bool,
+    ) -> anyhow::Result<Vec<ThreadId>> {
+        self.db
+            .list_thread_ids(
+                limit,
+                anchor,
+                sort_key,
+                allowed_sources,
+                model_providers,
+                archived_only,
+            )
+            .await
+    }
 
-        if outcome.parse_errors > 0 {
-            self.otel.counter(
+    /// Extract rollout metadata.
+    pub async fn extract(
+        &self,
+        path: &Path,
+        otel: Option<&OtelManager>,
+    ) -> Option<crate::ThreadMetadata> {
+        // TODO(jif) add a cache if this is too slow.
+        let outcome =
+            match extract_metadata_from_rollout(path, self.default_provider.as_str(), otel).await {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    warn!(
+                        "failed to extract rollout metadata {}: {err}",
+                        path.display()
+                    );
+                    if let Some(otel) = otel {
+                        otel.counter(DB_METRIC_COMPARE_ERROR, 1, &[("stage", "extract")]);
+                    }
+                    return None;
+                }
+            };
+
+        if outcome.parse_errors > 0
+            && let Some(otel) = otel
+        {
+            otel.counter(
                 DB_METRIC_COMPARE_ERROR,
                 outcome.parse_errors as i64,
                 &[("stage", "extract_per_line")],
@@ -166,22 +192,28 @@ impl StateRuntime {
     }
 
     /// Ingest a rollout file by extracting metadata and upserting it into the database.
-    pub async fn ingest_rollout_file(&self, path: &Path) {
-        let Some(metadata) = self.extract(path).await else {
+    pub async fn ingest_rollout_file(&self, path: &Path, otel: Option<&OtelManager>) {
+        let Some(metadata) = self.extract(path, otel).await else {
             return;
         };
         if let Err(err) = self.db.upsert_thread(&metadata).await {
             warn!("failed to reconcile rollout {}: {err}", path.display());
-            self.otel
-                .counter(DB_ERROR_METRIC, 1, &[("stage", "ingest_rollout_file")]);
+            if let Some(otel) = otel {
+                otel.counter(DB_ERROR_METRIC, 1, &[("stage", "ingest_rollout_file")]);
+            }
         }
     }
 
     /// Apply rollout items incrementally using the underlying database.
-    pub async fn apply_rollout_items(&self, path: &Path, items: &[RolloutItem]) {
+    pub async fn apply_rollout_items(
+        &self,
+        path: &Path,
+        items: &[RolloutItem],
+        otel: Option<&OtelManager>,
+    ) {
         if let Err(err) = self
             .db
-            .apply_rollout_items(path, self.default_provider.as_str(), items, &self.otel)
+            .apply_rollout_items(path, self.default_provider.as_str(), items, otel)
             .await
         {
             warn!(
