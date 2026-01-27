@@ -98,10 +98,16 @@ jobs:
           targets: ${{ matrix.target }}
 
       - if: ${{ matrix.install_musl }}
+        name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - if: ${{ matrix.install_musl }}
         name: Install musl build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools pkg-config
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
 
       - name: Build exec server binaries
         run: cargo build --release --target ${{ matrix.target }} --bin codex-exec-mcp-server --bin codex-execve-wrapper
@@ -198,7 +204,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/bminor/bash /tmp/bash
+          git clone --depth 1 https://github.com/bolinfest/bash /tmp/bash
           cd /tmp/bash
           git fetch --depth 1 origin a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
           git checkout a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
@@ -240,7 +246,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/bminor/bash /tmp/bash
+          git clone --depth 1 https://github.com/bolinfest/bash /tmp/bash
           cd /tmp/bash
           git fetch --depth 1 origin a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
           git checkout a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b

@@ -20,11 +20,12 @@ use codex_rmcp_client::perform_oauth_login;
 use codex_rmcp_client::supports_oauth_login;
 
 /// Subcommands:
-/// - `serve`  — run the MCP server on stdio
 /// - `list`   — list configured servers (with `--json`)
 /// - `get`    — show a single server (with `--json`)
 /// - `add`    — add a server launcher entry to `~/.codex/config.toml`
 /// - `remove` — delete a server entry
+/// - `login`  — authenticate with MCP server using OAuth
+/// - `logout` — remove OAuth credentials for MCP server
 #[derive(Debug, clap::Parser)]
 pub struct McpCli {
     #[clap(flatten)]
@@ -246,6 +247,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
+        scopes: None,
     };
 
     servers.insert(name.clone(), new_entry);
@@ -346,6 +348,11 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
         } => (url.clone(), http_headers.clone(), env_http_headers.clone()),
         _ => bail!("OAuth login is only supported for streamable HTTP servers."),
     };
+
+    let mut scopes = scopes;
+    if scopes.is_empty() {
+        scopes = server.scopes.clone().unwrap_or_default();
+    }
 
     perform_oauth_login(
         &name,

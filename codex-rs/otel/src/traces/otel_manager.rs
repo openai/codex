@@ -40,7 +40,7 @@ impl OtelManager {
         auth_mode: Option<AuthMode>,
         log_user_prompts: bool,
         terminal_type: String,
-        _session_source: SessionSource,
+        session_source: SessionSource,
     ) -> OtelManager {
         Self {
             metadata: OtelEventMetadata {
@@ -48,6 +48,7 @@ impl OtelManager {
                 auth_mode: auth_mode.map(|m| m.to_string()),
                 account_id,
                 account_email,
+                session_source: session_source.to_string(),
                 model: model.to_owned(),
                 slug: slug.to_owned(),
                 log_user_prompts,
@@ -484,6 +485,7 @@ impl OtelManager {
             ResponseEvent::ReasoningSummaryPartAdded { .. } => {
                 "reasoning_summary_part_added".into()
             }
+            ResponseEvent::ServerReasoningIncluded(_) => "server_reasoning_included".into(),
             ResponseEvent::RateLimits(_) => "rate_limits".into(),
             ResponseEvent::ModelsEtag(_) => "models_etag".into(),
         }

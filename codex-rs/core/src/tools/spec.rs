@@ -8,8 +8,10 @@ use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolRegistryBuilder;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -27,6 +29,7 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
     pub collab_tools: bool,
+    pub collaboration_modes_tools: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -45,6 +48,7 @@ impl ToolsConfig {
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_collab_tools = features.enabled(Feature::Collab);
+        let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -76,6 +80,7 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
             collab_tools: include_collab_tools,
+            collaboration_modes_tools: include_collaboration_modes_tools,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
     }
@@ -84,7 +89,7 @@ impl ToolsConfig {
 /// Generic JSON‑Schema subset needed for our tool definitions
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub(crate) enum JsonSchema {
+pub enum JsonSchema {
     Boolean {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
@@ -120,7 +125,7 @@ pub(crate) enum JsonSchema {
 /// Whether additional properties are allowed, and if so, any required schema
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
-pub(crate) enum AdditionalProperties {
+pub enum AdditionalProperties {
     Boolean(bool),
     Schema(Box<JsonSchema>),
 }
@@ -513,7 +518,7 @@ fn create_wait_tool() -> ToolSpec {
         "timeout_ms".to_string(),
         JsonSchema::Number {
             description: Some(format!(
-                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS} and max {MAX_WAIT_TIMEOUT_MS}."
+                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS}, min {MIN_WAIT_TIMEOUT_MS}, and max {MAX_WAIT_TIMEOUT_MS}. Avoid tight polling loops; prefer longer waits (seconds to minutes)."
             )),
         },
     );
@@ -527,6 +532,98 @@ fn create_wait_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["ids".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_request_user_input_tool() -> ToolSpec {
+    let mut option_props = BTreeMap::new();
+    option_props.insert(
+        "label".to_string(),
+        JsonSchema::String {
+            description: Some("User-facing label (1-5 words).".to_string()),
+        },
+    );
+    option_props.insert(
+        "description".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "One short sentence explaining impact/tradeoff if selected.".to_string(),
+            ),
+        },
+    );
+
+    let options_schema = JsonSchema::Array {
+        description: Some(
+            "Optional 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Do not include an \"Other\" option in this list; use isOther on the question to request a free form choice. If the question is free form in nature, please do not have any option."
+                .to_string(),
+        ),
+        items: Box::new(JsonSchema::Object {
+            properties: option_props,
+            required: Some(vec!["label".to_string(), "description".to_string()]),
+            additional_properties: Some(false.into()),
+        }),
+    };
+
+    let mut question_props = BTreeMap::new();
+    question_props.insert(
+        "id".to_string(),
+        JsonSchema::String {
+            description: Some("Stable identifier for mapping answers (snake_case).".to_string()),
+        },
+    );
+    question_props.insert(
+        "header".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Short header label shown in the UI (12 or fewer chars).".to_string(),
+            ),
+        },
+    );
+    question_props.insert(
+        "question".to_string(),
+        JsonSchema::String {
+            description: Some("Single-sentence prompt shown to the user.".to_string()),
+        },
+    );
+    question_props.insert(
+        "isOther".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "True when this question should include a free-form \"Other\" option. Otherwise false."
+                    .to_string(),
+            ),
+        },
+    );
+    question_props.insert("options".to_string(), options_schema);
+
+    let questions_schema = JsonSchema::Array {
+        description: Some("Questions to show the user. Prefer 1 and do not exceed 3".to_string()),
+        items: Box::new(JsonSchema::Object {
+            properties: question_props,
+            required: Some(vec![
+                "id".to_string(),
+                "header".to_string(),
+                "question".to_string(),
+                "isOther".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        }),
+    };
+
+    let mut properties = BTreeMap::new();
+    properties.insert("questions".to_string(), questions_schema);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "request_user_input".to_string(),
+        description:
+            "Request user input for one to three short questions and wait for the response."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["questions".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1016,6 +1113,26 @@ pub(crate) fn mcp_tool_to_openai_tool(
     })
 }
 
+fn dynamic_tool_to_openai_tool(
+    tool: &DynamicToolSpec,
+) -> Result<ResponsesApiTool, serde_json::Error> {
+    let input_schema = parse_tool_input_schema(&tool.input_schema)?;
+
+    Ok(ResponsesApiTool {
+        name: tool.name.clone(),
+        description: tool.description.clone(),
+        strict: false,
+        parameters: input_schema,
+    })
+}
+
+/// Parse the tool input_schema or return an error for invalid schema
+pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, serde_json::Error> {
+    let mut input_schema = input_schema.clone();
+    sanitize_json_schema(&mut input_schema);
+    serde_json::from_value::<JsonSchema>(input_schema)
+}
+
 /// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
 /// JsonSchema enum. This function:
 /// - Ensures every schema object has a "type". If missing, infers it from
@@ -1131,15 +1248,18 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 pub(crate) fn build_specs(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
+    dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::CollabHandler;
+    use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
+    use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
@@ -1153,10 +1273,12 @@ pub(crate) fn build_specs(
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
     let plan_handler = Arc::new(PlanHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
+    let dynamic_tool_handler = Arc::new(DynamicToolHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
+    let request_user_input_handler = Arc::new(RequestUserInputHandler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1196,6 +1318,11 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+
+    if config.collaboration_modes_tools {
+        builder.push_spec(create_request_user_input_tool());
+        builder.register_handler("request_user_input", request_user_input_handler);
+    }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
         match apply_patch_tool_type {
@@ -1287,6 +1414,23 @@ pub(crate) fn build_specs(
                 }
                 Err(e) => {
                     tracing::error!("Failed to convert {name:?} MCP tool to OpenAI tool: {e:?}");
+                }
+            }
+        }
+    }
+
+    if !dynamic_tools.is_empty() {
+        for tool in dynamic_tools {
+            match dynamic_tool_to_openai_tool(tool) {
+                Ok(converted_tool) => {
+                    builder.push_spec(ToolSpec::Function(converted_tool));
+                    builder.register_handler(tool.name.clone(), dynamic_tool_handler.clone());
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to convert dynamic tool {:?} to OpenAI tool: {e:?}",
+                        tool.name
+                    );
                 }
             }
         }
@@ -1398,12 +1542,13 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::UnifiedExec);
+        features.enable(Feature::CollaborationModes);
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
         });
-        let (tools, _) = build_specs(&config, None).build();
+        let (tools, _) = build_specs(&config, None, &[]).build();
 
         // Build actual map name -> spec
         use std::collections::BTreeMap;
@@ -1430,6 +1575,7 @@ mod tests {
             create_list_mcp_resource_templates_tool(),
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
+            create_request_user_input_tool(),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
@@ -1460,16 +1606,44 @@ mod tests {
         let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
         features.enable(Feature::Collab);
+        features.enable(Feature::CollaborationModes);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
         });
-        let (tools, _) = build_specs(&tools_config, None).build();
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(
             &tools,
             &["spawn_agent", "send_input", "wait", "close_agent"],
         );
+    }
+
+    #[test]
+    fn request_user_input_requires_collaboration_modes_feature() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.disable(Feature::CollaborationModes);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
+        assert!(
+            !tools.iter().any(|t| t.spec.name() == "request_user_input"),
+            "request_user_input should be disabled when collaboration_modes feature is off"
+        );
+
+        features.enable(Feature::CollaborationModes);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+        });
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
+        assert_contains_tool_names(&tools, &["request_user_input"]);
     }
 
     fn assert_model_tools(
@@ -1485,7 +1659,7 @@ mod tests {
             features,
             web_search_mode,
         });
-        let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
+        let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
         let tool_names = tools.iter().map(|t| t.spec.name()).collect::<Vec<_>>();
         assert_eq!(&tool_names, &expected_tools,);
     }
@@ -1501,7 +1675,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
         });
-        let (tools, _) = build_specs(&tools_config, None).build();
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
         let tool = find_tool(&tools, "web_search");
         assert_eq!(
@@ -1523,7 +1697,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
         });
-        let (tools, _) = build_specs(&tools_config, None).build();
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
         let tool = find_tool(&tools, "web_search");
         assert_eq!(
@@ -1536,9 +1710,11 @@ mod tests {
 
     #[test]
     fn test_build_specs_gpt5_codex_default() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5-codex",
-            &Features::with_defaults(),
+            &features,
             Some(WebSearchMode::Cached),
             &[
                 "shell_command",
@@ -1546,6 +1722,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1555,9 +1732,11 @@ mod tests {
 
     #[test]
     fn test_build_specs_gpt51_codex_default() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5.1-codex",
-            &Features::with_defaults(),
+            &features,
             Some(WebSearchMode::Cached),
             &[
                 "shell_command",
@@ -1565,6 +1744,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1574,9 +1754,12 @@ mod tests {
 
     #[test]
     fn test_build_specs_gpt5_codex_unified_exec_web_search() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5-codex",
-            Features::with_defaults().enable(Feature::UnifiedExec),
+            &features,
             Some(WebSearchMode::Live),
             &[
                 "exec_command",
@@ -1585,6 +1768,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1594,9 +1778,12 @@ mod tests {
 
     #[test]
     fn test_build_specs_gpt51_codex_unified_exec_web_search() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5.1-codex",
-            Features::with_defaults().enable(Feature::UnifiedExec),
+            &features,
             Some(WebSearchMode::Live),
             &[
                 "exec_command",
@@ -1605,6 +1792,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1614,9 +1802,11 @@ mod tests {
 
     #[test]
     fn test_codex_mini_defaults() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "codex-mini-latest",
-            &Features::with_defaults(),
+            &features,
             Some(WebSearchMode::Cached),
             &[
                 "local_shell",
@@ -1624,6 +1814,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "web_search",
                 "view_image",
             ],
@@ -1632,9 +1823,11 @@ mod tests {
 
     #[test]
     fn test_codex_5_1_mini_defaults() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5.1-codex-mini",
-            &Features::with_defaults(),
+            &features,
             Some(WebSearchMode::Cached),
             &[
                 "shell_command",
@@ -1642,6 +1835,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1651,9 +1845,11 @@ mod tests {
 
     #[test]
     fn test_gpt_5_defaults() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5",
-            &Features::with_defaults(),
+            &features,
             Some(WebSearchMode::Cached),
             &[
                 "shell",
@@ -1661,6 +1857,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "web_search",
                 "view_image",
             ],
@@ -1669,9 +1866,11 @@ mod tests {
 
     #[test]
     fn test_gpt_5_1_defaults() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "gpt-5.1",
-            &Features::with_defaults(),
+            &features,
             Some(WebSearchMode::Cached),
             &[
                 "shell_command",
@@ -1679,6 +1878,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1688,9 +1888,11 @@ mod tests {
 
     #[test]
     fn test_exp_5_1_defaults() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "exp-5.1",
-            &Features::with_defaults(),
+            &features,
             Some(WebSearchMode::Cached),
             &[
                 "exec_command",
@@ -1699,6 +1901,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1708,9 +1911,12 @@ mod tests {
 
     #[test]
     fn test_codex_mini_unified_exec_web_search() {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        features.enable(Feature::CollaborationModes);
         assert_model_tools(
             "codex-mini-latest",
-            Features::with_defaults().enable(Feature::UnifiedExec),
+            &features,
             Some(WebSearchMode::Live),
             &[
                 "exec_command",
@@ -1719,6 +1925,7 @@ mod tests {
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
                 "update_plan",
+                "request_user_input",
                 "web_search",
                 "view_image",
             ],
@@ -1736,7 +1943,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Live),
         });
-        let (tools, _) = build_specs(&tools_config, Some(HashMap::new())).build();
+        let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
 
         // Only check the shell variant and a couple of core tools.
         let mut subset = vec!["exec_command", "write_stdin", "update_plan"];
@@ -1758,7 +1965,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
         });
-        let (tools, _) = build_specs(&tools_config, None).build();
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
         assert!(!find_tool(&tools, "exec_command").supports_parallel_tool_calls);
         assert!(!find_tool(&tools, "write_stdin").supports_parallel_tool_calls);
@@ -1777,7 +1984,7 @@ mod tests {
             features: &features,
             web_search_mode: Some(WebSearchMode::Cached),
         });
-        let (tools, _) = build_specs(&tools_config, None).build();
+        let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
         assert!(
             tools
@@ -1844,6 +2051,7 @@ mod tests {
                     description: Some("Do something cool".to_string()),
                 },
             )])),
+            &[],
         )
         .build();
 
@@ -1953,7 +2161,7 @@ mod tests {
             ),
         ]);
 
-        let (tools, _) = build_specs(&tools_config, Some(tools_map)).build();
+        let (tools, _) = build_specs(&tools_config, Some(tools_map), &[]).build();
 
         // Only assert that the MCP tools themselves are sorted by fully-qualified name.
         let mcp_names: Vec<_> = tools
@@ -2002,6 +2210,7 @@ mod tests {
                     description: Some("Search docs".to_string()),
                 },
             )])),
+            &[],
         )
         .build();
 
@@ -2057,6 +2266,7 @@ mod tests {
                     description: Some("Pagination".to_string()),
                 },
             )])),
+            &[],
         )
         .build();
 
@@ -2111,6 +2321,7 @@ mod tests {
                     description: Some("Tags".to_string()),
                 },
             )])),
+            &[],
         )
         .build();
 
@@ -2167,6 +2378,7 @@ mod tests {
                     description: Some("AnyOf Value".to_string()),
                 },
             )])),
+            &[],
         )
         .build();
 
@@ -2304,6 +2516,7 @@ Examples of valid command strings:
                     description: Some("Do something cool".to_string()),
                 },
             )])),
+            &[],
         )
         .build();
 

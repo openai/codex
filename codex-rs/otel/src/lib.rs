@@ -9,7 +9,7 @@ use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::metrics::MetricsError;
 use crate::metrics::Result as MetricsResult;
-use crate::metrics::timer::Timer;
+pub use crate::metrics::timer::Timer;
 use crate::metrics::validation::validate_tag_key;
 use crate::metrics::validation::validate_tag_value;
 use crate::otel_provider::OtelProvider;
@@ -31,6 +31,7 @@ pub struct OtelEventMetadata {
     pub(crate) auth_mode: Option<String>,
     pub(crate) account_id: Option<String>,
     pub(crate) account_email: Option<String>,
+    pub(crate) session_source: String,
     pub(crate) model: String,
     pub(crate) slug: String,
     pub(crate) log_user_prompts: bool,
@@ -149,8 +150,13 @@ impl OtelManager {
         if !self.metrics_use_metadata_tags {
             return Ok(Vec::new());
         }
-        let mut tags = Vec::with_capacity(5);
+        let mut tags = Vec::with_capacity(6);
         Self::push_metadata_tag(&mut tags, "auth_mode", self.metadata.auth_mode.as_deref())?;
+        Self::push_metadata_tag(
+            &mut tags,
+            "session_source",
+            Some(self.metadata.session_source.as_str()),
+        )?;
         Self::push_metadata_tag(&mut tags, "model", Some(self.metadata.model.as_str()))?;
         Self::push_metadata_tag(&mut tags, "app.version", Some(self.metadata.app_version))?;
         Ok(tags)
@@ -169,4 +175,12 @@ impl OtelManager {
         tags.push((key, value));
         Ok(())
     }
+}
+
+/// Start a metrics timer using the globally installed metrics client.
+pub fn start_global_timer(name: &str, tags: &[(&str, &str)]) -> MetricsResult<Timer> {
+    let Some(metrics) = crate::metrics::global() else {
+        return Err(MetricsError::ExporterDisabled);
+    };
+    metrics.start_timer(name, tags)
 }

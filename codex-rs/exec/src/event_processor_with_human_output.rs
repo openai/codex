@@ -3,7 +3,16 @@ use codex_common::elapsed::format_elapsed;
 use codex_core::config::Config;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningRawContentEvent;
+use codex_core::protocol::AgentStatus;
 use codex_core::protocol::BackgroundEventEvent;
+use codex_core::protocol::CollabAgentInteractionBeginEvent;
+use codex_core::protocol::CollabAgentInteractionEndEvent;
+use codex_core::protocol::CollabAgentSpawnBeginEvent;
+use codex_core::protocol::CollabAgentSpawnEndEvent;
+use codex_core::protocol::CollabCloseBeginEvent;
+use codex_core::protocol::CollabCloseEndEvent;
+use codex_core::protocol::CollabWaitingBeginEvent;
+use codex_core::protocol::CollabWaitingEndEvent;
 use codex_core::protocol::DeprecationNoticeEvent;
 use codex_core::protocol::ErrorEvent;
 use codex_core::protocol::Event;
@@ -23,6 +32,7 @@ use codex_core::protocol::TurnCompleteEvent;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::web_search::web_search_detail;
 use codex_protocol::num_format::format_with_separators;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
@@ -361,8 +371,20 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     }
                 }
             }
-            EventMsg::WebSearchEnd(WebSearchEndEvent { call_id: _, query }) => {
-                ts_msg!(self, "🌐 Searched: {query}");
+            EventMsg::WebSearchBegin(_) => {
+                ts_msg!(self, "🌐 Searching the web...");
+            }
+            EventMsg::WebSearchEnd(WebSearchEndEvent {
+                call_id: _,
+                query,
+                action,
+            }) => {
+                let detail = web_search_detail(Some(&action), &query);
+                if detail.is_empty() {
+                    ts_msg!(self, "🌐 Searched the web");
+                } else {
+                    ts_msg!(self, "🌐 Searched: {detail}");
+                }
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id,
@@ -571,19 +593,164 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::ContextCompacted(_) => {
                 ts_msg!(self, "context compacted");
             }
-            EventMsg::CollabAgentSpawnBegin(_)
-            | EventMsg::CollabAgentSpawnEnd(_)
-            | EventMsg::CollabAgentInteractionBegin(_)
-            | EventMsg::CollabAgentInteractionEnd(_)
-            | EventMsg::CollabWaitingBegin(_)
-            | EventMsg::CollabWaitingEnd(_)
-            | EventMsg::CollabCloseBegin(_)
-            | EventMsg::CollabCloseEnd(_) => {
-                // TODO(jif) handle collab tools.
+            EventMsg::CollabAgentSpawnBegin(CollabAgentSpawnBeginEvent {
+                call_id,
+                sender_thread_id: _,
+                prompt,
+            }) => {
+                ts_msg!(
+                    self,
+                    "{} {}",
+                    "collab".style(self.magenta),
+                    format_collab_invocation("spawn_agent", &call_id, Some(&prompt))
+                        .style(self.bold)
+                );
+            }
+            EventMsg::CollabAgentSpawnEnd(CollabAgentSpawnEndEvent {
+                call_id,
+                sender_thread_id: _,
+                new_thread_id,
+                prompt,
+                status,
+            }) => {
+                let success = new_thread_id.is_some() && !is_collab_status_failure(&status);
+                let title_style = if success { self.green } else { self.red };
+                let title = format!(
+                    "{} {}:",
+                    format_collab_invocation("spawn_agent", &call_id, Some(&prompt)),
+                    format_collab_status(&status)
+                );
+                ts_msg!(self, "{}", title.style(title_style));
+                if let Some(new_thread_id) = new_thread_id {
+                    eprintln!("  agent: {}", new_thread_id.to_string().style(self.dimmed));
+                }
+            }
+            EventMsg::CollabAgentInteractionBegin(CollabAgentInteractionBeginEvent {
+                call_id,
+                sender_thread_id: _,
+                receiver_thread_id,
+                prompt,
+            }) => {
+                ts_msg!(
+                    self,
+                    "{} {}",
+                    "collab".style(self.magenta),
+                    format_collab_invocation("send_input", &call_id, Some(&prompt))
+                        .style(self.bold)
+                );
+                eprintln!(
+                    "  receiver: {}",
+                    receiver_thread_id.to_string().style(self.dimmed)
+                );
+            }
+            EventMsg::CollabAgentInteractionEnd(CollabAgentInteractionEndEvent {
+                call_id,
+                sender_thread_id: _,
+                receiver_thread_id,
+                prompt,
+                status,
+            }) => {
+                let success = !is_collab_status_failure(&status);
+                let title_style = if success { self.green } else { self.red };
+                let title = format!(
+                    "{} {}:",
+                    format_collab_invocation("send_input", &call_id, Some(&prompt)),
+                    format_collab_status(&status)
+                );
+                ts_msg!(self, "{}", title.style(title_style));
+                eprintln!(
+                    "  receiver: {}",
+                    receiver_thread_id.to_string().style(self.dimmed)
+                );
+            }
+            EventMsg::CollabWaitingBegin(CollabWaitingBeginEvent {
+                sender_thread_id: _,
+                receiver_thread_ids,
+                call_id,
+            }) => {
+                ts_msg!(
+                    self,
+                    "{} {}",
+                    "collab".style(self.magenta),
+                    format_collab_invocation("wait", &call_id, None).style(self.bold)
+                );
+                eprintln!(
+                    "  receivers: {}",
+                    format_receiver_list(&receiver_thread_ids).style(self.dimmed)
+                );
+            }
+            EventMsg::CollabWaitingEnd(CollabWaitingEndEvent {
+                sender_thread_id: _,
+                call_id,
+                statuses,
+            }) => {
+                if statuses.is_empty() {
+                    ts_msg!(
+                        self,
+                        "{} {}:",
+                        format_collab_invocation("wait", &call_id, None),
+                        "timed out".style(self.yellow)
+                    );
+                    return CodexStatus::Running;
+                }
+                let success = !statuses.values().any(is_collab_status_failure);
+                let title_style = if success { self.green } else { self.red };
+                let title = format!(
+                    "{} {} agents complete:",
+                    format_collab_invocation("wait", &call_id, None),
+                    statuses.len()
+                );
+                ts_msg!(self, "{}", title.style(title_style));
+                let mut sorted = statuses
+                    .into_iter()
+                    .map(|(thread_id, status)| (thread_id.to_string(), status))
+                    .collect::<Vec<_>>();
+                sorted.sort_by(|(left, _), (right, _)| left.cmp(right));
+                for (thread_id, status) in sorted {
+                    eprintln!(
+                        "  {} {}",
+                        thread_id.style(self.dimmed),
+                        format_collab_status(&status).style(style_for_agent_status(&status, self))
+                    );
+                }
+            }
+            EventMsg::CollabCloseBegin(CollabCloseBeginEvent {
+                call_id,
+                sender_thread_id: _,
+                receiver_thread_id,
+            }) => {
+                ts_msg!(
+                    self,
+                    "{} {}",
+                    "collab".style(self.magenta),
+                    format_collab_invocation("close_agent", &call_id, None).style(self.bold)
+                );
+                eprintln!(
+                    "  receiver: {}",
+                    receiver_thread_id.to_string().style(self.dimmed)
+                );
+            }
+            EventMsg::CollabCloseEnd(CollabCloseEndEvent {
+                call_id,
+                sender_thread_id: _,
+                receiver_thread_id,
+                status,
+            }) => {
+                let success = !is_collab_status_failure(&status);
+                let title_style = if success { self.green } else { self.red };
+                let title = format!(
+                    "{} {}:",
+                    format_collab_invocation("close_agent", &call_id, None),
+                    format_collab_status(&status)
+                );
+                ts_msg!(self, "{}", title.style(title_style));
+                eprintln!(
+                    "  receiver: {}",
+                    receiver_thread_id.to_string().style(self.dimmed)
+                );
             }
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
-            EventMsg::WebSearchBegin(_)
-            | EventMsg::ExecApprovalRequest(_)
+            EventMsg::ExecApprovalRequest(_)
             | EventMsg::ApplyPatchApprovalRequest(_)
             | EventMsg::TerminalInteraction(_)
             | EventMsg::ExecCommandOutputDelta(_)
@@ -606,7 +773,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::SkillsUpdateAvailable
             | EventMsg::UndoCompleted(_)
             | EventMsg::UndoStarted(_)
-            | EventMsg::ThreadRolledBack(_) => {}
+            | EventMsg::ThreadRolledBack(_)
+            | EventMsg::RequestUserInput(_)
+            | EventMsg::DynamicToolCallRequest(_) => {}
         }
         CodexStatus::Running
     }
@@ -650,6 +819,78 @@ fn format_file_change(change: &FileChange) -> &'static str {
             move_path: None, ..
         } => "M",
     }
+}
+
+fn format_collab_invocation(tool: &str, call_id: &str, prompt: Option<&str>) -> String {
+    let prompt = prompt
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+        .map(|prompt| truncate_preview(prompt, 120));
+    match prompt {
+        Some(prompt) => format!("{tool}({call_id}, prompt=\"{prompt}\")"),
+        None => format!("{tool}({call_id})"),
+    }
+}
+
+fn format_collab_status(status: &AgentStatus) -> String {
+    match status {
+        AgentStatus::PendingInit => "pending init".to_string(),
+        AgentStatus::Running => "running".to_string(),
+        AgentStatus::Completed(Some(message)) => {
+            let preview = truncate_preview(message.trim(), 120);
+            if preview.is_empty() {
+                "completed".to_string()
+            } else {
+                format!("completed: \"{preview}\"")
+            }
+        }
+        AgentStatus::Completed(None) => "completed".to_string(),
+        AgentStatus::Errored(message) => {
+            let preview = truncate_preview(message.trim(), 120);
+            if preview.is_empty() {
+                "errored".to_string()
+            } else {
+                format!("errored: \"{preview}\"")
+            }
+        }
+        AgentStatus::Shutdown => "shutdown".to_string(),
+        AgentStatus::NotFound => "not found".to_string(),
+    }
+}
+
+fn style_for_agent_status(
+    status: &AgentStatus,
+    processor: &EventProcessorWithHumanOutput,
+) -> Style {
+    match status {
+        AgentStatus::PendingInit | AgentStatus::Shutdown => processor.dimmed,
+        AgentStatus::Running => processor.cyan,
+        AgentStatus::Completed(_) => processor.green,
+        AgentStatus::Errored(_) | AgentStatus::NotFound => processor.red,
+    }
+}
+
+fn is_collab_status_failure(status: &AgentStatus) -> bool {
+    matches!(status, AgentStatus::Errored(_) | AgentStatus::NotFound)
+}
+
+fn format_receiver_list(ids: &[codex_protocol::ThreadId]) -> String {
+    if ids.is_empty() {
+        return "none".to_string();
+    }
+    ids.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn truncate_preview(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+
+    let preview = text.chars().take(max_chars).collect::<String>();
+    format!("{preview}…")
 }
 
 fn format_mcp_invocation(invocation: &McpInvocation) -> String {

@@ -22,6 +22,7 @@ codex-common = { workspace = true, features = ["cli"] }
 codex-core = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-file-search = { workspace = true }
+codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }
@@ -34,6 +35,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 mcp-types = { workspace = true }
 tempfile = { workspace = true }
+time = { workspace = true }
 toml = { workspace = true }
 tokio = { workspace = true, features = [
     "io-std",
@@ -48,11 +50,20 @@ uuid = { workspace = true, features = ["serde", "v7"] }
 
 [dev-dependencies]
 app_test_support = { workspace = true }
+axum = { workspace = true, default-features = false, features = [
+    "http1",
+    "json",
+    "tokio",
+] }
 base64 = { workspace = true }
 core_test_support = { workspace = true }
 mcp-types = { workspace = true }
 os_info = { workspace = true }
 pretty_assertions = { workspace = true }
+rmcp = { workspace = true, default-features = false, features = [
+    "server",
+    "transport-streamable-http-server",
+] }
 serial_test = { workspace = true }
 wiremock = { workspace = true }
 shlex = { workspace = true }

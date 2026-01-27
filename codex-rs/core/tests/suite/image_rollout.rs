@@ -128,6 +128,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -135,7 +136,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
     codex.submit(Op::Shutdown).await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::ShutdownComplete)).await;
 
-    let rollout_path = codex.rollout_path();
+    let rollout_path = codex.rollout_path().expect("rollout path");
     let rollout_text = read_rollout_text(&rollout_path).await?;
     let actual = find_user_message_with_image(&rollout_text)
         .expect("expected user message with input image in rollout");
@@ -156,6 +157,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
                 text: "pasted image".to_string(),
             },
         ],
+        end_turn: None,
     };
 
     assert_eq!(actual, expected);
@@ -207,6 +209,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -214,7 +217,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
     codex.submit(Op::Shutdown).await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::ShutdownComplete)).await;
 
-    let rollout_path = codex.rollout_path();
+    let rollout_path = codex.rollout_path().expect("rollout path");
     let rollout_text = read_rollout_text(&rollout_path).await?;
     let actual = find_user_message_with_image(&rollout_text)
         .expect("expected user message with input image in rollout");
@@ -235,6 +238,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
                 text: "dropped image".to_string(),
             },
         ],
+        end_turn: None,
     };
 
     assert_eq!(actual, expected);

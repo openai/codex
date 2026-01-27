@@ -26,7 +26,7 @@ use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 
-pub const SETUP_VERSION: u32 = 3;
+pub const SETUP_VERSION: u32 = 5;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
@@ -36,12 +36,16 @@ pub fn sandbox_dir(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox")
 }
 
+pub fn sandbox_secrets_dir(codex_home: &Path) -> PathBuf {
+    codex_home.join(".sandbox-secrets")
+}
+
 pub fn setup_marker_path(codex_home: &Path) -> PathBuf {
     sandbox_dir(codex_home).join("setup_marker.json")
 }
 
 pub fn sandbox_users_path(codex_home: &Path) -> PathBuf {
-    sandbox_dir(codex_home).join("sandbox_users.json")
+    sandbox_secrets_dir(codex_home).join("sandbox_users.json")
 }
 
 pub fn run_setup_refresh(
@@ -430,10 +434,16 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
     let codex_home_key = crate::audit::normalize_path_key(codex_home);
     let sbx_dir_key = crate::audit::normalize_path_key(&sandbox_dir(codex_home));
     let sbx_dir_prefix = format!("{}/", sbx_dir_key.trim_end_matches('/'));
+    let secrets_dir_key = crate::audit::normalize_path_key(&sandbox_secrets_dir(codex_home));
+    let secrets_dir_prefix = format!("{}/", secrets_dir_key.trim_end_matches('/'));
 
     roots.retain(|root| {
         let key = crate::audit::normalize_path_key(root);
-        key != codex_home_key && key != sbx_dir_key && !key.starts_with(&sbx_dir_prefix)
+        key != codex_home_key
+            && key != sbx_dir_key
+            && !key.starts_with(&sbx_dir_prefix)
+            && key != secrets_dir_key
+            && !key.starts_with(&secrets_dir_prefix)
     });
     roots
 }

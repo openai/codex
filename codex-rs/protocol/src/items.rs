@@ -1,3 +1,4 @@
+use crate::models::WebSearchAction;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningEvent;
 use crate::protocol::AgentReasoningRawContentEvent;
@@ -49,10 +50,11 @@ pub struct ReasoningItem {
     pub raw_content: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct WebSearchItem {
     pub id: String,
     pub query: String,
+    pub action: WebSearchAction,
 }
 
 impl UserMessageItem {
@@ -97,13 +99,14 @@ impl UserMessageItem {
                 // Text element ranges are relative to each text chunk; offset them so they align
                 // with the concatenated message returned by `message()`.
                 for elem in text_elements {
-                    out.push(TextElement {
-                        byte_range: ByteRange {
-                            start: offset + elem.byte_range.start,
-                            end: offset + elem.byte_range.end,
-                        },
-                        placeholder: elem.placeholder.clone(),
-                    });
+                    let byte_range = ByteRange {
+                        start: offset + elem.byte_range.start,
+                        end: offset + elem.byte_range.end,
+                    };
+                    out.push(TextElement::new(
+                        byte_range,
+                        elem.placeholder(text).map(str::to_string),
+                    ));
                 }
                 offset += text.len();
             }
@@ -180,6 +183,7 @@ impl WebSearchItem {
         EventMsg::WebSearchEnd(WebSearchEndEvent {
             call_id: self.id.clone(),
             query: self.query.clone(),
+            action: self.action.clone(),
         })
     }
 }

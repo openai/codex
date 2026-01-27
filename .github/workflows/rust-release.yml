@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.92
 
       - name: Validate tag matches Cargo.toml version
         shell: bash
@@ -44,6 +45,15 @@ jobs:
 
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
+
+      - name: Verify config schema fixture
+        shell: bash
+        working-directory: codex-rs
+        run: |
+          set -euo pipefail
+          echo "If this fails, run: just write-config-schema to overwrite fixture with intentional changes."
+          cargo run -p codex-core --bin codex-write-config-schema
+          git diff --exit-code core/config.schema.json
 
   build:
     needs: tag-check
@@ -95,10 +105,16 @@ jobs:
           key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
+        name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools pkg-config
+        env:
+          TARGET: ${{ matrix.target }}
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/install-musl-build-tools.sh"
 
       - name: Cargo build
         shell: bash
@@ -275,7 +291,30 @@ jobs:
             # Must run from inside the dest dir so 7z won't
             # embed the directory path inside the zip.
             if [[ "${{ matrix.runner }}" == windows* ]]; then
-              (cd "$dest" && 7z a "${base}.zip" "$base")
+              if [[ "$base" == "codex-${{ matrix.target }}.exe" ]]; then
+                # Bundle the sandbox helper binaries into the main codex zip so
+                # WinGet installs include the required helpers next to codex.exe.
+                # Fall back to the single-binary zip if the helpers are missing
+                # to avoid breaking releases.
+                bundle_dir="$(mktemp -d)"
+                runner_src="$dest/codex-command-runner-${{ matrix.target }}.exe"
+                setup_src="$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
+                if [[ -f "$runner_src" && -f "$setup_src" ]]; then
+                  cp "$dest/$base" "$bundle_dir/$base"
+                  cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
+                  cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
+                  # Use an absolute path so bundle zips land in the real dist
+                  # dir even when 7z runs from a temp directory.
+                  (cd "$bundle_dir" && 7z a "$(pwd)/$dest/${base}.zip" .)
+                else
+                  echo "warning: missing sandbox binaries; falling back to single-binary zip"
+                  echo "warning: expected $runner_src and $setup_src"
+                  (cd "$dest" && 7z a "${base}.zip" "$base")
+                fi
+                rm -rf "$bundle_dir"
+              else
+                (cd "$dest" && 7z a "${base}.zip" "$base")
+              fi
             fi
 
             # Also create .zst (existing behaviour) *and* remove the original
@@ -358,6 +397,10 @@ jobs:
 
           ls -R dist/
 
+      - name: Add config schema release asset
+        run: |
+          cp codex-rs/core/config.schema.json dist/config-schema.json
+
       - name: Define release name
         id: release_name
         run: |
@@ -427,6 +470,19 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
+
+      - name: Trigger developers.openai.com deploy
+        # Only trigger the deploy if the release is not a pre-release.
+        # The deploy is used to update the developers.openai.com website with the new config schema json file.
+        if: ${{ !contains(steps.release_name.outputs.name, '-') }}
+        continue-on-error: true
+        env:
+          DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if ! curl -sS -f -o /dev/null -X POST "$DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL"; then
+            echo "::warning title=developers.openai.com deploy hook failed::Vercel deploy hook POST failed for ${GITHUB_REF_NAME}"
+            exit 1
+          fi
 
   # Publish to npm using OIDC authentication.
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/

@@ -1,4 +1,6 @@
 use crate::key_hint::is_altgr;
+use codex_protocol::user_input::ByteRange;
+use codex_protocol::user_input::TextElement as UserTextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -60,10 +62,36 @@ impl TextArea {
         }
     }
 
-    pub fn set_text(&mut self, text: &str) {
+    /// Replace the textarea text and clear any existing text elements.
+    pub fn set_text_clearing_elements(&mut self, text: &str) {
+        self.set_text_inner(text, None);
+    }
+
+    /// Replace the textarea text and set the provided text elements.
+    pub fn set_text_with_elements(&mut self, text: &str, elements: &[UserTextElement]) {
+        self.set_text_inner(text, Some(elements));
+    }
+
+    fn set_text_inner(&mut self, text: &str, elements: Option<&[UserTextElement]>) {
+        // Stage 1: replace the raw text and keep the cursor in a safe byte range.
         self.text = text.to_string();
         self.cursor_pos = self.cursor_pos.clamp(0, self.text.len());
+        // Stage 2: rebuild element ranges from scratch against the new text.
         self.elements.clear();
+        if let Some(elements) = elements {
+            for elem in elements {
+                let mut start = elem.byte_range.start.min(self.text.len());
+                let mut end = elem.byte_range.end.min(self.text.len());
+                start = self.clamp_pos_to_char_boundary(start);
+                end = self.clamp_pos_to_char_boundary(end);
+                if start >= end {
+                    continue;
+                }
+                self.elements.push(TextElement { range: start..end });
+            }
+            self.elements.sort_by_key(|e| e.range.start);
+        }
+        // Stage 3: clamp the cursor and reset derived state tied to the prior content.
         self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
         self.wrap_cache.replace(None);
         self.preferred_col = None;
@@ -722,10 +750,20 @@ impl TextArea {
             .collect()
     }
 
-    pub fn element_payload_starting_at(&self, pos: usize) -> Option<String> {
-        let pos = pos.min(self.text.len());
-        let elem = self.elements.iter().find(|e| e.range.start == pos)?;
-        self.text.get(elem.range.clone()).map(str::to_string)
+    pub fn text_elements(&self) -> Vec<UserTextElement> {
+        self.elements
+            .iter()
+            .map(|e| {
+                let placeholder = self.text.get(e.range.clone()).map(str::to_string);
+                UserTextElement::new(
+                    ByteRange {
+                        start: e.range.start,
+                        end: e.range.end,
+                    },
+                    placeholder,
+                )
+            })
+            .collect()
     }
 
     /// Renames a single text element in-place, keeping it atomic.
@@ -1251,7 +1289,7 @@ mod tests {
         let mut t = TextArea::new();
         t.insert_str("abcd");
         t.set_cursor(1);
-        t.set_text("你");
+        t.set_text_clearing_elements("你");
         assert_eq!(t.cursor(), 0);
         t.insert_str("a");
         assert_eq!(t.text(), "a你");
@@ -1281,6 +1319,21 @@ mod tests {
         t.set_cursor(t.text().len());
         t.delete_forward(1);
         assert_eq!(t.text(), "b");
+    }
+
+    #[test]
+    fn delete_forward_deletes_element_at_left_edge() {
+        let mut t = TextArea::new();
+        t.insert_str("a");
+        t.insert_element("<element>");
+        t.insert_str("b");
+
+        let elem_start = t.elements[0].range.start;
+        t.set_cursor(elem_start);
+        t.delete_forward(1);
+
+        assert_eq!(t.text(), "ab");
+        assert_eq!(t.cursor(), elem_start);
     }
 
     #[test]
@@ -1933,7 +1986,7 @@ mod tests {
             for _ in 0..base_len {
                 base.push_str(&rand_grapheme(&mut rng));
             }
-            ta.set_text(&base);
+            ta.set_text_clearing_elements(&base);
             // Choose a valid char boundary for initial cursor
             let mut boundaries: Vec<usize> = vec![0];
             boundaries.extend(ta.text().char_indices().map(|(i, _)| i).skip(1));

@@ -6,21 +6,13 @@ use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows;
+use super::slash_commands;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::slash_command::SlashCommand;
-use crate::slash_command::built_in_slash_commands;
-use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::custom_prompts::PROMPTS_CMD_PREFIX;
 use std::collections::HashSet;
-
-fn windows_degraded_sandbox_active() -> bool {
-    cfg!(target_os = "windows")
-        && codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-        && codex_core::get_platform_sandbox().is_some()
-        && !codex_core::is_windows_elevated_sandbox_enabled()
-}
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,14 +29,19 @@ pub(crate) struct CommandPopup {
     state: ScrollState,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CommandPopupFlags {
+    pub(crate) collaboration_modes_enabled: bool,
+    pub(crate) personality_command_enabled: bool,
+}
+
 impl CommandPopup {
-    pub(crate) fn new(mut prompts: Vec<CustomPrompt>, skills_enabled: bool) -> Self {
-        let allow_elevate_sandbox = windows_degraded_sandbox_active();
-        let builtins: Vec<(&'static str, SlashCommand)> = built_in_slash_commands()
-            .into_iter()
-            .filter(|(_, cmd)| skills_enabled || *cmd != SlashCommand::Skills)
-            .filter(|(_, cmd)| allow_elevate_sandbox || *cmd != SlashCommand::ElevateSandbox)
-            .collect();
+    pub(crate) fn new(mut prompts: Vec<CustomPrompt>, flags: CommandPopupFlags) -> Self {
+        // Keep built-in availability in sync with the composer.
+        let builtins = slash_commands::builtins_for_input(
+            flags.collaboration_modes_enabled,
+            flags.personality_command_enabled,
+        );
         // Exclude prompts that collide with builtin command names and sort by name.
         let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
         prompts.retain(|p| !exclude.contains(&p.name));
@@ -112,52 +109,84 @@ impl CommandPopup {
         measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width)
     }
 
-    /// Compute fuzzy-filtered matches over built-in commands and user prompts,
-    /// paired with optional highlight indices and score. Preserves the original
+    /// Compute exact/prefix matches over built-in commands and user prompts,
+    /// paired with optional highlight indices. Preserves the original
     /// presentation order for built-ins and prompts.
-    fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>, i32)> {
+    fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>)> {
         let filter = self.command_filter.trim();
-        let mut out: Vec<(CommandItem, Option<Vec<usize>>, i32)> = Vec::new();
+        let mut out: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
         if filter.is_empty() {
             // Built-ins first, in presentation order.
             for (_, cmd) in self.builtins.iter() {
-                out.push((CommandItem::Builtin(*cmd), None, 0));
+                out.push((CommandItem::Builtin(*cmd), None));
             }
             // Then prompts, already sorted by name.
             for idx in 0..self.prompts.len() {
-                out.push((CommandItem::UserPrompt(idx), None, 0));
+                out.push((CommandItem::UserPrompt(idx), None));
             }
             return out;
         }
 
+        let filter_lower = filter.to_lowercase();
+        let filter_chars = filter.chars().count();
+        let mut exact: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
+        let mut prefix: Vec<(CommandItem, Option<Vec<usize>>)> = Vec::new();
+        let prompt_prefix_len = PROMPTS_CMD_PREFIX.chars().count() + 1;
+        let indices_for = |offset| Some((offset..offset + filter_chars).collect());
+
+        let mut push_match =
+            |item: CommandItem, display: &str, name: Option<&str>, name_offset: usize| {
+                let display_lower = display.to_lowercase();
+                let name_lower = name.map(str::to_lowercase);
+                let display_exact = display_lower == filter_lower;
+                let name_exact = name_lower.as_deref() == Some(filter_lower.as_str());
+                if display_exact || name_exact {
+                    let offset = if display_exact { 0 } else { name_offset };
+                    exact.push((item, indices_for(offset)));
+                    return;
+                }
+                let display_prefix = display_lower.starts_with(&filter_lower);
+                let name_prefix = name_lower
+                    .as_ref()
+                    .is_some_and(|name| name.starts_with(&filter_lower));
+                if display_prefix || name_prefix {
+                    let offset = if display_prefix { 0 } else { name_offset };
+                    prefix.push((item, indices_for(offset)));
+                }
+            };
+
         for (_, cmd) in self.builtins.iter() {
-            if let Some((indices, score)) = fuzzy_match(cmd.command(), filter) {
-                out.push((CommandItem::Builtin(*cmd), Some(indices), score));
-            }
+            push_match(CommandItem::Builtin(*cmd), cmd.command(), None, 0);
         }
         // Support both search styles:
         // - Typing "name" should surface "/prompts:name" results.
         // - Typing "prompts:name" should also work.
         for (idx, p) in self.prompts.iter().enumerate() {
             let display = format!("{PROMPTS_CMD_PREFIX}:{}", p.name);
-            if let Some((indices, score)) = fuzzy_match(&display, filter) {
-                out.push((CommandItem::UserPrompt(idx), Some(indices), score));
-            }
+            push_match(
+                CommandItem::UserPrompt(idx),
+                &display,
+                Some(&p.name),
+                prompt_prefix_len,
+            );
         }
+
+        out.extend(exact);
+        out.extend(prefix);
         out
     }
 
     fn filtered_items(&self) -> Vec<CommandItem> {
-        self.filtered().into_iter().map(|(c, _, _)| c).collect()
+        self.filtered().into_iter().map(|(c, _)| c).collect()
     }
 
     fn rows_from_matches(
         &self,
-        matches: Vec<(CommandItem, Option<Vec<usize>>, i32)>,
+        matches: Vec<(CommandItem, Option<Vec<usize>>)>,
     ) -> Vec<GenericDisplayRow> {
         matches
             .into_iter()
-            .map(|(item, indices, _)| {
+            .map(|(item, indices)| {
                 let (name, description) = match item {
                     CommandItem::Builtin(cmd) => {
                         (format!("/{}", cmd.command()), cmd.description().to_string())
@@ -180,6 +209,7 @@ impl CommandPopup {
                     display_shortcut: None,
                     description: Some(description),
                     wrap_indent: None,
+                    is_disabled: false,
                     disabled_reason: None,
                 }
             })
@@ -231,7 +261,7 @@ mod tests {
 
     #[test]
     fn filter_includes_init_when_typing_prefix() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
         // Simulate the composer line starting with '/in' so the popup filters
         // matching commands by prefix.
         popup.on_composer_text_change("/in".to_string());
@@ -251,7 +281,7 @@ mod tests {
 
     #[test]
     fn selecting_init_by_exact_match() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
         popup.on_composer_text_change("/init".to_string());
 
         // When an exact match exists, the selected command should be that
@@ -266,7 +296,7 @@ mod tests {
 
     #[test]
     fn model_is_first_suggestion_for_mo() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
         popup.on_composer_text_change("/mo".to_string());
         let matches = popup.filtered_items();
         match matches.first() {
@@ -279,8 +309,8 @@ mod tests {
     }
 
     #[test]
-    fn filtered_commands_keep_presentation_order() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+    fn filtered_commands_keep_presentation_order_for_prefix() {
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
         popup.on_composer_text_change("/m".to_string());
 
         let cmds: Vec<&str> = popup
@@ -291,17 +321,7 @@ mod tests {
                 CommandItem::UserPrompt(_) => None,
             })
             .collect();
-        assert_eq!(
-            cmds,
-            vec![
-                "model",
-                "experimental",
-                "resume",
-                "compact",
-                "mention",
-                "mcp"
-            ]
-        );
+        assert_eq!(cmds, vec!["model", "mention", "mcp"]);
     }
 
     #[test]
@@ -322,7 +342,7 @@ mod tests {
                 argument_hint: None,
             },
         ];
-        let popup = CommandPopup::new(prompts, false);
+        let popup = CommandPopup::new(prompts, CommandPopupFlags::default());
         let items = popup.filtered_items();
         let mut prompt_names: Vec<String> = items
             .into_iter()
@@ -346,7 +366,7 @@ mod tests {
                 description: None,
                 argument_hint: None,
             }],
-            false,
+            CommandPopupFlags::default(),
         );
         let items = popup.filtered_items();
         let has_collision_prompt = items.into_iter().any(|it| match it {
@@ -369,9 +389,9 @@ mod tests {
                 description: Some("Create feature branch, commit and open draft PR.".to_string()),
                 argument_hint: None,
             }],
-            false,
+            CommandPopupFlags::default(),
         );
-        let rows = popup.rows_from_matches(vec![(CommandItem::UserPrompt(0), None, 0)]);
+        let rows = popup.rows_from_matches(vec![(CommandItem::UserPrompt(0), None)]);
         let description = rows.first().and_then(|row| row.description.as_deref());
         assert_eq!(
             description,
@@ -389,16 +409,16 @@ mod tests {
                 description: None,
                 argument_hint: None,
             }],
-            false,
+            CommandPopupFlags::default(),
         );
-        let rows = popup.rows_from_matches(vec![(CommandItem::UserPrompt(0), None, 0)]);
+        let rows = popup.rows_from_matches(vec![(CommandItem::UserPrompt(0), None)]);
         let description = rows.first().and_then(|row| row.description.as_deref());
         assert_eq!(description, Some("send saved prompt"));
     }
 
     #[test]
-    fn fuzzy_filter_matches_subsequence_for_ac() {
-        let mut popup = CommandPopup::new(Vec::new(), false);
+    fn prefix_filter_limits_matches_for_ac() {
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
         popup.on_composer_text_change("/ac".to_string());
 
         let cmds: Vec<&str> = popup
@@ -410,8 +430,86 @@ mod tests {
             })
             .collect();
         assert!(
-            cmds.contains(&"compact") && cmds.contains(&"feedback"),
-            "expected fuzzy search for '/ac' to include compact and feedback, got {cmds:?}"
+            !cmds.contains(&"compact"),
+            "expected prefix search for '/ac' to exclude 'compact', got {cmds:?}"
         );
+    }
+
+    #[test]
+    fn collab_command_hidden_when_collaboration_modes_disabled() {
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        popup.on_composer_text_change("/coll".to_string());
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+        assert!(
+            !cmds.contains(&"collab"),
+            "expected '/collab' to be hidden when collaboration modes are disabled, got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn collab_command_visible_when_collaboration_modes_enabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                personality_command_enabled: true,
+            },
+        );
+        popup.on_composer_text_change("/collab".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "collab"),
+            other => panic!("expected collab to be selected for exact match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn personality_command_hidden_when_disabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                personality_command_enabled: false,
+            },
+        );
+        popup.on_composer_text_change("/pers".to_string());
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+        assert!(
+            !cmds.contains(&"personality"),
+            "expected '/personality' to be hidden when disabled, got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn personality_command_visible_when_enabled() {
+        let mut popup = CommandPopup::new(
+            Vec::new(),
+            CommandPopupFlags {
+                collaboration_modes_enabled: true,
+                personality_command_enabled: true,
+            },
+        );
+        popup.on_composer_text_change("/personality".to_string());
+
+        match popup.selected_item() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "personality"),
+            other => panic!("expected personality to be selected for exact match, got {other:?}"),
+        }
     }
 }

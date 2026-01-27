@@ -5,14 +5,20 @@
 //! booleans through multiple types, call sites consult a single `Features`
 //! container attached to `Config`.
 
+use crate::config::CONFIG_TOML_FILE;
+use crate::config::Config;
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
+use crate::protocol::Event;
+use crate::protocol::EventMsg;
+use crate::protocol::WarningEvent;
 use codex_otel::OtelManager;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use toml::Value as TomlValue;
 
 mod legacy;
 pub(crate) use legacy::LegacyFeatureToggles;
@@ -21,37 +27,42 @@ pub(crate) use legacy::legacy_feature_keys;
 /// High-level lifecycle stage for a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
-    Experimental,
-    Beta {
+    /// Features that are still under development, not ready for external use
+    UnderDevelopment,
+    /// Experimental features made available to users through the `/experimental` menu
+    Experimental {
         name: &'static str,
         menu_description: &'static str,
         announcement: &'static str,
     },
+    /// Stable features. The feature flag is kept for ad-hoc enabling/disabling
     Stable,
+    /// Deprecated feature that should not be used anymore.
     Deprecated,
+    /// The feature flag is useless but kept for backward compatibility reason.
     Removed,
 }
 
 impl Stage {
-    pub fn beta_menu_name(self) -> Option<&'static str> {
+    pub fn experimental_menu_name(self) -> Option<&'static str> {
         match self {
-            Stage::Beta { name, .. } => Some(name),
+            Stage::Experimental { name, .. } => Some(name),
             _ => None,
         }
     }
 
-    pub fn beta_menu_description(self) -> Option<&'static str> {
+    pub fn experimental_menu_description(self) -> Option<&'static str> {
         match self {
-            Stage::Beta {
+            Stage::Experimental {
                 menu_description, ..
             } => Some(menu_description),
             _ => None,
         }
     }
 
-    pub fn beta_announcement(self) -> Option<&'static str> {
+    pub fn experimental_announcement(self) -> Option<&'static str> {
         match self {
-            Stage::Beta { announcement, .. } => Some(announcement),
+            Stage::Experimental { announcement, .. } => Some(announcement),
             _ => None,
         }
     }
@@ -90,18 +101,20 @@ pub enum Feature {
     ShellSnapshot,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
-    /// Experimental TUI v2 (viewport) implementation.
-    Tui2,
     /// Enforce UTF8 output in Powershell.
     PowershellUtf8,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
     /// Enable collab tools.
     Collab,
+    /// Enable connectors (apps).
+    Connectors,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
-    /// Enable collaboration modes (Plan, Pair Programming, Execute).
+    /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
     CollaborationModes,
+    /// Use the Responses API WebSocket transport for OpenAI by default.
+    ResponsesWebsockets,
 }
 
 impl Feature {
@@ -336,14 +349,14 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WebSearchCached,
         key: "web_search_cached",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
-    // Beta program. Rendered in the `/experimental` menu for users.
+    // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
         id: Feature::UnifiedExec,
         key: "unified_exec",
-        stage: Stage::Beta {
+        stage: Stage::Experimental {
             name: "Background terminal",
             menu_description: "Run long-running terminal commands in the background.",
             announcement: "NEW! Try Background terminals for long-running commands. Enable in /experimental!",
@@ -353,7 +366,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ShellSnapshot,
         key: "shell_snapshot",
-        stage: Stage::Beta {
+        stage: Stage::Experimental {
             name: "Shell snapshot",
             menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
             announcement: "NEW! Try shell snapshotting to make your Codex faster. Enable in /experimental!",
@@ -363,50 +376,50 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ChildAgentsMd,
         key: "child_agents_md",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ExecPolicy,
         key: "exec_policy",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: true,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,
         key: "experimental_windows_sandbox",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandboxElevated,
         key: "elevated_windows_sandbox",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::RemoteCompaction,
         key: "remote_compaction",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: true,
     },
     FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
-        stage: Stage::Experimental,
-        default_enabled: false,
+        stage: Stage::UnderDevelopment,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::PowershellUtf8,
         key: "powershell_utf8",
         #[cfg(windows)]
-        stage: Stage::Beta {
+        stage: Stage::Experimental {
             name: "Powershell UTF-8 support",
             menu_description: "Enable UTF-8 output in Powershell.",
             announcement: "Codex now supports UTF-8 output in Powershell. If you are seeing problems, disable in /experimental.",
@@ -414,32 +427,32 @@ pub const FEATURES: &[FeatureSpec] = &[
         #[cfg(windows)]
         default_enabled: true,
         #[cfg(not(windows))]
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         #[cfg(not(windows))]
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::EnableRequestCompression,
         key: "enable_request_compression",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Collab,
         key: "collab",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::Tui2,
-        key: "tui2",
-        stage: Stage::Experimental,
+        id: Feature::Connectors,
+        key: "connectors",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Steer,
         key: "steer",
-        stage: Stage::Beta {
+        stage: Stage::Experimental {
             name: "Steer conversation",
             menu_description: "Enter submits immediately; Tab queues messages when a task is running.",
             announcement: "NEW! Try Steer mode: Enter submits immediately, Tab queues. Enable in /experimental!",
@@ -449,7 +462,64 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CollaborationModes,
         key: "collaboration_modes",
-        stage: Stage::Experimental,
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResponsesWebsockets,
+        key: "responses_websockets",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
 ];
+
+/// Push a warning event if any under-development features are enabled.
+pub fn maybe_push_unstable_features_warning(
+    config: &Config,
+    post_session_configured_events: &mut Vec<Event>,
+) {
+    if config.suppress_unstable_features_warning {
+        return;
+    }
+
+    let mut under_development_feature_keys = Vec::new();
+    if let Some(table) = config
+        .config_layer_stack
+        .effective_config()
+        .get("features")
+        .and_then(TomlValue::as_table)
+    {
+        for (key, value) in table {
+            if value.as_bool() != Some(true) {
+                continue;
+            }
+            let Some(spec) = FEATURES.iter().find(|spec| spec.key == key.as_str()) else {
+                continue;
+            };
+            if !config.features.enabled(spec.id) {
+                continue;
+            }
+            if matches!(spec.stage, Stage::UnderDevelopment) {
+                under_development_feature_keys.push(spec.key.to_string());
+            }
+        }
+    }
+
+    if under_development_feature_keys.is_empty() {
+        return;
+    }
+
+    let under_development_feature_keys = under_development_feature_keys.join(", ");
+    let config_path = config
+        .codex_home
+        .join(CONFIG_TOML_FILE)
+        .display()
+        .to_string();
+    let message = format!(
+        "Under-development features enabled: {under_development_feature_keys}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {config_path}."
+    );
+    post_session_configured_events.push(Event {
+        id: "".to_owned(),
+        msg: EventMsg::Warning(WarningEvent { message }),
+    });
+}

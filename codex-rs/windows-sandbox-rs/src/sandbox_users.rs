@@ -13,6 +13,7 @@ use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
 use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::NetworkManagement::NetManagement::NERR_Success;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupAdd;
@@ -27,17 +28,26 @@ use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_INFO_1003;
 use windows_sys::Win32::NetworkManagement::NetManagement::USER_PRIV_USER;
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
+use windows_sys::Win32::Security::CopySid;
+use windows_sys::Win32::Security::GetLengthSid;
 use windows_sys::Win32::Security::LookupAccountNameW;
+use windows_sys::Win32::Security::LookupAccountSidW;
 use windows_sys::Win32::Security::SID_NAME_USE;
 
 use codex_windows_sandbox::dpapi_protect;
 use codex_windows_sandbox::sandbox_dir;
+use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::SETUP_VERSION;
 
 pub const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
 const SANDBOX_USERS_GROUP_COMMENT: &str = "Codex sandbox internal group (managed)";
+const SID_ADMINISTRATORS: &str = "S-1-5-32-544";
+const SID_USERS: &str = "S-1-5-32-545";
+const SID_AUTHENTICATED_USERS: &str = "S-1-5-11";
+const SID_EVERYONE: &str = "S-1-1-0";
+const SID_SYSTEM: &str = "S-1-5-18";
 
 pub fn ensure_sandbox_users_group(log: &mut File) -> Result<()> {
     ensure_local_group(SANDBOX_USERS_GROUP, SANDBOX_USERS_GROUP_COMMENT, log)
@@ -119,17 +129,24 @@ pub fn ensure_local_user(name: &str, password: &str, log: &mut File) -> Result<(
         }
 
         // Ensure the principal is a regular local user account.
-        let group = to_wide(OsStr::new("Users"));
-        let member = LOCALGROUP_MEMBERS_INFO_3 {
-            lgrmi3_domainandname: name_w.as_ptr() as *mut u16,
-        };
-        let _ = NetLocalGroupAddMembers(
-            std::ptr::null(),
-            group.as_ptr(),
-            3,
-            &member as *const _ as *mut u8,
-            1,
-        );
+        if let Ok(group_name) = lookup_account_name_for_sid(SID_USERS) {
+            let group = to_wide(OsStr::new(&group_name));
+            let member = LOCALGROUP_MEMBERS_INFO_3 {
+                lgrmi3_domainandname: name_w.as_ptr() as *mut u16,
+            };
+            let _ = NetLocalGroupAddMembers(
+                std::ptr::null(),
+                group.as_ptr(),
+                3,
+                &member as *const _ as *mut u8,
+                1,
+            );
+        } else {
+            super::log_line(
+                log,
+                "LookupAccountSidW failed for Users SID; skipping Users group membership",
+            )?;
+        }
     }
     Ok(())
 }
@@ -184,6 +201,9 @@ pub fn ensure_local_group_member(group_name: &str, member_name: &str) -> Result<
 }
 
 pub fn resolve_sid(name: &str) -> Result<Vec<u8>> {
+    if let Some(sid_str) = well_known_sid_str(name) {
+        return sid_bytes_from_string(sid_str);
+    }
     let name_w = to_wide(OsStr::new(name));
     let mut sid_buffer = vec![0u8; 68];
     let mut sid_len: u32 = sid_buffer.len() as u32;
@@ -216,6 +236,104 @@ pub fn resolve_sid(name: &str) -> Result<Vec<u8>> {
             "LookupAccountNameW failed for {name}: {err}"
         ));
     }
+}
+
+fn well_known_sid_str(name: &str) -> Option<&'static str> {
+    match name {
+        "Administrators" => Some(SID_ADMINISTRATORS),
+        "Users" => Some(SID_USERS),
+        "Authenticated Users" => Some(SID_AUTHENTICATED_USERS),
+        "Everyone" => Some(SID_EVERYONE),
+        "SYSTEM" => Some(SID_SYSTEM),
+        _ => None,
+    }
+}
+
+fn sid_bytes_from_string(sid_str: &str) -> Result<Vec<u8>> {
+    let sid_w = to_wide(OsStr::new(sid_str));
+    let mut psid: *mut c_void = std::ptr::null_mut();
+    if unsafe { ConvertStringSidToSidW(sid_w.as_ptr(), &mut psid) } == 0 {
+        return Err(anyhow::anyhow!(
+            "ConvertStringSidToSidW failed for {sid_str}: {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let sid_len = unsafe { GetLengthSid(psid) };
+    if sid_len == 0 {
+        unsafe {
+            LocalFree(psid as _);
+        }
+        return Err(anyhow::anyhow!("GetLengthSid failed for {sid_str}"));
+    }
+    let mut out = vec![0u8; sid_len as usize];
+    let ok = unsafe { CopySid(sid_len, out.as_mut_ptr() as *mut c_void, psid) };
+    unsafe {
+        LocalFree(psid as _);
+    }
+    if ok == 0 {
+        return Err(anyhow::anyhow!("CopySid failed for {sid_str}"));
+    }
+    Ok(out)
+}
+
+fn lookup_account_name_for_sid(sid_str: &str) -> Result<String> {
+    let sid_w = to_wide(OsStr::new(sid_str));
+    let mut psid: *mut c_void = std::ptr::null_mut();
+    if unsafe { ConvertStringSidToSidW(sid_w.as_ptr(), &mut psid) } == 0 {
+        return Err(anyhow::anyhow!(
+            "ConvertStringSidToSidW failed for {sid_str}: {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let mut name_len: u32 = 0;
+    let mut domain_len: u32 = 0;
+    let mut use_type: SID_NAME_USE = 0;
+    let ok = unsafe {
+        LookupAccountSidW(
+            std::ptr::null(),
+            psid,
+            std::ptr::null_mut(),
+            &mut name_len,
+            std::ptr::null_mut(),
+            &mut domain_len,
+            &mut use_type,
+        )
+    };
+    if ok == 0 {
+        let err = unsafe { GetLastError() };
+        if err != ERROR_INSUFFICIENT_BUFFER {
+            unsafe {
+                LocalFree(psid as _);
+            }
+            return Err(anyhow::anyhow!(
+                "LookupAccountSidW preflight failed for {sid_str}: {err}"
+            ));
+        }
+    }
+    let mut name_buf: Vec<u16> = vec![0u16; name_len as usize];
+    let mut domain_buf: Vec<u16> = vec![0u16; domain_len as usize];
+    let ok = unsafe {
+        LookupAccountSidW(
+            std::ptr::null(),
+            psid,
+            name_buf.as_mut_ptr(),
+            &mut name_len,
+            domain_buf.as_mut_ptr(),
+            &mut domain_len,
+            &mut use_type,
+        )
+    };
+    unsafe {
+        LocalFree(psid as _);
+    }
+    if ok == 0 {
+        return Err(anyhow::anyhow!(
+            "LookupAccountSidW failed for {sid_str}: {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let name = String::from_utf16_lossy(&name_buf);
+    Ok(name.trim_end_matches('\0').to_string())
 }
 
 pub fn sid_bytes_to_psid(sid: &[u8]) -> Result<*mut c_void> {
@@ -277,6 +395,8 @@ fn write_secrets(
 ) -> Result<()> {
     let sandbox_dir = sandbox_dir(codex_home);
     std::fs::create_dir_all(&sandbox_dir)?;
+    let secrets_dir = sandbox_secrets_dir(codex_home);
+    std::fs::create_dir_all(&secrets_dir)?;
     let offline_blob = dpapi_protect(offline_pwd.as_bytes())?;
     let online_blob = dpapi_protect(online_pwd.as_bytes())?;
     let users = SandboxUsersFile {
@@ -298,7 +418,7 @@ fn write_secrets(
         read_roots: Vec::new(),
         write_roots: Vec::new(),
     };
-    let users_path = sandbox_dir.join("sandbox_users.json");
+    let users_path = secrets_dir.join("sandbox_users.json");
     let marker_path = sandbox_dir.join("setup_marker.json");
     std::fs::write(users_path, serde_json::to_vec_pretty(&users)?)?;
     std::fs::write(marker_path, serde_json::to_vec_pretty(&marker)?)?;

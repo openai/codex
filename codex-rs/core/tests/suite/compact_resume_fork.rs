@@ -10,12 +10,8 @@
 use super::compact::COMPACT_WARNING_MESSAGE;
 use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
-use codex_core::CodexAuth;
 use codex_core::CodexThread;
-use codex_core::ModelProviderInfo;
-use codex_core::NewThread;
 use codex_core::ThreadManager;
-use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
 use codex_core::protocol::EventMsg;
@@ -23,12 +19,12 @@ use codex_core::protocol::Op;
 use codex_core::protocol::WarningEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
+use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -99,8 +95,7 @@ fn extract_summary_message(request: &Value, summary_text: &str) -> Value {
                         .and_then(|arr| arr.first())
                         .and_then(|entry| entry.get("text"))
                         .and_then(Value::as_str)
-                        .map(|text| text.contains(summary_text))
-                        .unwrap_or(false)
+                        .is_some_and(|text| text.contains(summary_text))
             })
         })
         .cloned()
@@ -117,21 +112,18 @@ fn normalize_compact_prompts(requests: &mut [Value]) {
                 {
                     return true;
                 }
-                let content = item
-                    .get("content")
-                    .and_then(Value::as_array)
-                    .cloned()
+                let Some(content) = item.get("content").and_then(Value::as_array) else {
+                    return false;
+                };
+                let Some(first) = content.first() else {
+                    return false;
+                };
+                let text = first
+                    .get("text")
+                    .and_then(Value::as_str)
                     .unwrap_or_default();
-                if let Some(first) = content.first() {
-                    let text = first
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    let normalized_text = normalize_line_endings_str(text);
-                    !(text.is_empty() || normalized_text == normalized_summary_prompt)
-                } else {
-                    false
-                }
+                let normalized_text = normalize_line_endings_str(text);
+                !(text.is_empty() || normalized_text == normalized_summary_prompt)
             });
         }
     }
@@ -278,6 +270,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
@@ -348,6 +341,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
@@ -409,6 +403,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
@@ -511,6 +506,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
@@ -634,6 +630,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
       "tool_choice": "auto",
       "parallel_tool_calls": false,
       "reasoning": {
+        "effort": "medium",
         "summary": "auto"
       },
       "store": false,
@@ -869,9 +866,7 @@ fn gather_request_bodies(request_log: &[ResponseMock]) -> Vec<Value> {
         .flat_map(ResponseMock::requests)
         .map(|request| request.body_json())
         .collect::<Vec<_>>();
-    for body in &mut bodies {
-        normalize_line_endings(body);
-    }
+    bodies.iter_mut().for_each(normalize_line_endings);
     bodies
 }
 
@@ -955,29 +950,19 @@ async fn mount_second_compact_flow(server: &MockServer) -> Vec<ResponseMock> {
 async fn start_test_conversation(
     server: &MockServer,
     model: Option<&str>,
-) -> (TempDir, Config, ThreadManager, Arc<CodexThread>) {
-    let model_provider = ModelProviderInfo {
-        name: "Non-OpenAI Model provider".into(),
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-    let home = TempDir::new().expect("create temp dir");
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
-    if let Some(model) = model {
-        config.model = Some(model.to_string());
-    }
-    let manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let NewThread { thread, .. } = manager
-        .start_thread(config.clone())
-        .await
-        .expect("create conversation");
-
-    (home, config, manager, thread)
+) -> (Arc<TempDir>, Config, Arc<ThreadManager>, Arc<CodexThread>) {
+    let base_url = format!("{}/v1", server.uri());
+    let model = model.map(str::to_string);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider.name = "Non-OpenAI Model provider".to_string();
+        config.model_provider.base_url = Some(base_url);
+        config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+        if let Some(model) = model {
+            config.model = Some(model);
+        }
+    });
+    let test = builder.build(server).await.expect("create conversation");
+    (test.home, test.config, test.thread_manager, test.codex)
 }
 
 async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
@@ -1008,7 +993,7 @@ async fn compact_conversation(conversation: &Arc<CodexThread>) {
 }
 
 async fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBuf {
-    conversation.rollout_path()
+    conversation.rollout_path().expect("rollout path")
 }
 
 async fn resume_conversation(
@@ -1016,13 +1001,14 @@ async fn resume_conversation(
     config: &Config,
     path: std::path::PathBuf,
 ) -> Arc<CodexThread> {
-    let auth_manager =
-        codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy"));
-    let NewThread { thread, .. } = manager
+    let auth_manager = codex_core::AuthManager::from_auth_for_testing(
+        codex_core::CodexAuth::from_api_key("dummy"),
+    );
+    manager
         .resume_thread_from_rollout(config.clone(), path, auth_manager)
         .await
-        .expect("resume conversation");
-    thread
+        .expect("resume conversation")
+        .thread
 }
 
 #[cfg(test)]
@@ -1032,9 +1018,9 @@ async fn fork_thread(
     path: std::path::PathBuf,
     nth_user_message: usize,
 ) -> Arc<CodexThread> {
-    let NewThread { thread, .. } = manager
+    manager
         .fork_thread(nth_user_message, config.clone(), path)
         .await
-        .expect("fork conversation");
-    thread
+        .expect("fork conversation")
+        .thread
 }

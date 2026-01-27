@@ -1,4 +1,4 @@
-Overview of Protocol Defined in [protocol.rs](../core/src/protocol.rs) and [agent.rs](../core/src/agent.rs).
+Overview of Protocol defined in [protocol.rs](../protocol/src/protocol.rs) and [agent.rs](../core/src/agent.rs).
 
 The goal of this document is to define terminology used in the system and explain the expected behavior of the system.
 
@@ -23,11 +23,11 @@ These are entities exit on the codex backend. The intent of this section is to e
 3. `Task`
    - A `Task` is `Codex` executing work in response to user input.
    - `Session` has at most one `Task` running at a time.
-   - Receiving `Op::UserInput` starts a `Task`
+   - Receiving `Op::UserTurn` starts a `Task` (`Op::UserInput` is legacy)
    - Consists of a series of `Turn`s
    - The `Task` executes to until:
      - The `Model` completes the task and there is no output to feed into an additional `Turn`
-     - Additional `Op::UserInput` aborts the current task and starts a new one
+     - Additional user-turn input aborts the current task and starts a new one
      - UI interrupts with `Op::Interrupt`
      - Fatal errors are encountered, eg. `Model` connection exceeding retry limits
      - Blocked by user approval (executing a command or patch)
@@ -42,7 +42,7 @@ These are entities exit on the codex backend. The intent of this section is to e
 
 The term "UI" is used to refer to the application driving `Codex`. This may be the CLI / TUI chat-like interface that users operate, or it may be a GUI interface like a VSCode extension. The UI is external to `Codex`, as `Codex` is intended to be operated by arbitrary UI implementations.
 
-When a `Turn` completes, the `response_id` from the `Model`'s final `response.completed` message is stored in the `Session` state to resume the thread given the next `Op::UserInput`. The `response_id` is also returned in the `EventMsg::TurnComplete` to the UI, which can be used to fork the thread from an earlier point by providing it in the `Op::UserInput`.
+When a `Turn` completes, the `response_id` from the `Model`'s final `response.completed` message is stored in the `Session` state to resume the thread given the next user turn. The `response_id` is also returned in the `EventMsg::TurnComplete` to the UI, which can be used to fork the thread from an earlier point by providing it in a future user turn.
 
 Since only 1 `Task` can be run at a time, for parallel tasks it is recommended that a single `Codex` be run for each thread of work.
 
@@ -57,21 +57,25 @@ Since only 1 `Task` can be run at a time, for parallel tasks it is recommended t
     - This enum is `non_exhaustive`; variants can be added at future dates
 - `Event`
   - These are messages sent on the `EQ` (`Codex` -> UI)
-  - Each `Event` has a non-unique ID, matching the `sub_id` from the `Op::UserInput` that started the current task.
+  - Each `Event` has a non-unique ID, matching the `sub_id` from the user-turn op that started the current task.
   - `EventMsg` refers to the enum of all possible `Event` payloads
     - This enum is `non_exhaustive`; variants can be added at future dates
     - It should be expected that new `EventMsg` variants will be added over time to expose more detailed information about the model's actions.
 
-For complete documentation of the `Op` and `EventMsg` variants, refer to [protocol.rs](../core/src/protocol.rs). Some example payload types:
+For complete documentation of the `Op` and `EventMsg` variants, refer to [protocol.rs](../protocol/src/protocol.rs). Some example payload types:
 
 - `Op`
-  - `Op::UserInput` – Any input from the user to kick off a `Turn`
+  - `Op::UserTurn` – Any input from the user to kick off a `Turn`
+  - `Op::UserInput` – Legacy form of user input
   - `Op::Interrupt` – Interrupts a running turn
   - `Op::ExecApproval` – Approve or deny code execution
+  - `Op::UserInputAnswer` – Provide answers for a `request_user_input` tool call
   - `Op::ListSkills` – Request skills for one or more cwd values (optionally `force_reload`)
+  - `Op::UserTurn` and `Op::OverrideTurnContext` accept an optional `personality` override that updates the model’s communication style
 - `EventMsg`
   - `EventMsg::AgentMessage` – Messages from the `Model`
   - `EventMsg::ExecApprovalRequest` – Request approval from user to execute a command
+  - `EventMsg::RequestUserInput` – Request user input for a tool call (questions can include options plus `isOther` to add a free-form choice)
   - `EventMsg::TurnComplete` – A turn completed successfully
   - `EventMsg::Error` – A turn stopped with an error
   - `EventMsg::Warning` – A non-fatal warning that the client should surface to the user
@@ -112,7 +116,7 @@ sequenceDiagram
     user->>codex: Op::ConfigureSession
     codex-->>session: create session
     codex->>user: Event::SessionConfigured
-    user->>session: Op::UserInput
+    user->>session: Op::UserTurn
     session-->>+task: start task
     task->>user: Event::TurnStarted
     task->>agent: prompt
@@ -150,7 +154,7 @@ sequenceDiagram
     box Rest API
     participant agent as Model
     end
-    user->>session: Op::UserInput
+    user->>session: Op::UserTurn
     session-->>+task1: start task
     task1->>user: Event::TurnStarted
     task1->>agent: prompt
@@ -162,7 +166,7 @@ sequenceDiagram
     task1->>task1: exec (auto-approved)
     user->>task1: Op::Interrupt
     task1->>-user: Event::Error("interrupted")
-    user->>session: Op::UserInput w/ last_response_id
+    user->>session: Op::UserTurn w/ response bookmark
     session-->>+task2: start task
     task2->>user: Event::TurnStarted
     task2->>agent: prompt + Task1 last_response_id

@@ -6,6 +6,7 @@ use codex_core::protocol::ItemCompletedEvent;
 use codex_core::protocol::ItemStartedEvent;
 use codex_core::protocol::Op;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::WebSearchAction;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -18,7 +19,7 @@ use core_test_support::responses::ev_reasoning_item_added;
 use core_test_support::responses::ev_reasoning_summary_text_delta;
 use core_test_support::responses::ev_reasoning_text_delta;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::ev_web_search_call_added;
+use core_test_support::responses::ev_web_search_call_added_partial;
 use core_test_support::responses::ev_web_search_call_done;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
@@ -40,10 +41,10 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
     let first_response = sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]);
     mount_sse_once(&server, first_response).await;
 
-    let text_elements = vec![TextElement {
-        byte_range: ByteRange { start: 0, end: 6 },
-        placeholder: Some("<file>".into()),
-    }];
+    let text_elements = vec![TextElement::new(
+        ByteRange { start: 0, end: 6 },
+        Some("<file>".into()),
+    )];
     let expected_input = UserInput::Text {
         text: "please inspect sample.txt".into(),
         text_elements: text_elements.clone(),
@@ -208,8 +209,7 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
 
     let TestCodex { codex, .. } = test_codex().build(&server).await?;
 
-    let web_search_added =
-        ev_web_search_call_added("web-search-1", "in_progress", "weather seattle");
+    let web_search_added = ev_web_search_call_added_partial("web-search-1", "in_progress");
     let web_search_done = ev_web_search_call_done("web-search-1", "completed", "weather seattle");
 
     let first_response = sse(vec![
@@ -230,11 +230,8 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
         })
         .await?;
 
-    let started = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ItemStarted(ItemStartedEvent {
-            item: TurnItem::WebSearch(item),
-            ..
-        }) => Some(item.clone()),
+    let begin = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::WebSearchBegin(event) => Some(event.clone()),
         _ => None,
     })
     .await;
@@ -247,8 +244,14 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
     })
     .await;
 
-    assert_eq!(started.id, completed.id);
-    assert_eq!(completed.query, "weather seattle");
+    assert_eq!(begin.call_id, "web-search-1");
+    assert_eq!(completed.id, begin.call_id);
+    assert_eq!(
+        completed.action,
+        WebSearchAction::Search {
+            query: Some("weather seattle".to_string()),
+        }
+    );
 
     Ok(())
 }

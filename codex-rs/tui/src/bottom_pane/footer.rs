@@ -37,12 +37,51 @@ pub(crate) struct FooterProps {
     pub(crate) use_shift_enter_hint: bool,
     pub(crate) is_task_running: bool,
     pub(crate) steer_enabled: bool,
+    pub(crate) collaboration_modes_enabled: bool,
     /// Which key the user must press again to quit.
     ///
     /// This is rendered when `mode` is `FooterMode::QuitShortcutReminder`.
     pub(crate) quit_shortcut_key: KeyBinding,
     pub(crate) context_window_percent: Option<i64>,
     pub(crate) context_window_used_tokens: Option<i64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CollaborationModeIndicator {
+    Plan,
+    Code,
+    PairProgramming,
+    Execute,
+}
+
+const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
+
+impl CollaborationModeIndicator {
+    fn label(self, show_cycle_hint: bool) -> String {
+        let suffix = if show_cycle_hint {
+            format!(" ({MODE_CYCLE_HINT})")
+        } else {
+            String::new()
+        };
+        match self {
+            CollaborationModeIndicator::Plan => format!("Plan mode{suffix}"),
+            CollaborationModeIndicator::Code => format!("Code mode{suffix}"),
+            CollaborationModeIndicator::PairProgramming => {
+                format!("Pair Programming mode{suffix}")
+            }
+            CollaborationModeIndicator::Execute => format!("Execute mode{suffix}"),
+        }
+    }
+
+    fn styled_span(self, show_cycle_hint: bool) -> Span<'static> {
+        let label = self.label(show_cycle_hint);
+        match self {
+            CollaborationModeIndicator::Plan => Span::from(label).magenta(),
+            CollaborationModeIndicator::Code => Span::from(label).cyan(),
+            CollaborationModeIndicator::PairProgramming => Span::from(label).cyan(),
+            CollaborationModeIndicator::Execute => Span::from(label).dim(),
+        }
+    }
 }
 
 /// Selects which footer content is rendered.
@@ -103,6 +142,57 @@ pub(crate) fn render_footer(area: Rect, buf: &mut Buffer, props: FooterProps) {
     .render(area, buf);
 }
 
+pub(crate) fn render_mode_indicator(
+    area: Rect,
+    buf: &mut Buffer,
+    indicator: Option<CollaborationModeIndicator>,
+    show_cycle_hint: bool,
+    left_content_width: Option<u16>,
+) {
+    let Some(indicator) = indicator else {
+        return;
+    };
+    if area.is_empty() {
+        return;
+    }
+
+    let span = indicator.styled_span(show_cycle_hint);
+    let label_width = span.width() as u16;
+    if label_width == 0 || label_width > area.width {
+        return;
+    }
+
+    let x = area
+        .x
+        .saturating_add(area.width)
+        .saturating_sub(label_width)
+        .saturating_sub(FOOTER_INDENT_COLS as u16);
+    let y = area.y + area.height.saturating_sub(1);
+    if let Some(left_content_width) = left_content_width {
+        let left_extent = FOOTER_INDENT_COLS as u16 + left_content_width;
+        if left_extent >= x.saturating_sub(area.x) {
+            return;
+        }
+    }
+    buf.set_span(x, y, &span, label_width);
+}
+
+pub(crate) fn inset_footer_hint_area(mut area: Rect) -> Rect {
+    if area.width > 2 {
+        area.x += 2;
+        area.width = area.width.saturating_sub(2);
+    }
+    area
+}
+
+pub(crate) fn render_footer_hint_items(area: Rect, buf: &mut Buffer, items: &[(String, String)]) {
+    if items.is_empty() {
+        return;
+    }
+
+    footer_hint_items_line(items).render(inset_footer_hint_area(area), buf);
+}
+
 fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
     // Show the context indicator on the left, appended after the primary hint
     // (e.g., "? for shortcuts"). Keep it visible even when typing (i.e., when
@@ -134,6 +224,7 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
                 use_shift_enter_hint: props.use_shift_enter_hint,
                 esc_backtrack_hint: props.esc_backtrack_hint,
                 is_wsl,
+                collaboration_modes_enabled: props.collaboration_modes_enabled,
             };
             shortcut_overlay_lines(state)
         }
@@ -153,11 +244,39 @@ fn footer_lines(props: FooterProps) -> Vec<Line<'static>> {
     }
 }
 
+pub(crate) fn footer_line_width(props: FooterProps) -> u16 {
+    footer_lines(props)
+        .last()
+        .map(|line| line.width() as u16)
+        .unwrap_or(0)
+}
+
+pub(crate) fn footer_hint_items_width(items: &[(String, String)]) -> u16 {
+    if items.is_empty() {
+        return 0;
+    }
+    footer_hint_items_line(items).width() as u16
+}
+
+fn footer_hint_items_line(items: &[(String, String)]) -> Line<'static> {
+    let mut spans = Vec::with_capacity(items.len() * 4);
+    for (idx, (key, label)) in items.iter().enumerate() {
+        spans.push(" ".into());
+        spans.push(key.clone().bold());
+        spans.push(format!(" {label}").into());
+        if idx + 1 != items.len() {
+            spans.push("   ".into());
+        }
+    }
+    Line::from(spans)
+}
+
 #[derive(Clone, Copy, Debug)]
 struct ShortcutsState {
     use_shift_enter_hint: bool,
     esc_backtrack_hint: bool,
     is_wsl: bool,
+    collaboration_modes_enabled: bool,
 }
 
 fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
@@ -190,6 +309,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut edit_previous = Line::from("");
     let mut quit = Line::from("");
     let mut show_transcript = Line::from("");
+    let mut change_mode = Line::from("");
 
     for descriptor in SHORTCUTS {
         if let Some(text) = descriptor.overlay_entry(state) {
@@ -204,11 +324,12 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::EditPrevious => edit_previous = text,
                 ShortcutId::Quit => quit = text,
                 ShortcutId::ShowTranscript => show_transcript = text,
+                ShortcutId::ChangeMode => change_mode = text,
             }
         }
     }
 
-    let ordered = vec![
+    let mut ordered = vec![
         commands,
         shell_commands,
         newline,
@@ -218,9 +339,12 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         external_editor,
         edit_previous,
         quit,
-        Line::from(""),
-        show_transcript,
     ];
+    if change_mode.width() > 0 {
+        ordered.push(change_mode);
+    }
+    ordered.push(Line::from(""));
+    ordered.push(show_transcript);
 
     build_columns(ordered)
 }
@@ -298,6 +422,7 @@ enum ShortcutId {
     EditPrevious,
     Quit,
     ShowTranscript,
+    ChangeMode,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -318,6 +443,7 @@ enum DisplayCondition {
     WhenShiftEnterHint,
     WhenNotShiftEnterHint,
     WhenUnderWSL,
+    WhenCollaborationModesEnabled,
 }
 
 impl DisplayCondition {
@@ -327,6 +453,7 @@ impl DisplayCondition {
             DisplayCondition::WhenShiftEnterHint => state.use_shift_enter_hint,
             DisplayCondition::WhenNotShiftEnterHint => !state.use_shift_enter_hint,
             DisplayCondition::WhenUnderWSL => state.is_wsl,
+            DisplayCondition::WhenCollaborationModesEnabled => state.collaboration_modes_enabled,
         }
     }
 }
@@ -469,6 +596,15 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         prefix: "",
         label: " to view transcript",
     },
+    ShortcutDescriptor {
+        id: ShortcutId::ChangeMode,
+        bindings: &[ShortcutBinding {
+            key: key_hint::shift(KeyCode::Tab),
+            condition: DisplayCondition::WhenCollaborationModesEnabled,
+        }],
+        prefix: "",
+        label: " to change mode",
+    },
 ];
 
 #[cfg(test)]
@@ -490,6 +626,30 @@ mod tests {
         assert_snapshot!(name, terminal.backend());
     }
 
+    fn snapshot_footer_with_indicator(
+        name: &str,
+        width: u16,
+        props: FooterProps,
+        indicator: Option<CollaborationModeIndicator>,
+    ) {
+        let height = footer_height(props).max(1);
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = Rect::new(0, 0, f.area().width, height);
+                render_footer(area, f.buffer_mut(), props);
+                render_mode_indicator(
+                    area,
+                    f.buffer_mut(),
+                    indicator,
+                    !props.is_task_running,
+                    Some(footer_line_width(props)),
+                );
+            })
+            .unwrap();
+        assert_snapshot!(name, terminal.backend());
+    }
+
     #[test]
     fn footer_snapshots() {
         snapshot_footer(
@@ -500,6 +660,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -514,6 +675,22 @@ mod tests {
                 use_shift_enter_hint: true,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
+                quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+                context_window_percent: None,
+                context_window_used_tokens: None,
+            },
+        );
+
+        snapshot_footer(
+            "footer_shortcuts_collaboration_modes_enabled",
+            FooterProps {
+                mode: FooterMode::ShortcutOverlay,
+                esc_backtrack_hint: false,
+                use_shift_enter_hint: false,
+                is_task_running: false,
+                steer_enabled: false,
+                collaboration_modes_enabled: true,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -528,6 +705,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -542,6 +720,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -556,6 +735,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -570,6 +750,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -584,6 +765,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: Some(72),
                 context_window_used_tokens: None,
@@ -598,6 +780,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: false,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: Some(123_456),
@@ -612,6 +795,7 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: false,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
@@ -626,10 +810,56 @@ mod tests {
                 use_shift_enter_hint: false,
                 is_task_running: true,
                 steer_enabled: true,
+                collaboration_modes_enabled: false,
                 quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
                 context_window_percent: None,
                 context_window_used_tokens: None,
             },
+        );
+
+        let props = FooterProps {
+            mode: FooterMode::ShortcutSummary,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: false,
+            steer_enabled: false,
+            collaboration_modes_enabled: true,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: None,
+            context_window_used_tokens: None,
+        };
+
+        snapshot_footer_with_indicator(
+            "footer_mode_indicator_wide",
+            120,
+            props,
+            Some(CollaborationModeIndicator::Plan),
+        );
+
+        snapshot_footer_with_indicator(
+            "footer_mode_indicator_narrow_overlap_hides",
+            50,
+            props,
+            Some(CollaborationModeIndicator::Plan),
+        );
+
+        let props = FooterProps {
+            mode: FooterMode::ShortcutSummary,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: true,
+            steer_enabled: false,
+            collaboration_modes_enabled: true,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: None,
+            context_window_used_tokens: None,
+        };
+
+        snapshot_footer_with_indicator(
+            "footer_mode_indicator_running_hides_hint",
+            120,
+            props,
+            Some(CollaborationModeIndicator::Plan),
         );
     }
 }
