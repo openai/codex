@@ -29,6 +29,7 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+use crate::status_line::StatusLineRunner;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -523,6 +524,7 @@ pub(crate) struct App {
     runtime_sandbox_policy_override: Option<SandboxPolicy>,
 
     pub(crate) file_search: FileSearchManager,
+    pub(crate) status_line_runner: StatusLineRunner,
 
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
 
@@ -1070,6 +1072,7 @@ impl App {
         chat_widget.maybe_prompt_windows_sandbox_enable();
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let status_line_runner = StatusLineRunner::new(config.clone(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -1086,6 +1089,7 @@ impl App {
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
             file_search,
+            status_line_runner,
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
             overlay: None,
@@ -2605,6 +2609,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let status_line_runner = StatusLineRunner::new(config.clone(), app_event_tx.clone());
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
@@ -2621,6 +2626,7 @@ mod tests {
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
             file_search,
+            status_line_runner,
             transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
@@ -2657,6 +2663,7 @@ mod tests {
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let status_line_runner = StatusLineRunner::new(config.clone(), app_event_tx.clone());
         let model = ModelsManager::get_model_offline(config.model.as_deref());
         let otel_manager = test_otel_manager(&config, model.as_str());
 
@@ -2674,6 +2681,7 @@ mod tests {
                 runtime_approval_policy_override: None,
                 runtime_sandbox_policy_override: None,
                 file_search,
+                status_line_runner,
                 transcript_cells: Vec::new(),
                 overlay: None,
                 deferred_history_lines: Vec::new(),

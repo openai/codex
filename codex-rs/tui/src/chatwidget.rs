@@ -580,6 +580,8 @@ pub(crate) struct ChatWidget {
     feedback_audience: FeedbackAudience,
     // Current session rollout path (if known)
     current_rollout_path: Option<PathBuf>,
+    // Current working directory (if known)
+    current_cwd: Option<PathBuf>,
     external_editor_state: ExternalEditorState,
 }
 
@@ -807,6 +809,7 @@ impl ChatWidget {
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
+        self.current_cwd = Some(event.cwd.clone());
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
@@ -2258,6 +2261,7 @@ impl ChatWidget {
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
+        let current_cwd = Some(config.cwd.clone());
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -2329,6 +2333,7 @@ impl ChatWidget {
             feedback,
             feedback_audience,
             current_rollout_path: None,
+            current_cwd,
             external_editor_state: ExternalEditorState::Closed,
         };
 
@@ -2403,6 +2408,7 @@ impl ChatWidget {
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
+        let current_cwd = Some(config.cwd.clone());
 
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -2475,6 +2481,7 @@ impl ChatWidget {
             feedback,
             feedback_audience,
             current_rollout_path: None,
+            current_cwd,
             external_editor_state: ExternalEditorState::Closed,
         };
 
@@ -2525,6 +2532,7 @@ impl ChatWidget {
             .and_then(|mask| mask.model.clone())
             .unwrap_or(header_model);
 
+        let current_cwd = Some(session_configured.cwd.clone());
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
@@ -2610,6 +2618,7 @@ impl ChatWidget {
             feedback,
             feedback_audience,
             current_rollout_path: None,
+            current_cwd,
             external_editor_state: ExternalEditorState::Closed,
         };
 
@@ -6160,6 +6169,10 @@ impl ChatWidget {
         self.current_rollout_path.clone()
     }
 
+    pub(crate) fn current_cwd(&self) -> Option<PathBuf> {
+        self.current_cwd.clone()
+    }
+
     /// Returns a cache key describing the current in-flight active cell for the transcript overlay.
     ///
     /// `Ctrl+T` renders committed transcript cells plus a render-only live tail derived from the
@@ -6361,6 +6374,80 @@ async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimi
             None
         }
     }
+}
+
+pub fn build_status_line_payload(chat: &ChatWidget, config: &Config) -> serde_json::Value {
+    let mut payload = serde_json::Map::new();
+
+    let cwd = chat.current_cwd.as_ref().unwrap_or(&config.cwd);
+
+    payload.insert(
+        "session_id".to_string(),
+        chat.thread_id
+            .map(|id| id.to_string().into())
+            .unwrap_or(serde_json::Value::Null),
+    );
+    payload.insert(
+        "transcript_path".to_string(),
+        chat.current_rollout_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string().into())
+            .unwrap_or(serde_json::Value::Null),
+    );
+    payload.insert("cwd".to_string(), cwd.to_string_lossy().to_string().into());
+
+    // TODO: set once and cache
+    let project_dir = codex_core::git_info::resolve_root_git_project_for_trust(&cwd)
+        .unwrap_or_else(|| cwd.clone());
+
+    let workspace = serde_json::json!({
+        "project_dir": project_dir,
+        "current_dir": cwd,
+    });
+
+    payload.insert("workspace".to_string(), workspace);
+
+    // TODO: set once and cache
+    let model = serde_json::json!({
+        "id": chat.current_model(),
+        "display_name": chat.models_manager.try_list_models(&chat.config).ok()
+            .and_then(|models| models.into_iter().find(|m| m.model == chat.current_model()))
+            .map(|m| m.display_name)
+            .unwrap_or_else(|| chat.current_model().to_string()),
+        "reasoning_level": chat.effective_reasoning_effort(),
+    });
+
+    payload.insert("model".to_string(), model);
+    payload.insert("version".to_string(), CODEX_CLI_VERSION.into());
+
+    let context_window_size = chat
+        .token_info
+        .as_ref()
+        .and_then(|ti| ti.model_context_window);
+    let used_percentage = context_window_size
+        .map(|cws| chat.token_usage().percent_of_context_window_remaining(cws) as f64);
+    let remaining_percentage = used_percentage.map(|up| 100f64 - up);
+    let input_tokens = chat.token_usage().input_tokens;
+    let output_tokens = chat.token_usage().output_tokens;
+    let cache_read_input_tokens = chat.token_usage().cached_input_tokens;
+    let reasoning_output_tokens = chat.token_usage().reasoning_output_tokens;
+
+    let context_window = serde_json::json!({
+        "total_input_tokens": chat.token_usage().input_tokens,
+        "total_output_tokens": chat.token_usage().output_tokens,
+        "context_window_size": context_window_size,
+        "used_percentage": used_percentage,
+        "remaining_percentage": remaining_percentage,
+        "current_usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_input_tokens": cache_read_input_tokens,
+            "reasoning_output_tokens": reasoning_output_tokens,
+        }
+    });
+    payload.insert("context_window".to_string(), context_window);
+
+    serde_json::Value::Object(payload)
 }
 
 #[cfg(test)]

@@ -894,6 +894,7 @@ async fn make_chatwidget_manual(
         feedback: codex_feedback::CodexFeedback::new(),
         feedback_audience: FeedbackAudience::External,
         current_rollout_path: None,
+        current_cwd: None,
         external_editor_state: ExternalEditorState::Closed,
     };
     widget.set_model(&resolved_model);
