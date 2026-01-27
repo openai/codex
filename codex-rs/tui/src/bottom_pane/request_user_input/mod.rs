@@ -563,9 +563,9 @@ impl RequestUserInputOverlay {
             };
             // Notes are appended as extra answers. For freeform questions, only submit when
             // the user explicitly committed the draft.
-            let notes = if options.is_some_and(|opts| !opts.is_empty()) {
-                answer_state.draft.text.trim().to_string()
-            } else if answer_state.freeform_committed {
+            let notes = if options.is_some_and(|opts| !opts.is_empty())
+                || answer_state.freeform_committed
+            {
                 answer_state.draft.text.trim().to_string()
             } else {
                 String::new()
