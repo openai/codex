@@ -392,6 +392,12 @@ pub(crate) async fn maybe_install_mcp_dependencies(
             }
         };
 
+        sess.notify_background_event(
+            turn_context,
+            format!("Authenticating MCP server {name} via OAuth..."),
+        )
+        .await;
+
         if let Err(err) = perform_oauth_login(
             &name,
             &oauth_config.url,
