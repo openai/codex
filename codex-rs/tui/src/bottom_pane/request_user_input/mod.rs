@@ -555,7 +555,11 @@ impl BottomPaneView for RequestUserInputOverlay {
                         self.select_current_option();
                     }
                     KeyCode::Enter => {
-                        self.select_current_option();
+                        let is_last_question = self.current_index() + 1 >= self.question_count();
+                        let has_selection = self.selected_option_index().is_some();
+                        if !is_last_question || has_selection {
+                            self.select_current_option();
+                        }
                         self.go_next_or_submit();
                     }
                     KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete => {
@@ -809,6 +813,27 @@ mod tests {
             panic!("expected UserInputAnswer");
         };
         assert_eq!(id, "turn-1");
+        let answer = response.answers.get("q1").expect("answer missing");
+        assert_eq!(answer.answers, Vec::<String>::new());
+    }
+
+    #[test]
+    fn enter_does_not_auto_select_last_option_question() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
         let answer = response.answers.get("q1").expect("answer missing");
         assert_eq!(answer.answers, Vec::<String>::new());
     }
