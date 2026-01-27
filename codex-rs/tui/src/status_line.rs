@@ -4,26 +4,28 @@ use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_ansi_escape::ansi_escape_line;
 use codex_core::config::Config;
+use ratatui::text::Line;
 use ratatui::text::Span;
 use tokio::io::AsyncWriteExt;
 
+use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::chatwidget::ChatWidget;
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatusLineRunner {
     config: Config,
     state: Arc<Mutex<StatusLine>>,
-    app_rx: AppEventSender,
+    app_tx: AppEventSender,
 }
 
 impl StatusLineRunner {
-    pub(crate) fn new(config: Config, app_rx: AppEventSender) -> Self {
+    pub(crate) fn new(config: Config, app_tx: AppEventSender) -> Self {
         Self {
             config,
             state: Arc::new(Mutex::new(StatusLine::default())),
-            app_rx,
+            app_tx,
         }
     }
 
@@ -56,7 +58,7 @@ impl StatusLineRunner {
         }
 
         let state = self.state.clone();
-        let app_rx = self.app_rx.clone();
+        let app_tx = self.app_tx.clone();
         let run = async move {
             loop {
                 let payload = {
@@ -72,29 +74,44 @@ impl StatusLineRunner {
                     timeout: DEFAULT_STATUS_LINE_TIMEOUT,
                 };
                 let result = run_request(&request).await;
-                let mut state = state.lock().expect("status line lock poisoned");
-                match result {
-                    Ok(line) => {
-                        state.latest = Some(StatusLineValue {
-                            text: line,
-                            spans: None,
-                        });
-                        state.last_error = None;
-                        state.last_updated_at = Some(Instant::now());
+                let mut update = None;
+                let mut rerun = false;
+
+                {
+                    let mut state = state.lock().expect("status line lock poisoned");
+                    match result {
+                        Ok(line) => {
+                            let parsed = ansi_escape_line(&line);
+                            let status_line_value = StatusLineValue {
+                                text: line,
+                                spans: Some(parsed.spans),
+                            };
+                            state.latest = Some(status_line_value.clone());
+                            state.last_error = None;
+                            state.last_updated_at = Some(Instant::now());
+                            update = Some(status_line_value);
+                        }
+                        Err(err) => {
+                            tracing::warn!("status line execution failed: {}", err);
+                            state.last_error = Some(err);
+                        }
                     }
-                    Err(err) => {
-                        state.last_error = Some(err);
+
+                    if state.pending {
+                        state.pending = false;
+                        rerun = true;
+                    } else {
+                        state.in_flight = false;
                     }
                 }
 
-                // TODO: emit a redraw/status-line-updated event when the UI is wired up.
-                let _ = &app_rx;
+                if let Some(status_line_value) = update {
+                    app_tx.send(AppEvent::StatusLineUpdated(status_line_value));
+                }
 
-                if state.pending {
-                    state.pending = false;
+                if rerun {
                     continue;
                 }
-                state.in_flight = false;
                 break;
             }
         };
@@ -152,6 +169,16 @@ struct StatusLine {
 pub(crate) struct StatusLineValue {
     pub text: String,
     pub spans: Option<Vec<Span<'static>>>,
+}
+
+impl StatusLineValue {
+    pub(crate) fn as_line(&self) -> Line<'static> {
+        if let Some(spans) = &self.spans {
+            Line::from(spans.clone())
+        } else {
+            Line::from(self.text.clone())
+        }
+    }
 }
 
 async fn run_request(request: &StatusLineRequest) -> Result<String, String> {
