@@ -17,6 +17,11 @@ pub(crate) struct SessionState {
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
+    /// Whether the session's initial context has been seeded into history.
+    ///
+    /// TODO(owen): This is a temporary solution to avoid updating a thread's updated_at
+    /// timestamp when resuming a session. Remove this once SQLite is in place.
+    pub(crate) initial_context_seeded: bool,
 }
 
 impl SessionState {
@@ -29,6 +34,7 @@ impl SessionState {
             latest_rate_limits: None,
             server_reasoning_included: false,
             mcp_dependency_prompted: HashSet::new(),
+            initial_context_seeded: false,
         }
     }
 
