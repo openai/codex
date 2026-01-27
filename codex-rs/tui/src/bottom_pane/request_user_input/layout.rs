@@ -23,85 +23,274 @@ impl RequestUserInputOverlay {
         let footer_pref = if self.unanswered_count() > 0 { 2 } else { 1 };
         let notes_pref_height = self.notes_input_height(area.width);
         let mut question_lines = self.wrapped_question_lines(area.width);
-        let mut question_height = question_lines.len() as u16;
+        let question_height = question_lines.len() as u16;
 
-        let mut progress_height = 0;
-        let mut answer_title_height = 0;
-        let mut notes_title_height = 0;
-        let mut notes_height = 0;
-        let mut options_height = 0;
-        let mut footer_lines = 0;
-
-        if has_options {
-            let options_required_height = self.options_required_height(area.width);
-            let min_options_height = 1u16;
-            let required = 1u16
-                .saturating_add(question_height)
-                .saturating_add(options_required_height);
-
-            if required > area.height {
-                // Tight layout: allocate header + question + options first and drop everything else.
-                let max_question_height = area
-                    .height
-                    .saturating_sub(1u16.saturating_add(min_options_height));
-                question_height = question_height.min(max_question_height);
-                question_lines.truncate(question_height as usize);
-                options_height = area
-                    .height
-                    .saturating_sub(1u16.saturating_add(question_height));
-            } else {
-                options_height = options_required_height;
-                let used = 1u16
-                    .saturating_add(question_height)
-                    .saturating_add(options_height);
-                let mut remaining = area.height.saturating_sub(used);
-
-                // Prefer notes next, then footer, then labels, with progress last.
-                notes_height = notes_pref_height.min(remaining);
-                remaining = remaining.saturating_sub(notes_height);
-
-                footer_lines = footer_pref.min(remaining);
-                remaining = remaining.saturating_sub(footer_lines);
-
-                if remaining > 0 {
-                    answer_title_height = 1;
-                    remaining = remaining.saturating_sub(1);
-                }
-                if remaining > 0 {
-                    notes_title_height = 1;
-                    remaining = remaining.saturating_sub(1);
-                }
-                if remaining > 0 {
-                    progress_height = 1;
-                    remaining = remaining.saturating_sub(1);
-                }
-
-                // Expand the notes composer with any leftover rows.
-                notes_height = notes_height.saturating_add(remaining);
-            }
+        let (
+            question_height,
+            progress_height,
+            answer_title_height,
+            notes_title_height,
+            notes_height,
+            options_height,
+            footer_lines,
+        ) = if has_options {
+            self.layout_with_options(
+                area.height,
+                area.width,
+                question_height,
+                notes_pref_height,
+                footer_pref,
+                &mut question_lines,
+            )
         } else {
-            let required = 1u16.saturating_add(question_height);
-            if required > area.height {
-                let max_question_height = area.height.saturating_sub(1);
-                question_height = question_height.min(max_question_height);
-                question_lines.truncate(question_height as usize);
-            } else {
-                let mut remaining = area.height.saturating_sub(required);
-                notes_height = notes_pref_height.min(remaining);
-                remaining = remaining.saturating_sub(notes_height);
+            self.layout_without_options(
+                area.height,
+                question_height,
+                notes_pref_height,
+                footer_pref,
+                &mut question_lines,
+            )
+        };
 
-                footer_lines = footer_pref.min(remaining);
-                remaining = remaining.saturating_sub(footer_lines);
+        let (
+            progress_area,
+            header_area,
+            question_area,
+            answer_title_area,
+            options_area,
+            notes_title_area,
+            notes_area,
+        ) = self.build_layout_areas(
+            area,
+            progress_height,
+            question_height,
+            answer_title_height,
+            options_height,
+            notes_title_height,
+            notes_height,
+        );
 
-                if remaining > 0 {
-                    progress_height = 1;
-                    remaining = remaining.saturating_sub(1);
-                }
+        LayoutSections {
+            progress_area,
+            header_area,
+            question_area,
+            answer_title_area,
+            question_lines,
+            options_area,
+            notes_title_area,
+            notes_area,
+            footer_lines,
+        }
+    }
 
-                notes_height = notes_height.saturating_add(remaining);
-            }
+    /// Layout calculation when options are present.
+    ///
+    /// Handles both tight layout (when space is constrained) and normal layout
+    /// (when there's sufficient space for all elements).
+    ///
+    /// Returns: (question_height, progress_height, answer_title_height, notes_title_height, notes_height, options_height, footer_lines)
+    fn layout_with_options(
+        &self,
+        available_height: u16,
+        width: u16,
+        question_height: u16,
+        notes_pref_height: u16,
+        footer_pref: u16,
+        question_lines: &mut Vec<String>,
+    ) -> (u16, u16, u16, u16, u16, u16, u16) {
+        let options_required_height = self.options_required_height(width);
+        let min_options_height = 1u16;
+        let required = 1u16
+            .saturating_add(question_height)
+            .saturating_add(options_required_height);
+
+        if required > available_height {
+            self.layout_with_options_tight(
+                available_height,
+                question_height,
+                min_options_height,
+                question_lines,
+            )
+        } else {
+            self.layout_with_options_normal(
+                available_height,
+                question_height,
+                options_required_height,
+                notes_pref_height,
+                footer_pref,
+            )
+        }
+    }
+
+    /// Tight layout for options case: allocate header + question + options first
+    /// and drop everything else when space is constrained.
+    fn layout_with_options_tight(
+        &self,
+        available_height: u16,
+        question_height: u16,
+        min_options_height: u16,
+        question_lines: &mut Vec<String>,
+    ) -> (u16, u16, u16, u16, u16, u16, u16) {
+        let max_question_height =
+            available_height.saturating_sub(1u16.saturating_add(min_options_height));
+        let adjusted_question_height = question_height.min(max_question_height);
+        question_lines.truncate(adjusted_question_height as usize);
+        let options_height =
+            available_height.saturating_sub(1u16.saturating_add(adjusted_question_height));
+
+        (adjusted_question_height, 0, 0, 0, 0, options_height, 0)
+    }
+
+    /// Normal layout for options case: allocate space for all elements with
+    /// preference order: notes, footer, labels, then progress.
+    fn layout_with_options_normal(
+        &self,
+        available_height: u16,
+        question_height: u16,
+        options_required_height: u16,
+        notes_pref_height: u16,
+        footer_pref: u16,
+    ) -> (u16, u16, u16, u16, u16, u16, u16) {
+        let options_height = options_required_height;
+        let used = 1u16
+            .saturating_add(question_height)
+            .saturating_add(options_height);
+        let mut remaining = available_height.saturating_sub(used);
+
+        // Prefer notes next, then footer, then labels, with progress last.
+        let mut notes_height = notes_pref_height.min(remaining);
+        remaining = remaining.saturating_sub(notes_height);
+
+        let footer_lines = footer_pref.min(remaining);
+        remaining = remaining.saturating_sub(footer_lines);
+
+        let mut answer_title_height = 0;
+        if remaining > 0 {
+            answer_title_height = 1;
+            remaining = remaining.saturating_sub(1);
         }
 
+        let mut notes_title_height = 0;
+        if remaining > 0 {
+            notes_title_height = 1;
+            remaining = remaining.saturating_sub(1);
+        }
+
+        let mut progress_height = 0;
+        if remaining > 0 {
+            progress_height = 1;
+            remaining = remaining.saturating_sub(1);
+        }
+
+        // Expand the notes composer with any leftover rows.
+        notes_height = notes_height.saturating_add(remaining);
+
+        (
+            question_height,
+            progress_height,
+            answer_title_height,
+            notes_title_height,
+            notes_height,
+            options_height,
+            footer_lines,
+        )
+    }
+
+    /// Layout calculation when no options are present.
+    ///
+    /// Handles both tight layout (when space is constrained) and normal layout
+    /// (when there's sufficient space for all elements).
+    ///
+    /// Returns: (question_height, progress_height, answer_title_height, notes_title_height, notes_height, options_height, footer_lines)
+    fn layout_without_options(
+        &self,
+        available_height: u16,
+        question_height: u16,
+        notes_pref_height: u16,
+        footer_pref: u16,
+        question_lines: &mut Vec<String>,
+    ) -> (u16, u16, u16, u16, u16, u16, u16) {
+        let required = 1u16.saturating_add(question_height);
+        if required > available_height {
+            self.layout_without_options_tight(available_height, question_height, question_lines)
+        } else {
+            self.layout_without_options_normal(
+                available_height,
+                question_height,
+                notes_pref_height,
+                footer_pref,
+            )
+        }
+    }
+
+    /// Tight layout for no-options case: truncate question to fit available space.
+    fn layout_without_options_tight(
+        &self,
+        available_height: u16,
+        question_height: u16,
+        question_lines: &mut Vec<String>,
+    ) -> (u16, u16, u16, u16, u16, u16, u16) {
+        let max_question_height = available_height.saturating_sub(1);
+        let adjusted_question_height = question_height.min(max_question_height);
+        question_lines.truncate(adjusted_question_height as usize);
+
+        (adjusted_question_height, 0, 0, 0, 0, 0, 0)
+    }
+
+    /// Normal layout for no-options case: allocate space for notes, footer, and progress.
+    fn layout_without_options_normal(
+        &self,
+        available_height: u16,
+        question_height: u16,
+        notes_pref_height: u16,
+        footer_pref: u16,
+    ) -> (u16, u16, u16, u16, u16, u16, u16) {
+        let required = 1u16.saturating_add(question_height);
+        let mut remaining = available_height.saturating_sub(required);
+        let mut notes_height = notes_pref_height.min(remaining);
+        remaining = remaining.saturating_sub(notes_height);
+
+        let footer_lines = footer_pref.min(remaining);
+        remaining = remaining.saturating_sub(footer_lines);
+
+        let mut progress_height = 0;
+        if remaining > 0 {
+            progress_height = 1;
+            remaining = remaining.saturating_sub(1);
+        }
+
+        notes_height = notes_height.saturating_add(remaining);
+
+        (
+            question_height,
+            progress_height,
+            0,
+            0,
+            notes_height,
+            0,
+            footer_lines,
+        )
+    }
+
+    /// Build the final layout areas from computed heights.
+    fn build_layout_areas(
+        &self,
+        area: Rect,
+        progress_height: u16,
+        question_height: u16,
+        answer_title_height: u16,
+        options_height: u16,
+        notes_title_height: u16,
+        notes_height: u16,
+    ) -> (
+        Rect, // progress_area
+        Rect, // header_area
+        Rect, // question_area
+        Rect, // answer_title_area
+        Rect, // options_area
+        Rect, // notes_title_area
+        Rect, // notes_area
+    ) {
         let mut cursor_y = area.y;
         let progress_area = Rect {
             x: area.x,
@@ -155,16 +344,14 @@ impl RequestUserInputOverlay {
             height: notes_height,
         };
 
-        LayoutSections {
+        (
             progress_area,
             header_area,
             question_area,
             answer_title_area,
-            question_lines,
             options_area,
             notes_title_area,
             notes_area,
-            footer_lines,
-        }
+        )
     }
 }
