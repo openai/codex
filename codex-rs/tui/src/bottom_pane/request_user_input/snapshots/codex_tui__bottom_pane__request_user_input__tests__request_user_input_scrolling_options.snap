@@ -6,10 +6,9 @@ expression: "render_snapshot(&overlay, area)"
   Question 1/1                                                                                                          
   Next Step                                                                                                             
   What would you like to do next?                                                                                       
-  Answer                                                                                                                
   ( ) Discuss a code change (Recommended)  Walk through a plan and edit code together.                                  
   ( ) Run tests                            Pick a crate and run its tests.                                              
   ( ) Review a diff                        Summarize or review current changes.                                         
   (x) Refactor                             Tighten structure and remove dead code.                                      
   ( ) Ship it                              Finalize and open a PR.                                                      
-  Option 4 of 5 | ↑/↓ scroll | tab add notes | Enter to submit answer | Esc to interrupt
+  Option 4 of 5 | ↑/↓ scroll | Tab add notes | Enter to submit answer | Esc to interrupt

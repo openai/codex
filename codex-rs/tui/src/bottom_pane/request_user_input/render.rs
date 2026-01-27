@@ -31,7 +31,7 @@ impl Renderable for RequestUserInputOverlay {
         } else {
             0
         };
-        let footer_height = if self.unanswered_count() > 0 { 2 } else { 1 };
+        let footer_height = 1usize;
 
         // Tight minimum height: progress + header + question + (optional) titles/options
         // + notes composer + footer + menu padding.
@@ -40,11 +40,8 @@ impl Renderable for RequestUserInputOverlay {
             .saturating_add(notes_height)
             .saturating_add(footer_height)
             .saturating_add(2); // progress + header
-        if self.has_options() {
-            height = height.saturating_add(1); // answer title
-            if notes_visible {
-                height = height.saturating_add(1); // notes title
-            }
+        if self.has_options() && notes_visible {
+            height = height.saturating_add(1); // notes title
         }
         height = height.saturating_add(menu_surface_padding_height() as usize);
         height.max(8) as u16
@@ -73,12 +70,18 @@ impl RequestUserInputOverlay {
         }
         let sections = self.layout_sections(content_area);
         let notes_visible = self.notes_ui_visible();
+        let unanswered = self.unanswered_count();
 
         // Progress header keeps the user oriented across multiple questions.
         let progress_line = if self.question_count() > 0 {
             let idx = self.current_index() + 1;
             let total = self.question_count();
-            Line::from(format!("Question {idx}/{total}").dim())
+            let base = format!("Question {idx}/{total}");
+            if unanswered > 0 {
+                Line::from(format!("{base} ({unanswered} unanswered)").dim())
+            } else {
+                Line::from(base.dim())
+            }
         } else {
             Line::from("No questions".dim())
         };
@@ -109,10 +112,6 @@ impl RequestUserInputOverlay {
                 },
                 buf,
             );
-        }
-
-        if sections.answer_title_area.height > 0 {
-            Paragraph::new(Line::from("Answer".dim())).render(sections.answer_title_area, buf);
         }
 
         // Build rows with selection markers for the shared selection renderer.
@@ -176,19 +175,6 @@ impl RequestUserInputOverlay {
             .notes_area
             .y
             .saturating_add(sections.notes_area.height);
-        if sections.footer_lines == 2 {
-            // Status line for unanswered count when any question is empty.
-            let warning = format!("Unanswered: {}", self.unanswered_count());
-            Paragraph::new(Line::from(warning.dim())).render(
-                Rect {
-                    x: content_area.x,
-                    y: footer_y,
-                    width: content_area.width,
-                    height: 1,
-                },
-                buf,
-            );
-        }
         let hint_y = footer_y.saturating_add(sections.footer_lines.saturating_sub(1));
         // Footer hints (selection index + navigation keys).
         let mut hint_spans = Vec::new();
@@ -210,10 +196,7 @@ impl RequestUserInputOverlay {
                 " scroll | ".into(),
             ]);
             if self.selected_option_index().is_some() && !notes_visible {
-                hint_spans.extend(vec![
-                    key_hint::plain(KeyCode::Tab).into(),
-                    " add notes | ".into(),
-                ]);
+                hint_spans.extend(vec!["Tab".dim(), " add notes | ".into()]);
             }
         }
         let question_count = self.question_count();
