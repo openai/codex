@@ -82,17 +82,64 @@ fn collect_explicit_skill_mentions(
     disabled_paths: &HashSet<PathBuf>,
 ) -> Vec<SkillMetadata> {
     let mut selected: Vec<SkillMetadata> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
 
     for input in inputs {
         if let UserInput::Skill { name, path } = input
-            && seen.insert(name.clone())
             && let Some(skill) = skills.iter().find(|s| s.name == *name && s.path == *path)
             && !disabled_paths.contains(&skill.path)
+            && seen.insert(skill.path.clone())
         {
             selected.push(skill.clone());
         }
     }
 
     selected
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::skills::SkillMetadata;
+    use codex_protocol::protocol::SkillScope;
+    use codex_protocol::user_input::UserInput;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    fn skill(name: &str, path: PathBuf) -> SkillMetadata {
+        SkillMetadata {
+            name: name.to_string(),
+            description: "desc".to_string(),
+            short_description: None,
+            interface: None,
+            path,
+            scope: SkillScope::Repo,
+        }
+    }
+
+    #[test]
+    fn valid_skill_not_blocked_by_disabled_skill_with_same_name() {
+        let disabled_path = PathBuf::from("/skills/test/SKILL.md");
+        let enabled_path = PathBuf::from("/skills/test-copy/SKILL.md");
+        let skills = vec![
+            skill("test", disabled_path.clone()),
+            skill("test", enabled_path.clone()),
+        ];
+        let disabled_paths = HashSet::from([disabled_path.clone()]);
+        let inputs = vec![
+            UserInput::Skill {
+                name: "test".to_string(),
+                path: disabled_path,
+            },
+            UserInput::Skill {
+                name: "test".to_string(),
+                path: enabled_path.clone(),
+            },
+        ];
+
+        let selected = collect_explicit_skill_mentions(&inputs, &skills, &disabled_paths);
+
+        assert_eq!(vec![skill("test", enabled_path)], selected);
+    }
 }
