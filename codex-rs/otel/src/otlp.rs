@@ -75,10 +75,45 @@ pub(crate) fn build_http_client(
     tls: &OtelTlsConfig,
     timeout_var: &str,
 ) -> Result<reqwest::blocking::Client, Box<dyn Error>> {
-    if tokio::runtime::Handle::try_current().is_ok() {
-        tokio::task::block_in_place(|| build_http_client_inner(tls, timeout_var))
-    } else {
-        build_http_client_inner(tls, timeout_var)
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| build_http_client_inner(tls, timeout_var))
+            }
+            tokio::runtime::RuntimeFlavor::CurrentThread => {
+                let joined = std::thread::spawn({
+                    let tls = tls.clone();
+                    let timeout_var = timeout_var.to_owned();
+                    move || {
+                        build_http_client_inner(&tls, &timeout_var)
+                            .map_err(|error| error.to_string())
+                    }
+                })
+                .join();
+                match joined {
+                    Ok(result) => result,
+                    Err(panic) => std::panic::resume_unwind(panic),
+                }
+                .map_err(config_error)
+            }
+            _ => {
+                let joined = std::thread::spawn({
+                    let tls = tls.clone();
+                    let timeout_var = timeout_var.to_owned();
+                    move || {
+                        build_http_client_inner(&tls, &timeout_var)
+                            .map_err(|error| error.to_string())
+                    }
+                })
+                .join();
+                match joined {
+                    Ok(result) => result,
+                    Err(panic) => std::panic::resume_unwind(panic),
+                }
+                .map_err(config_error)
+            }
+        },
+        Err(_) => build_http_client_inner(tls, timeout_var),
     }
 }
 

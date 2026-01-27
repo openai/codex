@@ -169,6 +169,62 @@ async fn returns_empty_when_all_layers_missing() {
     }
 }
 
+#[tokio::test]
+async fn cwd_local_config_ignores_codex_home_config() {
+    let tmp = tempdir().expect("tempdir");
+
+    let codex_home = tmp.path().join("home");
+    std::fs::create_dir_all(&codex_home).expect("create codex_home");
+    std::fs::write(
+        codex_home.join(CONFIG_TOML_FILE),
+        r#"
+[mcp_servers.chrome-devtools]
+command = "npx"
+args = ["chrome-devtools-mcp@latest"]
+"#,
+    )
+    .expect("write CODEX_HOME config");
+
+    let cwd = tmp.path().join("project");
+    std::fs::create_dir_all(cwd.join(".codex")).expect("create project .codex");
+    std::fs::write(
+        cwd.join(".codex").join(CONFIG_TOML_FILE),
+        r#"
+[mcp_servers.mobile-mcp]
+command = "npx"
+args = ["-y", "@mobilenext/mobile-mcp@latest"]
+"#,
+    )
+    .expect("write cwd-local config");
+
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(AbsolutePathBuf::try_from(cwd.as_path()).expect("cwd")),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+    )
+    .await
+    .expect("load layers");
+
+    assert_eq!(
+        layers.get_user_layer(),
+        None,
+        "expected no user layer when cwd/.codex/config.toml exists"
+    );
+
+    let merged = layers.effective_config();
+    let table = merged.as_table().expect("top-level table expected");
+    let servers = table
+        .get("mcp_servers")
+        .and_then(|v| v.as_table())
+        .expect("mcp_servers");
+    assert_eq!(
+        servers.keys().cloned().collect::<Vec<_>>(),
+        vec!["mobile-mcp".to_string()],
+        "expected cwd-local mcp_servers only (no merge with CODEX_HOME)"
+    );
+}
+
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn managed_preferences_take_highest_precedence() {
@@ -411,12 +467,8 @@ async fn project_layers_prefer_closest_cwd() -> std::io::Result<()> {
             _ => None,
         })
         .collect();
-    assert_eq!(project_layers.len(), 2);
+    assert_eq!(project_layers.len(), 1);
     assert_eq!(project_layers[0].as_path(), nested.join(".codex").as_path());
-    assert_eq!(
-        project_layers[1].as_path(),
-        project_root.join(".codex").as_path()
-    );
 
     let config = layers.effective_config();
     let foo = config
@@ -589,8 +641,14 @@ async fn project_layers_skipped_when_untrusted_or_unknown() -> std::io::Result<(
         .into_iter()
         .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
         .count();
-    assert_eq!(project_layers_untrusted, 0);
-    assert_eq!(layers_untrusted.effective_config().get("foo"), None);
+    assert_eq!(project_layers_untrusted, 1);
+    assert_eq!(
+        layers_untrusted
+            .effective_config()
+            .get("foo")
+            .and_then(TomlValue::as_str),
+        Some("child")
+    );
 
     let codex_home_unknown = tmp.path().join("home_unknown");
     tokio::fs::create_dir_all(&codex_home_unknown).await?;
@@ -607,8 +665,14 @@ async fn project_layers_skipped_when_untrusted_or_unknown() -> std::io::Result<(
         .into_iter()
         .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
         .count();
-    assert_eq!(project_layers_unknown, 0);
-    assert_eq!(layers_unknown.effective_config().get("foo"), None);
+    assert_eq!(project_layers_unknown, 1);
+    assert_eq!(
+        layers_unknown
+            .effective_config()
+            .get("foo")
+            .and_then(TomlValue::as_str),
+        Some("child")
+    );
 
     Ok(())
 }
@@ -688,12 +752,8 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
             _ => None,
         })
         .collect();
-    assert_eq!(project_layers.len(), 2);
+    assert_eq!(project_layers.len(), 1);
     assert_eq!(project_layers[0].as_path(), nested.join(".codex").as_path());
-    assert_eq!(
-        project_layers[1].as_path(),
-        project_root.join(".codex").as_path()
-    );
 
     let merged = layers.effective_config();
     let foo = merged

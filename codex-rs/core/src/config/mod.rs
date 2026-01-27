@@ -114,6 +114,10 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: Option<String>,
 
+    /// True if the user explicitly set a model override (e.g. CLI `--model`),
+    /// as opposed to a model coming from config.toml defaults or a resumed session.
+    pub did_user_override_model: bool,
+
     /// Model used specifically for review sessions.
     pub review_model: Option<String>,
 
@@ -1234,6 +1238,7 @@ impl Config {
             tools_web_search_request: override_tools_web_search_request,
             additional_writable_roots,
         } = overrides;
+        let did_user_override_model = model.is_some();
 
         let active_profile_name = config_profile_key
             .as_ref()
@@ -1468,6 +1473,7 @@ impl Config {
 
         let config = Self {
             model,
+            did_user_override_model,
             review_model,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
@@ -2312,9 +2318,6 @@ profile = "global"
 [profiles.global]
 model = "gpt-global"
 
-[profiles.project]
-model = "gpt-project"
-
 [projects."{workspace_key}"]
 trust_level = "trusted"
 "#,
@@ -2326,6 +2329,9 @@ trust_level = "trusted"
             project_config_dir.join(CONFIG_TOML_FILE),
             r#"
 profile = "project"
+
+[profiles.project]
+model = "gpt-project"
 "#,
         )?;
 
@@ -3649,6 +3655,7 @@ model_verbosity = "high"
         assert_eq!(
             Config {
                 model: Some("o3".to_string()),
+                did_user_override_model: false,
                 review_model: None,
                 model_context_window: None,
                 model_auto_compact_token_limit: None,
@@ -3730,6 +3737,7 @@ model_verbosity = "high"
         )?;
         let expected_gpt3_profile_config = Config {
             model: Some("gpt-3.5-turbo".to_string()),
+            did_user_override_model: false,
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
@@ -3826,6 +3834,7 @@ model_verbosity = "high"
         )?;
         let expected_zdr_profile_config = Config {
             model: Some("o3".to_string()),
+            did_user_override_model: false,
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
@@ -3908,6 +3917,7 @@ model_verbosity = "high"
         )?;
         let expected_gpt5_profile_config = Config {
             model: Some("gpt-5.1".to_string()),
+            did_user_override_model: false,
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,

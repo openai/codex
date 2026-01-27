@@ -104,10 +104,7 @@ impl MetricsClientInner {
     }
 
     fn shutdown(&self) -> Result<()> {
-        debug!("flushing OTEL metrics");
-        self.meter_provider
-            .force_flush()
-            .map_err(|source| MetricsError::ProviderShutdown { source })?;
+        debug!("shutting down OTEL metrics");
         self.meter_provider
             .shutdown()
             .map_err(|source| MetricsError::ProviderShutdown { source })?;
@@ -273,14 +270,12 @@ fn build_otlp_metric_exporter(
                 .with_protocol(protocol)
                 .with_headers(headers);
 
-            if let Some(tls) = tls.as_ref() {
-                let client =
-                    crate::otlp::build_http_client(tls, OTEL_EXPORTER_OTLP_METRICS_TIMEOUT)
-                        .map_err(|err| MetricsError::InvalidConfig {
-                            message: err.to_string(),
-                        })?;
-                exporter_builder = exporter_builder.with_http_client(client);
-            }
+            let tls = tls.clone().unwrap_or_default();
+            let client = crate::otlp::build_http_client(&tls, OTEL_EXPORTER_OTLP_METRICS_TIMEOUT)
+                .map_err(|err| MetricsError::InvalidConfig {
+                message: err.to_string(),
+            })?;
+            exporter_builder = exporter_builder.with_http_client(client);
 
             exporter_builder
                 .build()

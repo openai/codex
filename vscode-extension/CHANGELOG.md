@@ -4,8 +4,14 @@
 
 ## Unreleased
 
+- 改善: 承認（approval）カードに「実行予定コマンド（`$ ...`）」と `cwd` を表示（item が未到着でも request params から表示）
+- 追加: `/compact`（`thread/compact`）で手動 compaction を起動できるように復活
 - 改善: codez 限定機能を codex 選択時に実行しようとした場合、エラーではなく「Settings (⚙) で codez に切り替えると使える」旨を案内表示する
 - 修正: `account/list` / `account/switch`（複数アカウント切替）は codez 限定のため、codex バックエンドでは呼ばず Settings で案内表示する
+- 追加: opencode server（`opencode serve`）をバックエンドとして起動・接続できる設定（`codez.backend.kind=opencode`）
+- 改善: Settings のバックエンド選択を「codex / codez / opencode」の単一UIに統合（Backend/CLIの分離を廃止）
+- 改善: Settings の見た目/操作性を改善（行間、hover/focus、ボタン配色、Backend操作行のレイアウト）
+- 追加: `/mcp` でセッションごとの MCP server 一覧をカード表示（起動時と同様の状態アイコン）
 
 ## 0.2.1
 

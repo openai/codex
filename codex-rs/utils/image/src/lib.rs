@@ -43,78 +43,77 @@ static IMAGE_CACHE: LazyLock<BlockingLruCache<[u8; 20], EncodedImage>> =
 pub fn load_and_resize_to_fit(path: &Path) -> Result<EncodedImage, ImageProcessingError> {
     let path_buf = path.to_path_buf();
 
-    let file_bytes = read_file_bytes(path, &path_buf)?;
+    // This function is intentionally synchronous, but may be invoked from within a Tokio runtime.
+    // Mark the expensive image IO/processing as blocking so the runtime can compensate and avoid
+    // starving unrelated async tasks (tests frequently use small worker thread counts).
+    let run = || {
+        let file_bytes = read_file_bytes(path, &path_buf)?;
 
-    let key = sha1_digest(&file_bytes);
+        let key = sha1_digest(&file_bytes);
 
-    IMAGE_CACHE.get_or_try_insert_with(key, move || {
-        let format = match image::guess_format(&file_bytes) {
-            Ok(ImageFormat::Png) => Some(ImageFormat::Png),
-            Ok(ImageFormat::Jpeg) => Some(ImageFormat::Jpeg),
-            _ => None,
-        };
+        IMAGE_CACHE.get_or_try_insert_with(key, move || {
+            let format = match image::guess_format(&file_bytes) {
+                Ok(ImageFormat::Png) => Some(ImageFormat::Png),
+                Ok(ImageFormat::Jpeg) => Some(ImageFormat::Jpeg),
+                _ => None,
+            };
 
-        let dynamic = image::load_from_memory(&file_bytes).map_err(|source| {
-            ImageProcessingError::Decode {
-                path: path_buf.clone(),
-                source,
-            }
-        })?;
+            let dynamic = image::load_from_memory(&file_bytes).map_err(|source| {
+                ImageProcessingError::Decode {
+                    path: path_buf.clone(),
+                    source,
+                }
+            })?;
 
-        let (width, height) = dynamic.dimensions();
+            let (width, height) = dynamic.dimensions();
 
-        let encoded = if width <= MAX_WIDTH && height <= MAX_HEIGHT {
-            if let Some(format) = format {
-                let mime = format_to_mime(format);
-                EncodedImage {
-                    bytes: file_bytes,
-                    mime,
-                    width,
-                    height,
+            let encoded = if width <= MAX_WIDTH && height <= MAX_HEIGHT {
+                if let Some(format) = format {
+                    let mime = format_to_mime(format);
+                    EncodedImage {
+                        bytes: file_bytes,
+                        mime,
+                        width,
+                        height,
+                    }
+                } else {
+                    let (bytes, output_format) = encode_image(&dynamic, ImageFormat::Png)?;
+                    let mime = format_to_mime(output_format);
+                    EncodedImage {
+                        bytes,
+                        mime,
+                        width,
+                        height,
+                    }
                 }
             } else {
-                let (bytes, output_format) = encode_image(&dynamic, ImageFormat::Png)?;
+                let resized = dynamic.resize(MAX_WIDTH, MAX_HEIGHT, FilterType::Triangle);
+                let target_format = format.unwrap_or(ImageFormat::Png);
+                let (bytes, output_format) = encode_image(&resized, target_format)?;
                 let mime = format_to_mime(output_format);
                 EncodedImage {
                     bytes,
                     mime,
-                    width,
-                    height,
+                    width: resized.width(),
+                    height: resized.height(),
                 }
-            }
-        } else {
-            let resized = dynamic.resize(MAX_WIDTH, MAX_HEIGHT, FilterType::Triangle);
-            let target_format = format.unwrap_or(ImageFormat::Png);
-            let (bytes, output_format) = encode_image(&resized, target_format)?;
-            let mime = format_to_mime(output_format);
-            EncodedImage {
-                bytes,
-                mime,
-                width: resized.width(),
-                height: resized.height(),
-            }
-        };
+            };
 
-        Ok(encoded)
-    })
+            Ok(encoded)
+        })
+    };
+
+    match tokio::runtime::Handle::try_current() {
+        Ok(_) => tokio::task::block_in_place(run),
+        Err(_) => run(),
+    }
 }
 
 fn read_file_bytes(path: &Path, path_for_error: &Path) -> Result<Vec<u8>, ImageProcessingError> {
-    match tokio::runtime::Handle::try_current() {
-        // If we're inside a Tokio runtime, avoid block_on (it panics on worker threads).
-        // Use block_in_place and do a standard blocking read safely.
-        Ok(_) => tokio::task::block_in_place(|| std::fs::read(path)).map_err(|source| {
-            ImageProcessingError::Read {
-                path: path_for_error.to_path_buf(),
-                source,
-            }
-        }),
-        // Outside a runtime, just read synchronously.
-        Err(_) => std::fs::read(path).map_err(|source| ImageProcessingError::Read {
-            path: path_for_error.to_path_buf(),
-            source,
-        }),
-    }
+    std::fs::read(path).map_err(|source| ImageProcessingError::Read {
+        path: path_for_error.to_path_buf(),
+        source,
+    })
 }
 
 fn encode_image(

@@ -207,7 +207,9 @@ export class BackendProcess implements vscode.Disposable {
       params: {
         cursor: params?.cursor ?? null,
         limit: params?.limit ?? null,
+        sortKey: params?.sortKey ?? null,
         modelProviders: params?.modelProviders ?? null,
+        archived: params?.archived ?? null,
       },
     };
     return this.rpc.request<ThreadListResponse>(request);

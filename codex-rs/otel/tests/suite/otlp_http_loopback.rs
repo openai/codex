@@ -8,6 +8,7 @@ use std::io::Read as _;
 use std::io::Write as _;
 use std::net::TcpListener;
 use std::net::TcpStream;
+use std::sync::Once;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -128,39 +129,23 @@ fn write_http_response(stream: &mut TcpStream, status: &str) -> std::io::Result<
     stream.flush()
 }
 
+fn init_otel_internal_logs() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_test_writer()
+            .try_init();
+    });
+}
+
 #[test]
 fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
+    init_otel_internal_logs();
+
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("local_addr");
     listener.set_nonblocking(true).expect("set_nonblocking");
-
-    let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
-    let server = thread::spawn(move || {
-        let mut captured = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(3);
-
-        while Instant::now() < deadline {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    let result = read_http_request(&mut stream);
-                    let _ = write_http_response(&mut stream, "202 Accepted");
-                    if let Ok((path, headers, body)) = result {
-                        captured.push(CapturedRequest {
-                            path,
-                            content_type: headers.get("content-type").cloned(),
-                            body,
-                        });
-                    }
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(_) => break,
-            }
-        }
-
-        let _ = tx.send(captured);
-    });
 
     let metrics = MetricsClient::new(MetricsConfig::otlp(
         "test",
@@ -175,10 +160,51 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     ))?;
 
     metrics.counter("codex.turns", 1, &[("source", "test")])?;
-    metrics.shutdown()?;
+
+    let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
+    let server = thread::spawn(move || {
+        let mut captured = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let result = read_http_request(&mut stream);
+                    let _ = write_http_response(&mut stream, "202 Accepted");
+                    if let Ok((path, headers, body)) = result {
+                        captured.push(CapturedRequest {
+                            path,
+                            content_type: headers.get("content-type").cloned(),
+                            body,
+                        });
+                        break;
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+
+        let _ = tx.send(captured);
+    });
+
+    let shutdown_result = metrics.shutdown();
 
     server.join().expect("server join");
     let captured = rx.recv_timeout(Duration::from_secs(1)).expect("captured");
+    if let Err(err) = shutdown_result {
+        let paths = captured
+            .iter()
+            .map(|req| req.path.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        panic!(
+            "metrics.shutdown() failed: {err:?}; captured {} request(s): {paths}",
+            captured.len()
+        );
+    }
 
     let request = captured
         .iter()

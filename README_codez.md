@@ -88,6 +88,25 @@ WSL（Ubuntu 等）で `codez` が見つからない場合は、まず `echo $PA
 
 - その作業ディレクトリで **global 設定を有効にしたい**場合は、`./.codex/config.toml` を置かない（または別ディレクトリから起動する）。
 
+#### OpenCode（opencode）設定の生成（MCP）
+
+Codex の `~/.codex/config.toml`（および `~/workspace/.codex/config.toml` が存在する場合はそれ）にある `[mcp_servers]` を元に、OpenCode の設定（JSONC）を生成するスクリプトを用意している。
+
+- user 設定: `~/.config/opencode/opencode.json`
+- workspace 設定（任意）: `~/workspace/opencode.json`（`~/workspace/.codex/config.toml` がある場合のみ生成）
+
+実行:
+
+```sh
+node scripts/sync-opencode-config.cjs
+```
+
+既存ファイルを上書きする場合:
+
+```sh
+node scripts/sync-opencode-config.cjs --force
+```
+
 #### ツールの有効化（例: AskUserQuestion）
 
 `ask_user_question` はデフォルト無効で、明示的に有効化した場合のみモデルへ露出する。

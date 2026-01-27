@@ -31,6 +31,14 @@ This extension **does not bundle Codex CLI**.
   - If `codex` is not in your `PATH`, set an absolute path.
 - `codez.backend.args`
   - Default: `["app-server"]`
+- `codez.backend.kind`
+  - Default: `app-server`
+  - `app-server`: spawn Codex CLI (`codex app-server`) via JSON-RPC (existing behavior)
+  - `opencode`: spawn `opencode serve` and talk to its HTTP API
+- `codez.opencode.command`
+  - Default: `opencode`
+- `codez.opencode.args`
+  - Default: `["serve"]`
 
 ## Development
 
@@ -40,13 +48,20 @@ This extension **does not bundle Codex CLI**.
    pnpm install
    ```
 
-2. Build
+2. (Re)generate protocol bindings (if missing / after protocol changes)
+
+   ```bash
+   cd ../codex-rs && cargo build -p codex-cli
+   cd ../vscode-extension && pnpm run regen:protocol
+   ```
+
+3. Build
 
    ```bash
    pnpm run compile
    ```
 
-3. Run in VS Code
+4. Run in VS Code
    - Open this repo in VS Code
    - Run the debug configuration: **Run Extension (Codex UI)**
 

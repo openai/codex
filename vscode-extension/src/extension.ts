@@ -415,6 +415,9 @@ type SessionRuntime = {
       method: string;
       itemId: string;
       reason: string | null;
+      command: string | null;
+      cwd: string | null;
+      grantRoot: string | null;
     }
   >;
   approvalResolvers: Map<
@@ -483,7 +486,20 @@ export function activate(context: vscode.ExtensionContext): void {
       req.method === "item/commandExecution/requestApproval"
         ? "Command approval required"
         : "File change approval required";
-    const detail = formatApprovalDetail(req.method, item, reason);
+    const detail = formatApprovalDetail(req.method, item, reason, req.params);
+
+    const fallbackCommand =
+      req.method === "item/commandExecution/requestApproval"
+        ? req.params.command ?? null
+        : null;
+    const fallbackCwd =
+      req.method === "item/commandExecution/requestApproval"
+        ? req.params.cwd ?? null
+        : null;
+    const fallbackGrantRoot =
+      req.method === "item/fileChange/requestApproval"
+        ? req.params.grantRoot ?? null
+        : null;
 
     rt.pendingApprovals.set(requestKey, {
       title,
@@ -492,6 +508,9 @@ export function activate(context: vscode.ExtensionContext): void {
       method: req.method,
       itemId: req.params.itemId,
       reason,
+      command: fallbackCommand,
+      cwd: fallbackCwd,
+      grantRoot: fallbackGrantRoot,
     });
     chatView?.refresh();
     void showCodezViewContainer();
@@ -566,7 +585,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 id: "context",
                 prompt: "Which context should I include?",
                 type: "multi_select",
-                allow_other: true,
+                allowOther: true,
                 required: false,
                 options: [
                   {
@@ -648,13 +667,6 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       if (rewind) {
-        if (!isMineSelectedForBackendKey(session.backendKey)) {
-          void vscode.window.showInformationMessage(
-            "Rewind は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
-          );
-          return;
-        }
-
         const folder = resolveWorkspaceFolderForSession(session);
         if (!folder) {
           void vscode.window.showErrorMessage(
@@ -662,6 +674,15 @@ export function activate(context: vscode.ExtensionContext): void {
           );
           return;
         }
+        const cfg = vscode.workspace.getConfiguration("codez", folder.uri);
+        const backendKind = cfg.get<string>("backend.kind") ?? "app-server";
+        if (backendKind !== "opencode" && !isMineSelectedForBackendKey(session.backendKey)) {
+          void vscode.window.showInformationMessage(
+            "Rewind は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
+          );
+          return;
+        }
+
         try {
           await ensureBackendMatchesConfiguredCli(folder, "codezFeature");
         } catch (err) {
@@ -798,6 +819,45 @@ export function activate(context: vscode.ExtensionContext): void {
         throw new Error(`Unexpected login response: ${JSON.stringify(res)}`);
       }
       return res;
+    },
+    async (session) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      const providers = await backendManager.opencodeListProviders(session);
+      const authMethods = await backendManager.opencodeListProviderAuthMethods(
+        session,
+      );
+      return { providers, authMethods };
+    },
+    async (session, args) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      return await backendManager.opencodeProviderOauthAuthorize(session, args);
+    },
+    async (session, args) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      await backendManager.opencodeProviderOauthCallback(session, args);
+      return {};
+    },
+    async (session, args) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+      await backendManager.opencodeSetProviderApiKey(session, args);
+      return {};
+    },
+    async (folder, { kind, restartMode }) => {
+      if (!backendManager) throw new Error("backendManager is not initialized");
+
+      const cfg = vscode.workspace.getConfiguration("codez", folder.uri);
+      await cfg.update(
+        "backend.kind",
+        kind,
+        vscode.ConfigurationTarget.WorkspaceFolder,
+      );
+
+      if (restartMode === "restartAll" || restartMode === "forceRestartAll") {
+        const folders = vscode.workspace.workspaceFolders ?? [];
+        for (const f of folders) {
+          await backendManager.restartForWorkspaceFolder(f);
+        }
+      }
     },
     async ({ variant, restartMode }) => {
       if (!backendManager) throw new Error("backendManager is not initialized");
@@ -2835,6 +2895,85 @@ async function handleSlashCommand(
     await vscode.commands.executeCommand("codez.showStatus");
     return true;
   }
+  if (cmd === "mcp") {
+    if (arg) {
+      upsertBlock(session.id, {
+        id: newLocalId("mcpError"),
+        type: "error",
+        title: "Slash command error",
+        text: "/mcp does not take arguments.",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    const folder = resolveWorkspaceFolderForSession(session);
+    if (!folder) {
+      upsertBlock(session.id, {
+        id: newLocalId("mcpNoFolder"),
+        type: "error",
+        title: "MCP servers",
+        text: "このセッションに紐づく workspace folder が見つかりません。",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    const cfg = vscode.workspace.getConfiguration("codez", folder.uri);
+    const backendKind = cfg.get<string>("backend.kind") ?? "app-server";
+    if (backendKind === "opencode") {
+      upsertBlock(session.id, {
+        id: newLocalId("mcpUnsupported"),
+        type: "info",
+        title: "MCP servers",
+        text: "opencode backend では MCP server の一覧表示は未対応です。",
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+
+    if (!backendManager) throw new Error("backendManager is not initialized");
+    try {
+      const response = await backendManager.listMcpServerStatus(session.backendKey);
+      const serverNames = response.data.map((s) => s.name).filter(Boolean);
+
+      const statusMap = getMcpStatusMap(session.backendKey);
+      for (const name of serverNames) {
+        if (!statusMap.has(name)) statusMap.set(name, "configured");
+      }
+
+      const icon = (state: string): string =>
+        state === "ready" ? "✓" : state === "starting" ? "…" : "•";
+      const lines = serverNames.map((name) => {
+        const state = statusMap.get(name) ?? "configured";
+        return `${icon(state)} ${name}`;
+      });
+
+      upsertBlock(session.id, {
+        id: newLocalId("mcp"),
+        type: "system",
+        title: "MCP servers",
+        text: ["MCP servers:", ...lines].join("\n"),
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    } catch (err) {
+      const msg = formatUnknownError(err);
+      upsertBlock(session.id, {
+        id: newLocalId("mcpListError"),
+        type: "error",
+        title: "MCP servers",
+        text: msg,
+      });
+      chatView?.refresh();
+      schedulePersistRuntime(session.id);
+      return true;
+    }
+  }
   if (cmd === "init") {
     if (arg) {
       upsertBlock(session.id, {
@@ -3236,6 +3375,7 @@ async function handleSlashCommand(
         "- /init: Create AGENTS.md",
         "- /resume: Resume from history",
         "- /status: Show status",
+        "- /mcp: List MCP servers",
         "- /diff: Open Latest Diff",
         "- /rename <title>: Rename session",
         "- /skills: Browse skills",
@@ -3786,6 +3926,11 @@ async function ensureBackendMatchesConfiguredCli(
   if (!outputChannel) throw new Error("outputChannel is not initialized");
 
   const cfg = vscode.workspace.getConfiguration("codez", folder.uri);
+  const backendKind = cfg.get<string>("backend.kind") ?? "app-server";
+  if (backendKind === "opencode") {
+    // opencode backend is not controlled by cli.variant.
+    return;
+  }
   const desired = desiredCliCommandFromConfig(cfg);
   if (desired.variant === "auto" || !desired.command) return;
 
@@ -5312,7 +5457,7 @@ function applyGlobalNotification(
         effectiveBackendKey &&
         isMineSelectedForBackendKey(effectiveBackendKey)
       ) {
-        void refreshMcpConfiguredServersForBackend(effectiveBackendKey, cwd);
+        void refreshMcpConfiguredServersForBackend(effectiveBackendKey);
       }
 
       chatView?.refresh();
@@ -5468,13 +5613,12 @@ function applyGlobalNotification(
 
 async function refreshMcpConfiguredServersForBackend(
   backendKey: string,
-  cwd: string,
 ): Promise<void> {
   if (!backendManager) return;
   if (!isMineSelectedForBackendKey(backendKey)) return;
 
   try {
-    const response = await backendManager.listMcpServerStatus(backendKey, cwd);
+    const response = await backendManager.listMcpServerStatus(backendKey);
     const nextNames = response.data.map((s) => s.name).filter(Boolean);
 
     const previous = mcpStatusByBackendKey.get(backendKey) ?? new Map();
@@ -5489,7 +5633,7 @@ async function refreshMcpConfiguredServersForBackend(
     const msg =
       e instanceof Error ? e.stack || e.message : `Unknown error: ${String(e)}`;
     outputChannel?.appendLine(
-      `[mcp] Failed to list configured MCP servers (backend=${backendKey}, cwd=${cwd}): ${msg}`,
+      `[mcp] Failed to list configured MCP servers (backend=${backendKey}): ${msg}`,
     );
   }
 }
@@ -6014,19 +6158,23 @@ function formatApprovalDetail(
   method: string,
   item: unknown,
   reason: string | null,
+  approvalParams: unknown,
 ): string {
   const lines: string[] = [];
   lines.push(`method: ${method}`);
   if (reason) lines.push(`reason: ${reason}`);
 
+  let command: string | null = null;
+  let cwd: string | null = null;
+  let grantRoot: string | null = null;
   if (typeof item === "object" && item !== null) {
     const anyItem = item as Record<string, unknown>;
     const type = anyItem["type"];
     if (type === "commandExecution") {
-      const command = anyItem["command"];
-      const cwd = anyItem["cwd"];
-      if (typeof cwd === "string") lines.push(`cwd: ${cwd}`);
-      if (typeof command === "string") lines.push(`$ ${command}`);
+      const itemCommand = anyItem["command"];
+      const itemCwd = anyItem["cwd"];
+      if (typeof itemCwd === "string") cwd = itemCwd;
+      if (typeof itemCommand === "string") command = itemCommand;
     } else if (type === "fileChange") {
       const changes = anyItem["changes"];
       if (Array.isArray(changes)) {
@@ -6039,6 +6187,24 @@ function formatApprovalDetail(
       }
     }
   }
+
+  if (typeof approvalParams === "object" && approvalParams !== null) {
+    const anyParams = approvalParams as Record<string, unknown>;
+    if (method === "item/commandExecution/requestApproval") {
+      const paramsCwd = anyParams["cwd"];
+      const paramsCommand = anyParams["command"];
+      if (!cwd && typeof paramsCwd === "string") cwd = paramsCwd;
+      if (!command && typeof paramsCommand === "string") command = paramsCommand;
+    }
+    if (method === "item/fileChange/requestApproval") {
+      const paramsGrantRoot = anyParams["grantRoot"];
+      if (typeof paramsGrantRoot === "string") grantRoot = paramsGrantRoot;
+    }
+  }
+
+  if (grantRoot) lines.push(`grantRoot: ${grantRoot}`);
+  if (cwd) lines.push(`cwd: ${cwd}`);
+  if (command) lines.push(`$ ${command}`);
 
   return lines.join("\n");
 }
@@ -6054,6 +6220,11 @@ function updatePendingApprovalsFromItem(
       approval.method,
       item,
       approval.reason,
+      {
+        command: approval.command,
+        cwd: approval.cwd,
+        grantRoot: approval.grantRoot,
+      },
     );
   }
 }

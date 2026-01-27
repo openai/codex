@@ -402,9 +402,17 @@ fn resolve_session_collaboration_settings(
     let Some(ctx) = last_turn_context_from_history(conversation_history) else {
         return (fallback_settings, fallback_summary);
     };
+
+    // If the user provided a model override outside config layers (e.g. CLI `--model`),
+    // it should take precedence over the session's previously used model.
+    let override_model = config.did_user_override_model;
     (
         Settings {
-            model: ctx.model,
+            model: if override_model {
+                fallback_settings.model.clone()
+            } else {
+                ctx.model
+            },
             reasoning_effort: ctx.effort,
             developer_instructions: None,
         },

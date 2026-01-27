@@ -1,6 +1,17 @@
 import * as vscode from "vscode";
 import { randomUUID } from "node:crypto";
 import { BackendProcess, type BackendExitInfo } from "./process";
+import { OpencodeServerProcess } from "./opencode_process";
+import {
+  OpencodeHttpClient,
+  type OpencodeEvent,
+  type OpencodeFileDiff,
+  type OpencodeMessageWithParts,
+  type OpencodeSessionInfo,
+  type OpencodeProviderAuthMethodsResponse,
+  type OpencodeProviderAuthorization,
+  type OpencodeProviderListResponse,
+} from "./opencode_http";
 import type { ThreadResumeParams } from "../generated/v2/ThreadResumeParams";
 import type { ThreadStartParams } from "../generated/v2/ThreadStartParams";
 import type { ThreadCompactParams } from "../generated/v2/ThreadCompactParams";
@@ -26,9 +37,12 @@ import type { SwitchAccountParams } from "../generated/v2/SwitchAccountParams";
 import type { SwitchAccountResponse } from "../generated/v2/SwitchAccountResponse";
 import type { SkillsListEntry } from "../generated/v2/SkillsListEntry";
 import type { Thread } from "../generated/v2/Thread";
+import type { Turn } from "../generated/v2/Turn";
 import type { AnyServerNotification } from "./types";
 import type { FuzzyFileSearchResponse } from "../generated/FuzzyFileSearchResponse";
 import type { ListMcpServerStatusResponse } from "../generated/v2/ListMcpServerStatusResponse";
+import type { AskForApproval } from "../generated/v2/AskForApproval";
+import type { SandboxPolicy } from "../generated/v2/SandboxPolicy";
 
 type ModelSettings = {
   model: string | null;
@@ -44,6 +58,16 @@ export type BackendTermination = {
 
 export class BackendManager implements vscode.Disposable {
   private readonly processes = new Map<string, BackendProcess>();
+  private readonly opencode = new Map<
+    string,
+    {
+      server: OpencodeServerProcess;
+      client: OpencodeHttpClient;
+      sse: AbortController;
+      messageRoleById: Map<string, "user" | "assistant">;
+      activeTurnIdBySession: Map<string, string>;
+    }
+  >();
   private readonly startInFlight = new Map<string, Promise<void>>();
   private readonly streamState = new Map<
     string,
@@ -102,19 +126,31 @@ export class BackendManager implements vscode.Disposable {
   public getRunningCommand(folder: vscode.WorkspaceFolder): string | null {
     const key = folder.uri.toString();
     const proc = this.processes.get(key);
-    return proc ? proc.getCommand() : null;
+    if (proc) return proc.getCommand();
+    const oc = this.opencode.get(key);
+    if (oc) return "opencode";
+    return null;
   }
 
   public stopForWorkspaceFolder(folder: vscode.WorkspaceFolder): void {
     const key = folder.uri.toString();
     const proc = this.processes.get(key);
-    if (!proc) return;
-    this.output.appendLine(`Stopping backend for ${folder.uri.fsPath}`);
-    this.terminateBackend(key, proc, {
-      reason: "stop",
-      code: null,
-      signal: null,
-    });
+    const oc = this.opencode.get(key);
+    if (proc) {
+      this.output.appendLine(`Stopping backend for ${folder.uri.fsPath}`);
+      this.terminateBackend(key, proc, {
+        reason: "stop",
+        code: null,
+        signal: null,
+      });
+      return;
+    }
+    if (oc) {
+      this.output.appendLine(`Stopping opencode backend for ${folder.uri.fsPath}`);
+      oc.sse.abort();
+      oc.server.dispose();
+      this.opencode.delete(key);
+    }
   }
 
   public getActiveTurnId(threadId: string): string | null {
@@ -133,9 +169,8 @@ export class BackendManager implements vscode.Disposable {
   ): Promise<void> {
     const key = folder.uri.toString();
     const existing = this.processes.get(key);
-    if (existing) {
-      return;
-    }
+    const existingOpencode = this.opencode.get(key);
+    if (existing || existingOpencode) return;
 
     const inflight = this.startInFlight.get(key);
     if (inflight) {
@@ -144,6 +179,64 @@ export class BackendManager implements vscode.Disposable {
     }
 
     const cfg = vscode.workspace.getConfiguration("codez", folder.uri);
+    const backendKind =
+      (cfg.get<string>("backend.kind") ?? "app-server") === "opencode"
+        ? ("opencode" as const)
+        : ("app-server" as const);
+
+    if (backendKind === "opencode") {
+      const command = cfg.get<string>("opencode.command") ?? "opencode";
+      const rawArgs = cfg.get<string[]>("opencode.args") ?? ["serve"];
+      const args = [...rawArgs];
+      if (!args.includes("--hostname")) args.push("--hostname", "127.0.0.1");
+      if (!args.includes("--port")) args.push("--port", "0");
+
+      const startPromise = (async () => {
+        this.output.appendLine(
+          `Starting opencode backend: ${command} ${args.join(" ")} (cwd=${folder.uri.fsPath})`,
+        );
+        const server = await OpencodeServerProcess.spawn({
+          command,
+          args,
+          cwd: folder.uri.fsPath,
+          output: this.output,
+        });
+        const baseUrl = server.getBaseUrl();
+        const client = new OpencodeHttpClient({
+          baseUrl,
+          directory: folder.uri.fsPath,
+        });
+
+        const messageRoleById = new Map<string, "user" | "assistant">();
+        const activeTurnIdBySession = new Map<string, string>();
+
+        const sse = await client.connectEventStream(
+          (evt) => this.onOpencodeEvent(key, evt, messageRoleById, activeTurnIdBySession, client),
+          (err) => {
+            this.output.appendLine(`[opencode] event stream error: ${String(err)}`);
+          },
+        );
+
+        this.opencode.set(key, { server, client, sse, messageRoleById, activeTurnIdBySession });
+        server.onDidExit(({ code, signal }) => {
+          // Backend died unexpectedly (e.g. killed from outside VS Code).
+          const current = this.opencode.get(key);
+          if (!current) return;
+          current.sse.abort();
+          this.opencode.delete(key);
+          this.cleanupBackendCaches(key);
+          this.onBackendTerminated?.(key, { reason: "exit", code, signal });
+        });
+      })();
+
+      this.startInFlight.set(
+        key,
+        startPromise.finally(() => this.startInFlight.delete(key)),
+      );
+      await startPromise;
+      return;
+    }
+
     const cliVariantRaw = cfg.get<string>("cli.variant") ?? "auto";
     const cliVariant =
       cliVariantRaw === "upstream"
@@ -216,7 +309,6 @@ export class BackendManager implements vscode.Disposable {
 
   public async listMcpServerStatus(
     backendKey: string,
-    cwd: string,
   ): Promise<ListMcpServerStatusResponse> {
     const proc = this.processes.get(backendKey);
     if (!proc) {
@@ -226,7 +318,7 @@ export class BackendManager implements vscode.Disposable {
     }
     return await this.withTimeout(
       "mcpServerStatus/list",
-      proc.mcpServerStatusList({ cursor: null, limit: null, cwd }),
+      proc.mcpServerStatusList({ cursor: null, limit: null }),
       30_000,
     );
   }
@@ -256,6 +348,24 @@ export class BackendManager implements vscode.Disposable {
   ): Promise<Session> {
     await this.startForWorkspaceFolder(folder);
     const backendKey = folder.uri.toString();
+    const oc = this.opencode.get(backendKey);
+    if (oc) {
+      const created = await oc.client.createSession();
+      const session: Session = {
+        id: randomUUID(),
+        backendKey,
+        workspaceFolderUri: folder.uri.toString(),
+        title: folder.name,
+        threadId: created.id,
+      };
+      this.sessions.add(backendKey, session);
+      this.output.appendLine(
+        `[session] created (opencode): ${session.title} sessionId=${session.threadId}`,
+      );
+      this.onSessionAdded?.(session);
+      return session;
+    }
+
     const proc = this.processes.get(backendKey);
     if (!proc) throw new Error("Backend process was not started");
 
@@ -304,6 +414,10 @@ export class BackendManager implements vscode.Disposable {
     }
 
     await this.startForWorkspaceFolder(folder);
+    const oc = this.opencode.get(session.backendKey);
+    if (oc) {
+      return await oc.client.listSkills(folder.uri.fsPath);
+    }
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -328,6 +442,14 @@ export class BackendManager implements vscode.Disposable {
     }
 
     await this.startForWorkspaceFolder(folder);
+    const oc = this.opencode.get(session.backendKey);
+    if (oc) {
+      return await oc.client.fuzzyFileSearch({
+        query,
+        roots: [folder.uri.fsPath],
+        cancellationToken,
+      });
+    }
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -348,6 +470,14 @@ export class BackendManager implements vscode.Disposable {
     }
 
     await this.startForWorkspaceFolder(folder);
+    const oc = this.opencode.get(session.backendKey);
+    if (oc) {
+      const cached = this.modelsByBackendKey.get(session.backendKey);
+      if (cached) return cached;
+      const models = await oc.client.listModels();
+      this.modelsByBackendKey.set(session.backendKey, models);
+      return models;
+    }
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -370,6 +500,15 @@ export class BackendManager implements vscode.Disposable {
   ): Promise<{ data: Thread[]; nextCursor: string | null }> {
     await this.startForWorkspaceFolder(folder);
     const backendKey = folder.uri.toString();
+    const oc = this.opencode.get(backendKey);
+    if (oc) {
+      const sessions = await oc.client.listSessions();
+      const threads = sessions
+        .filter((s) => typeof s?.directory === "string" && s.directory === folder.uri.fsPath)
+        .map((s) => this.threadFromOpencodeSession(s));
+      // NOTE: no pagination cursor support for now; return everything.
+      return { data: threads, nextCursor: null };
+    }
     const proc = this.processes.get(backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -413,6 +552,19 @@ export class BackendManager implements vscode.Disposable {
     }
 
     await this.startForWorkspaceFolder(folder);
+    const oc = this.opencode.get(session.backendKey);
+    if (oc) {
+      const thread = await this.buildThreadFromOpencodeSession(session.threadId, oc.client);
+      return {
+        thread,
+        model: "",
+        modelProvider: "",
+        cwd: folder.uri.fsPath,
+        approvalPolicy: "on-request" as AskForApproval,
+        sandbox: { type: "dangerFullAccess" } as SandboxPolicy,
+        reasoningEffort: null,
+      };
+    }
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -448,6 +600,24 @@ export class BackendManager implements vscode.Disposable {
     }
 
     await this.startForWorkspaceFolder(folder);
+    const oc = this.opencode.get(session.backendKey);
+    if (oc) {
+      // Clear per-thread caches so the UI can rehydrate from the refreshed thread state.
+      this.itemsByThreadId.delete(session.threadId);
+      this.latestDiffByThreadId.delete(session.threadId);
+      this.streamState.set(session.threadId, { activeTurnId: null });
+
+      const thread = await this.buildThreadFromOpencodeSession(session.threadId, oc.client);
+      return {
+        thread,
+        model: modelSettings?.model ?? "",
+        modelProvider: modelSettings?.provider ?? "",
+        cwd: folder.uri.fsPath,
+        approvalPolicy: "on-request" as AskForApproval,
+        sandbox: { type: "dangerFullAccess" } as SandboxPolicy,
+        reasoningEffort: null,
+      };
+    }
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -499,6 +669,9 @@ export class BackendManager implements vscode.Disposable {
       );
     }
     await this.startForWorkspaceFolder(folder);
+    if (this.opencode.get(session.backendKey)) {
+      throw new Error("Accounts are not supported when running opencode backend.");
+    }
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -516,6 +689,9 @@ export class BackendManager implements vscode.Disposable {
       );
     }
     await this.startForWorkspaceFolder(folder);
+    if (this.opencode.get(session.backendKey)) {
+      throw new Error("Accounts are not supported when running opencode backend.");
+    }
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -530,6 +706,9 @@ export class BackendManager implements vscode.Disposable {
       );
     }
     await this.startForWorkspaceFolder(folder);
+    if (this.opencode.get(session.backendKey)) {
+      throw new Error("Accounts are not supported when running opencode backend.");
+    }
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -547,6 +726,9 @@ export class BackendManager implements vscode.Disposable {
       );
     }
     await this.startForWorkspaceFolder(folder);
+    if (this.opencode.get(session.backendKey)) {
+      throw new Error("Accounts are not supported when running opencode backend.");
+    }
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -561,6 +743,9 @@ export class BackendManager implements vscode.Disposable {
       );
     }
     await this.startForWorkspaceFolder(folder);
+    if (this.opencode.get(session.backendKey)) {
+      throw new Error("Accounts are not supported when running opencode backend.");
+    }
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -577,10 +762,56 @@ export class BackendManager implements vscode.Disposable {
       );
     }
     await this.startForWorkspaceFolder(folder);
+    if (this.opencode.get(session.backendKey)) {
+      throw new Error("Accounts are not supported when running opencode backend.");
+    }
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
     return await proc.accountRateLimitsRead();
+  }
+
+  public async opencodeListProviders(
+    session: Session,
+  ): Promise<OpencodeProviderListResponse> {
+    const oc = this.opencode.get(session.backendKey);
+    if (!oc) throw new Error("opencode backend is not running for this workspace folder");
+    return await oc.client.listProviders();
+  }
+
+  public async opencodeListProviderAuthMethods(
+    session: Session,
+  ): Promise<OpencodeProviderAuthMethodsResponse> {
+    const oc = this.opencode.get(session.backendKey);
+    if (!oc) throw new Error("opencode backend is not running for this workspace folder");
+    return await oc.client.listProviderAuthMethods();
+  }
+
+  public async opencodeProviderOauthAuthorize(
+    session: Session,
+    args: { providerID: string; method: number },
+  ): Promise<OpencodeProviderAuthorization | null> {
+    const oc = this.opencode.get(session.backendKey);
+    if (!oc) throw new Error("opencode backend is not running for this workspace folder");
+    return await oc.client.providerOauthAuthorize(args);
+  }
+
+  public async opencodeProviderOauthCallback(
+    session: Session,
+    args: { providerID: string; method: number; code?: string },
+  ): Promise<void> {
+    const oc = this.opencode.get(session.backendKey);
+    if (!oc) throw new Error("opencode backend is not running for this workspace folder");
+    await oc.client.providerOauthCallback(args);
+  }
+
+  public async opencodeSetProviderApiKey(
+    session: Session,
+    args: { providerID: string; apiKey: string },
+  ): Promise<void> {
+    const oc = this.opencode.get(session.backendKey);
+    if (!oc) throw new Error("opencode backend is not running for this workspace folder");
+    await oc.client.setProviderApiKey(args);
   }
 
   public latestDiff(session: Session): string | null {
@@ -621,6 +852,68 @@ export class BackendManager implements vscode.Disposable {
     // Backend can terminate unexpectedly; ensure it is started before sending.
     await this.startForWorkspaceFolder(folder);
 
+    const oc = this.opencode.get(session.backendKey);
+    if (oc) {
+      if (images.length > 0) {
+        throw new Error("opencode backend does not support image inputs yet.");
+      }
+      const trimmed = text.trim();
+      if (!trimmed) {
+        throw new Error("Message must include text");
+      }
+
+      const turnId = randomUUID();
+      oc.activeTurnIdBySession.set(session.threadId, turnId);
+      this.streamState.set(session.threadId, { activeTurnId: turnId });
+      this.emitNotification(session.backendKey, session, {
+        method: "turn/started",
+        params: { threadId: session.threadId, turn: { id: turnId } },
+      });
+
+      const model =
+        modelSettings?.provider && modelSettings?.model
+          ? { providerID: modelSettings.provider, modelID: modelSettings.model }
+          : undefined;
+      const parts: Array<Record<string, unknown>> = [{ type: "text", text: trimmed }];
+
+      this.output.appendLine(`\n>> (${session.title}) ${trimmed}`);
+      this.output.append(`<< (${session.title}) `);
+
+      let msg: OpencodeMessageWithParts;
+      try {
+        msg = await oc.client.prompt(session.threadId, { parts, model });
+      } catch (err) {
+        this.emitNotification(session.backendKey, session, {
+          method: "error",
+          params: { error: { message: String(err) }, willRetry: false },
+        });
+        this.emitNotification(session.backendKey, session, {
+          method: "turn/completed",
+          params: { threadId: session.threadId, turn: { id: turnId, status: "failed" } },
+        });
+        this.streamState.set(session.threadId, { activeTurnId: null });
+        oc.activeTurnIdBySession.delete(session.threadId);
+        throw err;
+      }
+
+      const assistantText = extractOpencodeText(msg);
+      this.emitNotification(session.backendKey, session, {
+        method: "item/completed",
+        params: {
+          threadId: session.threadId,
+          turnId,
+          item: { type: "agentMessage", id: msg.info.id, text: assistantText },
+        },
+      });
+      this.emitNotification(session.backendKey, session, {
+        method: "turn/completed",
+        params: { threadId: session.threadId, turn: { id: turnId, status: "completed" } },
+      });
+      this.streamState.set(session.threadId, { activeTurnId: null });
+      oc.activeTurnIdBySession.delete(session.threadId);
+      return;
+    }
+
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -658,6 +951,7 @@ export class BackendManager implements vscode.Disposable {
       effort,
       summary: null,
       outputSchema: null,
+      collaborationMode: null,
     };
 
     const imageSuffix = images.length > 0 ? ` [images=${images.length}]` : "";
@@ -680,6 +974,19 @@ export class BackendManager implements vscode.Disposable {
     }
 
     await this.startForWorkspaceFolder(folder);
+    const oc = this.opencode.get(session.backendKey);
+    if (oc) {
+      await oc.client.abort(session.threadId);
+      // Best-effort: mark turn completed in the UI (opencode uses session.abort).
+      const active = oc.activeTurnIdBySession.get(session.threadId) ?? turnId;
+      this.emitNotification(session.backendKey, session, {
+        method: "turn/completed",
+        params: { threadId: session.threadId, turn: { id: active, status: "interrupted" } },
+      });
+      this.streamState.set(session.threadId, { activeTurnId: null });
+      oc.activeTurnIdBySession.delete(session.threadId);
+      return;
+    }
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -699,6 +1006,37 @@ export class BackendManager implements vscode.Disposable {
     }
 
     await this.startForWorkspaceFolder(folder);
+    const oc = this.opencode.get(session.backendKey);
+    if (oc) {
+      // Clear per-thread caches so the UI can rehydrate from the updated thread state.
+      this.itemsByThreadId.delete(session.threadId);
+      this.latestDiffByThreadId.delete(session.threadId);
+      this.streamState.set(session.threadId, { activeTurnId: null });
+
+      const threadBefore = await this.buildThreadFromOpencodeSession(session.threadId, oc.client);
+      const turns = Array.isArray(threadBefore.turns) ? threadBefore.turns : [];
+      if (turns.length === 0) {
+        throw new Error("No turns to rewind.");
+      }
+      const numTurns = Math.trunc(args.numTurns);
+      if (!Number.isFinite(numTurns) || numTurns < 1) {
+        throw new Error(`Invalid numTurns: ${String(args.numTurns)}`);
+      }
+      if (numTurns > turns.length) {
+        throw new Error(`Cannot rewind ${numTurns} turns (total=${turns.length}).`);
+      }
+      // Each opencode "turn" is based on a user message ID (turn.id is `turn:<messageId>`).
+      const targetTurn = turns[turns.length - numTurns]!;
+      const turnId = String(targetTurn.id ?? "");
+      const m = turnId.match(/^turn:(.+)$/);
+      if (!m) {
+        throw new Error(`Unexpected opencode turn id: ${turnId}`);
+      }
+      const messageID = m[1]!;
+      await oc.client.revert(session.threadId, messageID);
+      const thread = await this.buildThreadFromOpencodeSession(session.threadId, oc.client);
+      return { thread };
+    }
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -723,6 +1061,12 @@ export class BackendManager implements vscode.Disposable {
     }
 
     await this.startForWorkspaceFolder(folder);
+    const oc = this.opencode.get(session.backendKey);
+    if (oc) {
+      throw new Error(
+        "opencode backend does not support /compact via this UI yet (requires selecting provider/model for summarization).",
+      );
+    }
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -735,6 +1079,130 @@ export class BackendManager implements vscode.Disposable {
       proc.threadCompact(params),
       10_000,
     );
+  }
+
+  private emitNotification(
+    backendKey: string,
+    session: Session | null,
+    n: AnyServerNotification,
+  ): void {
+    // Maintain minimal caches needed by the extension outside of the webview runtime.
+    if (n.method === "turn/diff/updated" && session) {
+      const diff = (n as any).params?.diff;
+      if (typeof diff === "string") {
+        this.latestDiffByThreadId.set(session.threadId, diff);
+      }
+    }
+    if ((n.method === "item/started" || n.method === "item/completed") && session) {
+      const p = (n as any).params as { threadId?: unknown; item?: unknown };
+      const threadId = typeof p?.threadId === "string" ? p.threadId : session.threadId;
+      const item = p?.item as ThreadItem | undefined;
+      if (threadId && item && typeof (item as any).id === "string") {
+        this.upsertItem(threadId, item);
+      }
+    }
+    this.onServerEvent?.(backendKey, session, n);
+  }
+
+  private onOpencodeEvent(
+    backendKey: string,
+    raw: OpencodeEvent,
+    messageRoleById: Map<string, "user" | "assistant">,
+    activeTurnIdBySession: Map<string, string>,
+    client: OpencodeHttpClient,
+  ): void {
+    const evt = (raw as any)?.payload ? ((raw as any).payload as any) : (raw as any);
+    const type = typeof evt?.type === "string" ? (evt.type as string) : "";
+    const properties = evt?.properties as any;
+    if (!type) return;
+
+    if (type === "message.updated") {
+      const info = properties?.info as any;
+      const role = info?.role;
+      const messageID = typeof info?.id === "string" ? (info.id as string) : null;
+      const sessionID = typeof info?.sessionID === "string" ? (info.sessionID as string) : null;
+      if (messageID && (role === "user" || role === "assistant")) {
+        messageRoleById.set(messageID, role);
+      }
+      if (sessionID && role === "assistant" && messageID) {
+        const session = this.sessions.getByThreadId(sessionID);
+        if (!session) return;
+        const turnId = activeTurnIdBySession.get(sessionID) ?? "";
+        this.emitNotification(backendKey, session, {
+          method: "item/started",
+          params: {
+            threadId: sessionID,
+            turnId,
+            item: { type: "agentMessage", id: messageID, text: "" },
+          },
+        });
+      }
+      return;
+    }
+
+    if (type === "message.part.updated") {
+      const part = properties?.part as any;
+      const delta = typeof properties?.delta === "string" ? (properties.delta as string) : null;
+      const sessionID = typeof part?.sessionID === "string" ? (part.sessionID as string) : null;
+      const messageID = typeof part?.messageID === "string" ? (part.messageID as string) : null;
+      const partType = typeof part?.type === "string" ? (part.type as string) : null;
+      if (!delta || !sessionID || !messageID) return;
+      const role = messageRoleById.get(messageID) ?? null;
+      if (role !== "assistant") return;
+      if (partType !== "text") return;
+      const session = this.sessions.getByThreadId(sessionID);
+      if (!session) return;
+      const turnId = activeTurnIdBySession.get(sessionID) ?? "";
+      this.emitNotification(backendKey, session, {
+        method: "item/agentMessage/delta",
+        params: { threadId: sessionID, turnId, itemId: messageID, delta },
+      });
+      return;
+    }
+
+    if (type === "session.diff") {
+      const sessionID = typeof properties?.sessionID === "string" ? (properties.sessionID as string) : null;
+      const diff = Array.isArray(properties?.diff) ? (properties.diff as OpencodeFileDiff[]) : null;
+      if (!sessionID || !diff) return;
+      const session = this.sessions.getByThreadId(sessionID);
+      if (!session) return;
+      const turnId = activeTurnIdBySession.get(sessionID) ?? "";
+      const formatted = client.formatFileDiffs(diff);
+      this.emitNotification(backendKey, session, {
+        method: "turn/diff/updated",
+        params: { threadId: sessionID, turnId, diff: formatted },
+      });
+      return;
+    }
+  }
+
+  private threadFromOpencodeSession(s: OpencodeSessionInfo): Thread {
+    const createdMs = typeof s?.time?.created === "number" ? s.time.created : Date.now();
+    const updatedMs = typeof s?.time?.updated === "number" ? s.time.updated : createdMs;
+    return {
+      id: String(s.id),
+      preview: String(s.title ?? ""),
+      modelProvider: "",
+      createdAt: Math.floor(createdMs / 1000),
+      updatedAt: Math.floor(updatedMs / 1000),
+      path: "",
+      cwd: String(s.directory ?? ""),
+      cliVersion: "opencode",
+      source: "unknown",
+      gitInfo: null,
+      turns: [],
+    };
+  }
+
+  private async buildThreadFromOpencodeSession(
+    sessionID: string,
+    client: OpencodeHttpClient,
+  ): Promise<Thread> {
+    const session = await client.getSession(sessionID);
+    const messages = await client.listMessages(sessionID);
+    const thread = this.threadFromOpencodeSession(session);
+    thread.turns = buildTurnsFromOpencodeMessages(messages);
+    return thread;
   }
 
   private toReasoningEffort(effort: string | null): ReasoningEffort | null {
@@ -965,6 +1433,11 @@ export class BackendManager implements vscode.Disposable {
   public dispose(): void {
     for (const proc of this.processes.values()) proc.dispose();
     this.processes.clear();
+    for (const oc of this.opencode.values()) {
+      oc.sse.abort();
+      oc.server.dispose();
+    }
+    this.opencode.clear();
   }
 
   private async handleApprovalRequest(
@@ -1010,6 +1483,59 @@ export class BackendManager implements vscode.Disposable {
     map.set(item.id, item);
     this.itemsByThreadId.set(threadId, map);
   }
+}
+
+function extractOpencodeText(msg: OpencodeMessageWithParts): string {
+  const parts = Array.isArray(msg.parts) ? msg.parts : [];
+  const out: string[] = [];
+  for (const p of parts) {
+    if (p && (p as any).type === "text" && typeof (p as any).text === "string") {
+      out.push(String((p as any).text));
+    }
+  }
+  return out.join("");
+}
+
+function buildTurnsFromOpencodeMessages(messages: OpencodeMessageWithParts[]): Turn[] {
+  const out: Turn[] = [];
+  let current: { id: string; items: ThreadItem[] } | null = null;
+
+  const pushCurrent = () => {
+    if (!current) return;
+    out.push({
+      id: current.id,
+      items: current.items,
+      status: "completed",
+      error: null,
+    });
+    current = null;
+  };
+
+  for (const m of messages) {
+    const role = (m as any)?.info?.role;
+    const messageID = typeof (m as any)?.info?.id === "string" ? (m as any).info.id : "";
+    if (!messageID) continue;
+    if (role === "user") {
+      pushCurrent();
+      const userText = extractOpencodeText(m);
+      current = { id: `turn:${messageID}`, items: [] };
+      current.items.push({
+        type: "userMessage",
+        id: messageID,
+        content: userText ? [{ type: "text", text: userText, text_elements: [] }] : [],
+      } as any);
+      continue;
+    }
+    if (role === "assistant") {
+      if (!current) {
+        current = { id: `turn:${messageID}`, items: [] };
+      }
+      current.items.push({ type: "agentMessage", id: messageID, text: extractOpencodeText(m) } as any);
+      continue;
+    }
+  }
+  pushCurrent();
+  return out;
 }
 
 type V2ApprovalRequest = Extract<

@@ -249,6 +249,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       session: Session,
       apiKey: string,
     ) => Promise<unknown>,
+    private readonly onOpencodeProviderLoad: (
+      session: Session,
+    ) => Promise<{
+      providers: unknown;
+      authMethods: unknown;
+    }>,
+    private readonly onOpencodeProviderOauthAuthorize: (
+      session: Session,
+      args: { providerID: string; method: number },
+    ) => Promise<unknown>,
+    private readonly onOpencodeProviderOauthCallback: (
+      session: Session,
+      args: { providerID: string; method: number; code?: string },
+    ) => Promise<unknown>,
+    private readonly onOpencodeProviderSetApiKey: (
+      session: Session,
+      args: { providerID: string; apiKey: string },
+    ) => Promise<unknown>,
+    private readonly onSetBackendKind: (
+      folder: vscode.WorkspaceFolder,
+      args: {
+        kind: "app-server" | "opencode";
+        restartMode: "later" | "restartAll" | "forceRestartAll";
+      },
+    ) => Promise<void>,
     private readonly onSetCliVariant: (args: {
       variant: "auto" | "codex" | "codez";
       restartMode: "later" | "restartAll" | "forceRestartAll";
@@ -709,32 +734,160 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       const st = this.getState();
       const active = st.activeSession;
+      const activeFolder =
+        active && vscode.workspace.workspaceFolders
+          ? vscode.workspace.workspaceFolders.find(
+              (f) => f.uri.toString() === active.workspaceFolderUri,
+            ) ?? null
+          : null;
+      const backendKind =
+        activeFolder
+          ? vscode.workspace
+              .getConfiguration("codez", activeFolder.uri)
+              .get<string>("backend.kind") ?? "app-server"
+          : "app-server";
       try {
         if (op === "load") {
           if (!active) {
             await respondOk({
               hasActiveSession: false,
               capabilities: st.capabilities ?? null,
+              backendKind,
               account: null,
               accounts: null,
+              opencode: null,
             });
             return;
           }
           const detected = st.capabilities?.detectedCliVariant ?? "unknown";
-          const account = await this.onAccountRead(active);
+          const opencode =
+            backendKind === "opencode"
+              ? await this.onOpencodeProviderLoad(active)
+              : null;
+          const account =
+            backendKind === "opencode" ? null : await this.onAccountRead(active);
           const accounts =
-            detected === "codez" ? await this.onAccountList(active) : null;
+            backendKind === "opencode"
+              ? null
+              : detected === "codez"
+                ? await this.onAccountList(active)
+                : null;
           await respondOk({
             hasActiveSession: true,
             capabilities: st.capabilities ?? null,
+            backendKind,
             account,
             accounts,
+            opencode,
           });
           return;
         }
 
         if (!active) {
           await respondErr("No active session.");
+          return;
+        }
+
+        if (op === "opencodeProviderLoad") {
+          if (backendKind !== "opencode") {
+            await respondOk({
+              unsupported: true,
+              message: "opencode backend is not active for this workspace.",
+            });
+            return;
+          }
+          const res = await this.onOpencodeProviderLoad(active);
+          await respondOk(res);
+          return;
+        }
+
+        if (op === "opencodeProviderOauthAuthorize") {
+          if (backendKind !== "opencode") {
+            await respondOk({
+              unsupported: true,
+              message: "opencode backend is not active for this workspace.",
+            });
+            return;
+          }
+          const providerID = anyMsg["providerID"];
+          const method = anyMsg["method"];
+          if (typeof providerID !== "string" || !providerID.trim()) {
+            await respondErr("Missing providerID.");
+            return;
+          }
+          const m =
+            typeof method === "number" && Number.isFinite(method)
+              ? Math.trunc(method)
+              : -1;
+          if (m < 0) {
+            await respondErr("Invalid method index.");
+            return;
+          }
+          const res = await this.onOpencodeProviderOauthAuthorize(active, {
+            providerID: providerID.trim(),
+            method: m,
+          });
+          await respondOk(res);
+          return;
+        }
+
+        if (op === "opencodeProviderOauthCallback") {
+          if (backendKind !== "opencode") {
+            await respondOk({
+              unsupported: true,
+              message: "opencode backend is not active for this workspace.",
+            });
+            return;
+          }
+          const providerID = anyMsg["providerID"];
+          const method = anyMsg["method"];
+          const code = anyMsg["code"];
+          if (typeof providerID !== "string" || !providerID.trim()) {
+            await respondErr("Missing providerID.");
+            return;
+          }
+          const m =
+            typeof method === "number" && Number.isFinite(method)
+              ? Math.trunc(method)
+              : -1;
+          if (m < 0) {
+            await respondErr("Invalid method index.");
+            return;
+          }
+          const c =
+            typeof code === "string" && code.trim() ? code.trim() : undefined;
+          await this.onOpencodeProviderOauthCallback(active, {
+            providerID: providerID.trim(),
+            method: m,
+            code: c,
+          });
+          await respondOk({});
+          return;
+        }
+
+        if (op === "opencodeProviderSetApiKey") {
+          if (backendKind !== "opencode") {
+            await respondOk({
+              unsupported: true,
+              message: "opencode backend is not active for this workspace.",
+            });
+            return;
+          }
+          const providerID = anyMsg["providerID"];
+          const apiKey = anyMsg["apiKey"];
+          if (typeof providerID !== "string" || !providerID.trim()) {
+            await respondErr("Missing providerID.");
+            return;
+          }
+          if (typeof apiKey !== "string" || !apiKey.trim()) {
+            await respondErr("Missing API key.");
+            return;
+          }
+          await this.onOpencodeProviderSetApiKey(active, {
+            providerID: providerID.trim(),
+            apiKey: apiKey.trim(),
+          });
+          await respondOk({});
           return;
         }
 
@@ -811,6 +964,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               ? restartMode
               : "later";
           await this.onSetCliVariant({ variant, restartMode: restart });
+          await respondOk({});
+          this.refresh();
+          return;
+        }
+
+        if (op === "setBackendKind") {
+          if (!activeFolder) {
+            await respondErr("WorkspaceFolder not found for active session.");
+            return;
+          }
+          const kind = anyMsg["kind"];
+          const restartMode = anyMsg["restartMode"];
+          if (kind !== "app-server" && kind !== "opencode") {
+            await respondErr("Invalid backend kind.");
+            return;
+          }
+          const restart =
+            restartMode === "restartAll" || restartMode === "forceRestartAll"
+              ? restartMode
+              : "later";
+          await this.onSetBackendKind(activeFolder, {
+            kind,
+            restartMode: restart,
+          });
           await respondOk({});
           this.refresh();
           return;
@@ -1230,7 +1407,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       activeSession: full.activeSession,
       unreadSessionIds: full.unreadSessionIds,
       runningSessionIds: full.runningSessionIds,
-      latestDiff: full.latestDiff,
+      hasLatestDiff: full.latestDiff != null,
       sending: full.sending,
       reloading: full.reloading,
       statusText: full.statusText,
@@ -1497,12 +1674,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         .settingsSection { border: 1px solid rgba(127,127,127,0.25); border-radius: 12px; padding: 12px; }
         .settingsSectionTitle { font-weight: 600; margin-bottom: 10px; }
         .settingsRow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .settingsRow + .settingsRow { margin-top: 8px; }
+        .settingsRow.split { justify-content: space-between; }
+        .settingsBtnGroup { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .settingsInput.grow, .settingsSelect.grow { flex: 1; min-width: 220px; }
         .settingsHelp { margin-top: 6px; opacity: 0.75; font-size: 12px; white-space: pre-wrap; }
         .settingsBtn { padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); background: transparent; color: inherit; cursor: pointer; }
-        .settingsBtn.primary { background: rgba(0,120,212,0.18); border-color: rgba(0,120,212,0.45); }
+        .settingsBtn:hover:not(:disabled) { background: rgba(127,127,127,0.10); }
+        .settingsBtn.primary { background: var(--vscode-button-background, rgba(0,120,212,0.18)); border-color: var(--vscode-button-border, rgba(0,120,212,0.45)); color: var(--vscode-button-foreground, inherit); }
+        .settingsBtn.primary:hover:not(:disabled) { background: var(--vscode-button-hoverBackground, rgba(0,120,212,0.28)); }
         .settingsBtn:disabled { opacity: 0.5; cursor: default; }
         .settingsInput { border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); padding: 6px 10px; background: transparent; color: inherit; font-family: var(--cm-editor-font-family); font-size: var(--cm-editor-font-size); }
-        .settingsSelect { border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); padding: 6px 10px; background: transparent; color: inherit; }
+        .settingsSelect { border-radius: 8px; border: 1px solid rgba(127,127,127,0.35); padding: 6px 10px; min-width: 150px; background: var(--vscode-dropdown-background, transparent); color: inherit; }
+        .settingsInput:focus, .settingsSelect:focus, .settingsBtn:focus { outline: 1px solid var(--vscode-focusBorder, rgba(0,120,212,0.85)); outline-offset: 2px; }
+        .settingsRow input[type="radio"] { accent-color: var(--vscode-button-background, rgba(0,120,212,1)); }
+        .settingsSubsection { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(127,127,127,0.18); }
+        .settingsSubsectionTitle { font-weight: 600; margin-bottom: 8px; opacity: 0.95; }
         .settingsList { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
         .settingsListItem { display: flex; gap: 10px; align-items: baseline; padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(127,127,127,0.2); cursor: pointer; }
         .settingsListItem:hover { border-color: rgba(127,127,127,0.35); background: rgba(127,127,127,0.06); }

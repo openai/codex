@@ -16,4 +16,7 @@
     // `args` for an MCP server is significant, so we disable reordering.
     "evenBetterToml.formatter.reorderArrays": false,
     "evenBetterToml.formatter.reorderKeys": true,
+    "quench.css.files": [
+        ".vscode/quench-theme.css"
+    ],
 }

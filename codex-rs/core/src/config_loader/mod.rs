@@ -147,38 +147,74 @@ pub async fn load_config_layers_state(
         layers.push(system_layer);
     }
 
-    // Add a layer for $CODEX_HOME/config.toml if it exists. Note if the file
-    // exists, but is malformed, then this error should be propagated to the
-    // user.
-    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home)?;
-    let user_layer = load_config_toml_for_required_layer(&user_file, |config_toml| {
-        ConfigLayerEntry::new(
-            ConfigLayerSource::User {
-                file: user_file.clone(),
-            },
-            config_toml,
-        )
-    })
-    .await?;
-    layers.push(user_layer);
-
+    // Codez policy: If `cwd/.codex/config.toml` exists, use it as the only
+    // user-editable config input (do not merge $CODEX_HOME/config.toml, and do
+    // not walk parent directories). This avoids unintended merges of
+    // notify/MCP/hooks and keeps behavior easy to reason about.
     if let Some(cwd) = cwd {
-        let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
-        for layer in &layers {
-            merge_toml_values(&mut merged_so_far, &layer.config);
-        }
-        if let Some(cli_overrides_layer) = cli_overrides_layer.as_ref() {
-            merge_toml_values(&mut merged_so_far, cli_overrides_layer);
-        }
+        let cwd_dot_codex = cwd.as_path().join(".codex");
+        let cwd_dot_codex_config = cwd_dot_codex.join(CONFIG_TOML_FILE);
+        let use_cwd_local_only = tokio::fs::metadata(&cwd_dot_codex_config)
+            .await
+            .map(|m| m.is_file())
+            .unwrap_or(false);
 
-        let project_root_markers = project_root_markers_from_config(&merged_so_far)?
-            .unwrap_or_else(default_project_root_markers);
-        if let Some(project_root) =
-            trusted_project_root(&merged_so_far, &cwd, &project_root_markers, codex_home).await?
-        {
-            let project_layers = load_project_layers(&cwd, &project_root).await?;
-            layers.extend(project_layers);
+        if use_cwd_local_only {
+            let dot_codex_folder = AbsolutePathBuf::from_absolute_path(&cwd_dot_codex)?;
+            let config_file = dot_codex_folder.join(CONFIG_TOML_FILE)?;
+            let layer = load_config_toml_for_required_layer(&config_file, |config_toml| {
+                ConfigLayerEntry::new(ConfigLayerSource::Project { dot_codex_folder }, config_toml)
+            })
+            .await?;
+            layers.push(layer);
+        } else {
+            // Add a layer for $CODEX_HOME/config.toml if it exists. Note if the
+            // file exists, but is malformed, then this error should be
+            // propagated to the user.
+            let user_file =
+                AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home)?;
+            let user_layer = load_config_toml_for_required_layer(&user_file, |config_toml| {
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::User {
+                        file: user_file.clone(),
+                    },
+                    config_toml,
+                )
+            })
+            .await?;
+            layers.push(user_layer);
+
+            let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
+            for layer in &layers {
+                merge_toml_values(&mut merged_so_far, &layer.config);
+            }
+            if let Some(cli_overrides_layer) = cli_overrides_layer.as_ref() {
+                merge_toml_values(&mut merged_so_far, cli_overrides_layer);
+            }
+
+            let project_root_markers = project_root_markers_from_config(&merged_so_far)?
+                .unwrap_or_else(default_project_root_markers);
+            if let Some(project_root) =
+                trusted_project_root(&merged_so_far, &cwd, &project_root_markers, codex_home)
+                    .await?
+            {
+                let project_layers = load_project_layers(&cwd, &project_root).await?;
+                layers.extend(project_layers);
+            }
         }
+    } else {
+        // Thread-agnostic config load (no cwd): use user config.
+        let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home)?;
+        let user_layer = load_config_toml_for_required_layer(&user_file, |config_toml| {
+            ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: user_file.clone(),
+                },
+                config_toml,
+            )
+        })
+        .await?;
+        layers.push(user_layer);
     }
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.

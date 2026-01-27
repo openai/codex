@@ -193,6 +193,15 @@
     "configuration": {
       "title": "Codex UI",
       "properties": {
+        "codez.backend.kind": {
+          "type": "string",
+          "enum": [
+            "app-server",
+            "opencode"
+          ],
+          "default": "app-server",
+          "description": "Backend type. app-server=spawn codex/codez app-server (JSON-RPC). opencode=spawn opencode serve and talk to its HTTP API."
+        },
         "codez.cli.variant": {
           "type": "string",
           "enum": [
@@ -237,6 +246,21 @@
             "app-server"
           ],
           "description": "Arguments passed to the backend command."
+        },
+        "codez.opencode.command": {
+          "type": "string",
+          "default": "opencode",
+          "description": "CLI command for opencode (used when codez.backend.kind=opencode)."
+        },
+        "codez.opencode.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "serve"
+          ],
+          "description": "Arguments passed to the opencode command (used when codez.backend.kind=opencode). The extension will append --hostname/--port as needed."
         },
         "codez.debug.logRpcPayloads": {
           "type": "boolean",

@@ -128,7 +128,7 @@ type ChatViewState = {
   unreadSessionIds: string[];
   runningSessionIds: string[];
   blocks: ChatBlock[];
-  latestDiff: string | null;
+  hasLatestDiff: boolean;
   sending: boolean;
   reloading: boolean;
   statusText?: string | null;
@@ -1210,7 +1210,7 @@ function main(): void {
     unreadSessionIds: [],
     runningSessionIds: [],
     blocks: [],
-    latestDiff: null,
+    hasLatestDiff: false,
     sending: false,
     reloading: false,
     statusText: null,
@@ -1244,6 +1244,7 @@ function main(): void {
   let rewindTurnIndex: number | null = null;
   const blockElByKey = new Map<string, HTMLElement>();
   let tabsSig: string | null = null;
+  let approvalsSig: string | null = null;
   const tabElBySessionId = new Map<string, HTMLDivElement>();
   let isComposing = false;
 
@@ -1287,6 +1288,9 @@ function main(): void {
   let settingsBusy = false;
   let settingsSelectedCliVariant: "auto" | "codex" | "codez" = "auto";
   let settingsRestartMode: "later" | "restartAll" | "forceRestartAll" = "later";
+  let settingsBackendKind: "app-server" | "opencode" = "app-server";
+  let settingsCurrentBackendProfile: "codex" | "codez" | "opencode" = "codex";
+  let settingsSelectedBackendProfile: "codex" | "codez" | "opencode" = "codex";
   let settingsActiveAccount: string | null = null;
   let settingsSelectedAccount: string | null = null;
   let settingsAuthAccount: { type: string; [key: string]: unknown } | null =
@@ -1298,6 +1302,21 @@ function main(): void {
     email?: string;
   }> = [];
   let settingsLoginInFlight: { loginId: string; authUrl: string } | null = null;
+
+  let settingsOpencodeProviders: Array<{
+    id: string;
+    name?: string;
+    connected?: boolean;
+    methods?: Array<{ type: "oauth" | "api"; label: string; index: number }>;
+  }> = [];
+  let settingsOpencodeSelectedProviderId: string | null = null;
+  let settingsOpencodeOauthInFlight: {
+    providerID: string;
+    methodIndex: number;
+    url: string;
+    method: "auto" | "code";
+    instructions: string;
+  } | null = null;
 
   const closeSettings = (): void => {
     settingsOpen = false;
@@ -1324,29 +1343,82 @@ function main(): void {
     return null;
   };
 
+  const applyOpencodeProviderLoad = (data: unknown): void => {
+    const d = data as any;
+    const providers = d?.providers ?? d ?? null;
+    const authMethods = d?.authMethods ?? null;
+    const all = Array.isArray(providers?.all) ? providers.all : [];
+    const connected = Array.isArray(providers?.connected) ? providers.connected : [];
+    const methodsByProvider =
+      authMethods && typeof authMethods === "object" ? (authMethods as any) : {};
+
+    settingsOpencodeProviders = all
+      .map((p: any) => {
+        const id = typeof p?.id === "string" ? p.id : "";
+        if (!id) return null;
+        const name = typeof p?.name === "string" ? p.name : undefined;
+        const connectedFlag = connected.includes(id);
+        const rawMethods = Array.isArray(methodsByProvider?.[id])
+          ? methodsByProvider[id]
+          : [];
+        const methods = rawMethods
+          .map((m: any, index: number) => {
+            const type = typeof m?.type === "string" ? String(m.type) : "";
+            const label =
+              typeof m?.label === "string" ? String(m.label) : type || "method";
+            if (type !== "oauth" && type !== "api") return null;
+            return { type, label, index } as const;
+          })
+          .filter(Boolean) as Array<{
+          type: "oauth" | "api";
+          label: string;
+          index: number;
+        }>;
+        return { id, name, connected: connectedFlag, methods };
+      })
+      .filter(Boolean) as any;
+
+    if (
+      settingsOpencodeSelectedProviderId &&
+      !settingsOpencodeProviders.some(
+        (p) => p.id === settingsOpencodeSelectedProviderId,
+      )
+    ) {
+      settingsOpencodeSelectedProviderId = null;
+    }
+  };
+
   const renderSettings = (): void => {
     settingsBodyEl.textContent = "";
 
-    const sectionCli = document.createElement("div");
-    sectionCli.className = "settingsSection";
-    const cliTitle = document.createElement("div");
-    cliTitle.className = "settingsSectionTitle";
-    cliTitle.textContent = "CLI";
-    sectionCli.appendChild(cliTitle);
+    const sectionBackend = document.createElement("div");
+    sectionBackend.className = "settingsSection";
+    const backendTitle = document.createElement("div");
+    backendTitle.className = "settingsSectionTitle";
+    backendTitle.textContent = "Backend";
+    sectionBackend.appendChild(backendTitle);
 
-    const cliRow = document.createElement("div");
-    cliRow.className = "settingsRow";
-    const cliLabel = document.createElement("div");
-    const detected = state.capabilities?.detectedCliVariant ?? "unknown";
-    const selected = state.capabilities?.selectedCliVariant ?? "auto";
-    cliLabel.textContent = `Selected: ${selected} (detected: ${detected})`;
-    cliRow.appendChild(cliLabel);
-    sectionCli.appendChild(cliRow);
+    const backendRow = document.createElement("div");
+    backendRow.className = "settingsRow";
+    const backendLabel = document.createElement("div");
+    if (!state.activeSession) {
+      backendLabel.textContent =
+        "No active session. Create or select a session first.";
+    } else {
+      const detected = state.capabilities?.detectedCliVariant ?? "unknown";
+      const selected = state.capabilities?.selectedCliVariant ?? "auto";
+      backendLabel.textContent =
+        settingsBackendKind === "opencode"
+          ? "Current: opencode"
+          : selected === "auto"
+            ? `Current: ${settingsCurrentBackendProfile} (auto; detected: ${detected})`
+            : `Current: ${settingsCurrentBackendProfile}`;
+    }
+    backendRow.appendChild(backendLabel);
+    sectionBackend.appendChild(backendRow);
 
-    const choiceRow = document.createElement("div");
-    choiceRow.className = "settingsRow";
-    const mkRadio = (
-      variant: "auto" | "codex" | "codez",
+    const mkBackendRadio = (
+      profile: "codex" | "codez" | "opencode",
       label: string,
     ): HTMLLabelElement => {
       const wrap = document.createElement("label");
@@ -1355,11 +1427,13 @@ function main(): void {
       wrap.style.alignItems = "center";
       const radio = document.createElement("input");
       radio.type = "radio";
-      radio.name = "cliVariant";
-      radio.value = variant;
-      radio.checked = settingsSelectedCliVariant === variant;
+      radio.name = "backendKind";
+      radio.value = profile;
+      radio.checked = settingsSelectedBackendProfile === profile;
+      radio.disabled = settingsBusy || !state.activeSession;
       radio.addEventListener("change", () => {
-        settingsSelectedCliVariant = variant;
+        settingsSelectedBackendProfile = profile;
+        renderSettings();
       });
       const span = document.createElement("span");
       span.textContent = label;
@@ -1367,12 +1441,16 @@ function main(): void {
       wrap.appendChild(span);
       return wrap;
     };
-    choiceRow.appendChild(mkRadio("auto", "Auto"));
-    choiceRow.appendChild(mkRadio("codex", "codex"));
-    choiceRow.appendChild(mkRadio("codez", "codez"));
+
+    const controlsRow = document.createElement("div");
+    controlsRow.className = "settingsRow";
+    controlsRow.appendChild(mkBackendRadio("codex", "codex"));
+    controlsRow.appendChild(mkBackendRadio("codez", "codez"));
+    controlsRow.appendChild(mkBackendRadio("opencode", "opencode"));
 
     const restartSelect = document.createElement("select");
     restartSelect.className = "settingsSelect";
+    restartSelect.disabled = settingsBusy || !state.activeSession;
     const restartOptions: Array<{
       value: typeof settingsRestartMode;
       label: string;
@@ -1392,34 +1470,98 @@ function main(): void {
       const v = restartSelect.value as typeof settingsRestartMode;
       settingsRestartMode =
         v === "restartAll" || v === "forceRestartAll" ? v : "later";
+      renderSettings();
     });
-    choiceRow.appendChild(restartSelect);
-    sectionCli.appendChild(choiceRow);
+    controlsRow.appendChild(restartSelect);
 
-    const cliBtnRow = document.createElement("div");
-    cliBtnRow.className = "settingsRow";
-    const applyCliBtn = document.createElement("button");
-    applyCliBtn.className = "settingsBtn primary";
-    applyCliBtn.textContent = "Apply CLI";
-    applyCliBtn.disabled = settingsBusy;
-    applyCliBtn.addEventListener("click", async () => {
-      if (settingsBusy) return;
+    const applyBackendBtn = document.createElement("button");
+    applyBackendBtn.className = "settingsBtn primary";
+    applyBackendBtn.textContent = "Apply Backend";
+    applyBackendBtn.disabled =
+      settingsBusy ||
+      !state.activeSession ||
+      (settingsSelectedBackendProfile === settingsCurrentBackendProfile &&
+        settingsRestartMode === "later");
+    applyBackendBtn.addEventListener("click", async () => {
+      if (settingsBusy || !state.activeSession) return;
       settingsBusy = true;
       renderSettings();
-      const res = await settingsRequest("setCliVariant", {
-        variant: settingsSelectedCliVariant,
-        restartMode: settingsRestartMode,
-      });
-      settingsBusy = false;
-      if (res.ok) {
-        showToast("success", "CLI setting updated.");
-      } else {
-        showToast("error", res.error);
+      try {
+        if (settingsSelectedBackendProfile === "opencode") {
+          const res = await settingsRequest("setBackendKind", {
+            kind: "opencode",
+            restartMode: settingsRestartMode,
+          });
+          if (!res.ok) {
+            showToast("error", res.error);
+            renderSettings();
+            return;
+          }
+          showToast(
+            "success",
+            settingsRestartMode === "later"
+              ? "Backend setting updated (restart required)."
+              : "Backend setting updated.",
+            3000,
+          );
+          await loadSettings();
+          return;
+        }
+
+        const resKind = await settingsRequest("setBackendKind", {
+          kind: "app-server",
+          restartMode: "later",
+        });
+        if (!resKind.ok) {
+          showToast("error", resKind.error);
+          renderSettings();
+          return;
+        }
+
+        const resCli = await settingsRequest("setCliVariant", {
+          variant: settingsSelectedBackendProfile,
+          restartMode: settingsRestartMode,
+        });
+        if (!resCli.ok) {
+          showToast("error", resCli.error);
+          renderSettings();
+          return;
+        }
+
+        showToast(
+          "success",
+          settingsRestartMode === "later"
+            ? "Backend setting updated (restart required)."
+            : "Backend setting updated.",
+          3000,
+        );
+        await loadSettings();
+      } finally {
+        settingsBusy = false;
       }
-      renderSettings();
     });
-    cliBtnRow.appendChild(applyCliBtn);
-    sectionCli.appendChild(cliBtnRow);
+    controlsRow.appendChild(applyBackendBtn);
+    sectionBackend.appendChild(controlsRow);
+
+    const backendHelp = document.createElement("div");
+    backendHelp.className = "settingsHelp";
+    backendHelp.textContent =
+      "codex/codez use the built-in JSON-RPC backend.\nopencode starts and connects to the local opencode server for this workspace folder.\nNote: codex/codez selection updates a global setting (CLI variant).";
+    sectionBackend.appendChild(backendHelp);
+
+    if (settingsBackendKind !== "opencode") {
+      const cliRow = document.createElement("div");
+      cliRow.className = "settingsRow";
+      const cliLabel = document.createElement("div");
+      const detected = state.capabilities?.detectedCliVariant ?? "unknown";
+      const selected = state.capabilities?.selectedCliVariant ?? "auto";
+      cliLabel.textContent =
+        selected === "auto"
+          ? `CLI variant: auto (detected: ${detected})`
+          : `CLI variant: ${selected}`;
+      cliRow.appendChild(cliLabel);
+      sectionBackend.appendChild(cliRow);
+    }
 
     const sectionAcct = document.createElement("div");
     sectionAcct.className = "settingsSection";
@@ -1508,7 +1650,12 @@ function main(): void {
       sectionAcct.appendChild(list);
 
       const acctBtnRow2 = document.createElement("div");
-      acctBtnRow2.className = "settingsRow";
+      acctBtnRow2.className = "settingsRow split";
+
+      const acctBtnLeft = document.createElement("div");
+      acctBtnLeft.className = "settingsBtnGroup";
+      const acctBtnRight = document.createElement("div");
+      acctBtnRight.className = "settingsBtnGroup";
 
       const refreshBtn = document.createElement("button");
       refreshBtn.className = "settingsBtn";
@@ -1518,7 +1665,7 @@ function main(): void {
         if (settingsBusy) return;
         await loadSettings();
       });
-      acctBtnRow2.appendChild(refreshBtn);
+      acctBtnLeft.appendChild(refreshBtn);
 
       if (accountsSwitchSupported) {
         const switchBtn = document.createElement("button");
@@ -1568,7 +1715,7 @@ function main(): void {
             renderSettings();
           }
         });
-        acctBtnRow2.appendChild(switchBtn);
+        acctBtnLeft.appendChild(switchBtn);
       }
 
       const logoutBtn = document.createElement("button");
@@ -1588,15 +1735,17 @@ function main(): void {
           renderSettings();
         }
       });
-      acctBtnRow2.appendChild(logoutBtn);
+      acctBtnRight.appendChild(logoutBtn);
 
+      acctBtnRow2.appendChild(acctBtnLeft);
+      acctBtnRow2.appendChild(acctBtnRight);
       sectionAcct.appendChild(acctBtnRow2);
 
       if (accountsSwitchSupported) {
         const createRow = document.createElement("div");
         createRow.className = "settingsRow";
         const createInput = document.createElement("input");
-        createInput.className = "settingsInput";
+        createInput.className = "settingsInput grow";
         createInput.placeholder = "new-account-name";
         createInput.addEventListener("input", () => {
           const v = createInput.value;
@@ -1661,12 +1810,12 @@ function main(): void {
       help.className = "settingsHelp";
       help.textContent =
         "Account names: [A-Za-z0-9_-], 1..64 chars\nLogout logs out the active account only.";
-      sectionAcct.appendChild(help);
+        sectionAcct.appendChild(help);
 
       const sectionLogin = document.createElement("div");
-      sectionLogin.className = "settingsSection";
+      sectionLogin.className = "settingsSubsection";
       const loginTitle = document.createElement("div");
-      loginTitle.className = "settingsSectionTitle";
+      loginTitle.className = "settingsSubsectionTitle";
       loginTitle.textContent = "Login";
       sectionLogin.appendChild(loginTitle);
 
@@ -1678,9 +1827,6 @@ function main(): void {
         : "Active account: (none) (legacy auth)";
       loginRow.appendChild(loginInfo);
       sectionLogin.appendChild(loginRow);
-
-      const btnRow = document.createElement("div");
-      btnRow.className = "settingsRow";
 
       const chatgptBtn = document.createElement("button");
       chatgptBtn.className = "settingsBtn primary";
@@ -1714,14 +1860,16 @@ function main(): void {
         showToast("info", "Opened browser for ChatGPT login.");
         renderSettings();
       });
-      btnRow.appendChild(chatgptBtn);
+      const chatgptRow = document.createElement("div");
+      chatgptRow.className = "settingsRow";
+      chatgptRow.appendChild(chatgptBtn);
+      sectionLogin.appendChild(chatgptRow);
 
       const apiKeyInput = document.createElement("input");
-      apiKeyInput.className = "settingsInput";
+      apiKeyInput.className = "settingsInput grow";
       apiKeyInput.placeholder = "API key";
       apiKeyInput.type = "password";
       apiKeyInput.disabled = settingsBusy;
-      btnRow.appendChild(apiKeyInput);
 
       const apiKeyBtn = document.createElement("button");
       apiKeyBtn.className = "settingsBtn";
@@ -1746,7 +1894,11 @@ function main(): void {
         showToast("success", "Logged in with API key.");
         await loadSettings();
       });
-      btnRow.appendChild(apiKeyBtn);
+      const apiKeyRow = document.createElement("div");
+      apiKeyRow.className = "settingsRow";
+      apiKeyRow.appendChild(apiKeyInput);
+      apiKeyRow.appendChild(apiKeyBtn);
+      sectionLogin.appendChild(apiKeyRow);
 
       if (settingsLoginInFlight) {
         const inflight = document.createElement("div");
@@ -1759,8 +1911,290 @@ function main(): void {
       sectionAcct.appendChild(sectionLogin);
     }
 
-    settingsBodyEl.appendChild(sectionCli);
-    settingsBodyEl.appendChild(sectionAcct);
+    settingsBodyEl.appendChild(sectionBackend);
+    if (settingsBackendKind !== "opencode") {
+      settingsBodyEl.appendChild(sectionAcct);
+    }
+
+    if (settingsBackendKind === "opencode") {
+      const sectionProv = document.createElement("div");
+      sectionProv.className = "settingsSection";
+      const title = document.createElement("div");
+      title.className = "settingsSectionTitle";
+      title.textContent = "Providers (opencode)";
+      sectionProv.appendChild(title);
+
+      const help = document.createElement("div");
+      help.className = "settingsHelp";
+      help.textContent =
+        "Provider registration is handled by the opencode server. Configure OAuth/API keys here, then select provider/model in the model picker.";
+      sectionProv.appendChild(help);
+
+      const controlsRow = document.createElement("div");
+      controlsRow.className = "settingsRow split";
+      const controlsLeft = document.createElement("div");
+      controlsLeft.className = "settingsBtnGroup";
+      const controlsRight = document.createElement("div");
+      controlsRight.className = "settingsBtnGroup";
+
+      const select = document.createElement("select");
+      select.className = "settingsSelect grow";
+      select.disabled = settingsBusy;
+      const opt0 = document.createElement("option");
+      opt0.value = "";
+      opt0.textContent = "Select a provider…";
+      select.appendChild(opt0);
+      for (const p of settingsOpencodeProviders) {
+        const o = document.createElement("option");
+        o.value = p.id;
+        const name = p.name ? String(p.name) : p.id;
+        const suffix = p.connected ? " (connected)" : "";
+        o.textContent = `${name}${suffix}`;
+        if (settingsOpencodeSelectedProviderId === p.id) o.selected = true;
+        select.appendChild(o);
+      }
+      select.addEventListener("change", () => {
+        const v = select.value.trim();
+        settingsOpencodeSelectedProviderId = v || null;
+        settingsOpencodeOauthInFlight = null;
+        renderSettings();
+      });
+      controlsLeft.appendChild(select);
+
+      const refreshBtn = document.createElement("button");
+      refreshBtn.className = "settingsBtn";
+      refreshBtn.textContent = "Reload providers";
+      refreshBtn.disabled = settingsBusy;
+      refreshBtn.addEventListener("click", async () => {
+        settingsBusy = true;
+        renderSettings();
+        const res = await settingsRequest("opencodeProviderLoad", {});
+        settingsBusy = false;
+        if (!res.ok) {
+          showToast("error", res.error);
+          renderSettings();
+          return;
+        }
+        const unsupported =
+          res.data &&
+          typeof res.data === "object" &&
+          (res.data as any).unsupported === true;
+        if (unsupported) {
+          const msg =
+            typeof (res.data as any).message === "string"
+              ? String((res.data as any).message)
+              : "opencode backend is not active.";
+          showToast("info", msg, 4000);
+          renderSettings();
+          return;
+        }
+        applyOpencodeProviderLoad(res.data);
+        showToast("success", "Loaded providers.");
+        renderSettings();
+      });
+      controlsRight.appendChild(refreshBtn);
+
+      controlsRow.appendChild(controlsLeft);
+      controlsRow.appendChild(controlsRight);
+      sectionProv.appendChild(controlsRow);
+
+      const selected = settingsOpencodeProviders.find(
+        (p) => p.id === settingsOpencodeSelectedProviderId,
+      );
+      if (selected) {
+        const methods = Array.isArray(selected.methods) ? selected.methods : [];
+        for (const m of methods) {
+          const row = document.createElement("div");
+          row.className = "settingsRow";
+          row.style.gap = "8px";
+          row.style.flexWrap = "wrap";
+
+          const label = document.createElement("div");
+          label.textContent = `${m.label} (${m.type})`;
+          row.appendChild(label);
+
+          if (m.type === "oauth") {
+            const startBtn = document.createElement("button");
+            startBtn.className = "settingsBtn primary";
+            startBtn.textContent = "Start OAuth";
+            startBtn.disabled = settingsBusy;
+            startBtn.addEventListener("click", async () => {
+              settingsBusy = true;
+              renderSettings();
+              const res = await settingsRequest(
+                "opencodeProviderOauthAuthorize",
+                {
+                  providerID: selected.id,
+                  method: m.index,
+                },
+              );
+              settingsBusy = false;
+              if (!res.ok) {
+                showToast("error", res.error);
+                renderSettings();
+                return;
+              }
+              const auth = res.data as any;
+              const url =
+                auth && typeof auth.url === "string" ? String(auth.url) : "";
+              const mode =
+                auth && typeof auth.method === "string"
+                  ? String(auth.method)
+                  : "";
+              const instructions =
+                auth && typeof auth.instructions === "string"
+                  ? String(auth.instructions)
+                  : "";
+              if (!url || (mode !== "auto" && mode !== "code")) {
+                showToast("error", "OAuth authorize returned invalid data.");
+                renderSettings();
+                return;
+              }
+              settingsOpencodeOauthInFlight = {
+                providerID: selected.id,
+                methodIndex: m.index,
+                url,
+                method: mode as "auto" | "code",
+                instructions,
+              };
+              vscode.postMessage({ type: "openExternal", url });
+              showToast("info", "Opened browser for OAuth.");
+              renderSettings();
+            });
+            row.appendChild(startBtn);
+          }
+
+          if (m.type === "api") {
+            const input = document.createElement("input");
+            input.className = "settingsInput grow";
+            input.type = "password";
+            input.placeholder = "API key";
+            input.disabled = settingsBusy;
+            row.appendChild(input);
+
+            const saveBtn = document.createElement("button");
+            saveBtn.className = "settingsBtn";
+            saveBtn.textContent = "Save API key";
+            saveBtn.disabled = settingsBusy;
+            saveBtn.addEventListener("click", async () => {
+              const k = input.value.trim();
+              if (!k) {
+                showToast("error", "API key cannot be empty.");
+                return;
+              }
+              settingsBusy = true;
+              renderSettings();
+              const res = await settingsRequest("opencodeProviderSetApiKey", {
+                providerID: selected.id,
+                apiKey: k,
+              });
+              settingsBusy = false;
+              input.value = "";
+              if (!res.ok) {
+                showToast("error", res.error);
+                renderSettings();
+                return;
+              }
+              showToast("success", "Saved API key.");
+              const reload = await settingsRequest("opencodeProviderLoad", {});
+              if (reload.ok) applyOpencodeProviderLoad(reload.data);
+              renderSettings();
+            });
+            row.appendChild(saveBtn);
+          }
+
+          sectionProv.appendChild(row);
+        }
+
+        if (
+          settingsOpencodeOauthInFlight &&
+          settingsOpencodeOauthInFlight.providerID === selected.id
+        ) {
+          const inflight = settingsOpencodeOauthInFlight;
+          const inst = document.createElement("div");
+          inst.className = "settingsHelp";
+          inst.textContent = inflight.instructions || "OAuth in progress…";
+          sectionProv.appendChild(inst);
+
+          const completeRow = document.createElement("div");
+          completeRow.className = "settingsRow";
+          completeRow.style.gap = "8px";
+
+          if (inflight.method === "code") {
+            const codeInput = document.createElement("input");
+            codeInput.className = "settingsInput grow";
+            codeInput.placeholder = "Authorization code";
+            codeInput.disabled = settingsBusy;
+            completeRow.appendChild(codeInput);
+
+            const completeBtn = document.createElement("button");
+            completeBtn.className = "settingsBtn primary";
+            completeBtn.textContent = "Complete OAuth";
+            completeBtn.disabled = settingsBusy;
+            completeBtn.addEventListener("click", async () => {
+              const code = codeInput.value.trim();
+              if (!code) {
+                showToast("error", "Authorization code cannot be empty.");
+                return;
+              }
+              settingsBusy = true;
+              renderSettings();
+              const res = await settingsRequest(
+                "opencodeProviderOauthCallback",
+                {
+                  providerID: inflight.providerID,
+                  method: inflight.methodIndex,
+                  code,
+                },
+              );
+              settingsBusy = false;
+              if (!res.ok) {
+                showToast("error", res.error);
+                renderSettings();
+                return;
+              }
+              settingsOpencodeOauthInFlight = null;
+              showToast("success", "OAuth completed.");
+              const reload = await settingsRequest("opencodeProviderLoad", {});
+              if (reload.ok) applyOpencodeProviderLoad(reload.data);
+              renderSettings();
+            });
+            completeRow.appendChild(completeBtn);
+          } else {
+            const completeBtn = document.createElement("button");
+            completeBtn.className = "settingsBtn primary";
+            completeBtn.textContent = "Complete OAuth";
+            completeBtn.disabled = settingsBusy;
+            completeBtn.addEventListener("click", async () => {
+              settingsBusy = true;
+              renderSettings();
+              const res = await settingsRequest(
+                "opencodeProviderOauthCallback",
+                {
+                  providerID: inflight.providerID,
+                  method: inflight.methodIndex,
+                },
+              );
+              settingsBusy = false;
+              if (!res.ok) {
+                showToast("error", res.error);
+                renderSettings();
+                return;
+              }
+              settingsOpencodeOauthInFlight = null;
+              showToast("success", "OAuth completed.");
+              const reload = await settingsRequest("opencodeProviderLoad", {});
+              if (reload.ok) applyOpencodeProviderLoad(reload.data);
+              renderSettings();
+            });
+            completeRow.appendChild(completeBtn);
+          }
+          sectionProv.appendChild(completeRow);
+        }
+      }
+
+      settingsBodyEl.appendChild(sectionProv);
+    }
   };
 
   const loadSettings = async (): Promise<void> => {
@@ -1777,6 +2211,8 @@ function main(): void {
       return;
     }
     const data = res.data as any;
+    settingsBackendKind =
+      data?.backendKind === "opencode" ? "opencode" : "app-server";
     const accounts = data?.accounts ?? null;
     const activeAccount =
       typeof accounts?.activeAccount === "string" ? accounts.activeAccount : null;
@@ -1807,6 +2243,23 @@ function main(): void {
         : settingsActiveAccount ??
           (settingsAccounts.length > 0 ? settingsAccounts[0]!.name : null);
     settingsSelectedCliVariant = state.capabilities?.selectedCliVariant ?? "auto";
+
+    const detected = state.capabilities?.detectedCliVariant ?? "unknown";
+    const isCodezEffective =
+      settingsSelectedCliVariant === "codez" ||
+      (settingsSelectedCliVariant === "auto" && detected === "codez");
+    settingsCurrentBackendProfile =
+      settingsBackendKind === "opencode"
+        ? "opencode"
+        : isCodezEffective
+          ? "codez"
+          : "codex";
+    settingsSelectedBackendProfile = settingsCurrentBackendProfile;
+
+    if (settingsBackendKind === "opencode") {
+      const opencode = data?.opencode ?? null;
+      if (opencode) applyOpencodeProviderLoad(opencode);
+    }
     renderSettings();
   };
 
@@ -2026,6 +2479,12 @@ function main(): void {
       insert: "/status ",
       label: "/status",
       detail: "Show status",
+      kind: "slash",
+    },
+    {
+      insert: "/mcp ",
+      label: "/mcp",
+      detail: "List MCP servers",
       kind: "slash",
     },
     {
@@ -3148,7 +3607,7 @@ function main(): void {
       statusTextEl.classList.remove("clickable");
       statusPopoverEnabled = false;
     }
-    if (diffBtn) diffBtn.disabled = !s.latestDiff;
+    if (diffBtn) diffBtn.disabled = !s.hasLatestDiff;
     sendBtn.disabled = !s.activeSession;
     sendBtn.dataset.mode = s.sending ? "stop" : "send";
     sendBtn.setAttribute("aria-label", s.sending ? "Stop" : "Send");
@@ -3324,73 +3783,92 @@ function main(): void {
       }
     }
 
-    approvalsEl.innerHTML = "";
     const approvals = s.approvals || [];
-    if (s.activeSession && approvals.length > 0) {
-      approvalsEl.style.display = "";
-      for (const ap of approvals) {
-        const card = el("div", "approval");
-        const t = el("div", "approvalTitle");
-        t.textContent = ap.title;
-        card.appendChild(t);
-        const pre = el("pre") as HTMLPreElement;
-        pre.textContent = ap.detail;
-        card.appendChild(pre);
-        const actions = el("div", "approvalActions");
+    const approvalsVisible = Boolean(s.activeSession && approvals.length > 0);
+    const nextApprovalsSig = approvalsVisible
+      ? approvals
+          .map((ap) =>
+            [
+              ap.requestKey,
+              ap.canAcceptForSession ? "s" : "",
+              ap.title,
+              ap.detail,
+            ].join("\t"),
+          )
+          .join("\n")
+      : "hidden";
 
-        const btnAccept = document.createElement("button");
-        btnAccept.textContent = "Accept";
-        btnAccept.addEventListener("click", () =>
-          vscode.postMessage({
-            type: "approve",
-            requestKey: ap.requestKey,
-            decision: "accept",
-          }),
-        );
-        actions.appendChild(btnAccept);
+    if (approvalsSig !== nextApprovalsSig) {
+      approvalsSig = nextApprovalsSig;
+      approvalsEl.innerHTML = "";
+      if (approvalsVisible) {
+        approvalsEl.style.display = "";
+        for (const ap of approvals) {
+          const card = el("div", "approval");
+          const t = el("div", "approvalTitle");
+          t.textContent = ap.title;
+          card.appendChild(t);
+          const pre = el("pre") as HTMLPreElement;
+          pre.textContent = ap.detail;
+          card.appendChild(pre);
+          const actions = el("div", "approvalActions");
 
-        if (ap.canAcceptForSession) {
-          const btnAcceptSession = document.createElement("button");
-          btnAcceptSession.textContent = "Accept (For Session)";
-          btnAcceptSession.addEventListener("click", () =>
+          const btnAccept = document.createElement("button");
+          btnAccept.textContent = "Accept";
+          btnAccept.addEventListener("click", () =>
             vscode.postMessage({
               type: "approve",
               requestKey: ap.requestKey,
-              decision: "acceptForSession",
+              decision: "accept",
             }),
           );
-          actions.appendChild(btnAcceptSession);
+          actions.appendChild(btnAccept);
+
+          if (ap.canAcceptForSession) {
+            const btnAcceptSession = document.createElement("button");
+            btnAcceptSession.textContent = "Accept (For Session)";
+            btnAcceptSession.addEventListener("click", () =>
+              vscode.postMessage({
+                type: "approve",
+                requestKey: ap.requestKey,
+                decision: "acceptForSession",
+              }),
+            );
+            actions.appendChild(btnAcceptSession);
+          }
+
+          const btnDecline = document.createElement("button");
+          btnDecline.textContent = "Decline";
+          btnDecline.addEventListener("click", () => {
+            vscode.postMessage({
+              type: "approve",
+              requestKey: ap.requestKey,
+              decision: "decline",
+            });
+            vscode.postMessage({ type: "stop" });
+          });
+          actions.appendChild(btnDecline);
+
+          const btnCancel = document.createElement("button");
+          btnCancel.textContent = "Cancel";
+          btnCancel.addEventListener("click", () => {
+            vscode.postMessage({
+              type: "approve",
+              requestKey: ap.requestKey,
+              decision: "cancel",
+            });
+            vscode.postMessage({ type: "stop" });
+          });
+          actions.appendChild(btnCancel);
+
+          card.appendChild(actions);
+          approvalsEl.appendChild(card);
         }
-
-        const btnDecline = document.createElement("button");
-        btnDecline.textContent = "Decline";
-        btnDecline.addEventListener("click", () => {
-          vscode.postMessage({
-            type: "approve",
-            requestKey: ap.requestKey,
-            decision: "decline",
-          });
-          vscode.postMessage({ type: "stop" });
-        });
-        actions.appendChild(btnDecline);
-
-        const btnCancel = document.createElement("button");
-        btnCancel.textContent = "Cancel";
-        btnCancel.addEventListener("click", () => {
-          vscode.postMessage({
-            type: "approve",
-            requestKey: ap.requestKey,
-            decision: "cancel",
-          });
-          vscode.postMessage({ type: "stop" });
-        });
-        actions.appendChild(btnCancel);
-
-        card.appendChild(actions);
-        approvalsEl.appendChild(card);
+      } else {
+        approvalsEl.style.display = "none";
       }
     } else {
-      approvalsEl.style.display = "none";
+      approvalsEl.style.display = approvalsVisible ? "" : "none";
     }
 
     const globalBlocks = s.globalBlocks || [];
