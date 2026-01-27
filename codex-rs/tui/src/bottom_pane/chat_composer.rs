@@ -2566,7 +2566,7 @@ impl Renderable for ChatComposer {
                         show_queue_hint,
                     )
                 };
-                let can_show_both =
+                let can_show_left_and_context =
                     can_show_left_with_context(hint_rect, left_width, context_width);
                 let has_override =
                     self.footer_flash_visible() || self.footer_hint_override.is_some();
@@ -2597,7 +2597,7 @@ impl Renderable for ChatComposer {
                     summary_layout
                         .as_ref()
                         .map(|(_, show_context)| *show_context)
-                        .unwrap_or(can_show_both)
+                        .unwrap_or(can_show_left_and_context)
                 };
 
                 if let Some((summary_left, _)) = summary_layout {

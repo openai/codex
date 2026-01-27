@@ -915,7 +915,8 @@ mod tests {
                     show_shortcuts_hint,
                     show_queue_hint,
                 );
-                let can_show_both = can_show_left_with_context(area, left_width, context_width);
+                let can_show_left_and_context =
+                    can_show_left_with_context(area, left_width, context_width);
                 if matches!(
                     props.mode,
                     FooterMode::ShortcutSummary | FooterMode::ComposerHasDraft
@@ -958,7 +959,7 @@ mod tests {
                         show_shortcuts_hint,
                         show_queue_hint,
                     );
-                    let show_context = can_show_both
+                    let show_context = can_show_left_and_context
                         && !matches!(
                             props.mode,
                             FooterMode::EscHint
@@ -1012,7 +1013,8 @@ mod tests {
                     show_shortcuts_hint,
                     show_queue_hint,
                 );
-                let can_show_both = can_show_left_with_context(area, left_width, context_width);
+                let can_show_left_and_context =
+                    can_show_left_with_context(area, left_width, context_width);
                 if matches!(
                     props.mode,
                     FooterMode::ShortcutSummary | FooterMode::ComposerHasDraft
@@ -1055,7 +1057,7 @@ mod tests {
                         show_shortcuts_hint,
                         show_queue_hint,
                     );
-                    let show_context = can_show_both
+                    let show_context = can_show_left_and_context
                         && !matches!(
                             props.mode,
                             FooterMode::EscHint
