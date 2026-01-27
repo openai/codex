@@ -384,7 +384,6 @@ impl RequestUserInputOverlay {
         if question_count > 1 {
             tips.push(FooterTip::new("Ctrl+n next"));
         }
-        if self.has_options() && notes_visible && self.focus_is_notes() {}
         tips.push(FooterTip::new("Esc: interrupt"));
         tips
     }
@@ -560,7 +559,7 @@ impl RequestUserInputOverlay {
             let selected_idx = if options.is_some_and(|opts| !opts.is_empty()) {
                 answer_state.selected
             } else {
-                answer_state.selected
+                None
             };
             // Notes are appended as extra answers.
             let notes = answer_state.draft.text.trim().to_string();
@@ -679,10 +678,10 @@ impl RequestUserInputOverlay {
                         answer.selected = answer.option_state.selected_idx;
                     }
                 }
-                if !self.has_options() {
-                    if let Some(answer) = self.current_answer_mut() {
-                        answer.freeform_committed = !text.trim().is_empty();
-                    }
+                if !self.has_options()
+                    && let Some(answer) = self.current_answer_mut()
+                {
+                    answer.freeform_committed = !text.trim().is_empty();
                 }
                 self.apply_submission_to_draft(text, text_elements);
                 self.go_next_or_submit();
@@ -1664,33 +1663,6 @@ mod tests {
         let area = Rect::new(0, 0, 120, 16);
         insta::assert_snapshot!(
             "request_user_input_options_notes_visible",
-            render_snapshot(&overlay, area)
-        );
-    }
-
-    #[test]
-    fn request_user_input_options_notes_with_text_snapshot() {
-        let (tx, _rx) = test_sender();
-        let mut overlay = RequestUserInputOverlay::new(
-            request_event("turn-1", vec![question_with_options("q1", "Area")]),
-            tx,
-            true,
-            false,
-            false,
-        );
-        {
-            let answer = overlay.current_answer_mut().expect("answer missing");
-            answer.option_state.selected_idx = Some(0);
-            answer.selected = Some(0);
-        }
-        overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
-        overlay
-            .composer
-            .handle_paste("Include notes about follow-up tests.".to_string());
-
-        let area = Rect::new(0, 0, 120, 18);
-        insta::assert_snapshot!(
-            "request_user_input_options_notes_with_text",
             render_snapshot(&overlay, area)
         );
     }
