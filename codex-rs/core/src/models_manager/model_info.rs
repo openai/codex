@@ -1,8 +1,13 @@
+use std::collections::BTreeMap;
+
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelInstructionsTemplate;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::PersonalityMessages;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationMode;
@@ -22,6 +27,10 @@ const GPT_5_2_INSTRUCTIONS: &str = include_str!("../../gpt_5_2_prompt.md");
 const GPT_5_1_CODEX_MAX_INSTRUCTIONS: &str = include_str!("../../gpt-5.1-codex-max_prompt.md");
 
 const GPT_5_2_CODEX_INSTRUCTIONS: &str = include_str!("../../gpt-5.2-codex_prompt.md");
+const GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE: &str =
+    include_str!("../../templates/model_instructions/gpt-5.2-codex_instructions_template.md");
+const PERSONALITY_FRIENDLY: &str = include_str!("../../templates/personalities/friendly.md");
+const PERSONALITY_PRAGMATIC: &str = include_str!("../../templates/personalities/pragmatic.md");
 
 pub(crate) const CONTEXT_WINDOW_272K: i64 = 272_000;
 
@@ -160,6 +169,16 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
         model_info!(
             slug,
             base_instructions: GPT_5_2_CODEX_INSTRUCTIONS.to_string(),
+            model_instructions_template: Some(ModelInstructionsTemplate {
+                template: GPT_5_2_CODEX_INSTRUCTIONS_TEMPLATE.to_string(),
+                personality_messages: Some(PersonalityMessages(BTreeMap::from([(
+                    Personality::Friendly,
+                    PERSONALITY_FRIENDLY.to_string(),
+                ), (
+                    Personality::Pragmatic,
+                    PERSONALITY_PRAGMATIC.to_string(),
+                )]))),
+            }),
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
             shell_type: ConfigShellToolType::ShellCommand,
             supports_parallel_tool_calls: true,

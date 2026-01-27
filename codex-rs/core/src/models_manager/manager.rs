@@ -150,7 +150,11 @@ impl ModelsManager {
             .await
             .into_iter()
             .find(|m| m.slug == model);
-        let model = remote.unwrap_or(local);
+        let remote_supports = remote.as_ref().is_some_and(ModelInfo::supports_personality);
+        let mut model = remote.unwrap_or(local);
+        if !remote_supports {
+            model.model_instructions_template = None;
+        }
         model_info::with_config_overrides(model, config)
     }
 
@@ -353,7 +357,10 @@ impl ModelsManager {
     #[cfg(any(test, feature = "test-support"))]
     /// Build `ModelInfo` without consulting remote state or cache.
     pub fn construct_model_info_offline(model: &str, config: &Config) -> ModelInfo {
-        model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config)
+        let mut model_info =
+            model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config);
+        model_info.model_instructions_template = None;
+        model_info
     }
 }
 
