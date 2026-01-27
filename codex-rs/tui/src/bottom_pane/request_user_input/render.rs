@@ -6,7 +6,6 @@ use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
 use crate::bottom_pane::selection_popup_common::menu_surface_inset;
 use crate::bottom_pane::selection_popup_common::menu_surface_padding_height;
 use crate::bottom_pane::selection_popup_common::render_menu_surface;
@@ -21,21 +20,21 @@ impl Renderable for RequestUserInputOverlay {
         let outer = Rect::new(0, 0, width, u16::MAX);
         let inner = menu_surface_inset(outer);
         let inner_width = inner.width.max(1);
-        let sections = self.layout_sections(Rect::new(0, 0, inner_width, u16::MAX));
-        let question_height = sections.question_lines.len();
+        let question_height = self.wrapped_question_lines(inner_width).len();
+        let options_height = self.options_required_height(inner_width) as usize;
         let notes_height = self.notes_input_height(inner_width) as usize;
-        let footer_height = sections.footer_lines as usize;
+        let footer_height = if self.unanswered_count() > 0 { 2 } else { 1 };
 
         // Tight minimum height: progress + header + question + (optional) titles/options
         // + notes composer + footer + menu padding.
         let mut height = question_height
+            .saturating_add(options_height)
             .saturating_add(notes_height)
             .saturating_add(footer_height)
             .saturating_add(2); // progress + header
         if self.has_options() {
             height = height
                 .saturating_add(1) // answer title
-                .saturating_add(self.options_len())
                 .saturating_add(1); // notes title
         }
         height = height.saturating_add(menu_surface_padding_height() as usize);
@@ -113,28 +112,7 @@ impl RequestUserInputOverlay {
         }
 
         // Build rows with selection markers for the shared selection renderer.
-        let option_rows = self
-            .current_question()
-            .and_then(|question| question.options.as_ref())
-            .map(|options| {
-                options
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, opt)| {
-                        let selected = self
-                            .current_answer()
-                            .and_then(|answer| answer.selected)
-                            .is_some_and(|sel| sel == idx);
-                        let prefix = if selected { "(x)" } else { "( )" };
-                        GenericDisplayRow {
-                            name: format!("{prefix} {}", opt.label),
-                            description: Some(opt.description.clone()),
-                            ..Default::default()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let option_rows = self.option_rows();
 
         if self.has_options() {
             let mut option_state = self

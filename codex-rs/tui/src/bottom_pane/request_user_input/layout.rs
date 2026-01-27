@@ -19,100 +19,112 @@ pub(super) struct LayoutSections {
 impl RequestUserInputOverlay {
     /// Compute layout sections, collapsing notes and hints as space shrinks.
     pub(super) fn layout_sections(&self, area: Rect) -> LayoutSections {
-        let question_lines = self
-            .current_question()
-            .map(|q| {
-                textwrap::wrap(&q.question, area.width.max(1) as usize)
-                    .into_iter()
-                    .map(|line| line.to_string())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let question_text_height = question_lines.len() as u16;
         let has_options = self.has_options();
-        let mut notes_input_height = self.notes_input_height(area.width);
-        // Keep the question + options visible first; notes and hints collapse as space shrinks.
-        let footer_lines = if self.unanswered_count() > 0 { 2 } else { 1 };
-        let mut notes_title_height = if has_options { 1 } else { 0 };
+        let footer_pref = if self.unanswered_count() > 0 { 2 } else { 1 };
+        let notes_pref_height = self.notes_input_height(area.width);
+        let mut question_lines = self.wrapped_question_lines(area.width);
+        let mut question_height = question_lines.len() as u16;
+
+        let mut progress_height = 0;
+        let mut answer_title_height = 0;
+        let mut notes_title_height = 0;
+        let mut notes_height = 0;
+        let mut options_height = 0;
+        let mut footer_lines = 0;
+
+        if has_options {
+            let options_required_height = self.options_required_height(area.width);
+            let min_options_height = 1u16;
+            let required = 1u16
+                .saturating_add(question_height)
+                .saturating_add(options_required_height);
+
+            if required > area.height {
+                // Tight layout: allocate header + question + options first and drop everything else.
+                let max_question_height = area
+                    .height
+                    .saturating_sub(1u16.saturating_add(min_options_height));
+                question_height = question_height.min(max_question_height);
+                question_lines.truncate(question_height as usize);
+                options_height = area
+                    .height
+                    .saturating_sub(1u16.saturating_add(question_height));
+            } else {
+                options_height = options_required_height;
+                let used = 1u16
+                    .saturating_add(question_height)
+                    .saturating_add(options_height);
+                let mut remaining = area.height.saturating_sub(used);
+
+                // Prefer notes next, then footer, then labels, with progress last.
+                notes_height = notes_pref_height.min(remaining);
+                remaining = remaining.saturating_sub(notes_height);
+
+                footer_lines = footer_pref.min(remaining);
+                remaining = remaining.saturating_sub(footer_lines);
+
+                if remaining > 0 {
+                    answer_title_height = 1;
+                    remaining = remaining.saturating_sub(1);
+                }
+                if remaining > 0 {
+                    notes_title_height = 1;
+                    remaining = remaining.saturating_sub(1);
+                }
+                if remaining > 0 {
+                    progress_height = 1;
+                    remaining = remaining.saturating_sub(1);
+                }
+
+                // Expand the notes composer with any leftover rows.
+                notes_height = notes_height.saturating_add(remaining);
+            }
+        } else {
+            let required = 1u16.saturating_add(question_height);
+            if required > area.height {
+                let max_question_height = area.height.saturating_sub(1);
+                question_height = question_height.min(max_question_height);
+                question_lines.truncate(question_height as usize);
+            } else {
+                let mut remaining = area.height.saturating_sub(required);
+                notes_height = notes_pref_height.min(remaining);
+                remaining = remaining.saturating_sub(notes_height);
+
+                footer_lines = footer_pref.min(remaining);
+                remaining = remaining.saturating_sub(footer_lines);
+
+                if remaining > 0 {
+                    progress_height = 1;
+                    remaining = remaining.saturating_sub(1);
+                }
+
+                notes_height = notes_height.saturating_add(remaining);
+            }
+        }
 
         let mut cursor_y = area.y;
         let progress_area = Rect {
             x: area.x,
             y: cursor_y,
             width: area.width,
-            height: 1,
+            height: progress_height,
         };
-        cursor_y = cursor_y.saturating_add(1);
+        cursor_y = cursor_y.saturating_add(progress_height);
+        let header_height = area.height.saturating_sub(progress_height).min(1);
         let header_area = Rect {
             x: area.x,
             y: cursor_y,
             width: area.width,
-            height: 1,
+            height: header_height,
         };
-        cursor_y = cursor_y.saturating_add(1);
+        cursor_y = cursor_y.saturating_add(header_height);
         let question_area = Rect {
             x: area.x,
             y: cursor_y,
             width: area.width,
-            height: question_text_height,
+            height: question_height,
         };
-        cursor_y = cursor_y.saturating_add(question_text_height);
-        // Remaining height after progress/header/question areas.
-        let remaining = area.height.saturating_sub(cursor_y.saturating_sub(area.y));
-        let mut answer_title_height = if has_options { 1 } else { 0 };
-        let mut options_height = 0;
-        if has_options {
-            let remaining_content = remaining.saturating_sub(footer_lines);
-            let options_len = self.options_len() as u16;
-            if remaining_content == 0 {
-                answer_title_height = 0;
-                notes_title_height = 0;
-                notes_input_height = 0;
-                options_height = 0;
-            } else {
-                let min_notes = 1u16;
-                let full_notes = 3u16;
-                // Prefer to keep all options visible, then allocate notes height.
-                if remaining_content
-                    >= options_len + answer_title_height + notes_title_height + full_notes
-                {
-                    let max_notes = remaining_content
-                        .saturating_sub(options_len)
-                        .saturating_sub(answer_title_height)
-                        .saturating_sub(notes_title_height);
-                    notes_input_height = notes_input_height.min(max_notes).max(full_notes);
-                } else if remaining_content > options_len + answer_title_height + min_notes {
-                    notes_title_height = 0;
-                    notes_input_height = min_notes;
-                } else {
-                    // Tight layout: hide section titles and shrink notes to one line.
-                    answer_title_height = 0;
-                    notes_title_height = 0;
-                    notes_input_height = min_notes;
-                }
-
-                // Reserve notes/answer title area so options are scrollable if needed.
-                let reserved = answer_title_height
-                    .saturating_add(notes_title_height)
-                    .saturating_add(notes_input_height);
-                options_height = remaining_content.saturating_sub(reserved);
-                if options_height > options_len {
-                    // Expand the notes composer with any leftover rows so we
-                    // do not leave a large blank gap between options and notes.
-                    let extra_rows = options_height.saturating_sub(options_len);
-                    options_height = options_len;
-                    notes_input_height = notes_input_height.saturating_add(extra_rows);
-                }
-            }
-        } else {
-            let max_notes = remaining.saturating_sub(footer_lines);
-            if max_notes == 0 {
-                notes_input_height = 0;
-            } else {
-                // When no options exist, notes are the primary input.
-                notes_input_height = notes_input_height.min(max_notes).max(3.min(max_notes));
-            }
-        }
+        cursor_y = cursor_y.saturating_add(question_height);
 
         let answer_title_area = Rect {
             x: area.x,
@@ -140,7 +152,7 @@ impl RequestUserInputOverlay {
             x: area.x,
             y: cursor_y,
             width: area.width,
-            height: notes_input_height,
+            height: notes_height,
         };
 
         LayoutSections {
