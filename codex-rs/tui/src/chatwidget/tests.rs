@@ -1695,6 +1695,26 @@ async fn streaming_final_answer_keeps_task_running_state() {
 }
 
 #[tokio::test]
+async fn task_spawning_ops_mark_running_optimistically() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    assert!(!chat.bottom_pane.is_task_running());
+
+    chat.submit_op(Op::Undo);
+    let saw_undo = loop {
+        match op_rx.try_recv() {
+            Ok(Op::Undo) => break true,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => break false,
+            Err(TryRecvError::Disconnected) => panic!("expected op but channel closed"),
+        }
+    };
+    assert!(saw_undo, "expected Op::Undo to be forwarded");
+
+    assert!(chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn ctrl_c_shutdown_works_with_caps_lock() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

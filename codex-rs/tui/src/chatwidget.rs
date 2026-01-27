@@ -5187,8 +5187,15 @@ impl ChatWidget {
     pub(crate) fn submit_op(&mut self, op: Op) {
         // Record outbound operation for session replay fidelity.
         crate::session_log::log_outbound_op(&op);
-        if matches!(&op, Op::Review { .. }) && !self.bottom_pane.is_task_running() {
-            self.bottom_pane.set_task_running(true);
+        let spawns_task = matches!(
+            &op,
+            Op::Review { .. } | Op::Undo | Op::Compact | Op::RunUserShellCommand { .. }
+        );
+        if spawns_task && !self.bottom_pane.is_task_running() {
+            self.agent_turn_running = true;
+            self.update_task_running_state();
+            self.bottom_pane.set_interrupt_hint_visible(true);
+            self.request_redraw();
         }
         if let Err(e) = self.codex_op_tx.send(op) {
             tracing::error!("failed to submit op: {e}");
