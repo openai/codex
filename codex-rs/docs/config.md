@@ -11,7 +11,7 @@ To suppress this warning, set the following in `~/.codex/config.toml`:
 suppress_unstable_features_warning = true
 ```
 
-Example enabling an experimental feature and suppressing the warning:
+Example enabling an under development feature and suppressing the warning:
 
 ```toml
 [features]

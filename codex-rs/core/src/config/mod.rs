@@ -909,7 +909,7 @@ pub struct ConfigToml {
     #[schemars(schema_with = "crate::config::schema::features_schema")]
     pub features: Option<FeaturesToml>,
 
-    /// Suppress warnings about unstable (experimental or under development) features.
+    /// Suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: Option<bool>,
 
     /// Settings for ghost snapshots (used for undo).
