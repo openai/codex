@@ -80,18 +80,15 @@ pub(crate) fn collect_explicit_skill_mentions(
     let mut seen: HashSet<String> = HashSet::new();
 
     for input in inputs {
-        match input {
-            UserInput::Text { text, .. } => {
-                let mentioned_names = extract_skill_mentions(text);
-                select_skills_from_mentions(
-                    skills,
-                    disabled_paths,
-                    &mentioned_names,
-                    &mut seen,
-                    &mut selected,
-                );
-            }
-            _ => {}
+        if let UserInput::Text { text, .. } = input {
+            let mentioned_names = extract_skill_mentions(text);
+            select_skills_from_mentions(
+                skills,
+                disabled_paths,
+                &mentioned_names,
+                &mut seen,
+                &mut selected,
+            );
         }
     }
 
