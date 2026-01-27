@@ -49,7 +49,7 @@ async fn emits_deprecation_notice_for_legacy_feature_flag() -> anyhow::Result<()
     assert_eq!(
         details.as_deref(),
         Some(
-            "Enable it with `--enable unified_exec` or `[features].unified_exec` in config.toml. See https://developers.openai.com/codex/configuration/config-file#feature-flags for details."
+            "Enable it with `--enable unified_exec` or `[features].unified_exec` in config.toml. See https://developers.openai.com/codex/config-advanced/ for details."
         ),
     );
 

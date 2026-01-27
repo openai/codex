@@ -732,7 +732,7 @@ impl Session {
                 None
             } else {
                 Some(format!(
-                    "Enable it with `--enable {canonical}` or `[features].{canonical}` in config.toml. See https://developers.openai.com/codex/configuration/config-file#feature-flags for details."
+                    "Enable it with `--enable {canonical}` or `[features].{canonical}` in config.toml. See https://developers.openai.com/codex/config-advanced/ for details."
                 ))
             };
             post_session_configured_events.push(Event {
