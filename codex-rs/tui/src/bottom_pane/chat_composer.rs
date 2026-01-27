@@ -2186,6 +2186,11 @@ impl ChatComposer {
             FooterMode::QuitShortcutReminder if self.quit_shortcut_hint_visible() => {
                 FooterMode::QuitShortcutReminder
             }
+            FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
+                if self.quit_shortcut_hint_visible() =>
+            {
+                FooterMode::QuitShortcutReminder
+            }
             FooterMode::QuitShortcutReminder => base_mode,
             FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft => base_mode,
         }
