@@ -454,11 +454,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SkillMcpDependencyInstall,
         key: "skill_mcp_dependency_install",
-        stage: Stage::Experimental {
-            name: "MCP dependency install",
-            menu_description: "Prompt to install missing MCP tool dependencies for skills.",
-            announcement: "NEW! Codex can prompt to install missing MCP dependencies. Toggle in /experimental.",
-        },
+        stage: Stage::Stable,
         default_enabled: true,
     },
     FeatureSpec {
