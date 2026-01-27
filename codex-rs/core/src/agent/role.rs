@@ -70,7 +70,7 @@ impl AgentRole {
     }
 
     /// Returns the hard-coded profile for this role.
-    pub fn profile(&self) -> AgentProfile {
+    pub fn profile(self) -> AgentProfile {
         match self {
             AgentRole::Default => AgentProfile::default(),
             AgentRole::Orchestrator => AgentProfile {
@@ -105,7 +105,7 @@ Rules:
 - **Always** prefer asking explorers rather than exploring the codebase yourself.
 - Spawn multiple explorers in parallel when useful and wait for all results.
 - You can ask the `explorer` to return file name, lines, entire code snippets, ...
-- Re-use the same explorer when it is relevant. If later in your process you have more questions on some code an explorer already covered, re-use this same explorer to be more efficient.
+- Reuse the same explorer when it is relevant. If later in your process you have more questions on some code an explorer already covered, reuse this same explorer to be more efficient.
                 "#,
                 ..Default::default()
             },
