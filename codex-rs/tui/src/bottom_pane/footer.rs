@@ -760,15 +760,6 @@ pub(crate) fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>
     Line::from(vec![Span::from("100% context left").dim()])
 }
 
-pub(crate) fn context_window_line_and_width(
-    percent: Option<i64>,
-    used_tokens: Option<i64>,
-) -> (Line<'static>, u16) {
-    let line = context_window_line(percent, used_tokens);
-    let width = line.width() as u16;
-    (line, width)
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutId {
     Commands,
@@ -974,19 +965,10 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn snapshot_footer(name: &str, props: FooterProps) {
-        snapshot_footer_impl(name, 80, props, None);
+        snapshot_footer_with_mode_indicator(name, 80, props, None);
     }
 
-    fn snapshot_footer_with_indicator(
-        name: &str,
-        width: u16,
-        props: FooterProps,
-        collaboration_mode_indicator: Option<CollaborationModeIndicator>,
-    ) {
-        snapshot_footer_impl(name, width, props, collaboration_mode_indicator);
-    }
-
-    fn snapshot_footer_impl(
+    fn snapshot_footer_with_mode_indicator(
         name: &str,
         width: u16,
         props: FooterProps,
@@ -997,10 +979,11 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = Rect::new(0, 0, f.area().width, height);
-                let (context_line, context_width) = context_window_line_and_width(
+                let context_line = context_window_line(
                     props.context_window_percent,
                     props.context_window_used_tokens,
                 );
+                let context_width = context_line.width() as u16;
                 let show_cycle_hint = !props.is_task_running;
                 let show_shortcuts_hint = match props.mode {
                     FooterMode::ComposerEmpty => true,
@@ -1262,14 +1245,14 @@ mod tests {
             context_window_used_tokens: None,
         };
 
-        snapshot_footer_with_indicator(
+        snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_wide",
             120,
             props,
             Some(CollaborationModeIndicator::Plan),
         );
 
-        snapshot_footer_with_indicator(
+        snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_narrow_overlap_hides",
             50,
             props,
@@ -1288,7 +1271,7 @@ mod tests {
             context_window_used_tokens: None,
         };
 
-        snapshot_footer_with_indicator(
+        snapshot_footer_with_mode_indicator(
             "footer_mode_indicator_running_hides_hint",
             120,
             props,

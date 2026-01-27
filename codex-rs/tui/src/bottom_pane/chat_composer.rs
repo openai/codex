@@ -98,7 +98,7 @@ use super::footer::FooterMode;
 use super::footer::FooterProps;
 use super::footer::SummaryLeft;
 use super::footer::can_show_left_with_context;
-use super::footer::context_window_line_and_width;
+use super::footer::context_window_line;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
 use super::footer::footer_hint_items_width;
@@ -2541,10 +2541,11 @@ impl Renderable for ChatComposer {
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
-                let (context_line, context_width) = context_window_line_and_width(
+                let context_line = context_window_line(
                     footer_props.context_window_percent,
                     footer_props.context_window_used_tokens,
                 );
+                let context_width = context_line.width() as u16;
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
                     custom_height.unwrap_or_else(|| footer_height(footer_props));
