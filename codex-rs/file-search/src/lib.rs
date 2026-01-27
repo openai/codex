@@ -818,6 +818,8 @@ fn matcher_worker(
 
         let now = Instant::now();
         let throttle_ready = now.duration_since(last_emit_at) >= inner.update_interval;
+        let query_changed_after_complete =
+            query_changed && inner.complete_emitted.load(Ordering::Relaxed);
         if top_changed && (throttle_ready || walk_complete) {
             if inner.cancelled.load(Ordering::Relaxed) {
                 break;
@@ -826,6 +828,15 @@ fn matcher_worker(
             last_emit_at = now;
             emit_pending = false;
         } else if top_changed {
+            emit_pending = true;
+        } else if query_changed_after_complete && throttle_ready {
+            if inner.cancelled.load(Ordering::Relaxed) {
+                break;
+            }
+            inner.reporter.on_update(&snapshot);
+            last_emit_at = now;
+            emit_pending = false;
+        } else if query_changed_after_complete {
             emit_pending = true;
         } else if emit_pending && throttle_ready {
             if inner.cancelled.load(Ordering::Relaxed) {
@@ -1099,6 +1110,38 @@ mod tests {
                 .iter()
                 .any(|file_match| file_match.path.contains("beta.txt"))
         );
+
+        session.cancel();
+        let _ = session.join();
+    }
+
+    #[test]
+    fn session_emits_update_when_query_changes_with_no_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("alpha.txt"), "alpha").unwrap();
+        fs::write(dir.path().join("beta.txt"), "beta").unwrap();
+        let reporter = Arc::new(RecordingReporter::default());
+        let session = create_session(
+            dir.path(),
+            SessionOptions {
+                update_interval: Duration::from_millis(1),
+                ..SessionOptions::default()
+            },
+            reporter.clone(),
+        )
+        .expect("session");
+
+        session.update_query("asdf");
+        assert!(reporter.wait_for_complete(Duration::from_secs(5)));
+
+        let completed_snapshot = session.snapshot();
+        assert_eq!(completed_snapshot.matches, Vec::new());
+        assert_eq!(completed_snapshot.total_match_count, 0);
+        assert!(completed_snapshot.walk_complete);
+
+        let updates_before = reporter.updates().len();
+        session.update_query("asdfa");
+        assert!(reporter.wait_for_updates_at_least(updates_before + 1, Duration::from_secs(5),));
 
         session.cancel();
         let _ = session.join();
