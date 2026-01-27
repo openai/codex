@@ -46,7 +46,7 @@ struct ExecCommandArgs {
     #[serde(default)]
     request_approval: Option<String>,
     #[serde(default)]
-    rule_prefix: Option<Vec<String>>,
+    prefix_rule: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,6 +142,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let args: ExecCommandArgs = parse_arguments(&arguments)?;
                 let process_id = manager.allocate_process_id().await;
                 let command = get_command(&args, session.user_shell());
+                tracing::warn!("UNICORN");
 
                 let ExecCommandArgs {
                     workdir,
@@ -151,21 +152,17 @@ impl ToolHandler for UnifiedExecHandler {
                     sandbox_permissions,
                     justification,
                     request_approval,
-                    rule_prefix,
+                    prefix_rule,
                     ..
                 } = args;
 
-                let features = session.features();
-                let request_rule_enabled = features.enabled(crate::features::Feature::RequestRule);
-                let mut rule_prefix = if request_rule_enabled {
-                    rule_prefix
-                } else {
-                    None
-                };
                 // Normalize early so empty/whitespace request_approval does not trigger
                 // escalated permissions and bypass sandbox without a real approval prompt.
                 let request_approval = normalize_request_approval(request_approval);
 
+                let features = session.features();
+                let request_rule_enabled = features.enabled(crate::features::Feature::RequestRule);
+                tracing::warn!("request_rule_enabled: {request_rule_enabled}");
                 let sandbox_permissions = if request_approval.is_some() {
                     if !request_rule_enabled {
                         manager.release_process_id(&process_id).await;
@@ -202,9 +199,14 @@ impl ToolHandler for UnifiedExecHandler {
                     )));
                 }
 
-                if !request_rule_enabled || request_approval.is_none() {
-                    rule_prefix = None;
-                }
+                tracing::warn!("prefix_rule: {prefix_rule:?}");
+                tracing::warn!("request_approval: {request_approval:?}");
+                let prefix_rule = if request_rule_enabled && request_approval.is_some() {
+                    prefix_rule
+                } else {
+                    None
+                };
+                tracing::warn!("post prefix_rule: {prefix_rule:?}");
 
                 let workdir = workdir.filter(|value| !value.is_empty());
 
@@ -239,7 +241,7 @@ impl ToolHandler for UnifiedExecHandler {
                             sandbox_permissions,
                             justification,
                             request_approval,
-                            rule_prefix,
+                            prefix_rule,
                         },
                         &context,
                     )

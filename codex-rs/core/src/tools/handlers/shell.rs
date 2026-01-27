@@ -34,7 +34,7 @@ struct RunExecLikeArgs {
     tool_name: String,
     exec_params: ExecParams,
     request_approval: Option<String>,
-    rule_prefix: Option<Vec<String>>,
+    prefix_rule: Option<Vec<String>>,
     session: Arc<crate::codex::Session>,
     turn: Arc<TurnContext>,
     tracker: crate::tools::context::SharedTurnDiffTracker,
@@ -123,13 +123,13 @@ impl ToolHandler for ShellHandler {
             ToolPayload::Function { arguments } => {
                 let params: ShellToolCallParams = parse_arguments(&arguments)?;
                 let request_approval = params.request_approval.clone();
-                let rule_prefix = params.rule_prefix.clone();
+                let prefix_rule = params.prefix_rule.clone();
                 let exec_params = Self::to_exec_params(&params, turn.as_ref());
                 Self::run_exec_like(RunExecLikeArgs {
                     tool_name: tool_name.clone(),
                     exec_params,
                     request_approval,
-                    rule_prefix,
+                    prefix_rule,
                     session,
                     turn,
                     tracker,
@@ -144,7 +144,7 @@ impl ToolHandler for ShellHandler {
                     tool_name: tool_name.clone(),
                     exec_params,
                     request_approval: None,
-                    rule_prefix: None,
+                    prefix_rule: None,
                     session,
                     turn,
                     tracker,
@@ -202,13 +202,13 @@ impl ToolHandler for ShellCommandHandler {
 
         let params: ShellCommandToolCallParams = parse_arguments(&arguments)?;
         let request_approval = params.request_approval.clone();
-        let rule_prefix = params.rule_prefix.clone();
+        let prefix_rule = params.prefix_rule.clone();
         let exec_params = Self::to_exec_params(&params, session.as_ref(), turn.as_ref());
         ShellHandler::run_exec_like(RunExecLikeArgs {
             tool_name,
             exec_params,
             request_approval,
-            rule_prefix,
+            prefix_rule,
             session,
             turn,
             tracker,
@@ -225,7 +225,7 @@ impl ShellHandler {
             tool_name,
             exec_params,
             request_approval,
-            rule_prefix,
+            prefix_rule,
             session,
             turn,
             tracker,
@@ -236,8 +236,8 @@ impl ShellHandler {
 
         let features = session.features();
         let request_rule_enabled = features.enabled(crate::features::Feature::RequestRule);
-        let mut rule_prefix = if request_rule_enabled {
-            rule_prefix
+        let mut prefix_rule = if request_rule_enabled {
+            prefix_rule
         } else {
             None
         };
@@ -280,7 +280,7 @@ impl ShellHandler {
         }
 
         if !request_rule_enabled || request_approval.is_none() {
-            rule_prefix = None;
+            prefix_rule = None;
         }
 
         // Intercept apply_patch if present.
@@ -319,7 +319,7 @@ impl ShellHandler {
                 sandbox_policy: &turn.sandbox_policy,
                 sandbox_permissions: exec_params.sandbox_permissions,
                 request_approval,
-                rule_prefix,
+                prefix_rule,
             })
             .await;
 
@@ -453,7 +453,7 @@ mod tests {
             timeout_ms,
             sandbox_permissions: Some(sandbox_permissions),
             request_approval: None,
-            rule_prefix: None,
+            prefix_rule: None,
             justification: justification.clone(),
         };
 

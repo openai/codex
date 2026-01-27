@@ -94,7 +94,7 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) sandbox_policy: &'a SandboxPolicy,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) request_approval: Option<String>,
-    pub(crate) rule_prefix: Option<Vec<String>>,
+    pub(crate) prefix_rule: Option<Vec<String>>,
 }
 
 impl ExecPolicyManager {
@@ -131,11 +131,11 @@ impl ExecPolicyManager {
             sandbox_policy,
             sandbox_permissions,
             request_approval,
-            rule_prefix,
+            prefix_rule,
         } = req;
         let request_approval = normalize_request_approval(request_approval);
-        let rule_prefix = normalize_rule_prefix(rule_prefix);
-        let rule_prefix = request_approval.as_ref().and(rule_prefix.as_ref());
+        let prefix_rule = normalize_prefix_rule(prefix_rule);
+        let prefix_rule = request_approval.as_ref().and(prefix_rule.as_ref());
         let exec_policy = self.current();
         let commands =
             parse_shell_lc_plain_commands(command).unwrap_or_else(|| vec![command.to_vec()]);
@@ -155,7 +155,7 @@ impl ExecPolicyManager {
         let requested_amendment = derive_requested_execpolicy_amendment(
             features,
             &request_approval,
-            rule_prefix,
+            prefix_rule,
             &evaluation.matched_rules,
         );
         let has_policy_allow = evaluation.matched_rules.iter().any(|rule_match| {
@@ -447,8 +447,8 @@ fn normalize_request_approval(request_approval: Option<String>) -> Option<String
     })
 }
 
-fn normalize_rule_prefix(rule_prefix: Option<Vec<String>>) -> Option<Vec<String>> {
-    rule_prefix.and_then(|prefix| {
+fn normalize_prefix_rule(prefix_rule: Option<Vec<String>>) -> Option<Vec<String>> {
+    prefix_rule.and_then(|prefix| {
         if prefix.is_empty() {
             None
         } else {
@@ -460,15 +460,15 @@ fn normalize_rule_prefix(rule_prefix: Option<Vec<String>>) -> Option<Vec<String>
 fn derive_requested_execpolicy_amendment(
     features: &Features,
     request_approval: &Option<String>,
-    rule_prefix: Option<&Vec<String>>,
+    prefix_rule: Option<&Vec<String>>,
     matched_rules: &[RuleMatch],
 ) -> Option<ExecPolicyAmendment> {
     if request_approval.is_none() || !features.enabled(Feature::ExecPolicy) {
         return None;
     }
 
-    let rule_prefix = rule_prefix?;
-    if rule_prefix.is_empty() {
+    let prefix_rule = prefix_rule?;
+    if prefix_rule.is_empty() {
         return None;
     }
 
@@ -479,7 +479,7 @@ fn derive_requested_execpolicy_amendment(
         return None;
     }
 
-    Some(ExecPolicyAmendment::new(rule_prefix.clone()))
+    Some(ExecPolicyAmendment::new(prefix_rule.clone()))
 }
 
 /// Only return a reason when a policy rule drove the prompt decision.
@@ -863,7 +863,7 @@ prefix_rule(pattern=["rm"], decision="forbidden")
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 request_approval: None,
-                rule_prefix: None,
+                prefix_rule: None,
             })
             .await;
 
@@ -903,7 +903,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 request_approval: None,
-                rule_prefix: None,
+                prefix_rule: None,
             })
             .await;
 
@@ -934,7 +934,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 request_approval: None,
-                rule_prefix: None,
+                prefix_rule: None,
             })
             .await;
 
@@ -966,7 +966,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 request_approval: None,
-                rule_prefix: None,
+                prefix_rule: None,
             })
             .await;
 
@@ -991,7 +991,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 request_approval: None,
-                rule_prefix: None,
+                prefix_rule: None,
             })
             .await;
 
@@ -1005,7 +1005,7 @@ prefix_rule(
     }
 
     #[tokio::test]
-    async fn request_rule_uses_requested_approval_and_rule_prefix() {
+    async fn request_rule_uses_requested_approval_and_prefix_rule() {
         let command = vec![
             "cargo".to_string(),
             "install".to_string(),
@@ -1023,7 +1023,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 request_approval: Some("Install cargo-insta for snapshot tests?".to_string()),
-                rule_prefix: Some(vec!["cargo".to_string(), "install".to_string()]),
+                prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
             })
             .await;
 
@@ -1062,7 +1062,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::DangerFullAccess,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     request_approval: None,
-                    rule_prefix: None,
+                    prefix_rule: None,
                 })
                 .await,
             ExecApprovalRequirement::NeedsApproval {
@@ -1138,7 +1138,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 request_approval: None,
-                rule_prefix: None,
+                prefix_rule: None,
             })
             .await;
 
@@ -1167,7 +1167,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 request_approval: None,
-                rule_prefix: None,
+                prefix_rule: None,
             })
             .await;
 
@@ -1199,7 +1199,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 request_approval: None,
-                rule_prefix: None,
+                prefix_rule: None,
             })
             .await;
 
@@ -1228,7 +1228,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 request_approval: None,
-                rule_prefix: None,
+                prefix_rule: None,
             })
             .await;
 
@@ -1268,7 +1268,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::ReadOnly,
                     sandbox_permissions: SandboxPermissions::UseDefault,
                     request_approval: None,
-                    rule_prefix: None,
+                    prefix_rule: None,
                 })
                 .await,
             ExecApprovalRequirement::NeedsApproval {
@@ -1293,7 +1293,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 request_approval: None,
-                rule_prefix: None,
+                prefix_rule: None,
             })
             .await;
 
@@ -1325,7 +1325,7 @@ prefix_rule(
                 sandbox_policy: &SandboxPolicy::ReadOnly,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 request_approval: None,
-                rule_prefix: None,
+                prefix_rule: None,
             })
             .await;
 
@@ -1394,7 +1394,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::ReadOnly,
                     sandbox_permissions: permissions,
                     request_approval: None,
-                    rule_prefix: None,
+                    prefix_rule: None,
                 })
                 .await,
             "{pwsh_approval_reason}"
@@ -1419,7 +1419,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::ReadOnly,
                     sandbox_permissions: permissions,
                     request_approval: None,
-                    rule_prefix: None,
+                    prefix_rule: None,
                 })
                 .await,
             r#"On all platforms, a forbidden command should require approval
@@ -1440,7 +1440,7 @@ prefix_rule(
                     sandbox_policy: &SandboxPolicy::ReadOnly,
                     sandbox_permissions: permissions,
                     request_approval: None,
-                    rule_prefix: None,
+                    prefix_rule: None,
                 })
                 .await,
             r#"On all platforms, a forbidden command should require approval

@@ -23,7 +23,7 @@ IMPORTANT: To request approval to execute a command that will require escalated 
   - Include a short, 1 sentence explanation for why you need escalated permissions in the `justification` parameter
   - Suggest a `prefix_rule` - this will be shown to the user with an option to persist the rule approval for future sessions.
 
-If you run a command that is important to solving the user's query, but it fails because of sandboxing, rerun the command with "require_escalated". ALWAYS proceed to use the `justification` and `rule_prefix` parameters - do not message the user before requesting approval for the command.
+If you run a command that is important to solving the user's query, but it fails because of sandboxing, rerun the command with "require_escalated". ALWAYS proceed to use the `justification` and `prefix_rule` parameters - do not message the user before requesting approval for the command.
 
 
 ## When to request escalation
@@ -36,7 +36,7 @@ While commands are running inside the sandbox, here are some scenarios that will
 Only run commands that require approval if it is absolutely necessary to solve the user's query, don't try and circumvent approvals by using other tools.
 
 ##  prefix_rule guidance
-When choosing a `rule_prefix`, request one that will allow you to fulfill similar requests from the user in the future without re-requesting escalation. It should be categorical and reasonably scoped to similar capabilities. You MUST NOT pass the entire command into `rule_prefix`.
+When choosing a `prefix_rule`, request one that will allow you to fulfill similar requests from the user in the future without re-requesting escalation. It should be categorical and reasonably scoped to similar capabilities. You MUST NOT pass the entire command into `prefix_rule`.
 
 <good_example reason="frequently run command">
   ["npm", "run", "dev"]

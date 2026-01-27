@@ -30,6 +30,7 @@ pub(crate) struct ToolsConfig {
     pub web_search_mode: Option<WebSearchMode>,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
+    pub request_rule_enabled: bool,
     pub experimental_supported_tools: Vec<String>,
 }
 
@@ -49,6 +50,7 @@ impl ToolsConfig {
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
         let include_collab_tools = features.enabled(Feature::Collab);
         let include_collaboration_modes_tools = features.enabled(Feature::CollaborationModes);
+        let request_rule_enabled = features.enabled(Feature::RequestRule);
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
@@ -81,6 +83,7 @@ impl ToolsConfig {
             web_search_mode: *web_search_mode,
             collab_tools: include_collab_tools,
             collaboration_modes_tools: include_collaboration_modes_tools,
+            request_rule_enabled,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
         }
     }
@@ -142,8 +145,8 @@ impl From<JsonSchema> for AdditionalProperties {
     }
 }
 
-fn create_approval_parameters() -> BTreeMap<String, JsonSchema> {
-    BTreeMap::from([
+fn create_approval_parameters(include_prefix_rule: bool) -> BTreeMap<String, JsonSchema> {
+    let mut properties = BTreeMap::from([
         (
             "sandbox_permissions".to_string(),
             JsonSchema::String {
@@ -166,7 +169,10 @@ fn create_approval_parameters() -> BTreeMap<String, JsonSchema> {
                 ),
             },
         ),
-        (
+    ]);
+
+    if include_prefix_rule {
+        properties.insert(
             "prefix_rule".to_string(),
             JsonSchema::Array {
                 items: Box::new(JsonSchema::String { description: None }),
@@ -175,12 +181,13 @@ fn create_approval_parameters() -> BTreeMap<String, JsonSchema> {
                     Suggest a prefix command pattern that will allow you to fulfill similar requests from the user in the future.
                     Should be a short but reasonable prefix, e.g. [\"git\", \"pull\"] or [\"uv\", \"run\"] or [\"pytest\"]."#.to_string(),
                 ),
-            },
-        ),
-    ])
+            });
+    }
+
+    properties
 }
 
-fn create_exec_command_tool() -> ToolSpec {
+fn create_exec_command_tool(include_prefix_rule: bool) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "cmd".to_string(),
@@ -238,7 +245,7 @@ fn create_exec_command_tool() -> ToolSpec {
             },
         ),
     ]);
-    properties.extend(create_approval_parameters());
+    properties.extend(create_approval_parameters(include_prefix_rule));
 
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),
@@ -301,7 +308,7 @@ fn create_write_stdin_tool() -> ToolSpec {
     })
 }
 
-fn create_shell_tool() -> ToolSpec {
+fn create_shell_tool(include_prefix_rule: bool) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "command".to_string(),
@@ -323,7 +330,7 @@ fn create_shell_tool() -> ToolSpec {
             },
         ),
     ]);
-    properties.extend(create_approval_parameters());
+    properties.extend(create_approval_parameters(include_prefix_rule));
 
     let description  = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
@@ -354,7 +361,7 @@ Examples of valid command strings:
     })
 }
 
-fn create_shell_command_tool() -> ToolSpec {
+fn create_shell_command_tool(include_prefix_rule: bool) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "command".to_string(),
@@ -386,7 +393,7 @@ fn create_shell_command_tool() -> ToolSpec {
             },
         ),
     ]);
-    properties.extend(create_approval_parameters());
+    properties.extend(create_approval_parameters(include_prefix_rule));
 
     let description = if cfg!(windows) {
         r#"Runs a Powershell command (Windows) and returns its output.
@@ -1291,13 +1298,13 @@ pub(crate) fn build_specs(
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
-            builder.push_spec(create_shell_tool());
+            builder.push_spec(create_shell_tool(config.request_rule_enabled));
         }
         ConfigShellToolType::Local => {
             builder.push_spec(ToolSpec::LocalShell {});
         }
         ConfigShellToolType::UnifiedExec => {
-            builder.push_spec(create_exec_command_tool());
+            builder.push_spec(create_exec_command_tool(config.request_rule_enabled));
             builder.push_spec(create_write_stdin_tool());
             builder.register_handler("exec_command", unified_exec_handler.clone());
             builder.register_handler("write_stdin", unified_exec_handler);
@@ -1306,7 +1313,7 @@ pub(crate) fn build_specs(
             // Do nothing.
         }
         ConfigShellToolType::ShellCommand => {
-            builder.push_spec(create_shell_command_tool());
+            builder.push_spec(create_shell_command_tool(config.request_rule_enabled));
         }
     }
 
@@ -1578,7 +1585,7 @@ mod tests {
         // Build expected from the same helpers used by the builder.
         let mut expected: BTreeMap<String, ToolSpec> = BTreeMap::from([]);
         for spec in [
-            create_exec_command_tool(),
+            create_exec_command_tool(false),
             create_write_stdin_tool(),
             create_list_mcp_resources_tool(),
             create_list_mcp_resource_templates_tool(),
@@ -2412,7 +2419,7 @@ mod tests {
 
     #[test]
     fn test_shell_tool() {
-        let tool = super::create_shell_tool();
+        let tool = super::create_shell_tool(false);
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool
@@ -2442,7 +2449,8 @@ Examples of valid command strings:
 
     #[test]
     fn test_shell_command_tool() {
-        let tool = super::create_shell_command_tool();
+        // TODO BEFORE MERGING: add test for request_rule_enabled = true
+        let tool = super::create_shell_command_tool(false);
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
         }) = &tool

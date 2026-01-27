@@ -498,7 +498,7 @@ impl UnifiedExecProcessManager {
                 sandbox_policy: &context.turn.sandbox_policy,
                 sandbox_permissions: request.sandbox_permissions,
                 request_approval: request.request_approval.clone(),
-                rule_prefix: request.rule_prefix.clone(),
+                prefix_rule: request.prefix_rule.clone(),
             })
             .await;
         let req = UnifiedExecToolRequest::new(

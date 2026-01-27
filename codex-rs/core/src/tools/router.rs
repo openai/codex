@@ -115,7 +115,7 @@ impl ToolRouter {
                             timeout_ms: exec.timeout_ms,
                             sandbox_permissions: Some(SandboxPermissions::UseDefault),
                             request_approval: None,
-                            rule_prefix: None,
+                            prefix_rule: None,
                             justification: None,
                         };
                         Ok(Some(ToolCall {
