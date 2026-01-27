@@ -3392,7 +3392,10 @@ impl ChatWidget {
     fn prefetch_rate_limits(&mut self) {
         self.stop_rate_limit_poller();
 
-        if self.auth_manager.auth_cached().map(|auth| auth.mode) != Some(AuthMode::ChatGPT) {
+        if !matches!(
+            self.auth_manager.auth_cached().map(|auth| auth.mode),
+            Some(AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens)
+        ) {
             return;
         }
 
@@ -3405,7 +3408,7 @@ impl ChatWidget {
 
             loop {
                 if let Some(auth) = auth_manager.auth().await
-                    && auth.mode == AuthMode::ChatGPT
+                    && matches!(auth.mode, AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens)
                     && let Some(snapshot) = fetch_rate_limits(base_url.clone(), auth).await
                 {
                     app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));

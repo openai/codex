@@ -422,7 +422,9 @@ impl ModelClientSession {
             .config
             .features
             .enabled(Feature::EnableRequestCompression)
-            && auth.is_some_and(|auth| auth.mode == AuthMode::ChatGPT)
+            && auth.is_some_and(|auth| {
+                matches!(auth.mode, AuthMode::ChatGPT | AuthMode::ChatgptAuthTokens)
+            })
             && self.state.provider.is_openai()
         {
             Compression::Zstd

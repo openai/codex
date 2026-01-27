@@ -76,8 +76,16 @@ pub(crate) enum KnownPlan {
 struct IdClaims {
     #[serde(default)]
     email: Option<String>,
+    #[serde(rename = "https://api.openai.com/profile", default)]
+    profile: Option<ProfileClaims>,
     #[serde(rename = "https://api.openai.com/auth", default)]
     auth: Option<AuthClaims>,
+}
+
+#[derive(Deserialize)]
+struct ProfileClaims {
+    #[serde(default)]
+    email: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -112,17 +120,20 @@ pub fn parse_id_token(id_token: &str) -> Result<IdTokenInfo, IdTokenInfoError> {
 
     let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64)?;
     let claims: IdClaims = serde_json::from_slice(&payload_bytes)?;
+    let email = claims
+        .email
+        .or_else(|| claims.profile.and_then(|profile| profile.email));
 
     match claims.auth {
         Some(auth) => Ok(IdTokenInfo {
-            email: claims.email,
+            email,
             raw_jwt: id_token.to_string(),
             chatgpt_plan_type: auth.chatgpt_plan_type,
             chatgpt_user_id: auth.chatgpt_user_id.or(auth.user_id),
             chatgpt_account_id: auth.chatgpt_account_id,
         }),
         None => Ok(IdTokenInfo {
-            email: claims.email,
+            email,
             raw_jwt: id_token.to_string(),
             chatgpt_plan_type: None,
             chatgpt_user_id: None,

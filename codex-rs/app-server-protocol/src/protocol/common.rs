@@ -28,6 +28,11 @@ impl GitSha {
 pub enum AuthMode {
     ApiKey,
     ChatGPT,
+    /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
+    #[serde(rename = "chatgptAuthTokens")]
+    #[ts(rename = "chatgptAuthTokens")]
+    #[strum(serialize = "chatgptAuthTokens")]
+    ChatgptAuthTokens,
 }
 
 /// Generates an `enum ClientRequest` where each variant is a request that the
@@ -534,6 +539,11 @@ server_request_definitions! {
         response: v2::DynamicToolCallResponse,
     },
 
+    ChatgptAuthTokensRefresh => "account/chatgptAuthTokens/refresh" {
+        params: v2::ChatgptAuthTokensRefreshParams,
+        response: v2::ChatgptAuthTokensRefreshResponse,
+    },
+
     /// DEPRECATED APIs below
     /// Request to approve a patch.
     /// This request is used for Turns started via the legacy APIs (i.e. SendUserTurn, SendUserMessage).
@@ -754,6 +764,29 @@ mod tests {
     }
 
     #[test]
+    fn serialize_chatgpt_auth_tokens_refresh_request() -> Result<()> {
+        let request = ServerRequest::ChatgptAuthTokensRefresh {
+            request_id: RequestId::Integer(8),
+            params: v2::ChatgptAuthTokensRefreshParams {
+                reason: v2::ChatgptAuthTokensRefreshReason::Unauthorized,
+                previous_account_id: Some("org-123".to_string()),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "account/chatgptAuthTokens/refresh",
+                "id": 8,
+                "params": {
+                    "reason": "unauthorized",
+                    "previousAccountId": "org-123"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_get_account_rate_limits() -> Result<()> {
         let request = ClientRequest::GetAccountRateLimits {
             request_id: RequestId::Integer(1),
@@ -843,9 +876,33 @@ mod tests {
     }
 
     #[test]
+    fn serialize_account_login_chatgpt_auth_tokens() -> Result<()> {
+        let request = ClientRequest::LoginAccount {
+            request_id: RequestId::Integer(5),
+            params: v2::LoginAccountParams::ChatgptAuthTokens {
+                access_token: "access-token".to_string(),
+                id_token: "id-token".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "account/login/start",
+                "id": 5,
+                "params": {
+                    "type": "chatgptAuthTokens",
+                    "accessToken": "access-token",
+                    "idToken": "id-token"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
     fn serialize_get_account() -> Result<()> {
         let request = ClientRequest::GetAccount {
-            request_id: RequestId::Integer(5),
+            request_id: RequestId::Integer(6),
             params: v2::GetAccountParams {
                 refresh_token: false,
             },
@@ -853,7 +910,7 @@ mod tests {
         assert_eq!(
             json!({
                 "method": "account/read",
-                "id": 5,
+                "id": 6,
                 "params": {
                     "refreshToken": false
                 }
