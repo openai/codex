@@ -278,6 +278,10 @@ pub(crate) fn single_line_footer_layout(
             summary_line(indicator, spec)
         }
     };
+    // When the mode cycle hint is applicable (idle, non-queue mode),
+    // show the right-side context indicator if the "(shift+tab to cycle)"
+    // variant can also fit.
+    let context_requires_cycle_hint = show_cycle_hint && !show_queue_hint;
 
     if show_queue_hint {
         // In queue mode, prefer dropping context before dropping the queue hint.
@@ -342,7 +346,13 @@ pub(crate) fn single_line_footer_layout(
             show_cycle_hint: false,
         };
         let mode_only_width = spec_width(mode_only_spec);
-        if mode_only_width > 0 && can_show_left_with_context(area, mode_only_width, context_width) {
+        // When the mode cycle hint is applicable, only show context % if the mode cycle hint
+        // itself can also fit. This prevents the right-side context indicator from
+        // reappearing after we've already dropped "(shift+tab to cycle)".
+        if !context_requires_cycle_hint
+            && mode_only_width > 0
+            && can_show_left_with_context(area, mode_only_width, context_width)
+        {
             return (SummaryLeft::Custom(spec_line(mode_only_spec)), true);
         }
         if mode_only_width > 0 && left_fits(area, mode_only_width) {
@@ -356,7 +366,9 @@ pub(crate) fn single_line_footer_layout(
             show_cycle_hint: false,
         };
         let mode_only_width = summary_line(Some(indicator), mode_only_spec).width() as u16;
-        if can_show_left_with_context(area, mode_only_width, context_width) {
+        if !context_requires_cycle_hint
+            && can_show_left_with_context(area, mode_only_width, context_width)
+        {
             return (
                 SummaryLeft::Custom(summary_line(Some(indicator), mode_only_spec)),
                 true,
