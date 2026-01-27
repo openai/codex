@@ -105,7 +105,7 @@ use super::footer::footer_hint_items_width;
 use super::footer::footer_line_width;
 use super::footer::inset_footer_hint_area;
 use super::footer::render_context_right;
-use super::footer::render_footer;
+use super::footer::render_footer_from_props;
 use super::footer::render_footer_hint_items;
 use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
@@ -2620,7 +2620,7 @@ impl Renderable for ChatComposer {
                 if let Some((summary_left, _)) = single_line_layout {
                     match summary_left {
                         SummaryLeft::Default => {
-                            render_footer(
+                            render_footer_from_props(
                                 hint_rect,
                                 buf,
                                 footer_props,
@@ -2642,7 +2642,7 @@ impl Renderable for ChatComposer {
                 } else if let Some(items) = self.footer_hint_override.as_ref() {
                     render_footer_hint_items(hint_rect, buf, items);
                 } else {
-                    render_footer(
+                    render_footer_from_props(
                         hint_rect,
                         buf,
                         footer_props,

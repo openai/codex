@@ -27,9 +27,10 @@ use ratatui::widgets::Widget;
 /// The rendering inputs for the footer area under the composer.
 ///
 /// Callers are expected to construct `FooterProps` from higher-level state (`ChatComposer`,
-/// `BottomPane`, and `ChatWidget`) and pass it to `render_footer`. The footer treats these values as
-/// authoritative and does not attempt to infer missing state (for example, it does not query
-/// whether a task is running).
+/// `BottomPane`, and `ChatWidget`) and pass it to the footer render helpers
+/// (`render_footer_from_props` or the single-line collapse logic). The footer
+/// treats these values as authoritative and does not attempt to infer missing
+/// state (for example, it does not query whether a task is running).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FooterProps {
     pub(crate) mode: FooterMode,
@@ -159,14 +160,10 @@ pub(crate) fn footer_height(props: FooterProps) -> u16 {
         | FooterMode::ShortcutOverlay
         | FooterMode::EscHint => false,
     };
-    footer_lines(props, None, false, show_shortcuts_hint, show_queue_hint).len() as u16
+    footer_from_props_lines(props, None, false, show_shortcuts_hint, show_queue_hint).len() as u16
 }
 
 /// Render a single precomputed footer line.
-///
-/// Collapse/fallback logic (for example, `single_line_footer_layout`) may
-/// choose a specific line that fits the current width (for example, after
-/// dropping the cycle hint).
 pub(crate) fn render_footer_line(area: Rect, buf: &mut Buffer, line: Line<'static>) {
     Paragraph::new(prefix_lines(
         vec![line],
@@ -176,12 +173,14 @@ pub(crate) fn render_footer_line(area: Rect, buf: &mut Buffer, line: Line<'stati
     .render(area, buf);
 }
 
-/// Render default footer content derived from `FooterProps`.
+/// Render footer content directly from `FooterProps`.
 ///
-/// This uses `footer_lines` to build a nicely formatted footer line
-/// for varying screen widths. Use this when the caller has not already
-/// selected a specific line to render.
-pub(crate) fn render_footer(
+/// This is intentionally not part of the width-based collapse/fallback logic.
+/// Transient instructional states (shortcut overlay, Esc hint, quit reminder)
+/// prioritize "what to do next" instructions and currently suppress the
+/// collaboration mode label entirely. When collapse logic has already chosen a
+/// specific single line, prefer `render_footer_line`.
+pub(crate) fn render_footer_from_props(
     area: Rect,
     buf: &mut Buffer,
     props: FooterProps,
@@ -191,7 +190,7 @@ pub(crate) fn render_footer(
     show_queue_hint: bool,
 ) {
     Paragraph::new(prefix_lines(
-        footer_lines(
+        footer_from_props_lines(
             props,
             collaboration_mode_indicator,
             show_cycle_hint,
@@ -500,13 +499,13 @@ pub(crate) fn render_footer_hint_items(area: Rect, buf: &mut Buffer, items: &[(S
     footer_hint_items_line(items).render(inset_footer_hint_area(area), buf);
 }
 
-/// Build the default left-side footer lines for the current mode.
+/// Map `FooterProps` to one or more footer lines without dynamic collapse.
 ///
-/// This is the mode-driven baseline. Collapse/fallback logic may choose a
-/// specific single-line variant that better fits the current width (see
-/// `single_line_footer_layout`). The right-side context indicator is rendered
-/// separately by the caller.
-fn footer_lines(
+/// This is the straightforward FooterMode-to-text mapping used by instructional,
+/// transient footer states (shortcut overlay, Esc hint, quit reminder), and as
+/// a fallback for base states when we are not running the single-line collapse
+/// logic. Width-based collapse decisions live in `single_line_footer_layout`.
+fn footer_from_props_lines(
     props: FooterProps,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
@@ -567,7 +566,7 @@ pub(crate) fn footer_line_width(
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
 ) -> u16 {
-    footer_lines(
+    footer_from_props_lines(
         props,
         collaboration_mode_indicator,
         show_cycle_hint,
@@ -991,7 +990,7 @@ mod tests {
                     );
                     match summary_left {
                         SummaryLeft::Default => {
-                            render_footer(
+                            render_footer_from_props(
                                 area,
                                 f.buffer_mut(),
                                 props,
@@ -1010,7 +1009,7 @@ mod tests {
                         render_context_right(area, f.buffer_mut(), &context_line);
                     }
                 } else {
-                    render_footer(
+                    render_footer_from_props(
                         area,
                         f.buffer_mut(),
                         props,
@@ -1089,7 +1088,7 @@ mod tests {
                     );
                     match summary_left {
                         SummaryLeft::Default => {
-                            render_footer(
+                            render_footer_from_props(
                                 area,
                                 f.buffer_mut(),
                                 props,
@@ -1108,7 +1107,7 @@ mod tests {
                         render_context_right(area, f.buffer_mut(), &context_line);
                     }
                 } else {
-                    render_footer(
+                    render_footer_from_props(
                         area,
                         f.buffer_mut(),
                         props,
