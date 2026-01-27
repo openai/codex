@@ -15,7 +15,7 @@ You can also install via Homebrew (`brew install --cask codex`) or download a pl
 
 ## Documentation quickstart
 
-- First run with Codex? Start with the [Getting Started guide](https://developers.openai.com/codex/getting-started/overview) (links to the walkthrough for prompts, keyboard shortcuts, and session management).
+- First run with Codex? Start with the [Getting Started guide](https://developers.openai.com/codex) (links to the walkthrough for prompts, keyboard shortcuts, and session management).
 - Want deeper control? See [Configuration documentation](https://developers.openai.com/codex/config-advanced/).
 
 ## What's new in the Rust CLI
