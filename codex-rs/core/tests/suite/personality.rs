@@ -38,6 +38,9 @@ use tokio::time::sleep;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
 
+const LOCAL_FRIENDLY_TEMPLATE: &str =
+    "You optimize for team morale and being a supportive teammate as much as code quality.";
+
 fn sse_completed(id: &str) -> String {
     sse(vec![ev_response_created(id), ev_completed(id)])
 }
@@ -113,7 +116,7 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_personality_some_ignores_without_remote_template() -> anyhow::Result<()> {
+async fn config_personality_some_sets_instructions_template() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -148,12 +151,10 @@ async fn config_personality_some_ignores_without_remote_template() -> anyhow::Re
 
     let request = resp_mock.single_request();
     let instructions_text = request.instructions_text();
-    let model_info =
-        ModelsManager::construct_model_info_offline("exp-codex-personality", &test.config);
 
     assert!(
-        instructions_text == model_info.base_instructions,
-        "expected base instructions without a remote personality template, got: {instructions_text:?}"
+        instructions_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        "expected personality update to include the local friendly template, got: {instructions_text:?}"
     );
 
     let developer_texts = request.message_input_texts("developer");
@@ -168,7 +169,7 @@ async fn config_personality_some_ignores_without_remote_template() -> anyhow::Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn user_turn_personality_some_ignores_without_remote_template() -> anyhow::Result<()> {
+async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -245,11 +246,18 @@ async fn user_turn_personality_some_ignores_without_remote_template() -> anyhow:
         .expect("expected personality update request");
 
     let developer_texts = request.message_input_texts("developer");
+    let personality_text = developer_texts
+        .iter()
+        .find(|text| text.contains("<personality_spec>"))
+        .expect("expected personality update message in developer input");
+
     assert!(
-        !developer_texts
-            .iter()
-            .any(|text| text.contains("<personality_spec>")),
-        "did not expect a personality update message without a remote template"
+        personality_text.contains("The user has requested a new communication style."),
+        "expected personality update preamble, got {personality_text:?}"
+    );
+    assert!(
+        personality_text.contains(LOCAL_FRIENDLY_TEMPLATE),
+        "expected personality update to include the local friendly template, got: {personality_text:?}"
     );
 
     Ok(())

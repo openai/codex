@@ -105,10 +105,15 @@ impl ModelsManager {
 
     /// Determine whether a model supports personalities based on remote metadata.
     pub fn supports_personality(&self, model: &str, config: &Config) -> bool {
-        self.try_get_remote_models(config)
+        let remote = self
+            .try_get_remote_models(config)
             .ok()
-            .and_then(|remote_models| remote_models.into_iter().find(|info| info.slug == model))
-            .is_some_and(|info| info.supports_personality())
+            .and_then(|remote_models| remote_models.into_iter().find(|info| info.slug == model));
+        if let Some(remote) = remote {
+            return remote.supports_personality();
+        }
+        model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config)
+            .supports_personality()
     }
 
     // todo(aibrahim): should be visible to core only and sent on session_configured event
@@ -150,11 +155,7 @@ impl ModelsManager {
             .await
             .into_iter()
             .find(|m| m.slug == model);
-        let remote_supports = remote.as_ref().is_some_and(ModelInfo::supports_personality);
-        let mut model = remote.unwrap_or(local);
-        if !remote_supports {
-            model.model_instructions_template = None;
-        }
+        let model = remote.unwrap_or(local);
         model_info::with_config_overrides(model, config)
     }
 
@@ -357,10 +358,7 @@ impl ModelsManager {
     #[cfg(any(test, feature = "test-support"))]
     /// Build `ModelInfo` without consulting remote state or cache.
     pub fn construct_model_info_offline(model: &str, config: &Config) -> ModelInfo {
-        let mut model_info =
-            model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config);
-        model_info.model_instructions_template = None;
-        model_info
+        model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config)
     }
 }
 
