@@ -185,7 +185,7 @@ pub(crate) fn render_footer(
     area: Rect,
     buf: &mut Buffer,
     props: FooterProps,
-    indicator: Option<CollaborationModeIndicator>,
+    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
@@ -193,7 +193,7 @@ pub(crate) fn render_footer(
     Paragraph::new(prefix_lines(
         footer_lines(
             props,
-            indicator,
+            collaboration_mode_indicator,
             show_cycle_hint,
             show_shortcuts_hint,
             show_queue_hint,
@@ -218,14 +218,17 @@ enum SummaryHintKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SummarySpec {
+struct LeftSideState {
     hint: SummaryHintKind,
     show_cycle_hint: bool,
 }
 
-fn summary_line(indicator: Option<CollaborationModeIndicator>, spec: SummarySpec) -> Line<'static> {
+fn left_side_line(
+    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    state: LeftSideState,
+) -> Line<'static> {
     let mut line = Line::from("");
-    match spec.hint {
+    match state.hint {
         SummaryHintKind::None => {}
         SummaryHintKind::Shortcuts => {
             line.push_span(key_hint::plain(KeyCode::Char('?')));
@@ -241,11 +244,11 @@ fn summary_line(indicator: Option<CollaborationModeIndicator>, spec: SummarySpec
         }
     };
 
-    if let Some(indicator) = indicator {
-        if !matches!(spec.hint, SummaryHintKind::None) {
+    if let Some(collaboration_mode_indicator) = collaboration_mode_indicator {
+        if !matches!(state.hint, SummaryHintKind::None) {
             line.push_span(" · ".dim());
         }
-        line.push_span(indicator.styled_span(spec.show_cycle_hint));
+        line.push_span(collaboration_mode_indicator.styled_span(state.show_cycle_hint));
     }
 
     line
@@ -262,7 +265,7 @@ pub(crate) enum SummaryLeft {
 pub(crate) fn single_line_footer_layout(
     area: Rect,
     context_width: u16,
-    indicator: Option<CollaborationModeIndicator>,
+    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
@@ -274,28 +277,28 @@ pub(crate) fn single_line_footer_layout(
     } else {
         SummaryHintKind::None
     };
-    let default_spec = SummarySpec {
+    let default_state = LeftSideState {
         hint: hint_kind,
         show_cycle_hint,
     };
-    let default_line = summary_line(indicator, default_spec);
+    let default_line = left_side_line(collaboration_mode_indicator, default_state);
     let default_width = default_line.width() as u16;
     if default_width > 0 && can_show_left_with_context(area, default_width, context_width) {
         return (SummaryLeft::Default, true);
     }
 
-    let spec_width = |spec: SummarySpec| -> u16 {
-        if spec == default_spec {
+    let state_width = |state: LeftSideState| -> u16 {
+        if state == default_state {
             default_width
         } else {
-            summary_line(indicator, spec).width() as u16
+            left_side_line(collaboration_mode_indicator, state).width() as u16
         }
     };
-    let spec_line = |spec: SummarySpec| -> Line<'static> {
-        if spec == default_spec {
+    let state_line = |state: LeftSideState| -> Line<'static> {
+        if state == default_state {
             default_line.clone()
         } else {
-            summary_line(indicator, spec)
+            left_side_line(collaboration_mode_indicator, state)
         }
     };
     // When the mode cycle hint is applicable (idle, non-queue mode),
@@ -305,67 +308,67 @@ pub(crate) fn single_line_footer_layout(
 
     if show_queue_hint {
         // In queue mode, prefer dropping context before dropping the queue hint.
-        let queue_specs = [
-            default_spec,
-            SummarySpec {
+        let queue_states = [
+            default_state,
+            LeftSideState {
                 hint: SummaryHintKind::QueueMessage,
                 show_cycle_hint: false,
             },
-            SummarySpec {
+            LeftSideState {
                 hint: SummaryHintKind::QueueShort,
                 show_cycle_hint: false,
             },
         ];
 
-        let mut previous_spec: Option<SummarySpec> = None;
-        for spec in queue_specs {
-            if previous_spec == Some(spec) {
+        let mut previous_state: Option<LeftSideState> = None;
+        for state in queue_states {
+            if previous_state == Some(state) {
                 continue;
             }
-            previous_spec = Some(spec);
-            let width = spec_width(spec);
+            previous_state = Some(state);
+            let width = state_width(state);
             if width > 0 && can_show_left_with_context(area, width, context_width) {
-                if spec == default_spec {
+                if state == default_state {
                     return (SummaryLeft::Default, true);
                 }
-                return (SummaryLeft::Custom(spec_line(spec)), true);
+                return (SummaryLeft::Custom(state_line(state)), true);
             }
         }
 
-        let mut previous_spec: Option<SummarySpec> = None;
-        for spec in queue_specs {
-            if previous_spec == Some(spec) {
+        let mut previous_state: Option<LeftSideState> = None;
+        for state in queue_states {
+            if previous_state == Some(state) {
                 continue;
             }
-            previous_spec = Some(spec);
-            let width = spec_width(spec);
+            previous_state = Some(state);
+            let width = state_width(state);
             if width > 0 && left_fits(area, width) {
-                if spec == default_spec {
+                if state == default_state {
                     return (SummaryLeft::Default, false);
                 }
-                return (SummaryLeft::Custom(spec_line(spec)), false);
+                return (SummaryLeft::Custom(state_line(state)), false);
             }
         }
-    } else if indicator.is_some() {
+    } else if collaboration_mode_indicator.is_some() {
         if show_cycle_hint {
-            let cycle_spec = SummarySpec {
+            let cycle_state = LeftSideState {
                 hint: SummaryHintKind::None,
                 show_cycle_hint: true,
             };
-            let cycle_width = spec_width(cycle_spec);
+            let cycle_width = state_width(cycle_state);
             if cycle_width > 0 && can_show_left_with_context(area, cycle_width, context_width) {
-                return (SummaryLeft::Custom(spec_line(cycle_spec)), true);
+                return (SummaryLeft::Custom(state_line(cycle_state)), true);
             }
             if cycle_width > 0 && left_fits(area, cycle_width) {
-                return (SummaryLeft::Custom(spec_line(cycle_spec)), false);
+                return (SummaryLeft::Custom(state_line(cycle_state)), false);
             }
         }
 
-        let mode_only_spec = SummarySpec {
+        let mode_only_state = LeftSideState {
             hint: SummaryHintKind::None,
             show_cycle_hint: false,
         };
-        let mode_only_width = spec_width(mode_only_spec);
+        let mode_only_width = state_width(mode_only_state);
         // When the mode cycle hint is applicable, only show context % if the mode cycle hint
         // itself can also fit. This prevents the right-side context indicator from
         // reappearing after we've already dropped "(shift+tab to cycle)".
@@ -373,30 +376,37 @@ pub(crate) fn single_line_footer_layout(
             && mode_only_width > 0
             && can_show_left_with_context(area, mode_only_width, context_width)
         {
-            return (SummaryLeft::Custom(spec_line(mode_only_spec)), true);
+            return (SummaryLeft::Custom(state_line(mode_only_state)), true);
         }
         if mode_only_width > 0 && left_fits(area, mode_only_width) {
-            return (SummaryLeft::Custom(spec_line(mode_only_spec)), false);
+            return (SummaryLeft::Custom(state_line(mode_only_state)), false);
         }
     }
 
-    if let Some(indicator) = indicator {
-        let mode_only_spec = SummarySpec {
+    if let Some(collaboration_mode_indicator) = collaboration_mode_indicator {
+        let mode_only_state = LeftSideState {
             hint: SummaryHintKind::None,
             show_cycle_hint: false,
         };
-        let mode_only_width = summary_line(Some(indicator), mode_only_spec).width() as u16;
+        let mode_only_width =
+            left_side_line(Some(collaboration_mode_indicator), mode_only_state).width() as u16;
         if !context_requires_cycle_hint
             && can_show_left_with_context(area, mode_only_width, context_width)
         {
             return (
-                SummaryLeft::Custom(summary_line(Some(indicator), mode_only_spec)),
+                SummaryLeft::Custom(left_side_line(
+                    Some(collaboration_mode_indicator),
+                    mode_only_state,
+                )),
                 true,
             );
         }
         if left_fits(area, mode_only_width) {
             return (
-                SummaryLeft::Custom(summary_line(Some(indicator), mode_only_spec)),
+                SummaryLeft::Custom(left_side_line(
+                    Some(collaboration_mode_indicator),
+                    mode_only_state,
+                )),
                 false,
             );
         }
@@ -487,7 +497,7 @@ pub(crate) fn render_footer_hint_items(area: Rect, buf: &mut Buffer, items: &[(S
 /// separately by the caller.
 fn footer_lines(
     props: FooterProps,
-    indicator: Option<CollaborationModeIndicator>,
+    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
@@ -497,7 +507,7 @@ fn footer_lines(
             vec![quit_shortcut_reminder_line(props.quit_shortcut_key)]
         }
         FooterMode::ComposerEmpty => {
-            let spec = SummarySpec {
+            let state = LeftSideState {
                 hint: if show_shortcuts_hint {
                     SummaryHintKind::Shortcuts
                 } else {
@@ -505,7 +515,7 @@ fn footer_lines(
                 },
                 show_cycle_hint,
             };
-            vec![summary_line(indicator, spec)]
+            vec![left_side_line(collaboration_mode_indicator, state)]
         }
         FooterMode::ShortcutOverlay => {
             // Intentionally suppress the mode indicator here: the overlay is a
@@ -526,7 +536,7 @@ fn footer_lines(
         }
         FooterMode::EscHint => vec![esc_hint_line(props.esc_backtrack_hint)],
         FooterMode::ComposerHasDraft => {
-            let spec = SummarySpec {
+            let state = LeftSideState {
                 hint: if show_queue_hint {
                     SummaryHintKind::QueueMessage
                 } else {
@@ -534,21 +544,21 @@ fn footer_lines(
                 },
                 show_cycle_hint,
             };
-            vec![summary_line(indicator, spec)]
+            vec![left_side_line(collaboration_mode_indicator, state)]
         }
     }
 }
 
 pub(crate) fn footer_line_width(
     props: FooterProps,
-    indicator: Option<CollaborationModeIndicator>,
+    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
 ) -> u16 {
     footer_lines(
         props,
-        indicator,
+        collaboration_mode_indicator,
         show_cycle_hint,
         show_shortcuts_hint,
         show_queue_hint,
@@ -1018,7 +1028,7 @@ mod tests {
         name: &str,
         width: u16,
         props: FooterProps,
-        indicator: Option<CollaborationModeIndicator>,
+        collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     ) {
         let height = footer_height(props).max(1);
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -1047,7 +1057,7 @@ mod tests {
                 };
                 let left_width = footer_line_width(
                     props,
-                    indicator,
+                    collaboration_mode_indicator,
                     show_cycle_hint,
                     show_shortcuts_hint,
                     show_queue_hint,
@@ -1061,7 +1071,7 @@ mod tests {
                     let (summary_left, show_context) = single_line_footer_layout(
                         area,
                         context_width,
-                        indicator,
+                        collaboration_mode_indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
                         show_queue_hint,
@@ -1072,7 +1082,7 @@ mod tests {
                                 area,
                                 f.buffer_mut(),
                                 props,
-                                indicator,
+                                collaboration_mode_indicator,
                                 show_cycle_hint,
                                 show_shortcuts_hint,
                                 show_queue_hint,
@@ -1091,7 +1101,7 @@ mod tests {
                         area,
                         f.buffer_mut(),
                         props,
-                        indicator,
+                        collaboration_mode_indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
                         show_queue_hint,
