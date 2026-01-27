@@ -426,6 +426,8 @@ pub(crate) struct ChatWidget {
     current_collaboration_mode: CollaborationMode,
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
+    /// True when the active collaboration mask was selected via cycling.
+    collaboration_mask_from_cycle: bool,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     otel_manager: OtelManager,
@@ -915,12 +917,16 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.request_redraw();
+        let had_queued_messages = !self.queued_user_messages.is_empty();
 
         if !from_replay && self.queued_user_messages.is_empty() {
             self.maybe_prompt_plan_implementation(last_agent_message.as_deref());
         }
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
+        if !had_queued_messages {
+            self.maybe_auto_switch_cycle_collaboration_mode(from_replay);
+        }
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
@@ -2048,6 +2054,7 @@ impl ChatWidget {
             skills_initial_state: None,
             current_collaboration_mode,
             active_collaboration_mask,
+            collaboration_mask_from_cycle: false,
             auth_manager,
             models_manager,
             otel_manager,
@@ -2177,6 +2184,7 @@ impl ChatWidget {
             skills_initial_state: None,
             current_collaboration_mode,
             active_collaboration_mask,
+            collaboration_mask_from_cycle: false,
             auth_manager,
             models_manager,
             otel_manager,
@@ -2307,6 +2315,7 @@ impl ChatWidget {
             skills_initial_state: None,
             current_collaboration_mode,
             active_collaboration_mask,
+            collaboration_mask_from_cycle: false,
             auth_manager,
             models_manager,
             otel_manager,
@@ -5160,6 +5169,7 @@ impl ChatWidget {
                 settings,
             };
             self.active_collaboration_mask = None;
+            self.collaboration_mask_from_cycle = false;
             self.update_collaboration_mode_indicator();
             self.refresh_model_display();
             self.request_redraw();
@@ -5416,7 +5426,7 @@ impl ChatWidget {
             self.models_manager.as_ref(),
             self.active_collaboration_mask.as_ref(),
         ) {
-            self.set_collaboration_mask(next_mask);
+            self.set_collaboration_mask_from_cycle(next_mask);
         }
     }
 
@@ -5425,6 +5435,16 @@ impl ChatWidget {
     /// When collaboration modes are enabled and a preset is selected (not Custom),
     /// the current mode is attached to submissions as `Op::UserTurn { collaboration_mode: Some(...) }`.
     pub(crate) fn set_collaboration_mask(&mut self, mask: CollaborationModeMask) {
+        self.collaboration_mask_from_cycle = false;
+        self.set_collaboration_mask_internal(mask);
+    }
+
+    fn set_collaboration_mask_from_cycle(&mut self, mask: CollaborationModeMask) {
+        self.collaboration_mask_from_cycle = true;
+        self.set_collaboration_mask_internal(mask);
+    }
+
+    fn set_collaboration_mask_internal(&mut self, mask: CollaborationModeMask) {
         if !self.collaboration_modes_enabled() {
             return;
         }
@@ -5432,6 +5452,22 @@ impl ChatWidget {
         self.update_collaboration_mode_indicator();
         self.refresh_model_display();
         self.request_redraw();
+    }
+
+    fn maybe_auto_switch_cycle_collaboration_mode(&mut self, from_replay: bool) {
+        if from_replay
+            || !self.collaboration_modes_enabled()
+            || !self.collaboration_mask_from_cycle
+            || !self.queued_user_messages.is_empty()
+            || self.active_mode_kind() != ModeKind::Code
+        {
+            return;
+        }
+        if let Some(plan_mask) =
+            collaboration_modes::mask_for_kind(self.models_manager.as_ref(), ModeKind::Plan)
+        {
+            self.set_collaboration_mask_from_cycle(plan_mask);
+        }
     }
 
     /// Build a placeholder header cell while the session is configuring.

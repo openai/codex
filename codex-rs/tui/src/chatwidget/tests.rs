@@ -2229,6 +2229,55 @@ async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
 }
 
 #[tokio::test]
+async fn collab_mode_cycle_auto_switches_to_plan_after_code_turn() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Code);
+
+    chat.on_task_complete(Some("Done".to_string()), false);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
+async fn collab_mode_explicit_selection_does_not_auto_switch() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let code_mask = collaboration_modes::code_mask(chat.models_manager.as_ref())
+        .expect("expected code collaboration mode");
+
+    chat.set_collaboration_mask(code_mask);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Code);
+
+    chat.on_task_complete(Some("Done".to_string()), false);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Code);
+}
+
+#[tokio::test]
+async fn collab_mode_cycle_auto_switch_defers_until_queue_empty() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Code);
+
+    chat.bottom_pane.set_task_running(true);
+    chat.queue_user_message(UserMessage::from("Queued message".to_string()));
+
+    chat.on_task_complete(Some("Done".to_string()), false);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Code);
+
+    chat.on_task_complete(Some("Done".to_string()), false);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+}
+
+#[tokio::test]
 async fn collab_slash_command_opens_picker_and_updates_mode() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
