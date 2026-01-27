@@ -287,6 +287,19 @@ async fn request_user_input_rejected_in_execute_mode() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_rejected_in_code_mode() -> anyhow::Result<()> {
+    assert_request_user_input_rejected("Code", |model| CollaborationMode {
+        mode: ModeKind::Code,
+        settings: Settings {
+            model,
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_rejected_in_custom_mode() -> anyhow::Result<()> {
     assert_request_user_input_rejected("Custom", |model| CollaborationMode {
         mode: ModeKind::Custom,
