@@ -42,6 +42,10 @@ impl AppLinkView {
 
         lines.push(Line::from(self.title.clone().bold()));
         lines.push(Line::from(""));
+        for line in wrap("Use $ to insert an app into the prompt.", usable_width) {
+            lines.push(Line::from(line.into_owned()));
+        }
+        lines.push(Line::from(""));
 
         let instructions = self.instructions.trim();
         if !instructions.is_empty() {
