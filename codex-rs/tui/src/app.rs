@@ -923,6 +923,7 @@ impl App {
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_deprecation_notice(&app_event_tx, ollama_chat_support_notice);
         emit_project_config_warnings(&app_event_tx, &config);
+        tui.set_notification_method(config.tui_notification_method);
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
@@ -1336,6 +1337,7 @@ impl App {
                             Ok(resumed) => {
                                 self.shutdown_current_thread().await;
                                 self.config = resume_config;
+                                tui.set_notification_method(self.config.tui_notification_method);
                                 self.file_search = FileSearchManager::new(
                                     self.config.cwd.clone(),
                                     self.app_event_tx.clone(),
