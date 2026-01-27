@@ -292,7 +292,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
-            footer_mode: FooterMode::ShortcutSummary,
+            footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
             footer_flash: None,
             context_window_percent: None,
@@ -2169,24 +2169,28 @@ impl ChatComposer {
 
     /// Resolve the effective footer mode via a small priority waterfall.
     ///
-    /// The stored mode (`self.footer_mode`) is treated as a base mode with
-    /// sticky transient overrides (Esc hint, overlay, quit reminder). Only
-    /// the default summary mode is demoted to `ComposerHasDraft` when the
-    /// buffer is non-empty.
+    /// The base mode is derived solely from whether the composer is empty:
+    /// `ComposerEmpty` iff empty, otherwise `ComposerHasDraft`. Transient
+    /// modes (Esc hint, overlay, quit reminder) can override that base when
+    /// their conditions are active.
     fn footer_mode(&self) -> FooterMode {
-        match self.footer_mode {
-            FooterMode::EscHint => FooterMode::EscHint,
-            FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
-            FooterMode::QuitShortcutReminder if self.quit_shortcut_hint_visible() => {
-                FooterMode::QuitShortcutReminder
-            }
-            FooterMode::QuitShortcutReminder => FooterMode::ShortcutSummary,
-            FooterMode::ShortcutSummary if self.quit_shortcut_hint_visible() => {
-                FooterMode::QuitShortcutReminder
-            }
-            FooterMode::ShortcutSummary if !self.is_empty() => FooterMode::ComposerHasDraft,
-            other => other,
+        let base = if self.is_empty() {
+            FooterMode::ComposerEmpty
+        } else {
+            FooterMode::ComposerHasDraft
+        };
+
+        if matches!(self.footer_mode, FooterMode::EscHint) && self.is_empty() {
+            return FooterMode::EscHint;
         }
+        if matches!(self.footer_mode, FooterMode::ShortcutOverlay) && self.is_empty() {
+            return FooterMode::ShortcutOverlay;
+        }
+        if self.quit_shortcut_hint_visible() {
+            return FooterMode::QuitShortcutReminder;
+        }
+
+        base
     }
 
     fn custom_footer_height(&self) -> Option<u16> {
@@ -2515,7 +2519,7 @@ impl Renderable for ChatComposer {
                 let footer_props = self.footer_props();
                 let show_cycle_hint = !footer_props.is_task_running;
                 let show_shortcuts_hint = match footer_props.mode {
-                    FooterMode::ShortcutSummary => self.is_empty() && !self.is_in_paste_burst(),
+                    FooterMode::ComposerEmpty => self.is_empty() && !self.is_in_paste_burst(),
                     FooterMode::QuitShortcutReminder
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint
@@ -2526,7 +2530,7 @@ impl Renderable for ChatComposer {
                         footer_props.is_task_running && footer_props.steer_enabled
                     }
                     FooterMode::QuitShortcutReminder
-                    | FooterMode::ShortcutSummary
+                    | FooterMode::ComposerEmpty
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
@@ -2574,7 +2578,7 @@ impl Renderable for ChatComposer {
                     None
                 } else {
                     match footer_props.mode {
-                        FooterMode::ShortcutSummary | FooterMode::ComposerHasDraft => {
+                        FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft => {
                             // Both of these modes render the single-line footer style (with
                             // either the shortcuts hint or the optional queue hint). We still
                             // want the single-line collapse rules so the mode label can win over
@@ -3109,13 +3113,38 @@ mod tests {
 
         assert!(!composer.is_empty());
         assert_eq!(composer.current_text(), "d");
-        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
+        assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
         assert!(matches!(composer.active_popup, ActivePopup::None));
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
+        assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
         assert!(!composer.esc_backtrack_hint);
+    }
+
+    #[test]
+    fn base_footer_mode_tracks_empty_state_after_quit_hint_expires() {
+        use crossterm::event::KeyCode;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(&mut composer, &['d']);
+        composer.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')), true);
+        composer.quit_shortcut_expires_at =
+            Some(Instant::now() - std::time::Duration::from_secs(1));
+
+        assert_eq!(composer.footer_mode(), FooterMode::ComposerHasDraft);
+
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
+        assert_eq!(composer.footer_mode(), FooterMode::ComposerEmpty);
     }
 
     #[test]
@@ -3178,7 +3207,7 @@ mod tests {
 
         // Toggle back to prompt mode so subsequent typing captures characters.
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
-        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
+        assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
 
         type_chars_humanlike(&mut composer, &['h']);
         assert_eq!(composer.textarea.text(), "h");
@@ -3190,7 +3219,7 @@ mod tests {
         assert!(needs_redraw, "typing should still mark the view dirty");
         let _ = flush_after_paste_burst(&mut composer);
         assert_eq!(composer.textarea.text(), "h?");
-        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
+        assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
         assert_eq!(composer.footer_mode(), FooterMode::ComposerHasDraft);
     }
 
