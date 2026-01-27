@@ -287,13 +287,6 @@ pub(crate) fn single_line_footer_layout(
         return (SummaryLeft::Default, true);
     }
 
-    let state_width = |state: LeftSideState| -> u16 {
-        if state == default_state {
-            default_width
-        } else {
-            left_side_line(collaboration_mode_indicator, state).width() as u16
-        }
-    };
     let state_line = |state: LeftSideState| -> Line<'static> {
         if state == default_state {
             default_line.clone()
@@ -301,9 +294,10 @@ pub(crate) fn single_line_footer_layout(
             left_side_line(collaboration_mode_indicator, state)
         }
     };
-    // When the mode cycle hint is applicable (idle, non-queue mode),
-    // show the right-side context indicator if the "(shift+tab to cycle)"
-    // variant can also fit.
+    let state_width = |state: LeftSideState| -> u16 { state_line(state).width() as u16 };
+    // When the mode cycle hint is applicable (idle, non-queue mode), only show
+    // the right-side context indicator if the "(shift+tab to cycle)" variant
+    // can also fit.
     let context_requires_cycle_hint = show_cycle_hint && !show_queue_hint;
 
     if show_queue_hint {
@@ -320,6 +314,9 @@ pub(crate) fn single_line_footer_layout(
             },
         ];
 
+        // Pass 1: keep the right-side context indicator if any queue variant
+        // can fit alongside it. We skip adjacent duplicates because
+        // `default_state` can already be the no-cycle queue variant.
         let mut previous_state: Option<LeftSideState> = None;
         for state in queue_states {
             if previous_state == Some(state) {
@@ -335,6 +332,8 @@ pub(crate) fn single_line_footer_layout(
             }
         }
 
+        // Pass 2: if context cannot fit, drop it before dropping the queue
+        // hint. Reuse the same dedupe so we do not try equivalent states twice.
         let mut previous_state: Option<LeftSideState> = None;
         for state in queue_states {
             if previous_state == Some(state) {
@@ -351,6 +350,8 @@ pub(crate) fn single_line_footer_layout(
         }
     } else if collaboration_mode_indicator.is_some() {
         if show_cycle_hint {
+            // First fallback: drop shortcut hint but keep the cycle
+            // hint on the mode label if it can fit.
             let cycle_state = LeftSideState {
                 hint: SummaryHintKind::None,
                 show_cycle_hint: true,
@@ -364,30 +365,40 @@ pub(crate) fn single_line_footer_layout(
             }
         }
 
+        // Next fallback: mode label only. If the cycle hint is applicable but
+        // cannot fit, we also suppress context so the right side does not
+        // outlive "(shift+tab to cycle)" on the left.
         let mode_only_state = LeftSideState {
             hint: SummaryHintKind::None,
             show_cycle_hint: false,
         };
         let mode_only_width = state_width(mode_only_state);
-        // When the mode cycle hint is applicable, only show context % if the mode cycle hint
-        // itself can also fit. This prevents the right-side context indicator from
-        // reappearing after we've already dropped "(shift+tab to cycle)".
         if !context_requires_cycle_hint
             && mode_only_width > 0
             && can_show_left_with_context(area, mode_only_width, context_width)
         {
-            return (SummaryLeft::Custom(state_line(mode_only_state)), true);
+            return (
+                SummaryLeft::Custom(state_line(mode_only_state)),
+                true, // show_context
+            );
         }
         if mode_only_width > 0 && left_fits(area, mode_only_width) {
-            return (SummaryLeft::Custom(state_line(mode_only_state)), false);
+            return (
+                SummaryLeft::Custom(state_line(mode_only_state)),
+                false, // show_context
+            );
         }
     }
 
+    // Final fallback: if queue variants (or other earlier states) could not fit
+    // at all, drop every hint and try to show just the mode label.
     if let Some(collaboration_mode_indicator) = collaboration_mode_indicator {
         let mode_only_state = LeftSideState {
             hint: SummaryHintKind::None,
             show_cycle_hint: false,
         };
+        // Compute the width without going through `state_line` so we do not
+        // depend on `default_state` (which may still be a queue variant).
         let mode_only_width =
             left_side_line(Some(collaboration_mode_indicator), mode_only_state).width() as u16;
         if !context_requires_cycle_hint
@@ -398,7 +409,7 @@ pub(crate) fn single_line_footer_layout(
                     Some(collaboration_mode_indicator),
                     mode_only_state,
                 )),
-                true,
+                true, // show_context
             );
         }
         if left_fits(area, mode_only_width) {
@@ -407,7 +418,7 @@ pub(crate) fn single_line_footer_layout(
                     Some(collaboration_mode_indicator),
                     mode_only_state,
                 )),
-                false,
+                false, // show_context
             );
         }
     }
