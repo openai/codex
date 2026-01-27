@@ -933,7 +933,9 @@ mod tests {
                     let show_context = can_show_both
                         && !matches!(
                             props.mode,
-                            FooterMode::EscHint | FooterMode::QuitShortcutReminder
+                            FooterMode::EscHint
+                                | FooterMode::QuitShortcutReminder
+                                | FooterMode::ShortcutOverlay
                         );
                     if show_context {
                         render_context_right(area, f.buffer_mut(), &context_line);
@@ -1018,7 +1020,9 @@ mod tests {
                     let show_context = can_show_both
                         && !matches!(
                             props.mode,
-                            FooterMode::EscHint | FooterMode::QuitShortcutReminder
+                            FooterMode::EscHint
+                                | FooterMode::QuitShortcutReminder
+                                | FooterMode::ShortcutOverlay
                         );
                     if show_context {
                         render_context_right(area, f.buffer_mut(), &context_line);

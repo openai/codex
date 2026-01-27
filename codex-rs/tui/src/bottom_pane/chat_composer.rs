@@ -2572,7 +2572,9 @@ impl Renderable for ChatComposer {
                 };
                 let show_context = if matches!(
                     footer_props.mode,
-                    FooterMode::EscHint | FooterMode::QuitShortcutReminder
+                    FooterMode::EscHint
+                        | FooterMode::QuitShortcutReminder
+                        | FooterMode::ShortcutOverlay
                 ) {
                     false
                 } else {
