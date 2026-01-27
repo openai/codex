@@ -451,6 +451,9 @@ fn footer_lines(
             vec![summary_line(indicator, spec)]
         }
         FooterMode::ShortcutOverlay => {
+            // Intentionally suppress the mode indicator here: the overlay is a
+            // transient "what can I do next?" state and we want the next action
+            // hints to take full priority.
             #[cfg(target_os = "linux")]
             let is_wsl = is_probably_wsl();
             #[cfg(not(target_os = "linux"))]
