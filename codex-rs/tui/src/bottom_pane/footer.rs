@@ -760,6 +760,15 @@ pub(crate) fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>
     Line::from(vec![Span::from("100% context left").dim()])
 }
 
+pub(crate) fn context_window_line_and_width(
+    percent: Option<i64>,
+    used_tokens: Option<i64>,
+) -> (Line<'static>, u16) {
+    let line = context_window_line(percent, used_tokens);
+    let width = line.width() as u16;
+    (line, width)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ShortcutId {
     Commands,
@@ -965,99 +974,19 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     fn snapshot_footer(name: &str, props: FooterProps) {
-        let height = footer_height(props).max(1);
-        let mut terminal = Terminal::new(TestBackend::new(80, height)).unwrap();
-        terminal
-            .draw(|f| {
-                let area = Rect::new(0, 0, f.area().width, height);
-                let context_line = context_window_line(
-                    props.context_window_percent,
-                    props.context_window_used_tokens,
-                );
-                let context_width = context_line.width() as u16;
-                let show_cycle_hint = !props.is_task_running;
-                let show_shortcuts_hint = match props.mode {
-                    FooterMode::ComposerEmpty => true,
-                    FooterMode::QuitShortcutReminder
-                    | FooterMode::ShortcutOverlay
-                    | FooterMode::EscHint
-                    | FooterMode::ComposerHasDraft => false,
-                };
-                let show_queue_hint = match props.mode {
-                    FooterMode::ComposerHasDraft => props.is_task_running && props.steer_enabled,
-                    FooterMode::QuitShortcutReminder
-                    | FooterMode::ComposerEmpty
-                    | FooterMode::ShortcutOverlay
-                    | FooterMode::EscHint => false,
-                };
-                let left_width = footer_line_width(
-                    props,
-                    None,
-                    show_cycle_hint,
-                    show_shortcuts_hint,
-                    show_queue_hint,
-                );
-                let can_show_left_and_context =
-                    can_show_left_with_context(area, left_width, context_width);
-                if matches!(
-                    props.mode,
-                    FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
-                ) {
-                    let (summary_left, show_context) = single_line_footer_layout(
-                        area,
-                        context_width,
-                        None,
-                        show_cycle_hint,
-                        show_shortcuts_hint,
-                        show_queue_hint,
-                    );
-                    match summary_left {
-                        SummaryLeft::Default => {
-                            render_footer_from_props(
-                                area,
-                                f.buffer_mut(),
-                                props,
-                                None,
-                                show_cycle_hint,
-                                show_shortcuts_hint,
-                                show_queue_hint,
-                            );
-                        }
-                        SummaryLeft::Custom(line) => {
-                            render_footer_line(area, f.buffer_mut(), line);
-                        }
-                        SummaryLeft::None => {}
-                    }
-                    if show_context {
-                        render_context_right(area, f.buffer_mut(), &context_line);
-                    }
-                } else {
-                    render_footer_from_props(
-                        area,
-                        f.buffer_mut(),
-                        props,
-                        None,
-                        show_cycle_hint,
-                        show_shortcuts_hint,
-                        show_queue_hint,
-                    );
-                    let show_context = can_show_left_and_context
-                        && !matches!(
-                            props.mode,
-                            FooterMode::EscHint
-                                | FooterMode::QuitShortcutReminder
-                                | FooterMode::ShortcutOverlay
-                        );
-                    if show_context {
-                        render_context_right(area, f.buffer_mut(), &context_line);
-                    }
-                }
-            })
-            .unwrap();
-        assert_snapshot!(name, terminal.backend());
+        snapshot_footer_impl(name, 80, props, None);
     }
 
     fn snapshot_footer_with_indicator(
+        name: &str,
+        width: u16,
+        props: FooterProps,
+        collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    ) {
+        snapshot_footer_impl(name, width, props, collaboration_mode_indicator);
+    }
+
+    fn snapshot_footer_impl(
         name: &str,
         width: u16,
         props: FooterProps,
@@ -1068,11 +997,10 @@ mod tests {
         terminal
             .draw(|f| {
                 let area = Rect::new(0, 0, f.area().width, height);
-                let context_line = context_window_line(
+                let (context_line, context_width) = context_window_line_and_width(
                     props.context_window_percent,
                     props.context_window_used_tokens,
                 );
-                let context_width = context_line.width() as u16;
                 let show_cycle_hint = !props.is_task_running;
                 let show_shortcuts_hint = match props.mode {
                     FooterMode::ComposerEmpty => true,
