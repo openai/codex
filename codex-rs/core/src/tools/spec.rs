@@ -444,14 +444,17 @@ fn create_spawn_agent_tool() -> ToolSpec {
     properties.insert(
         "message".to_string(),
         JsonSchema::String {
-            description: Some("Initial message to send to the new agent.".to_string()),
+            description: Some(
+                "Initial task for the new agent. Include scope, constraints, and the expected output."
+                    .to_string(),
+            ),
         },
     );
     properties.insert(
         "agent_type".to_string(),
         JsonSchema::String {
             description: Some(format!(
-                "Optional agent type to spawn ({}).",
+                "Optional agent type ({}). Use an explicit type when delegating.",
                 AgentRole::enum_values().join(", ")
             )),
         },
@@ -459,7 +462,9 @@ fn create_spawn_agent_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
-        description: "Spawn a new agent and return its id.".to_string(),
+        description:
+            "Spawn a sub-agent for a well-scoped task. Returns the agent id to use to communicate with this agent."
+                .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -474,7 +479,7 @@ fn create_send_input_tool() -> ToolSpec {
     properties.insert(
         "id".to_string(),
         JsonSchema::String {
-            description: Some("Identifier of the agent to message.".to_string()),
+            description: Some("Agent id to message (from spawn_agent).".to_string()),
         },
     );
     properties.insert(
@@ -487,7 +492,7 @@ fn create_send_input_tool() -> ToolSpec {
         "interrupt".to_string(),
         JsonSchema::Boolean {
             description: Some(
-                "When true, interrupt the agent's current task before sending the message. When false (default), the message will be processed when the agent is done on its current task."
+                "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
                     .to_string(),
             ),
         },
@@ -495,7 +500,9 @@ fn create_send_input_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "send_input".to_string(),
-        description: "Send a message to an existing agent.".to_string(),
+        description:
+            "Send a message to an existing agent. Use interrupt=true to redirect work immediately."
+                .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -511,23 +518,25 @@ fn create_wait_tool() -> ToolSpec {
         "ids".to_string(),
         JsonSchema::Array {
             items: Box::new(JsonSchema::String { description: None }),
-            description: Some("Identifiers of the agents to wait on.".to_string()),
+            description: Some(
+                "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first."
+                    .to_string(),
+            ),
         },
     );
     properties.insert(
         "timeout_ms".to_string(),
         JsonSchema::Number {
             description: Some(format!(
-                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS}, min {MIN_WAIT_TIMEOUT_MS}, and max {MAX_WAIT_TIMEOUT_MS}. Avoid tight polling loops; prefer longer waits (seconds to minutes)."
+                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS}, min {MIN_WAIT_TIMEOUT_MS}, max {MAX_WAIT_TIMEOUT_MS}. Prefer longer waits (minutes) to avoid busy polling."
             )),
         },
     );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "wait".to_string(),
-        description:
-            "Wait for agents and return their statuses. If no agent is done, no status get returned."
-                .to_string(),
+        description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -634,13 +643,14 @@ fn create_close_agent_tool() -> ToolSpec {
     properties.insert(
         "id".to_string(),
         JsonSchema::String {
-            description: Some("Identifier of the agent to close.".to_string()),
+            description: Some("Agent id to close (from spawn_agent).".to_string()),
         },
     );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "close_agent".to_string(),
-        description: "Close an agent and return its last known status.".to_string(),
+        description: "Close an agent when it is no longer needed and return its last known status."
+            .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
