@@ -62,12 +62,14 @@ impl RequestUserInputOverlay {
             notes_area,
         ) = self.build_layout_areas(
             area,
-            progress_height,
-            question_height,
-            answer_title_height,
-            options_height,
-            notes_title_height,
-            notes_height,
+            LayoutHeights {
+                progress_height,
+                question_height,
+                answer_title_height,
+                options_height,
+                notes_title_height,
+                notes_height,
+            },
         );
 
         LayoutSections {
@@ -276,12 +278,7 @@ impl RequestUserInputOverlay {
     fn build_layout_areas(
         &self,
         area: Rect,
-        progress_height: u16,
-        question_height: u16,
-        answer_title_height: u16,
-        options_height: u16,
-        notes_title_height: u16,
-        notes_height: u16,
+        heights: LayoutHeights,
     ) -> (
         Rect, // progress_area
         Rect, // header_area
@@ -296,10 +293,10 @@ impl RequestUserInputOverlay {
             x: area.x,
             y: cursor_y,
             width: area.width,
-            height: progress_height,
+            height: heights.progress_height,
         };
-        cursor_y = cursor_y.saturating_add(progress_height);
-        let header_height = area.height.saturating_sub(progress_height).min(1);
+        cursor_y = cursor_y.saturating_add(heights.progress_height);
+        let header_height = area.height.saturating_sub(heights.progress_height).min(1);
         let header_area = Rect {
             x: area.x,
             y: cursor_y,
@@ -311,37 +308,37 @@ impl RequestUserInputOverlay {
             x: area.x,
             y: cursor_y,
             width: area.width,
-            height: question_height,
+            height: heights.question_height,
         };
-        cursor_y = cursor_y.saturating_add(question_height);
+        cursor_y = cursor_y.saturating_add(heights.question_height);
 
         let answer_title_area = Rect {
             x: area.x,
             y: cursor_y,
             width: area.width,
-            height: answer_title_height,
+            height: heights.answer_title_height,
         };
-        cursor_y = cursor_y.saturating_add(answer_title_height);
+        cursor_y = cursor_y.saturating_add(heights.answer_title_height);
         let options_area = Rect {
             x: area.x,
             y: cursor_y,
             width: area.width,
-            height: options_height,
+            height: heights.options_height,
         };
-        cursor_y = cursor_y.saturating_add(options_height);
+        cursor_y = cursor_y.saturating_add(heights.options_height);
 
         let notes_title_area = Rect {
             x: area.x,
             y: cursor_y,
             width: area.width,
-            height: notes_title_height,
+            height: heights.notes_title_height,
         };
-        cursor_y = cursor_y.saturating_add(notes_title_height);
+        cursor_y = cursor_y.saturating_add(heights.notes_title_height);
         let notes_area = Rect {
             x: area.x,
             y: cursor_y,
             width: area.width,
-            height: notes_height,
+            height: heights.notes_height,
         };
 
         (
@@ -354,4 +351,14 @@ impl RequestUserInputOverlay {
             notes_area,
         )
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LayoutHeights {
+    progress_height: u16,
+    question_height: u16,
+    answer_title_height: u16,
+    options_height: u16,
+    notes_title_height: u16,
+    notes_height: u16,
 }
