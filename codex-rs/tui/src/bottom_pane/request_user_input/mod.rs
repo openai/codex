@@ -1129,7 +1129,7 @@ mod tests {
             false,
             false,
         );
-        let area = Rect::new(0, 0, 120, 14);
+        let area = Rect::new(0, 0, 120, 15);
         insta::assert_snapshot!(
             "request_user_input_multi_question_first",
             render_snapshot(&overlay, area)
