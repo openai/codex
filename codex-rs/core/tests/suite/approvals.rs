@@ -490,6 +490,7 @@ async fn submit_turn(
 
     test.codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: prompt.into(),
                 text_elements: Vec::new(),

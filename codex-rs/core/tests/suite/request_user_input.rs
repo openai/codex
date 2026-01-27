@@ -123,6 +123,7 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "please confirm".into(),
                 text_elements: Vec::new(),
@@ -244,6 +245,7 @@ where
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "please confirm".into(),
                 text_elements: Vec::new(),

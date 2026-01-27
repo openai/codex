@@ -70,13 +70,13 @@ async fn no_collaboration_instructions_by_default() -> Result<()> {
     let test = test_codex().build(&server).await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
@@ -113,13 +113,13 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
         .await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
@@ -144,6 +144,7 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
 
     test.codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -195,6 +196,7 @@ async fn override_then_user_turn_uses_updated_collaboration_instructions() -> Re
 
     test.codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -248,6 +250,7 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
 
     test.codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -301,13 +304,13 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
         .await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
@@ -325,13 +328,13 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
         .await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
@@ -370,13 +373,13 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
         .await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
@@ -394,13 +397,13 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
         .await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
@@ -446,26 +449,26 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
 
     initial
         .codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let resumed = builder.resume(&server, home, rollout_path).await?;
     resumed
         .codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "after resume".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
     wait_for_event(&resumed.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
@@ -500,13 +503,13 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
         .await?;
 
     test.codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 

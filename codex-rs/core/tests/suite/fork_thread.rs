@@ -5,7 +5,6 @@ use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::parse_turn_item;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use codex_protocol::items::TurnItem;
@@ -67,13 +66,13 @@ async fn fork_thread_twice_drops_to_first_message() {
     // Send three user messages; wait for three completed turns.
     for text in ["first", "second", "third"] {
         codex
-            .submit(Op::UserInput {
-                items: vec![UserInput::Text {
+            .submit_user_turn_with_defaults(
+                vec![UserInput::Text {
                     text: text.to_string(),
                     text_elements: Vec::new(),
                 }],
-                final_output_json_schema: None,
-            })
+                None,
+            )
             .await
             .unwrap();
         let _ = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

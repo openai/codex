@@ -198,6 +198,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "apply patch via unified exec".into(),
                 text_elements: Vec::new(),
@@ -327,6 +328,7 @@ async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "emit begin event".into(),
                 text_elements: Vec::new(),
@@ -405,6 +407,7 @@ async fn unified_exec_resolves_relative_workdir() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "run relative workdir test".into(),
                 text_elements: Vec::new(),
@@ -486,6 +489,7 @@ async fn unified_exec_respects_workdir_override() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "run workdir test".into(),
                 text_elements: Vec::new(),
@@ -579,6 +583,7 @@ async fn unified_exec_emits_exec_command_end_event() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "emit end event".into(),
                 text_elements: Vec::new(),
@@ -654,6 +659,7 @@ async fn unified_exec_emits_output_delta_for_exec_command() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "emit delta".into(),
                 text_elements: Vec::new(),
@@ -730,6 +736,7 @@ async fn unified_exec_full_lifecycle_with_background_end_event() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "exercise full unified exec lifecycle".into(),
                 text_elements: Vec::new(),
@@ -860,6 +867,7 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "stdin delta".into(),
                 text_elements: Vec::new(),
@@ -997,6 +1005,7 @@ async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<(
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "delayed terminal interaction output".into(),
                 text_elements: Vec::new(),
@@ -1157,6 +1166,7 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "check poll event behavior".into(),
                 text_elements: Vec::new(),
@@ -1255,6 +1265,7 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "run metadata test".into(),
                 text_elements: Vec::new(),
@@ -1373,6 +1384,7 @@ async fn unified_exec_defaults_to_pipe() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "check default pipe mode".into(),
                 text_elements: Vec::new(),
@@ -1463,6 +1475,7 @@ async fn unified_exec_can_enable_tty() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "check tty enabled".into(),
                 text_elements: Vec::new(),
@@ -1544,6 +1557,7 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "watch early exit timing".into(),
                 text_elements: Vec::new(),
@@ -1675,6 +1689,7 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "test write_stdin exit behavior".into(),
                 text_elements: Vec::new(),
@@ -1843,6 +1858,7 @@ async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "end on exit".into(),
                 text_elements: Vec::new(),
@@ -1920,6 +1936,7 @@ async fn unified_exec_closes_long_running_session_at_turn_end() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "close unified exec processes on turn end".into(),
                 text_elements: Vec::new(),
@@ -2042,6 +2059,7 @@ async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "run unified exec".into(),
                 text_elements: Vec::new(),
@@ -2177,6 +2195,7 @@ PY
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "exercise lag handling".into(),
                 text_elements: Vec::new(),
@@ -2291,6 +2310,7 @@ async fn unified_exec_timeout_and_followup_poll() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "check timeout".into(),
                 text_elements: Vec::new(),
@@ -2387,6 +2407,7 @@ PY
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "summarize large output".into(),
                 text_elements: Vec::new(),
@@ -2468,6 +2489,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "summarize large output".into(),
                 text_elements: Vec::new(),
@@ -2573,6 +2595,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "start python under seatbelt".into(),
                 text_elements: Vec::new(),
@@ -2668,6 +2691,7 @@ async fn unified_exec_runs_on_all_platforms() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "summarize large output".into(),
                 text_elements: Vec::new(),
@@ -2803,6 +2827,7 @@ async fn unified_exec_prunes_exited_sessions_first() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "fill session cache".into(),
                 text_elements: Vec::new(),

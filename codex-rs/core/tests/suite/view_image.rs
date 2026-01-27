@@ -78,6 +78,7 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::LocalImage {
                 path: abs_path.clone(),
             }],
@@ -171,6 +172,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "please add the screenshot".into(),
                 text_elements: Vec::new(),
@@ -304,6 +306,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "please attach the folder".into(),
                 text_elements: Vec::new(),
@@ -379,6 +382,7 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "please use the view_image tool to read the json file".into(),
                 text_elements: Vec::new(),
@@ -473,6 +477,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "please attach the missing image".into(),
                 text_elements: Vec::new(),
@@ -557,6 +562,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::LocalImage {
                 path: abs_path.clone(),
             }],

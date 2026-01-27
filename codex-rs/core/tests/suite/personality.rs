@@ -85,6 +85,7 @@ async fn user_turn_personality_none_does_not_add_update_message() -> anyhow::Res
 
     test.codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -131,6 +132,7 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
 
     test.codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -187,6 +189,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
 
     test.codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -220,6 +223,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
 
     test.codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -339,6 +343,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
 
     test.codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -372,6 +377,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
 
     test.codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),

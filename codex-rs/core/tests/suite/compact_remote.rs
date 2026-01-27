@@ -71,13 +71,13 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     .await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "hello remote compact".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
@@ -85,13 +85,13 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "after compact".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
@@ -193,13 +193,13 @@ async fn remote_compact_runs_automatically() -> Result<()> {
     .await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "hello remote compact".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
     let message = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::ContextCompacted(_) => Some(true),
@@ -274,13 +274,13 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
     .await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "needs compaction".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 

@@ -1,5 +1,4 @@
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
@@ -97,13 +96,13 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         .codex;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "first prompt".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
 
@@ -113,13 +112,13 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
     .await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "second prompt".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
 

@@ -89,6 +89,7 @@ async fn run_snapshot_command(command: &str) -> Result<SnapshotRun> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "run unified exec with shell snapshot".into(),
                 text_elements: Vec::new(),
@@ -163,6 +164,7 @@ async fn run_shell_command_snapshot(command: &str) -> Result<SnapshotRun> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "run shell_command with shell snapshot".into(),
                 text_elements: Vec::new(),
@@ -298,6 +300,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     let model = test.session_configured.model.clone();
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "apply patch via shell_command with snapshot".into(),
                 text_elements: Vec::new(),

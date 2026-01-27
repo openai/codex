@@ -1,7 +1,6 @@
 use codex_core::ModelProviderInfo;
 use codex_core::WireApi;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::skip_if_no_network;
@@ -85,13 +84,13 @@ async fn continue_after_stream_error() {
         .unwrap();
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "first message".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
 
@@ -104,13 +103,13 @@ async fn continue_after_stream_error() {
     // mock server SSE stream. If the agent failed to clear the running task on
     // error above, this submission would be rejected/queued indefinitely.
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "follow up".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
 

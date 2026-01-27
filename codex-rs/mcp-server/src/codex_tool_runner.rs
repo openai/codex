@@ -18,7 +18,6 @@ use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
 use codex_core::protocol::TurnCompleteEvent;
 use codex_protocol::ThreadId;
@@ -117,16 +116,19 @@ pub async fn run_codex_tool_session(
         .lock()
         .await
         .insert(id.clone(), thread_id);
-    let submission = Submission {
-        id: sub_id.clone(),
-        op: Op::UserInput {
-            items: vec![UserInput::Text {
+    let op = thread
+        .user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: initial_prompt.clone(),
                 // MCP tool prompts are plain text with no UI element ranges.
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        },
+            None,
+        )
+        .await;
+    let submission = Submission {
+        id: sub_id.clone(),
+        op,
     };
 
     if let Err(e) = thread.submit_with_id(submission).await {
@@ -164,17 +166,17 @@ pub async fn run_codex_tool_session_reply(
         .lock()
         .await
         .insert(request_id.clone(), thread_id);
-    if let Err(e) = thread
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+    let op = thread
+        .user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: prompt,
                 // MCP tool prompts are plain text with no UI element ranges.
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
-        .await
-    {
+            None,
+        )
+        .await;
+    if let Err(e) = thread.submit(op).await {
         tracing::error!("Failed to submit user input: {e}");
         let result = create_call_tool_result_with_thread_id(
             thread_id,

@@ -521,6 +521,7 @@ impl SessionConfiguration {
             sandbox_policy: self.sandbox_policy.get().clone(),
             cwd: self.cwd.clone(),
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
+            reasoning_summary: self.model_reasoning_summary,
             personality: self.personality,
             session_source: self.session_source.clone(),
         }
@@ -2175,9 +2176,8 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 )
                 .await;
             }
-            Op::UserInput { .. } | Op::UserTurn { .. } => {
-                handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op, &mut previous_context)
-                    .await;
+            Op::UserTurn { .. } => {
+                handlers::user_turn(&sess, sub.id.clone(), sub.op, &mut previous_context).await;
             }
             Op::ExecApproval { id, decision } => {
                 handlers::exec_approval(&sess, id, decision).await;
@@ -2343,59 +2343,83 @@ mod handlers {
         }
     }
 
-    pub async fn user_input_or_turn(
+    pub async fn user_turn(
         sess: &Arc<Session>,
         sub_id: String,
         op: Op,
         previous_context: &mut Option<Arc<TurnContext>>,
     ) {
-        let (items, updates) = match op {
-            Op::UserTurn {
-                cwd,
-                approval_policy,
-                sandbox_policy,
-                model,
-                effort,
-                summary,
-                final_output_json_schema,
-                items,
-                collaboration_mode,
-                personality,
-            } => {
-                let collaboration_mode = collaboration_mode.or_else(|| {
-                    Some(CollaborationMode {
-                        mode: ModeKind::Custom,
-                        settings: Settings {
-                            model: model.clone(),
-                            reasoning_effort: effort,
-                            developer_instructions: None,
-                        },
-                    })
-                });
+        let Op::UserTurn {
+            use_thread_defaults,
+            cwd,
+            approval_policy,
+            sandbox_policy,
+            model,
+            effort,
+            summary,
+            final_output_json_schema,
+            items,
+            collaboration_mode,
+            personality,
+        } = op
+        else {
+            unreachable!();
+        };
+        let snapshot = if use_thread_defaults {
+            let state = sess.state.lock().await;
+            Some(state.session_configuration.thread_config_snapshot())
+        } else {
+            None
+        };
+        let (cwd, approval_policy, sandbox_policy, model, effort, summary, snapshot_personality) =
+            if let Some(snapshot) = snapshot {
                 (
-                    items,
-                    SessionSettingsUpdate {
-                        cwd: Some(cwd),
-                        approval_policy: Some(approval_policy),
-                        sandbox_policy: Some(sandbox_policy),
-                        collaboration_mode,
-                        reasoning_summary: Some(summary),
-                        final_output_json_schema: Some(final_output_json_schema),
-                        personality,
-                    },
+                    snapshot.cwd,
+                    snapshot.approval_policy,
+                    snapshot.sandbox_policy,
+                    snapshot.model,
+                    snapshot.reasoning_effort,
+                    snapshot.reasoning_summary,
+                    snapshot.personality,
                 )
-            }
-            Op::UserInput {
-                items,
-                final_output_json_schema,
-            } => (
-                items,
-                SessionSettingsUpdate {
-                    final_output_json_schema: Some(final_output_json_schema),
-                    ..Default::default()
-                },
-            ),
-            _ => unreachable!(),
+            } else {
+                (
+                    cwd,
+                    approval_policy,
+                    sandbox_policy,
+                    model,
+                    effort,
+                    summary,
+                    None,
+                )
+            };
+        let personality = if use_thread_defaults {
+            personality.or(snapshot_personality)
+        } else {
+            personality
+        };
+        let collaboration_mode = if use_thread_defaults {
+            collaboration_mode
+        } else {
+            collaboration_mode.or_else(|| {
+                Some(CollaborationMode {
+                    mode: ModeKind::Custom,
+                    settings: Settings {
+                        model: model.clone(),
+                        reasoning_effort: effort,
+                        developer_instructions: None,
+                    },
+                })
+            })
+        };
+        let updates = SessionSettingsUpdate {
+            cwd: Some(cwd),
+            approval_policy: Some(approval_policy),
+            sandbox_policy: Some(sandbox_policy),
+            collaboration_mode,
+            reasoning_summary: Some(summary),
+            final_output_json_schema: Some(final_output_json_schema),
+            personality,
         };
 
         let previous_collaboration_mode = sess

@@ -889,7 +889,7 @@ mod tests {
             .collect();
         assert_eq!(ops_for_agent.len(), 2);
         assert!(matches!(ops_for_agent[0], Op::Interrupt));
-        assert!(matches!(ops_for_agent[1], Op::UserInput { .. }));
+        assert!(matches!(ops_for_agent[1], Op::UserTurn { .. }));
 
         let _ = thread
             .thread

@@ -126,9 +126,19 @@ pub(crate) async fn run_codex_thread_one_shot(
     .await?;
 
     // Send the initial input to kick off the one-shot turn.
-    io.submit(Op::UserInput {
+    let snapshot = io.thread_config_snapshot().await;
+    io.submit(Op::UserTurn {
+        use_thread_defaults: false,
         items: input,
+        cwd: snapshot.cwd,
+        approval_policy: snapshot.approval_policy,
+        sandbox_policy: snapshot.sandbox_policy,
+        model: snapshot.model,
+        effort: snapshot.reasoning_effort,
+        summary: snapshot.reasoning_summary,
         final_output_json_schema: None,
+        collaboration_mode: None,
+        personality: snapshot.personality,
     })
     .await?;
 

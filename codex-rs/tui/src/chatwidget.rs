@@ -2843,6 +2843,7 @@ impl ChatWidget {
             .model_personality
             .filter(|_| self.current_model_supports_personality());
         let op = Op::UserTurn {
+            use_thread_defaults: false,
             items,
             cwd: self.config.cwd.clone(),
             approval_policy: self.config.approval_policy.value(),

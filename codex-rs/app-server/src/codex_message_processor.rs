@@ -3605,10 +3605,7 @@ impl CodexMessageProcessor {
 
         // Submit user input to the conversation.
         let _ = conversation
-            .submit(Op::UserInput {
-                items: mapped_items,
-                final_output_json_schema: None,
-            })
+            .submit_user_turn_with_defaults(mapped_items, None)
             .await;
 
         // Acknowledge with an empty result.
@@ -3657,6 +3654,7 @@ impl CodexMessageProcessor {
 
         let _ = conversation
             .submit(Op::UserTurn {
+                use_thread_defaults: false,
                 items: mapped_items,
                 cwd,
                 approval_policy,
@@ -3871,36 +3869,35 @@ impl CodexMessageProcessor {
             .map(V2UserInput::into_core)
             .collect();
 
-        let has_any_overrides = params.cwd.is_some()
-            || params.approval_policy.is_some()
-            || params.sandbox_policy.is_some()
-            || params.model.is_some()
-            || params.effort.is_some()
-            || params.summary.is_some()
-            || params.collaboration_mode.is_some()
-            || params.personality.is_some();
-
-        // If any overrides are provided, update the session turn context first.
-        if has_any_overrides {
-            let _ = thread
-                .submit(Op::OverrideTurnContext {
-                    cwd: params.cwd,
-                    approval_policy: params.approval_policy.map(AskForApproval::to_core),
-                    sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
-                    model: params.model,
-                    effort: params.effort.map(Some),
-                    summary: params.summary,
-                    collaboration_mode: params.collaboration_mode,
-                    personality: params.personality,
-                })
-                .await;
-        }
-
-        // Start the turn by submitting the user input. Return its submission id as turn_id.
+        // Start the turn by submitting the user input with the thread's current defaults,
+        // overridden by any per-turn parameters.
+        let snapshot = thread.config_snapshot().await;
+        let cwd = params.cwd.unwrap_or(snapshot.cwd);
+        let approval_policy = params
+            .approval_policy
+            .map(AskForApproval::to_core)
+            .unwrap_or(snapshot.approval_policy);
+        let sandbox_policy = params
+            .sandbox_policy
+            .map(|policy| policy.to_core())
+            .unwrap_or(snapshot.sandbox_policy);
+        let model = params.model.unwrap_or(snapshot.model);
+        let effort = params.effort.or(snapshot.reasoning_effort);
+        let summary = params.summary.unwrap_or(snapshot.reasoning_summary);
+        let personality = params.personality.or(snapshot.personality);
         let turn_id = thread
-            .submit(Op::UserInput {
+            .submit(Op::UserTurn {
+                use_thread_defaults: false,
                 items: mapped_items,
+                cwd,
+                approval_policy,
+                sandbox_policy,
+                model,
+                effort,
+                summary,
                 final_output_json_schema: params.output_schema,
+                collaboration_mode: params.collaboration_mode,
+                personality,
             })
             .await;
 

@@ -61,6 +61,10 @@ pub const COLLABORATION_MODE_OPEN_TAG: &str = "<collaboration_mode>";
 pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct Submission {
@@ -87,21 +91,13 @@ pub enum Op {
     /// This server sends [`EventMsg::TurnAborted`] in response.
     Interrupt,
 
-    /// Legacy user input.
-    ///
-    /// Prefer [`Op::UserTurn`] so the caller provides full turn context
-    /// (cwd/approval/sandbox/model/etc.) for each turn.
-    UserInput {
-        /// User input items, see `InputItem`
-        items: Vec<UserInput>,
-        /// Optional JSON Schema used to constrain the final assistant message for this turn.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        final_output_json_schema: Option<Value>,
-    },
-
-    /// Similar to [`Op::UserInput`], but contains additional context required
-    /// for a turn of a [`crate::codex_thread::CodexThread`].
+    /// User input with full turn context.
     UserTurn {
+        /// If true, defaults are computed at handling time from the session.
+        /// When set, collaboration mode is only updated if explicitly provided.
+        #[serde(default, skip_serializing_if = "is_false")]
+        use_thread_defaults: bool,
+
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
 
@@ -143,7 +139,7 @@ pub enum Op {
     /// All fields are optional; when omitted, the existing value is preserved.
     /// This does not enqueue any input – it only updates defaults used for
     /// turns that rely on persistent session-level context (for example,
-    /// [`Op::UserInput`]).
+    /// [`Op::UserTurn`]).
     OverrideTurnContext {
         /// Updated `cwd` for sandbox/tool calls.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -2398,35 +2394,7 @@ mod tests {
     }
 
     #[test]
-    fn user_input_serialization_omits_final_output_json_schema_when_none() -> Result<()> {
-        let op = Op::UserInput {
-            items: Vec::new(),
-            final_output_json_schema: None,
-        };
-
-        let json_op = serde_json::to_value(op)?;
-        assert_eq!(json_op, json!({ "type": "user_input", "items": [] }));
-
-        Ok(())
-    }
-
-    #[test]
-    fn user_input_deserializes_without_final_output_json_schema_field() -> Result<()> {
-        let op: Op = serde_json::from_value(json!({ "type": "user_input", "items": [] }))?;
-
-        assert_eq!(
-            op,
-            Op::UserInput {
-                items: Vec::new(),
-                final_output_json_schema: None,
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn user_input_serialization_includes_final_output_json_schema_when_some() -> Result<()> {
+    fn user_turn_serialization_includes_final_output_json_schema_when_some() -> Result<()> {
         let schema = json!({
             "type": "object",
             "properties": {
@@ -2435,17 +2403,32 @@ mod tests {
             "required": ["answer"],
             "additionalProperties": false
         });
-        let op = Op::UserInput {
+        let cwd = PathBuf::from("/tmp");
+        let op = Op::UserTurn {
+            use_thread_defaults: false,
             items: Vec::new(),
+            cwd: cwd.clone(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            model: "test-model".to_string(),
+            effort: None,
+            summary: ReasoningSummaryConfig::Auto,
             final_output_json_schema: Some(schema.clone()),
+            collaboration_mode: None,
+            personality: None,
         };
 
         let json_op = serde_json::to_value(op)?;
         assert_eq!(
             json_op,
             json!({
-                "type": "user_input",
+                "type": "user_turn",
                 "items": [],
+                "cwd": cwd,
+                "approval_policy": "never",
+                "sandbox_policy": { "type": "read-only" },
+                "model": "test-model",
+                "summary": "auto",
                 "final_output_json_schema": schema,
             })
         );

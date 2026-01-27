@@ -268,6 +268,7 @@ impl TestCodex {
         let session_model = self.session_configured.model.clone();
         self.codex
             .submit(Op::UserTurn {
+                use_thread_defaults: false,
                 items: vec![UserInput::Text {
                     text: prompt.into(),
                     text_elements: Vec::new(),

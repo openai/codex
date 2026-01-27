@@ -87,6 +87,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "hi".into(),
                 text_elements: Vec::new(),

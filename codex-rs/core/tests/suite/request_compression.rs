@@ -3,7 +3,6 @@
 use codex_core::CodexAuth;
 use codex_core::features::Feature;
 use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -36,13 +35,13 @@ async fn request_body_is_zstd_compressed_for_codex_backend_when_enabled() -> any
     let codex = builder.build(&server).await?.codex;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "compress me".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
 
     // Wait until the task completes so the request definitely hit the server.
@@ -80,13 +79,13 @@ async fn request_body_is_not_compressed_for_api_key_auth_even_when_enabled() -> 
     let codex = builder.build(&server).await?.codex;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "do not compress".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await?;
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

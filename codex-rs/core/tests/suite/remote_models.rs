@@ -167,6 +167,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "run call".into(),
                 text_elements: Vec::new(),
@@ -377,6 +378,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "hello remote".into(),
                 text_elements: Vec::new(),

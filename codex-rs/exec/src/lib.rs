@@ -466,6 +466,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         } => {
             let task_id = thread
                 .submit(Op::UserTurn {
+                    use_thread_defaults: false,
                     items,
                     cwd: default_cwd,
                     approval_policy: default_approval_policy,

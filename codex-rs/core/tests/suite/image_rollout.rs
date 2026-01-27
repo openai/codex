@@ -111,6 +111,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![
                 UserInput::LocalImage {
                     path: abs_path.clone(),
@@ -192,6 +193,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
 
     codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![
                 UserInput::Image {
                     image_url: image_url.clone(),

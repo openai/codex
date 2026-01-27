@@ -1220,6 +1220,7 @@ async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
 
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
+            use_thread_defaults: false,
             collaboration_mode:
                 Some(CollaborationMode {
                     mode: ModeKind::Code,
@@ -2243,6 +2244,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
+            use_thread_defaults: false,
             collaboration_mode:
                 Some(CollaborationMode {
                     mode: ModeKind::Code,
@@ -2261,6 +2263,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
+            use_thread_defaults: false,
             collaboration_mode:
                 Some(CollaborationMode {
                     mode: ModeKind::Code,
@@ -2398,6 +2401,7 @@ async fn collab_mode_is_not_sent_until_selected() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
+            use_thread_defaults: false,
             collaboration_mode,
             personality: None,
             ..
@@ -2430,6 +2434,7 @@ async fn user_turn_includes_personality_from_config() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
+            use_thread_defaults: false,
             personality: Some(Personality::Friendly),
             ..
         } => {}

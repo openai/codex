@@ -36,6 +36,7 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
 
     test.codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: prompt.into(),
                 text_elements: Vec::new(),
@@ -354,6 +355,7 @@ async fn shell_tools_start_before_response_completed_when_stream_delayed() -> an
     let session_model = test.session_configured.model.clone();
     test.codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: "stream delayed completion".into(),
                 text_elements: Vec::new(),

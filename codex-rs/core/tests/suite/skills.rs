@@ -61,6 +61,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
     let session_model = test.session_configured.model.clone();
     test.codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![
                 UserInput::Text {
                     text: "please use $demo".to_string(),

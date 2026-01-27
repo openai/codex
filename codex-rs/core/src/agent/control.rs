@@ -72,19 +72,26 @@ impl AgentControl {
         prompt: String,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
-        let result = state
-            .send_op(
-                agent_id,
-                Op::UserInput {
-                    items: vec![UserInput::Text {
-                        text: prompt,
-                        // Agent control prompts are plain text with no UI text elements.
-                        text_elements: Vec::new(),
-                    }],
-                    final_output_json_schema: None,
-                },
-            )
-            .await;
+        let thread = state.get_thread(agent_id).await?;
+        let snapshot = thread.config_snapshot().await;
+        let op = Op::UserTurn {
+            use_thread_defaults: false,
+            items: vec![UserInput::Text {
+                text: prompt,
+                // Agent control prompts are plain text with no UI text elements.
+                text_elements: Vec::new(),
+            }],
+            cwd: snapshot.cwd,
+            approval_policy: snapshot.approval_policy,
+            sandbox_policy: snapshot.sandbox_policy,
+            model: snapshot.model,
+            effort: snapshot.reasoning_effort,
+            summary: snapshot.reasoning_summary,
+            final_output_json_schema: None,
+            collaboration_mode: None,
+            personality: snapshot.personality,
+        };
+        let result = state.send_op(agent_id, op).await;
         if matches!(result, Err(CodexErr::InternalAgentDied)) {
             let _ = state.remove_thread(&agent_id).await;
             self.state.release_spawned_thread(agent_id);
@@ -347,7 +354,8 @@ mod tests {
     #[tokio::test]
     async fn send_prompt_submits_user_message() {
         let harness = AgentControlHarness::new().await;
-        let (thread_id, _thread) = harness.start_thread().await;
+        let (thread_id, thread) = harness.start_thread().await;
+        let snapshot = thread.config_snapshot().await;
 
         let submission_id = harness
             .control
@@ -357,12 +365,21 @@ mod tests {
         assert!(!submission_id.is_empty());
         let expected = (
             thread_id,
-            Op::UserInput {
+            Op::UserTurn {
+                use_thread_defaults: false,
                 items: vec![UserInput::Text {
                     text: "hello from tests".to_string(),
                     text_elements: Vec::new(),
                 }],
+                cwd: snapshot.cwd,
+                approval_policy: snapshot.approval_policy,
+                sandbox_policy: snapshot.sandbox_policy,
+                model: snapshot.model,
+                effort: snapshot.reasoning_effort,
+                summary: snapshot.reasoning_summary,
                 final_output_json_schema: None,
+                collaboration_mode: None,
+                personality: snapshot.personality,
             },
         );
         let captured = harness
@@ -381,19 +398,29 @@ mod tests {
             .spawn_agent(harness.config.clone(), "spawned".to_string(), None)
             .await
             .expect("spawn_agent should succeed");
-        let _thread = harness
+        let thread = harness
             .manager
             .get_thread(thread_id)
             .await
             .expect("thread should be registered");
+        let snapshot = thread.config_snapshot().await;
         let expected = (
             thread_id,
-            Op::UserInput {
+            Op::UserTurn {
+                use_thread_defaults: false,
                 items: vec![UserInput::Text {
                     text: "spawned".to_string(),
                     text_elements: Vec::new(),
                 }],
+                cwd: snapshot.cwd,
+                approval_policy: snapshot.approval_policy,
+                sandbox_policy: snapshot.sandbox_policy,
+                model: snapshot.model,
+                effort: snapshot.reasoning_effort,
+                summary: snapshot.reasoning_summary,
                 final_output_json_schema: None,
+                collaboration_mode: None,
+                personality: snapshot.personality,
             },
         );
         let captured = harness

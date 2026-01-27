@@ -158,13 +158,13 @@ async fn summarize_context_three_requests_and_instructions() {
 
     // 1) Normal user input – should hit server once.
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "hello world".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -180,13 +180,13 @@ async fn summarize_context_three_requests_and_instructions() {
 
     // 3) Next user input – third hit; history should include only the summary.
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: THIRD_USER_MSG.into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -574,13 +574,13 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
 
     // Start the conversation with the user message
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: user_message.into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .expect("submit user input");
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1051,39 +1051,39 @@ async fn auto_compact_runs_after_token_limit_hit() {
     let codex = thread_manager.start_thread(config).await.unwrap().thread;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: POST_AUTO_USER_MSG.into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
 
@@ -1284,6 +1284,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
     resumed
         .codex
         .submit(Op::UserTurn {
+            use_thread_defaults: false,
             items: vec![UserInput::Text {
                 text: follow_up_user.into(),
                 text_elements: Vec::new(),
@@ -1395,37 +1396,37 @@ async fn auto_compact_persists_rollout_entries() {
     } = thread_manager.start_thread(config).await.unwrap();
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: FIRST_AUTO_MSG.into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: SECOND_AUTO_MSG.into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: POST_AUTO_USER_MSG.into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1512,13 +1513,13 @@ async fn manual_compact_retries_after_context_window_error() {
     .thread;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: "first turn".into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1646,13 +1647,13 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     .thread;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: first_user_message.into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1661,13 +1662,13 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: second_user_message.into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1676,13 +1677,13 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: final_user_message.into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -1857,13 +1858,13 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
     let mut auto_compact_lifecycle_events = Vec::new();
     for user in [MULTI_AUTO_MSG, follow_up_user, final_user] {
         codex
-            .submit(Op::UserInput {
-                items: vec![UserInput::Text {
+            .submit_user_turn_with_defaults(
+                vec![UserInput::Text {
                     text: user.into(),
                     text_elements: Vec::new(),
                 }],
-                final_output_json_schema: None,
-            })
+                None,
+            )
             .await
             .unwrap();
 
@@ -1971,26 +1972,26 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
     .thread;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: FUNCTION_CALL_LIMIT_MSG.into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
 
     wait_for_event(&codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
 
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: follow_up_user.into(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
 
@@ -2103,13 +2104,13 @@ async fn auto_compact_counts_encrypted_reasoning_before_last_user() {
         .enumerate()
     {
         codex
-            .submit(Op::UserInput {
-                items: vec![UserInput::Text {
+            .submit_user_turn_with_defaults(
+                vec![UserInput::Text {
                     text: user.into(),
                     text_elements: Vec::new(),
                 }],
-                final_output_json_schema: None,
-            })
+                None,
+            )
             .await
             .unwrap();
         wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -2220,13 +2221,13 @@ async fn auto_compact_runs_when_reasoning_header_clears_between_turns() {
 
     for user in [first_user, second_user, third_user] {
         codex
-            .submit(Op::UserInput {
-                items: vec![UserInput::Text {
+            .submit_user_turn_with_defaults(
+                vec![UserInput::Text {
                     text: user.into(),
                     text_elements: Vec::new(),
                 }],
-                final_output_json_schema: None,
-            })
+                None,
+            )
             .await
             .unwrap();
         wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

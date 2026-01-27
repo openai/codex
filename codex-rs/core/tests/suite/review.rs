@@ -705,13 +705,13 @@ async fn review_history_surfaces_in_parent_session() {
     // 2) Continue in the parent session; request input must not include any review items.
     let followup = "back to parent".to_string();
     codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
+        .submit_user_turn_with_defaults(
+            vec![UserInput::Text {
                 text: followup.clone(),
                 text_elements: Vec::new(),
             }],
-            final_output_json_schema: None,
-        })
+            None,
+        )
         .await
         .unwrap();
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
