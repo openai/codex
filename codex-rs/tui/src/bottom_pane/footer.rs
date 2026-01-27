@@ -927,7 +927,12 @@ mod tests {
                         show_shortcuts_hint,
                         show_queue_hint,
                     );
-                    if can_show_both {
+                    let show_context = can_show_both
+                        && !matches!(
+                            props.mode,
+                            FooterMode::EscHint | FooterMode::QuitShortcutReminder
+                        );
+                    if show_context {
                         render_context_right(area, f.buffer_mut(), &context_line);
                     }
                 }
@@ -1007,7 +1012,12 @@ mod tests {
                         show_shortcuts_hint,
                         show_queue_hint,
                     );
-                    if can_show_both {
+                    let show_context = can_show_both
+                        && !matches!(
+                            props.mode,
+                            FooterMode::EscHint | FooterMode::QuitShortcutReminder
+                        );
+                    if show_context {
                         render_context_right(area, f.buffer_mut(), &context_line);
                     }
                 }

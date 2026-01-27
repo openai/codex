@@ -2568,10 +2568,17 @@ impl Renderable for ChatComposer {
                 } else {
                     None
                 };
-                let show_context = summary_layout
-                    .as_ref()
-                    .map(|(_, show_context)| *show_context)
-                    .unwrap_or(can_show_both);
+                let show_context = if matches!(
+                    footer_props.mode,
+                    FooterMode::EscHint | FooterMode::QuitShortcutReminder
+                ) {
+                    false
+                } else {
+                    summary_layout
+                        .as_ref()
+                        .map(|(_, show_context)| *show_context)
+                        .unwrap_or(can_show_both)
+                };
 
                 if let Some((summary_left, _)) = summary_layout {
                     match summary_left {
