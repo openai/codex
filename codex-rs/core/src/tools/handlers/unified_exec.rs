@@ -129,7 +129,6 @@ impl ToolHandler for UnifiedExecHandler {
                 let args: ExecCommandArgs = parse_arguments(&arguments)?;
                 let process_id = manager.allocate_process_id().await;
                 let command = get_command(&args, session.user_shell());
-                tracing::warn!("UNICORN");
 
                 let ExecCommandArgs {
                     workdir,
@@ -141,6 +140,14 @@ impl ToolHandler for UnifiedExecHandler {
                     prefix_rule,
                     ..
                 } = args;
+
+                let features = session.features();
+                let request_rule_enabled = features.enabled(crate::features::Feature::RequestRule);
+                let prefix_rule = if request_rule_enabled {
+                    prefix_rule
+                } else {
+                    None
+                };
 
                 if sandbox_permissions.requires_escalated_permissions()
                     && !matches!(

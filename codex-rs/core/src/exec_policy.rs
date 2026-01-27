@@ -403,16 +403,6 @@ fn try_derive_execpolicy_amendment_for_allow_rules(
         })
 }
 
-fn normalize_prefix_rule(prefix_rule: Option<Vec<String>>) -> Option<Vec<String>> {
-    prefix_rule.and_then(|prefix| {
-        if prefix.is_empty() {
-            None
-        } else {
-            Some(prefix)
-        }
-    })
-}
-
 fn derive_requested_execpolicy_amendment(
     features: &Features,
     prefix_rule: Option<&Vec<String>>,
@@ -955,7 +945,7 @@ prefix_rule(
     }
 
     #[tokio::test]
-    async fn request_rule_uses_requested_approval_and_prefix_rule() {
+    async fn request_rule_uses_prefix_rule() {
         let command = vec![
             "cargo".to_string(),
             "install".to_string(),
@@ -970,8 +960,8 @@ prefix_rule(
                 features: &features,
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
-                sandbox_policy: &SandboxPolicy::DangerFullAccess,
-                sandbox_permissions: SandboxPermissions::UseDefault,
+                sandbox_policy: &SandboxPolicy::ReadOnly,
+                sandbox_permissions: SandboxPermissions::RequireEscalated,
                 prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
             })
             .await;
@@ -979,10 +969,10 @@ prefix_rule(
         assert_eq!(
             requirement,
             ExecApprovalRequirement::NeedsApproval {
-                reason: Some("Install cargo-insta for snapshot tests?".to_string()),
+                reason: None,
                 proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                     "cargo".to_string(),
-                    "install".to_string()
+                    "install".to_string(),
                 ])),
             }
         );

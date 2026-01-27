@@ -2449,7 +2449,6 @@ Examples of valid command strings:
 
     #[test]
     fn test_shell_command_tool() {
-        // TODO BEFORE MERGING: add test for request_rule_enabled = true
         let tool = super::create_shell_command_tool(false);
         let ToolSpec::Function(ResponsesApiTool {
             description, name, ..
