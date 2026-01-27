@@ -8,6 +8,20 @@
 //! Some footer content is time-based rather than event-based, such as the "press again to quit"
 //! hint. The owning widgets schedule redraws so time-based hints can expire even if the UI is
 //! otherwise idle.
+//!
+//! Single-line collapse overview:
+//! 1. The composer decides the current `FooterMode` and hint flags, then calls
+//!    `single_line_footer_layout` for the base single-line modes.
+//! 2. That layout helper applies the width-based fallback rules: prefer the
+//!    fullest left-side hint that still allows the right-side context indicator
+//!    to fit, then progressively drop hint text and finally context as needed.
+//! 3. When collapse chooses a specific line, callers render it via
+//!    `render_footer_line`. Otherwise, callers render the straightforward
+//!    mode-to-text mapping via `render_footer_from_props`.
+//!
+//! In short: `single_line_footer_layout` chooses *what* best fits, and the two
+//! render helpers choose whether to draw the chosen line or the default
+//! `FooterProps` mapping.
 #[cfg(target_os = "linux")]
 use crate::clipboard_paste::is_probably_wsl;
 use crate::key_hint;
@@ -499,12 +513,14 @@ pub(crate) fn render_footer_hint_items(area: Rect, buf: &mut Buffer, items: &[(S
     footer_hint_items_line(items).render(inset_footer_hint_area(area), buf);
 }
 
-/// Map `FooterProps` to one or more footer lines without dynamic collapse.
+/// Map `FooterProps` to footer lines without width-based collapse.
 ///
-/// This is the straightforward FooterMode-to-text mapping used by instructional,
-/// transient footer states (shortcut overlay, Esc hint, quit reminder), and as
-/// a fallback for base states when we are not running the single-line collapse
-/// logic. Width-based collapse decisions live in `single_line_footer_layout`.
+/// This is the canonical FooterMode-to-text mapping. It powers transient,
+/// instructional states (shortcut overlay, Esc hint, quit reminder) and also
+/// the default rendering for base states when collapse is not applied (or when
+/// `single_line_footer_layout` returns `SummaryLeft::Default`). Collapse and
+/// fallback decisions live in `single_line_footer_layout`; this function only
+/// formats the chosen/default content.
 fn footer_from_props_lines(
     props: FooterProps,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
