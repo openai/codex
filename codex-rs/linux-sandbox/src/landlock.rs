@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Once;
 
 use codex_core::error::CodexErr;
 use codex_core::error::Result;
@@ -45,7 +46,12 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
             .into_iter()
             .map(|writable_root| writable_root.root)
             .collect();
-        install_filesystem_landlock_rules_on_current_thread(writable_roots)?;
+        let allow_unenforced = allow_unenforced_landlock(sandbox_policy);
+        let landlock_status = install_filesystem_landlock_rules_on_current_thread(writable_roots)?;
+        ensure_landlock_enforced(&landlock_status, allow_unenforced)?;
+        if landlock_status == landlock::RulesetStatus::NotEnforced {
+            warn_unenforced_landlock();
+        }
     }
 
     // TODO(ragona): Add appropriate restrictions if
@@ -66,11 +72,13 @@ fn set_no_new_privs() -> Result<()> {
 /// access to the entire file-system while restricting write access to
 /// `/dev/null` and the provided list of `writable_roots`.
 ///
+/// Returns the Landlock enforcement status for the process.
+///
 /// # Errors
-/// Returns [`CodexErr::Sandbox`] variants when the ruleset fails to apply.
+/// Returns [`CodexErr`] variants when the ruleset fails to apply.
 fn install_filesystem_landlock_rules_on_current_thread(
     writable_roots: Vec<AbsolutePathBuf>,
-) -> Result<()> {
+) -> Result<landlock::RulesetStatus> {
     let abi = ABI::V5;
     let access_rw = AccessFs::from_all(abi);
     let access_ro = AccessFs::from_read(abi);
@@ -89,7 +97,34 @@ fn install_filesystem_landlock_rules_on_current_thread(
 
     let status = ruleset.restrict_self()?;
 
-    if status.ruleset == landlock::RulesetStatus::NotEnforced {
+    Ok(status.ruleset)
+}
+
+fn allow_unenforced_landlock(sandbox_policy: &SandboxPolicy) -> bool {
+    matches!(
+        sandbox_policy,
+        SandboxPolicy::WorkspaceWrite {
+            network_access: false,
+            ..
+        }
+    )
+}
+
+#[allow(clippy::print_stderr)]
+fn warn_unenforced_landlock() {
+    static WARNED: Once = Once::new();
+    WARNED.call_once(|| {
+        eprintln!(
+            "codex-linux-sandbox: warning: Landlock is not enforced; filesystem sandbox disabled (network remains restricted)"
+        );
+    });
+}
+
+fn ensure_landlock_enforced(
+    status: &landlock::RulesetStatus,
+    allow_unenforced: bool,
+) -> Result<()> {
+    if *status == landlock::RulesetStatus::NotEnforced && !allow_unenforced {
         return Err(CodexErr::Sandbox(SandboxErr::LandlockRestrict));
     }
 
@@ -154,4 +189,53 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
     apply_filter(&prog)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allows_unenforced_landlock_for_workspace_write_without_network_access() {
+        assert!(allow_unenforced_landlock(&SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        }));
+    }
+
+    #[test]
+    fn rejects_unenforced_landlock_for_workspace_write_with_network_access() {
+        assert!(!allow_unenforced_landlock(&SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: true,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        }));
+    }
+
+    #[test]
+    fn rejects_unenforced_landlock_for_read_only() {
+        let result = ensure_landlock_enforced(&landlock::RulesetStatus::NotEnforced, false);
+        assert!(matches!(
+            result,
+            Err(CodexErr::Sandbox(SandboxErr::LandlockRestrict))
+        ));
+    }
+
+    #[test]
+    fn allows_unenforced_landlock_when_allowed() {
+        ensure_landlock_enforced(&landlock::RulesetStatus::NotEnforced, true).unwrap();
+    }
+
+    #[test]
+    fn allows_partially_enforced_landlock() {
+        ensure_landlock_enforced(&landlock::RulesetStatus::PartiallyEnforced, false).unwrap();
+    }
+
+    #[test]
+    fn allows_fully_enforced_landlock() {
+        ensure_landlock_enforced(&landlock::RulesetStatus::FullyEnforced, false).unwrap();
+    }
 }
