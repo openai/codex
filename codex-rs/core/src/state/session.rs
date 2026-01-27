@@ -17,8 +17,6 @@ pub(crate) struct SessionState {
     pub(crate) server_reasoning_included: bool,
     /// Whether the session's initial context has been seeded into history.
     pub(crate) initial_context_seeded: bool,
-    /// Whether seeding the initial context should persist to the rollout file.
-    pub(crate) persist_initial_context_on_seed: bool,
 }
 
 impl SessionState {
@@ -31,7 +29,6 @@ impl SessionState {
             latest_rate_limits: None,
             server_reasoning_included: false,
             initial_context_seeded: false,
-            persist_initial_context_on_seed: true,
         }
     }
 

@@ -1568,32 +1568,6 @@ impl CodexMessageProcessor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn has_thread_resume_overrides(
-        model: bool,
-        model_provider: bool,
-        cwd: bool,
-        approval_policy: bool,
-        sandbox: bool,
-        request_overrides: Option<&HashMap<String, serde_json::Value>>,
-        base_instructions: bool,
-        developer_instructions: bool,
-        personality: bool,
-    ) -> bool {
-        let has_request_overrides =
-            request_overrides.is_some_and(|overrides| !overrides.is_empty());
-
-        model
-            || model_provider
-            || cwd
-            || approval_policy
-            || sandbox
-            || has_request_overrides
-            || base_instructions
-            || developer_instructions
-            || personality
-    }
-
-    #[allow(clippy::too_many_arguments)]
     fn build_thread_config_overrides(
         &self,
         model: Option<String>,
@@ -1940,7 +1914,7 @@ impl CodexMessageProcessor {
             personality,
         } = params;
 
-        let mut thread_history = if let Some(history) = history {
+        let thread_history = if let Some(history) = history {
             if history.is_empty() {
                 self.send_invalid_request_error(
                     request_id,
@@ -2013,22 +1987,6 @@ impl CodexMessageProcessor {
                 }
             }
         };
-
-        let has_resume_overrides = Self::has_thread_resume_overrides(
-            model.is_some(),
-            model_provider.is_some(),
-            cwd.is_some(),
-            approval_policy.is_some(),
-            sandbox.is_some(),
-            request_overrides.as_ref(),
-            base_instructions.is_some(),
-            developer_instructions.is_some(),
-            personality.is_some(),
-        );
-
-        if !has_resume_overrides && let InitialHistory::Resumed(resumed) = &mut thread_history {
-            resumed.persist_initial_context = false;
-        }
 
         let history_cwd = thread_history.session_cwd();
         let typesafe_overrides = self.build_thread_config_overrides(

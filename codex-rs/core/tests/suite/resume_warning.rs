@@ -40,7 +40,6 @@ fn resume_history(
         conversation_id: ThreadId::default(),
         history: vec![RolloutItem::TurnContext(turn_ctx)],
         rollout_path: rollout_path.to_path_buf(),
-        persist_initial_context: true,
     })
 }
 

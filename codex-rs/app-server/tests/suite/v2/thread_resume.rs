@@ -156,13 +156,14 @@ async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     let rollout = setup_rollout_fixture(codex_home.path(), &server.uri())?;
+    let thread_id = rollout.conversation_id.clone();
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
-            thread_id: rollout.conversation_id,
+            thread_id: thread_id.clone(),
             ..Default::default()
         })
         .await?;
@@ -177,6 +178,30 @@ async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -
 
     let after_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
     assert_eq!(after_modified, rollout.before_modified);
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id,
+            input: vec![UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let after_turn_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
+    assert!(after_turn_modified > rollout.before_modified);
 
     Ok(())
 }
