@@ -1607,6 +1607,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_archive(&mut self, request_id: RequestId, params: ThreadArchiveParams) {
+        // TODO(jif) mostly rewrite this using sqlite after phase 1
         let thread_id = match ThreadId::from_string(&params.thread_id) {
             Ok(id) => id,
             Err(err) => {
@@ -1656,6 +1657,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_unarchive(&mut self, request_id: RequestId, params: ThreadUnarchiveParams) {
+        // TODO(jif) mostly rewrite this using sqlite after phase 1
         let thread_id = match ThreadId::from_string(&params.thread_id) {
             Ok(id) => id,
             Err(err) => {
@@ -1698,7 +1700,7 @@ impl CodexMessageProcessor {
 
         let rollout_path_display = archived_path.display().to_string();
         let fallback_provider = self.config.model_provider_id.clone();
-        let state_db_ctx = open_state_db_for_config(self.config.as_ref()).await;
+        let state_db_ctx = state_db::init_if_enabled(&self.config, None).await;
         let archived_folder = self
             .config
             .codex_home
@@ -3564,7 +3566,7 @@ impl CodexMessageProcessor {
         }
 
         if state_db_ctx.is_none() {
-            state_db_ctx = open_state_db_for_config(self.config.as_ref()).await;
+            state_db_ctx = state_db::init_if_enabled(&self.config, None).await;
         }
 
         // Move the rollout file to archived.
@@ -4643,10 +4645,6 @@ async fn derive_config_for_cwd(
         .await
 }
 
-async fn open_state_db_for_config(config: &Config) -> Option<Arc<StateDbContext>> {
-    state_db::init_if_enabled(config, None).await
-}
-
 pub(crate) async fn read_summary_from_rollout(
     path: &Path,
     fallback_provider: &str,
@@ -4701,7 +4699,7 @@ pub(crate) async fn read_summary_from_rollout(
     let git_info = git.as_ref().map(map_git_info);
     let updated_at = updated_at.or_else(|| timestamp.clone());
 
-    let summary = ConversationSummary {
+    Ok(ConversationSummary {
         conversation_id: session_meta.id,
         timestamp,
         updated_at,
@@ -4712,8 +4710,7 @@ pub(crate) async fn read_summary_from_rollout(
         cli_version: session_meta.cli_version,
         source: session_meta.source,
         git_info,
-    };
-    Ok(summary)
+    })
 }
 
 pub(crate) async fn read_event_msgs_from_rollout(
