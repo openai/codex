@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::protocol::SandboxPolicy;
-use codex_protocol::config_types::WindowsSandboxMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -12,34 +12,34 @@ use std::path::Path;
 /// prompts users to enable the legacy sandbox feature.
 pub const ELEVATED_SANDBOX_NUX_ENABLED: bool = true;
 
-pub trait WindowsSandboxModeExt {
-    fn from_config(config: &Config) -> WindowsSandboxMode;
-    fn from_features(features: &Features) -> WindowsSandboxMode;
+pub trait WindowsSandboxLevelExt {
+    fn from_config(config: &Config) -> WindowsSandboxLevel;
+    fn from_features(features: &Features) -> WindowsSandboxLevel;
 }
 
-impl WindowsSandboxModeExt for WindowsSandboxMode {
-    fn from_config(config: &Config) -> WindowsSandboxMode {
+impl WindowsSandboxLevelExt for WindowsSandboxLevel {
+    fn from_config(config: &Config) -> WindowsSandboxLevel {
         Self::from_features(&config.features)
     }
 
-    fn from_features(features: &Features) -> WindowsSandboxMode {
+    fn from_features(features: &Features) -> WindowsSandboxLevel {
         if !features.enabled(Feature::WindowsSandbox) {
-            return WindowsSandboxMode::Disabled;
+            return WindowsSandboxLevel::Disabled;
         }
         if features.enabled(Feature::WindowsSandboxElevated) {
-            WindowsSandboxMode::Elevated
+            WindowsSandboxLevel::Elevated
         } else {
-            WindowsSandboxMode::RestrictedToken
+            WindowsSandboxLevel::RestrictedToken
         }
     }
 }
 
-pub fn windows_sandbox_mode_from_config(config: &Config) -> WindowsSandboxMode {
-    WindowsSandboxMode::from_config(config)
+pub fn windows_sandbox_level_from_config(config: &Config) -> WindowsSandboxLevel {
+    WindowsSandboxLevel::from_config(config)
 }
 
-pub fn windows_sandbox_mode_from_features(features: &Features) -> WindowsSandboxMode {
-    WindowsSandboxMode::from_features(features)
+pub fn windows_sandbox_level_from_features(features: &Features) -> WindowsSandboxLevel {
+    WindowsSandboxLevel::from_features(features)
 }
 
 #[cfg(target_os = "windows")]

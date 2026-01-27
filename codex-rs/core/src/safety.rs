@@ -10,7 +10,7 @@ use crate::util::resolve_path;
 
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
-use codex_protocol::config_types::WindowsSandboxMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
 
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
@@ -29,7 +29,7 @@ pub fn assess_patch_safety(
     policy: AskForApproval,
     sandbox_policy: &SandboxPolicy,
     cwd: &Path,
-    windows_sandbox_mode: WindowsSandboxMode,
+    windows_sandbox_level: WindowsSandboxLevel,
 ) -> SafetyCheck {
     if action.is_empty() {
         return SafetyCheck::Reject {
@@ -67,7 +67,7 @@ pub fn assess_patch_safety(
             // Only auto‑approve when we can actually enforce a sandbox. Otherwise
             // fall back to asking the user because the patch may touch arbitrary
             // paths outside the project.
-            match get_platform_sandbox(windows_sandbox_mode != WindowsSandboxMode::Disabled) {
+            match get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled) {
                 Some(sandbox_type) => SafetyCheck::AutoApprove {
                     sandbox_type,
                     user_explicitly_approved: false,
@@ -243,7 +243,7 @@ mod tests {
                 AskForApproval::OnRequest,
                 &policy,
                 &cwd,
-                WindowsSandboxMode::Disabled
+                WindowsSandboxLevel::Disabled
             ),
             SafetyCheck::AutoApprove {
                 sandbox_type: SandboxType::None,

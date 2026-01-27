@@ -30,10 +30,10 @@ use codex_core::path_utils;
 use codex_core::protocol::AskForApproval;
 use codex_core::read_session_meta_line;
 use codex_core::terminal::Multiplexer;
-use codex_core::windows_sandbox::WindowsSandboxModeExt;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
-use codex_protocol::config_types::WindowsSandboxMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -818,7 +818,7 @@ async fn load_config_or_exit_with_fallback_cwd(
 /// show the trust screen.
 fn should_show_trust_screen(config: &Config) -> bool {
     if cfg!(target_os = "windows")
-        && WindowsSandboxMode::from_config(config) == WindowsSandboxMode::Disabled
+        && WindowsSandboxLevel::from_config(config) == WindowsSandboxLevel::Disabled
     {
         // If the experimental sandbox is not enabled, Native Windows cannot enforce sandboxed write access; skip the trust prompt entirely.
         return false;

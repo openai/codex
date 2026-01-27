@@ -89,7 +89,7 @@ use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_core::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
-use codex_core::windows_sandbox::WindowsSandboxModeExt;
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
@@ -100,7 +100,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
-use codex_protocol::config_types::WindowsSandboxMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::request_user_input::RequestUserInputEvent;
@@ -2034,8 +2034,8 @@ impl ChatWidget {
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                 && matches!(
-                    WindowsSandboxMode::from_config(&widget.config),
-                    WindowsSandboxMode::RestrictedToken
+                    WindowsSandboxLevel::from_config(&widget.config),
+                    WindowsSandboxLevel::RestrictedToken
                 ),
         );
         widget.update_collaboration_mode_indicator();
@@ -2293,8 +2293,8 @@ impl ChatWidget {
         widget.bottom_pane.set_windows_degraded_sandbox_active(
             codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                 && matches!(
-                    WindowsSandboxMode::from_config(&widget.config),
-                    WindowsSandboxMode::RestrictedToken
+                    WindowsSandboxLevel::from_config(&widget.config),
+                    WindowsSandboxLevel::RestrictedToken
                 ),
         );
         widget.update_collaboration_mode_indicator();
@@ -2552,9 +2552,9 @@ impl ChatWidget {
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
                 {
-                    let windows_sandbox_mode = WindowsSandboxMode::from_config(&self.config);
+                    let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
                     let windows_degraded_sandbox_enabled =
-                        matches!(windows_sandbox_mode, WindowsSandboxMode::RestrictedToken);
+                        matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
                     if !windows_degraded_sandbox_enabled
                         || !codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                     {
@@ -3329,7 +3329,7 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: None,
                 sandbox_policy: None,
-                windows_sandbox_mode: None,
+                windows_sandbox_level: None,
                 model: Some(switch_model.clone()),
                 effort: Some(Some(default_effort)),
                 summary: None,
@@ -3452,7 +3452,7 @@ impl ChatWidget {
                         effort: None,
                         summary: None,
                         collaboration_mode: None,
-                        windows_sandbox_mode: None,
+                        windows_sandbox_level: None,
                         personality: Some(personality),
                     }));
                     tx.send(AppEvent::UpdatePersonality(personality));
@@ -3722,7 +3722,7 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: None,
                 sandbox_policy: None,
-                windows_sandbox_mode: None,
+                windows_sandbox_level: None,
                 model: Some(model_for_action.clone()),
                 effort: Some(effort_for_action),
                 summary: None,
@@ -3896,7 +3896,7 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: None,
                 sandbox_policy: None,
-                windows_sandbox_mode: None,
+                windows_sandbox_level: None,
                 model: Some(model.clone()),
                 effort: Some(effort),
                 summary: None,
@@ -3937,10 +3937,10 @@ impl ChatWidget {
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
 
         #[cfg(target_os = "windows")]
-        let windows_sandbox_mode = WindowsSandboxMode::from_config(&self.config);
+        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
         #[cfg(target_os = "windows")]
         let windows_degraded_sandbox_enabled =
-            matches!(windows_sandbox_mode, WindowsSandboxMode::RestrictedToken);
+            matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
         #[cfg(not(target_os = "windows"))]
         let windows_degraded_sandbox_enabled = false;
 
@@ -3981,7 +3981,7 @@ impl ChatWidget {
             } else if preset.id == "auto" {
                 #[cfg(target_os = "windows")]
                 {
-                    if WindowsSandboxMode::from_config(&self.config) == WindowsSandboxMode::Disabled
+                    if WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled
                     {
                         let preset_clone = preset.clone();
                         if codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
@@ -4084,7 +4084,7 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: Some(approval),
                 sandbox_policy: Some(sandbox_clone.clone()),
-                windows_sandbox_mode: None,
+                windows_sandbox_level: None,
                 model: None,
                 effort: None,
                 summary: None,
@@ -4588,7 +4588,7 @@ impl ChatWidget {
     #[cfg(target_os = "windows")]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {
         if self.config.forced_auto_mode_downgraded_on_windows
-            && WindowsSandboxMode::from_config(&self.config) == WindowsSandboxMode::Disabled
+            && WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled
             && let Some(preset) = builtin_approval_presets()
                 .into_iter()
                 .find(|preset| preset.id == "auto")
@@ -4648,7 +4648,7 @@ impl ChatWidget {
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
         #[cfg(target_os = "windows")]
         let should_clear_downgrade = !matches!(&policy, SandboxPolicy::ReadOnly)
-            || WindowsSandboxMode::from_config(&self.config) != WindowsSandboxMode::Disabled;
+            || WindowsSandboxLevel::from_config(&self.config) != WindowsSandboxLevel::Disabled;
 
         self.config.sandbox_policy.set(policy)?;
 
@@ -4690,8 +4690,8 @@ impl ChatWidget {
             self.bottom_pane.set_windows_degraded_sandbox_active(
                 codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                     && matches!(
-                        WindowsSandboxMode::from_config(&self.config),
-                        WindowsSandboxMode::RestrictedToken
+                        WindowsSandboxLevel::from_config(&self.config),
+                        WindowsSandboxLevel::RestrictedToken
                     ),
             );
         }

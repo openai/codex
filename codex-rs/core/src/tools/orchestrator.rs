@@ -91,7 +91,7 @@ impl ToolOrchestrator {
             SandboxOverride::NoOverride => self.sandbox.select_initial(
                 &turn_ctx.sandbox_policy,
                 tool.sandbox_preference(),
-                turn_ctx.windows_sandbox_mode,
+                turn_ctx.windows_sandbox_level,
             ),
         };
 
@@ -103,7 +103,7 @@ impl ToolOrchestrator {
             manager: &self.sandbox,
             sandbox_cwd: &turn_ctx.cwd,
             codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
-            windows_sandbox_mode: turn_ctx.windows_sandbox_mode,
+            windows_sandbox_level: turn_ctx.windows_sandbox_level,
         };
 
         match tool.run(req, &initial_attempt, tool_ctx).await {
@@ -154,7 +154,7 @@ impl ToolOrchestrator {
                     manager: &self.sandbox,
                     sandbox_cwd: &turn_ctx.cwd,
                     codex_linux_sandbox_exe: None,
-                    windows_sandbox_mode: turn_ctx.windows_sandbox_mode,
+                    windows_sandbox_level: turn_ctx.windows_sandbox_level,
                 };
 
                 // Second attempt.

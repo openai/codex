@@ -36,7 +36,7 @@ impl ShellHandler {
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
-            windows_sandbox_mode: turn_context.windows_sandbox_mode,
+            windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification,
             arg0: None,
         }
@@ -63,7 +63,7 @@ impl ShellCommandHandler {
             expiration: params.timeout_ms.into(),
             env: create_env(&turn_context.shell_environment_policy),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
-            windows_sandbox_mode: turn_context.windows_sandbox_mode,
+            windows_sandbox_level: turn_context.windows_sandbox_level,
             justification: params.justification,
             arg0: None,
         }

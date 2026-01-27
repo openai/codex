@@ -71,7 +71,7 @@ pub enum SandboxMode {
 )]
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]
-pub enum WindowsSandboxMode {
+pub enum WindowsSandboxLevel {
     #[default]
     Disabled,
     RestrictedToken,
