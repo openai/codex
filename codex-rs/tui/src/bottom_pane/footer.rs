@@ -92,6 +92,10 @@ impl CollaborationModeIndicator {
 pub(crate) enum FooterMode {
     /// Transient "press again to quit" reminder (Ctrl+C/Ctrl+D).
     QuitShortcutReminder,
+    /// Multi-line shortcut overlay shown after pressing `?`.
+    ShortcutOverlay,
+    /// Transient "press Esc again" hint shown after the first Esc while idle.
+    EscHint,
     /// Base single-line footer when the composer is empty.
     ComposerEmpty,
     /// Base single-line footer when the composer contains a draft.
@@ -99,19 +103,25 @@ pub(crate) enum FooterMode {
     /// The shortcuts hint is suppressed here; when a task is running with
     /// steer enabled, this mode can show the queue hint instead.
     ComposerHasDraft,
-    /// Multi-line shortcut overlay shown after pressing `?`.
-    ShortcutOverlay,
-    /// Transient "press Esc again" hint shown after the first Esc while idle.
-    EscHint,
 }
 
-pub(crate) fn toggle_shortcut_mode(current: FooterMode, ctrl_c_hint: bool) -> FooterMode {
+pub(crate) fn toggle_shortcut_mode(
+    current: FooterMode,
+    ctrl_c_hint: bool,
+    is_empty: bool,
+) -> FooterMode {
     if ctrl_c_hint && matches!(current, FooterMode::QuitShortcutReminder) {
         return current;
     }
 
+    let base_mode = if is_empty {
+        FooterMode::ComposerEmpty
+    } else {
+        FooterMode::ComposerHasDraft
+    };
+
     match current {
-        FooterMode::ShortcutOverlay | FooterMode::QuitShortcutReminder => FooterMode::ComposerEmpty,
+        FooterMode::ShortcutOverlay | FooterMode::QuitShortcutReminder => base_mode,
         _ => FooterMode::ShortcutOverlay,
     }
 }
@@ -152,6 +162,25 @@ pub(crate) fn footer_height(props: FooterProps) -> u16 {
     footer_lines(props, None, false, show_shortcuts_hint, show_queue_hint).len() as u16
 }
 
+/// Render a single precomputed footer line.
+///
+/// Collapse/fallback logic (for example, `single_line_footer_layout`) may
+/// choose a specific line that fits the current width (for example, after
+/// dropping the cycle hint).
+pub(crate) fn render_footer_line(area: Rect, buf: &mut Buffer, line: Line<'static>) {
+    Paragraph::new(prefix_lines(
+        vec![line],
+        " ".repeat(FOOTER_INDENT_COLS).into(),
+        " ".repeat(FOOTER_INDENT_COLS).into(),
+    ))
+    .render(area, buf);
+}
+
+/// Render default footer content derived from `FooterProps`.
+///
+/// This uses `footer_lines` to build a nicely formatted footer line
+/// for varying screen widths. Use this when the caller has not already
+/// selected a specific line to render.
 pub(crate) fn render_footer(
     area: Rect,
     buf: &mut Buffer,
@@ -169,15 +198,6 @@ pub(crate) fn render_footer(
             show_shortcuts_hint,
             show_queue_hint,
         ),
-        " ".repeat(FOOTER_INDENT_COLS).into(),
-        " ".repeat(FOOTER_INDENT_COLS).into(),
-    ))
-    .render(area, buf);
-}
-
-pub(crate) fn render_footer_line(area: Rect, buf: &mut Buffer, line: Line<'static>) {
-    Paragraph::new(prefix_lines(
-        vec![line],
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
     ))
@@ -459,6 +479,12 @@ pub(crate) fn render_footer_hint_items(area: Rect, buf: &mut Buffer, items: &[(S
     footer_hint_items_line(items).render(inset_footer_hint_area(area), buf);
 }
 
+/// Build the default left-side footer lines for the current mode.
+///
+/// This is the mode-driven baseline. Collapse/fallback logic may choose a
+/// specific single-line variant that better fits the current width (see
+/// `single_line_footer_layout`). The right-side context indicator is rendered
+/// separately by the caller.
 fn footer_lines(
     props: FooterProps,
     indicator: Option<CollaborationModeIndicator>,
@@ -466,8 +492,6 @@ fn footer_lines(
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
 ) -> Vec<Line<'static>> {
-    // Render left-side hints only. The context indicator is rendered
-    // separately, right-aligned by the caller.
     match props.mode {
         FooterMode::QuitShortcutReminder => {
             vec![quit_shortcut_reminder_line(props.quit_shortcut_key)]

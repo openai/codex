@@ -2147,7 +2147,11 @@ impl ChatComposer {
             return false;
         }
 
-        let next = toggle_shortcut_mode(self.footer_mode, self.quit_shortcut_hint_visible());
+        let next = toggle_shortcut_mode(
+            self.footer_mode,
+            self.quit_shortcut_hint_visible(),
+            self.is_empty(),
+        );
         let changed = next != self.footer_mode;
         self.footer_mode = next;
         changed
