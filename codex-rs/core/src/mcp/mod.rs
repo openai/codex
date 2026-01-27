@@ -416,10 +416,15 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         }
     }
 
-    let refresh_servers = servers
-        .iter()
-        .map(|(name, config)| (name.clone(), config.clone()))
-        .collect();
+    // Refresh from the effective merged MCP map (global + repo + managed) and
+    // overlay the updated global servers so we don't drop repo-scoped servers.
+    let auth = sess.services.auth_manager.auth().await;
+    let mut refresh_servers = effective_mcp_servers(config, auth.as_ref());
+    for (name, server_config) in &servers {
+        refresh_servers
+            .entry(name.clone())
+            .or_insert_with(|| server_config.clone());
+    }
     sess.refresh_mcp_servers_now(
         turn_context,
         refresh_servers,
