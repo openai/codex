@@ -655,11 +655,13 @@ fn build_responses_headers(
     let mut headers = experimental_feature_headers(config);
     headers.insert(
         WEB_SEARCH_ELIGIBLE_HEADER,
-        HeaderValue::from_static(if config.web_search_mode == WebSearchMode::Disabled {
-            "false"
-        } else {
-            "true"
-        }),
+        HeaderValue::from_static(
+            if matches!(config.web_search_mode, Some(WebSearchMode::Disabled)) {
+                "false"
+            } else {
+                "true"
+            },
+        ),
     );
     if let Some(turn_state) = turn_state
         && let Some(state) = turn_state.get()
