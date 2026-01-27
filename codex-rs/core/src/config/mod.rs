@@ -310,8 +310,8 @@ pub struct Config {
     /// model info's default preference.
     pub include_apply_patch_tool: bool,
 
-    /// Explicit or feature-derived web search mode.
-    pub web_search_mode: Option<WebSearchMode>,
+    /// Explicit or feature-derived web search mode. Defaults to cached.
+    pub web_search_mode: WebSearchMode,
 
     /// Tool names that should be excluded from the model tool list.
     pub disallowed_tools: Vec<String>,
@@ -1227,17 +1227,17 @@ fn resolve_web_search_mode(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
     features: &Features,
-) -> Option<WebSearchMode> {
+) -> WebSearchMode {
     if let Some(mode) = config_profile.web_search.or(config_toml.web_search) {
-        return Some(mode);
+        return mode;
     }
     if features.enabled(Feature::WebSearchCached) {
-        return Some(WebSearchMode::Cached);
+        return WebSearchMode::Cached;
     }
     if features.enabled(Feature::WebSearchRequest) {
-        return Some(WebSearchMode::Live);
+        return WebSearchMode::Live;
     }
-    None
+    WebSearchMode::Cached
 }
 
 impl Config {
@@ -2312,12 +2312,15 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn web_search_mode_uses_none_if_unset() {
+    fn web_search_mode_defaults_to_cached_if_unset() {
         let cfg = ConfigToml::default();
         let profile = ConfigProfile::default();
         let features = Features::with_defaults();
 
-        assert_eq!(resolve_web_search_mode(&cfg, &profile, &features), None);
+        assert_eq!(
+            resolve_web_search_mode(&cfg, &profile, &features),
+            WebSearchMode::Cached
+        );
     }
 
     #[test]
@@ -2332,7 +2335,7 @@ trust_level = "trusted"
 
         assert_eq!(
             resolve_web_search_mode(&cfg, &profile, &features),
-            Some(WebSearchMode::Live)
+            WebSearchMode::Live
         );
     }
 
@@ -2348,7 +2351,7 @@ trust_level = "trusted"
 
         assert_eq!(
             resolve_web_search_mode(&cfg, &profile, &features),
-            Some(WebSearchMode::Disabled)
+            WebSearchMode::Disabled
         );
     }
 
@@ -3787,7 +3790,7 @@ model_verbosity = "high"
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
-                web_search_mode: None,
+                web_search_mode: WebSearchMode::Cached,
                 disallowed_tools: Vec::new(),
                 use_experimental_unified_exec_tool: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
@@ -3873,7 +3876,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: None,
+            web_search_mode: WebSearchMode::Cached,
             disallowed_tools: Vec::new(),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
@@ -3974,7 +3977,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: None,
+            web_search_mode: WebSearchMode::Cached,
             disallowed_tools: Vec::new(),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
@@ -4061,7 +4064,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: None,
+            web_search_mode: WebSearchMode::Cached,
             disallowed_tools: Vec::new(),
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),

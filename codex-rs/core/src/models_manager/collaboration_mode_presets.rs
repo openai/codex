@@ -28,7 +28,7 @@ fn plan_preset() -> CollaborationModeMask {
         name: "Plan".to_string(),
         mode: Some(ModeKind::Plan),
         model: None,
-        reasoning_effort: Some(Some(ReasoningEffort::High)),
+        reasoning_effort: Some(Some(ReasoningEffort::Medium)),
         developer_instructions: Some(Some(COLLABORATION_MODE_PLAN.to_string())),
     }
 }

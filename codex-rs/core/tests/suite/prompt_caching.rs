@@ -92,7 +92,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.model = Some("gpt-5.1-codex-max".to_string());
             // Keep tool expectations stable when the default web_search mode changes.
-            config.web_search_mode = Some(WebSearchMode::Cached);
+            config.web_search_mode = WebSearchMode::Cached;
             config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)

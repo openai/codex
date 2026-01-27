@@ -32,6 +32,7 @@ use codex_core::protocol::TurnCompleteEvent;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::web_search::web_search_detail;
 use codex_protocol::num_format::format_with_separators;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
@@ -370,8 +371,20 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     }
                 }
             }
-            EventMsg::WebSearchEnd(WebSearchEndEvent { call_id: _, query }) => {
-                ts_msg!(self, "🌐 Searched: {query}");
+            EventMsg::WebSearchBegin(_) => {
+                ts_msg!(self, "🌐 Searching the web...");
+            }
+            EventMsg::WebSearchEnd(WebSearchEndEvent {
+                call_id: _,
+                query,
+                action,
+            }) => {
+                let detail = web_search_detail(Some(&action), &query);
+                if detail.is_empty() {
+                    ts_msg!(self, "🌐 Searched the web");
+                } else {
+                    ts_msg!(self, "🌐 Searched: {detail}");
+                }
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id,
@@ -737,8 +750,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
             }
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
-            EventMsg::WebSearchBegin(_)
-            | EventMsg::ExecApprovalRequest(_)
+            EventMsg::ExecApprovalRequest(_)
             | EventMsg::ApplyPatchApprovalRequest(_)
             | EventMsg::TerminalInteraction(_)
             | EventMsg::ExecCommandOutputDelta(_)

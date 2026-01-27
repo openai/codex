@@ -1,3 +1,4 @@
+use codex_protocol::models::WebSearchAction;
 use mcp_types::ContentBlock as McpContentBlock;
 use serde::Deserialize;
 use serde::Serialize;
@@ -280,7 +281,9 @@ pub struct McpToolCallItem {
 /// A web search request.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct WebSearchItem {
+    pub id: String,
     pub query: String,
+    pub action: WebSearchAction,
 }
 
 /// An error notification.

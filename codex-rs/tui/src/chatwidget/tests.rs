@@ -807,6 +807,7 @@ async fn make_chatwidget_manual(
         config: cfg,
         current_collaboration_mode,
         active_collaboration_mask: None,
+        collaboration_mask_from_cycle: false,
         auth_manager,
         models_manager,
         otel_manager,
