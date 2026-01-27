@@ -117,6 +117,10 @@ client_request_definitions! {
         params: v2::ThreadArchiveParams,
         response: v2::ThreadArchiveResponse,
     },
+    ThreadUnarchive => "thread/unarchive" {
+        params: v2::ThreadUnarchiveParams,
+        response: v2::ThreadUnarchiveResponse,
+    },
     ThreadRollback => "thread/rollback" {
         params: v2::ThreadRollbackParams,
         response: v2::ThreadRollbackResponse,

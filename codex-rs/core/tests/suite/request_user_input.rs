@@ -94,6 +94,7 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
             "id": "confirm_path",
             "header": "Confirm",
             "question": "Proceed with the plan?",
+            "isOther": false,
             "options": [{
                 "label": "Yes (Recommended)",
                 "description": "Continue the current plan."
@@ -213,6 +214,7 @@ where
             "id": "confirm_path",
             "header": "Confirm",
             "question": "Proceed with the plan?",
+            "isOther": false,
             "options": [{
                 "label": "Yes (Recommended)",
                 "description": "Continue the current plan."
@@ -275,6 +277,19 @@ where
 async fn request_user_input_rejected_in_execute_mode() -> anyhow::Result<()> {
     assert_request_user_input_rejected("Execute", |model| CollaborationMode {
         mode: ModeKind::Execute,
+        settings: Settings {
+            model,
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_rejected_in_code_mode() -> anyhow::Result<()> {
+    assert_request_user_input_rejected("Code", |model| CollaborationMode {
+        mode: ModeKind::Code,
         settings: Settings {
             model,
             reasoning_effort: None,

@@ -1,8 +1,6 @@
 #![allow(clippy::expect_used)]
 use codex_core::CodexAuth;
 use codex_core::ModelProviderInfo;
-use codex_core::NewThread;
-use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
@@ -17,7 +15,6 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::user_input::UserInput;
-use core_test_support::load_default_config_for_test;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::skip_if_no_network;
@@ -25,7 +22,6 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use std::collections::VecDeque;
-use tempfile::TempDir;
 
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -140,21 +136,14 @@ async fn summarize_context_three_requests_and_instructions() {
 
     // Build config pointing to the mock server and spawn Codex.
     let model_provider = non_openai_model_provider(&server);
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_auto_compact_token_limit = Some(200_000);
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let NewThread {
-        thread: codex,
-        session_configured,
-        ..
-    } = thread_manager.start_thread(config).await.unwrap();
-    let rollout_path = session_configured.rollout_path.expect("rollout path");
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200_000);
+    });
+    let test = builder.build(&server).await.unwrap();
+    let codex = test.codex.clone();
+    let rollout_path = test.session_configured.rollout_path.expect("rollout path");
 
     // 1) Normal user input – should hit server once.
     codex
@@ -338,20 +327,15 @@ async fn manual_compact_uses_custom_prompt() {
     let custom_prompt = "Use this compact prompt instead";
 
     let model_provider = non_openai_model_provider(&server);
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    config.compact_prompt = Some(custom_prompt.to_string());
-
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let codex = thread_manager
-        .start_thread(config)
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        config.compact_prompt = Some(custom_prompt.to_string());
+    });
+    let codex = builder
+        .build(&server)
         .await
         .expect("create conversation")
-        .thread;
+        .codex;
 
     codex.submit(Op::Compact).await.expect("trigger compact");
     let warning_event = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
@@ -414,16 +398,11 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
     mount_sse_once(&server, sse_compact).await;
 
     let model_provider = non_openai_model_provider(&server);
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let NewThread { thread: codex, .. } = thread_manager.start_thread(config).await.unwrap();
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
 
     // Trigger manual compact and collect TokenCount events for the compact turn.
     codex.submit(Op::Compact).await.unwrap();
@@ -1039,16 +1018,12 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     let model_provider = non_openai_model_provider(&server);
 
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_auto_compact_token_limit = Some(200_000);
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let codex = thread_manager.start_thread(config).await.unwrap().thread;
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200_000);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
 
     codex
         .submit(Op::UserInput {
@@ -1379,20 +1354,14 @@ async fn auto_compact_persists_rollout_entries() {
 
     let model_provider = non_openai_model_provider(&server);
 
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_auto_compact_token_limit = Some(200_000);
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let NewThread {
-        thread: codex,
-        session_configured,
-        ..
-    } = thread_manager.start_thread(config).await.unwrap();
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200_000);
+    });
+    let test = builder.build(&server).await.unwrap();
+    let codex = test.codex.clone();
+    let session_configured = test.session_configured;
 
     codex
         .submit(Op::UserInput {
@@ -1497,19 +1466,12 @@ async fn manual_compact_retries_after_context_window_error() {
 
     let model_provider = non_openai_model_provider(&server);
 
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_auto_compact_token_limit = Some(200_000);
-    let codex = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    )
-    .start_thread(config)
-    .await
-    .unwrap()
-    .thread;
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200_000);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
 
     codex
         .submit(Op::UserInput {
@@ -1632,18 +1594,11 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
 
     let model_provider = non_openai_model_provider(&server);
 
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    let codex = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    )
-    .start_thread(config)
-    .await
-    .unwrap()
-    .thread;
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
 
     codex
         .submit(Op::UserInput {
@@ -1700,12 +1655,11 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
                 && item
                     .get("content")
                     .and_then(|v| v.as_array())
-                    .map(|arr| {
+                    .is_some_and(|arr| {
                         arr.iter().any(|entry| {
                             entry.get("text").and_then(|v| v.as_str()) == Some(expected)
                         })
                     })
-                    .unwrap_or(false)
         })
     };
 
@@ -1843,16 +1797,12 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
 
     let model_provider = non_openai_model_provider(&server);
 
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_auto_compact_token_limit = Some(200);
-    let thread_manager = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    );
-    let codex = thread_manager.start_thread(config).await.unwrap().thread;
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
 
     let mut auto_compact_lifecycle_events = Vec::new();
     for user in [MULTI_AUTO_MSG, follow_up_user, final_user] {
@@ -1954,21 +1904,13 @@ async fn auto_compact_triggers_after_function_call_over_95_percent_usage() {
 
     let model_provider = non_openai_model_provider(&server);
 
-    let home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&home).await;
-    config.model_provider = model_provider;
-    set_test_compact_prompt(&mut config);
-    config.model_context_window = Some(context_window);
-    config.model_auto_compact_token_limit = Some(limit);
-
-    let codex = ThreadManager::with_models_provider(
-        CodexAuth::from_api_key("dummy"),
-        config.model_provider.clone(),
-    )
-    .start_thread(config)
-    .await
-    .unwrap()
-    .thread;
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_context_window = Some(context_window);
+        config.model_auto_compact_token_limit = Some(limit);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
 
     codex
         .submit(Op::UserInput {

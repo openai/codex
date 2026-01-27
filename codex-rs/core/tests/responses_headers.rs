@@ -264,7 +264,7 @@ async fn responses_stream_includes_web_search_eligible_header_false_when_disable
 
     let test = test_codex()
         .with_config(|config| {
-            config.web_search_mode = Some(WebSearchMode::Disabled);
+            config.web_search_mode = WebSearchMode::Disabled;
         })
         .build(&server)
         .await

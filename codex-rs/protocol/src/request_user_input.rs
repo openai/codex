@@ -16,6 +16,10 @@ pub struct RequestUserInputQuestion {
     pub id: String,
     pub header: String,
     pub question: String,
+    #[serde(rename = "isOther", default)]
+    #[schemars(rename = "isOther")]
+    #[ts(rename = "isOther")]
+    pub is_other: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<RequestUserInputQuestionOption>>,
 }

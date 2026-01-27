@@ -304,8 +304,8 @@ pub struct Config {
     /// model info's default preference.
     pub include_apply_patch_tool: bool,
 
-    /// Explicit or feature-derived web search mode.
-    pub web_search_mode: Option<WebSearchMode>,
+    /// Explicit or feature-derived web search mode. Defaults to cached.
+    pub web_search_mode: WebSearchMode,
 
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
@@ -315,6 +315,9 @@ pub struct Config {
 
     /// Centralized feature flags; source of truth for feature gating.
     pub features: Features,
+
+    /// When `true`, suppress warnings about unstable (under development) features.
+    pub suppress_unstable_features_warning: bool,
 
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
@@ -906,6 +909,9 @@ pub struct ConfigToml {
     #[schemars(schema_with = "crate::config::schema::features_schema")]
     pub features: Option<FeaturesToml>,
 
+    /// Suppress warnings about unstable (under development) features.
+    pub suppress_unstable_features_warning: Option<bool>,
+
     /// Settings for ghost snapshots (used for undo).
     #[serde(default)]
     pub ghost_snapshot: Option<GhostSnapshotToml>,
@@ -1199,17 +1205,17 @@ fn resolve_web_search_mode(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
     features: &Features,
-) -> Option<WebSearchMode> {
+) -> WebSearchMode {
     if let Some(mode) = config_profile.web_search.or(config_toml.web_search) {
-        return Some(mode);
+        return mode;
     }
     if features.enabled(Feature::WebSearchCached) {
-        return Some(WebSearchMode::Cached);
+        return WebSearchMode::Cached;
     }
     if features.enabled(Feature::WebSearchRequest) {
-        return Some(WebSearchMode::Live);
+        return WebSearchMode::Live;
     }
-    None
+    WebSearchMode::Cached
 }
 
 impl Config {
@@ -1564,6 +1570,9 @@ impl Config {
             use_experimental_unified_exec_tool,
             ghost_snapshot,
             features,
+            suppress_unstable_features_warning: cfg
+                .suppress_unstable_features_warning
+                .unwrap_or(false),
             active_profile: active_profile_name,
             active_project,
             windows_wsl_setup_acknowledged: cfg.windows_wsl_setup_acknowledged.unwrap_or(false),
@@ -1772,6 +1781,7 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            scopes: None,
         }
     }
 
@@ -1789,6 +1799,7 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            scopes: None,
         }
     }
 
@@ -2253,12 +2264,15 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn web_search_mode_uses_none_if_unset() {
+    fn web_search_mode_defaults_to_cached_if_unset() {
         let cfg = ConfigToml::default();
         let profile = ConfigProfile::default();
         let features = Features::with_defaults();
 
-        assert_eq!(resolve_web_search_mode(&cfg, &profile, &features), None);
+        assert_eq!(
+            resolve_web_search_mode(&cfg, &profile, &features),
+            WebSearchMode::Cached
+        );
     }
 
     #[test]
@@ -2273,7 +2287,7 @@ trust_level = "trusted"
 
         assert_eq!(
             resolve_web_search_mode(&cfg, &profile, &features),
-            Some(WebSearchMode::Live)
+            WebSearchMode::Live
         );
     }
 
@@ -2289,7 +2303,7 @@ trust_level = "trusted"
 
         assert_eq!(
             resolve_web_search_mode(&cfg, &profile, &features),
-            Some(WebSearchMode::Disabled)
+            WebSearchMode::Disabled
         );
     }
 
@@ -2614,6 +2628,7 @@ profile = "project"
                 tool_timeout_sec: Some(Duration::from_secs(5)),
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         );
 
@@ -2768,6 +2783,7 @@ bearer_token = "secret"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -2837,6 +2853,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -2886,6 +2903,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -2933,6 +2951,7 @@ ZIG_VAR = "3"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -2996,6 +3015,7 @@ startup_timeout_sec = 2.0
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
         apply_blocking(
@@ -3071,6 +3091,7 @@ X-Auth = "DOCS_AUTH"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -3099,6 +3120,7 @@ X-Auth = "DOCS_AUTH"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         );
         apply_blocking(
@@ -3165,6 +3187,7 @@ url = "https://example.com/mcp"
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    scopes: None,
                 },
             ),
             (
@@ -3183,6 +3206,7 @@ url = "https://example.com/mcp"
                     tool_timeout_sec: None,
                     enabled_tools: None,
                     disabled_tools: None,
+                    scopes: None,
                 },
             ),
         ]);
@@ -3264,6 +3288,7 @@ url = "https://example.com/mcp"
                 tool_timeout_sec: None,
                 enabled_tools: None,
                 disabled_tools: None,
+                scopes: None,
             },
         )]);
 
@@ -3307,6 +3332,7 @@ url = "https://example.com/mcp"
                 tool_timeout_sec: None,
                 enabled_tools: Some(vec!["allowed".to_string()]),
                 disabled_tools: Some(vec!["blocked".to_string()]),
+                scopes: None,
             },
         )]);
 
@@ -3714,10 +3740,11 @@ model_verbosity = "high"
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
-                web_search_mode: None,
+                web_search_mode: WebSearchMode::Cached,
                 use_experimental_unified_exec_tool: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
+                suppress_unstable_features_warning: false,
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
                 windows_wsl_setup_acknowledged: false,
@@ -3796,10 +3823,11 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: None,
+            web_search_mode: WebSearchMode::Cached,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
+            suppress_unstable_features_warning: false,
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
@@ -3893,10 +3921,11 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: None,
+            web_search_mode: WebSearchMode::Cached,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
+            suppress_unstable_features_warning: false,
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,
@@ -3976,10 +4005,11 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: None,
+            web_search_mode: WebSearchMode::Cached,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
+            suppress_unstable_features_warning: false,
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },
             windows_wsl_setup_acknowledged: false,

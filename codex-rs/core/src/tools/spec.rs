@@ -8,6 +8,7 @@ use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::registry::ToolRegistryBuilder;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -26,7 +27,7 @@ use std::collections::HashMap;
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
-    pub web_search_mode: Option<WebSearchMode>,
+    pub web_search_mode: WebSearchMode,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub experimental_supported_tools: Vec<String>,
@@ -35,7 +36,7 @@ pub(crate) struct ToolsConfig {
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_info: &'a ModelInfo,
     pub(crate) features: &'a Features,
-    pub(crate) web_search_mode: Option<WebSearchMode>,
+    pub(crate) web_search_mode: WebSearchMode,
 }
 
 impl ToolsConfig {
@@ -517,7 +518,7 @@ fn create_wait_tool() -> ToolSpec {
         "timeout_ms".to_string(),
         JsonSchema::Number {
             description: Some(format!(
-                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS} and max {MAX_WAIT_TIMEOUT_MS}."
+                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS}, min {MIN_WAIT_TIMEOUT_MS}, and max {MAX_WAIT_TIMEOUT_MS}. Avoid tight polling loops; prefer longer waits (seconds to minutes)."
             )),
         },
     );
@@ -555,7 +556,7 @@ fn create_request_user_input_tool() -> ToolSpec {
 
     let options_schema = JsonSchema::Array {
         description: Some(
-            "Optional 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Only include \"Other\" option if we want to include a free form option. If the question is free form in nature, please do not have any option."
+            "Optional 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Do not include an \"Other\" option in this list; use isOther on the question to request a free form choice. If the question is free form in nature, please do not have any option."
                 .to_string(),
         ),
         items: Box::new(JsonSchema::Object {
@@ -586,6 +587,15 @@ fn create_request_user_input_tool() -> ToolSpec {
             description: Some("Single-sentence prompt shown to the user.".to_string()),
         },
     );
+    question_props.insert(
+        "isOther".to_string(),
+        JsonSchema::Boolean {
+            description: Some(
+                "True when this question should include a free-form \"Other\" option. Otherwise false."
+                    .to_string(),
+            ),
+        },
+    );
     question_props.insert("options".to_string(), options_schema);
 
     let questions_schema = JsonSchema::Array {
@@ -596,6 +606,7 @@ fn create_request_user_input_tool() -> ToolSpec {
                 "id".to_string(),
                 "header".to_string(),
                 "question".to_string(),
+                "isOther".to_string(),
             ]),
             additional_properties: Some(false.into()),
         }),
@@ -1363,17 +1374,17 @@ pub(crate) fn build_specs(
     }
 
     match config.web_search_mode {
-        Some(WebSearchMode::Cached) => {
+        WebSearchMode::Cached => {
             builder.push_spec(ToolSpec::WebSearch {
                 external_web_access: Some(false),
             });
         }
-        Some(WebSearchMode::Live) => {
+        WebSearchMode::Live => {
             builder.push_spec(ToolSpec::WebSearch {
                 external_web_access: Some(true),
             });
         }
-        Some(WebSearchMode::Disabled) | None => {}
+        WebSearchMode::Disabled => {}
     }
 
     builder.push_spec_with_parallel_support(create_view_image_tool(), true);
@@ -1535,7 +1546,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Live),
+            web_search_mode: WebSearchMode::Live,
         });
         let (tools, _) = build_specs(&config, None, &[]).build();
 
@@ -1599,7 +1610,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
+            web_search_mode: WebSearchMode::Cached,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(
@@ -1617,7 +1628,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
+            web_search_mode: WebSearchMode::Cached,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert!(
@@ -1629,7 +1640,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
+            web_search_mode: WebSearchMode::Cached,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(&tools, &["request_user_input"]);
@@ -1638,7 +1649,7 @@ mod tests {
     fn assert_model_tools(
         model_slug: &str,
         features: &Features,
-        web_search_mode: Option<WebSearchMode>,
+        web_search_mode: WebSearchMode,
         expected_tools: &[&str],
     ) {
         let config = test_config();
@@ -1662,7 +1673,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
+            web_search_mode: WebSearchMode::Cached,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -1684,7 +1695,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Live),
+            web_search_mode: WebSearchMode::Live,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -1704,7 +1715,7 @@ mod tests {
         assert_model_tools(
             "gpt-5-codex",
             &features,
-            Some(WebSearchMode::Cached),
+            WebSearchMode::Cached,
             &[
                 "shell_command",
                 "list_mcp_resources",
@@ -1726,7 +1737,7 @@ mod tests {
         assert_model_tools(
             "gpt-5.1-codex",
             &features,
-            Some(WebSearchMode::Cached),
+            WebSearchMode::Cached,
             &[
                 "shell_command",
                 "list_mcp_resources",
@@ -1749,7 +1760,7 @@ mod tests {
         assert_model_tools(
             "gpt-5-codex",
             &features,
-            Some(WebSearchMode::Live),
+            WebSearchMode::Live,
             &[
                 "exec_command",
                 "write_stdin",
@@ -1773,7 +1784,7 @@ mod tests {
         assert_model_tools(
             "gpt-5.1-codex",
             &features,
-            Some(WebSearchMode::Live),
+            WebSearchMode::Live,
             &[
                 "exec_command",
                 "write_stdin",
@@ -1796,7 +1807,7 @@ mod tests {
         assert_model_tools(
             "codex-mini-latest",
             &features,
-            Some(WebSearchMode::Cached),
+            WebSearchMode::Cached,
             &[
                 "local_shell",
                 "list_mcp_resources",
@@ -1817,7 +1828,7 @@ mod tests {
         assert_model_tools(
             "gpt-5.1-codex-mini",
             &features,
-            Some(WebSearchMode::Cached),
+            WebSearchMode::Cached,
             &[
                 "shell_command",
                 "list_mcp_resources",
@@ -1839,7 +1850,7 @@ mod tests {
         assert_model_tools(
             "gpt-5",
             &features,
-            Some(WebSearchMode::Cached),
+            WebSearchMode::Cached,
             &[
                 "shell",
                 "list_mcp_resources",
@@ -1860,7 +1871,7 @@ mod tests {
         assert_model_tools(
             "gpt-5.1",
             &features,
-            Some(WebSearchMode::Cached),
+            WebSearchMode::Cached,
             &[
                 "shell_command",
                 "list_mcp_resources",
@@ -1882,7 +1893,7 @@ mod tests {
         assert_model_tools(
             "exp-5.1",
             &features,
-            Some(WebSearchMode::Cached),
+            WebSearchMode::Cached,
             &[
                 "exec_command",
                 "write_stdin",
@@ -1906,7 +1917,7 @@ mod tests {
         assert_model_tools(
             "codex-mini-latest",
             &features,
-            Some(WebSearchMode::Live),
+            WebSearchMode::Live,
             &[
                 "exec_command",
                 "write_stdin",
@@ -1930,7 +1941,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Live),
+            web_search_mode: WebSearchMode::Live,
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
 
@@ -1952,7 +1963,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
+            web_search_mode: WebSearchMode::Cached,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -1971,7 +1982,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
+            web_search_mode: WebSearchMode::Cached,
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -2002,7 +2013,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Live),
+            web_search_mode: WebSearchMode::Live,
         });
         let (tools, _) = build_specs(
             &tools_config,
@@ -2098,7 +2109,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
+            web_search_mode: WebSearchMode::Cached,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -2175,7 +2186,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
+            web_search_mode: WebSearchMode::Cached,
         });
 
         let (tools, _) = build_specs(
@@ -2233,7 +2244,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
+            web_search_mode: WebSearchMode::Cached,
         });
 
         let (tools, _) = build_specs(
@@ -2288,7 +2299,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
+            web_search_mode: WebSearchMode::Cached,
         });
 
         let (tools, _) = build_specs(
@@ -2345,7 +2356,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
+            web_search_mode: WebSearchMode::Cached,
         });
 
         let (tools, _) = build_specs(
@@ -2458,7 +2469,7 @@ Examples of valid command strings:
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: Some(WebSearchMode::Cached),
+            web_search_mode: WebSearchMode::Cached,
         });
         let (tools, _) = build_specs(
             &tools_config,

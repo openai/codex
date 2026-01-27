@@ -12,6 +12,7 @@ use crate::CodexAuth;
 use crate::SandboxState;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
+use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
@@ -21,6 +22,7 @@ use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::features::maybe_push_unstable_features_warning;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -52,6 +54,7 @@ use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -240,7 +243,7 @@ impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn(
-        config: Config,
+        mut config: Config,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
         skills_manager: Arc<SkillsManager>,
@@ -260,6 +263,12 @@ impl Codex {
                 err.path.display(),
                 err.message
             );
+        }
+
+        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
+            && depth >= MAX_THREAD_SPAWN_DEPTH
+        {
+            config.features.disable(Feature::Collab);
         }
 
         let enabled_skills = loaded_skills.enabled_skills();
@@ -746,6 +755,7 @@ impl Session {
             });
         }
         maybe_push_chat_wire_api_deprecation(&config, &mut post_session_configured_events);
+        maybe_push_unstable_features_warning(&config, &mut post_session_configured_events);
 
         let auth = auth.as_ref();
         let otel_manager = OtelManager::new(
@@ -2814,7 +2824,7 @@ async fn spawn_review_thread(
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
         features: &review_features,
-        web_search_mode: Some(review_web_search_mode),
+        web_search_mode: review_web_search_mode,
     });
 
     let review_prompt = resolved.prompt.clone();
@@ -2826,7 +2836,7 @@ async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
-    per_turn_config.web_search_mode = Some(review_web_search_mode);
+    per_turn_config.web_search_mode = review_web_search_mode;
 
     let otel_manager = parent_turn_context
         .client
@@ -3429,10 +3439,8 @@ async fn try_run_sampling_request(
             }
             ResponseEvent::OutputItemAdded(item) => {
                 if let Some(turn_item) = handle_non_tool_response_item(&item).await {
-                    let tracked_item = turn_item.clone();
                     sess.emit_turn_item_started(&turn_context, &turn_item).await;
-
-                    active_item = Some(tracked_item);
+                    active_item = Some(turn_item);
                 }
             }
             ResponseEvent::ServerReasoningIncluded(included) => {
@@ -3587,6 +3595,7 @@ mod tests {
     use crate::shell::default_user_shell;
     use crate::tools::format_exec_output_str;
 
+    use codex_protocol::ThreadId;
     use codex_protocol::models::FunctionCallOutputPayload;
 
     use crate::protocol::CompactedItem;

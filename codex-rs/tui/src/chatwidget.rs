@@ -133,12 +133,12 @@ use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
-use crate::bottom_pane::BetaFeatureItem;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::CollaborationModeIndicator;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
+use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
@@ -162,6 +162,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
@@ -1490,13 +1491,43 @@ impl ChatWidget {
         self.defer_or_handle(|q| q.push_mcp_end(ev), |s| s.handle_mcp_end_now(ev2));
     }
 
-    fn on_web_search_begin(&mut self, _ev: WebSearchBeginEvent) {
+    fn on_web_search_begin(&mut self, ev: WebSearchBeginEvent) {
         self.flush_answer_stream_with_separator();
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(history_cell::new_active_web_search_call(
+            ev.call_id,
+            String::new(),
+            self.config.animations,
+        )));
+        self.bump_active_cell_revision();
+        self.request_redraw();
     }
 
     fn on_web_search_end(&mut self, ev: WebSearchEndEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_web_search_call(ev.query));
+        let WebSearchEndEvent {
+            call_id,
+            query,
+            action,
+        } = ev;
+        let mut handled = false;
+        if let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|cell| cell.as_any_mut().downcast_mut::<WebSearchCell>())
+            && cell.call_id() == call_id
+        {
+            cell.update(action.clone(), query.clone());
+            cell.complete();
+            self.bump_active_cell_revision();
+            self.flush_active_cell();
+            handled = true;
+        }
+
+        if !handled {
+            self.add_to_history(history_cell::new_web_search_call(call_id, query, action));
+        }
+        self.had_work_activity = true;
     }
 
     fn on_collab_event(&mut self, cell: PlainHistoryCell) {
@@ -4029,12 +4060,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_experimental_popup(&mut self) {
-        let features: Vec<BetaFeatureItem> = FEATURES
+        let features: Vec<ExperimentalFeatureItem> = FEATURES
             .iter()
             .filter_map(|spec| {
-                let name = spec.stage.beta_menu_name()?;
-                let description = spec.stage.beta_menu_description()?;
-                Some(BetaFeatureItem {
+                let name = spec.stage.experimental_menu_name()?;
+                let description = spec.stage.experimental_menu_description()?;
+                Some(ExperimentalFeatureItem {
                     feature: spec.id,
                     name: name.to_string(),
                     description: description.to_string(),
