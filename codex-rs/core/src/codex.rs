@@ -100,6 +100,7 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
+use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
@@ -581,6 +582,10 @@ impl Session {
             session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.model_personality = session_configuration.personality;
+        per_turn_config.web_search_mode = Some(resolve_web_search_mode_for_turn(
+            per_turn_config.web_search_mode,
+            session_configuration.sandbox_policy.get(),
+        ));
         per_turn_config.features = config.features.clone();
         per_turn_config
     }

@@ -1221,6 +1221,20 @@ fn resolve_web_search_mode(
     None
 }
 
+pub(crate) fn resolve_web_search_mode_for_turn(
+    explicit_mode: Option<WebSearchMode>,
+    sandbox_policy: &SandboxPolicy,
+) -> WebSearchMode {
+    if let Some(mode) = explicit_mode {
+        return mode;
+    }
+    if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
+        WebSearchMode::Live
+    } else {
+        WebSearchMode::Cached
+    }
+}
+
 impl Config {
     #[cfg(test)]
     fn load_from_base_config_with_overrides(
@@ -2303,6 +2317,30 @@ trust_level = "trusted"
             resolve_web_search_mode(&cfg, &profile, &features),
             Some(WebSearchMode::Disabled)
         );
+    }
+
+    #[test]
+    fn web_search_mode_for_turn_defaults_to_cached_when_unset() {
+        let mode = resolve_web_search_mode_for_turn(None, &SandboxPolicy::ReadOnly);
+
+        assert_eq!(mode, WebSearchMode::Cached);
+    }
+
+    #[test]
+    fn web_search_mode_for_turn_defaults_to_live_for_danger_full_access() {
+        let mode = resolve_web_search_mode_for_turn(None, &SandboxPolicy::DangerFullAccess);
+
+        assert_eq!(mode, WebSearchMode::Live);
+    }
+
+    #[test]
+    fn web_search_mode_for_turn_prefers_explicit_value() {
+        let mode = resolve_web_search_mode_for_turn(
+            Some(WebSearchMode::Cached),
+            &SandboxPolicy::DangerFullAccess,
+        );
+
+        assert_eq!(mode, WebSearchMode::Cached);
     }
 
     #[test]
