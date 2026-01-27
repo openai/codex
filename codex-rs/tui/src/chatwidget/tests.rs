@@ -2537,6 +2537,45 @@ async fn undo_success_events_render_info_messages() {
 }
 
 #[tokio::test]
+async fn undo_completed_clears_running_and_sends_next_queued_input() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.agent_turn_running = true;
+    chat.update_task_running_state();
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.queue_user_message(UserMessage {
+        text: "next".to_string(),
+        local_images: Vec::new(),
+        text_elements: Vec::new(),
+    });
+    assert_eq!(chat.queued_user_messages.len(), 1);
+
+    chat.handle_codex_event(Event {
+        id: "undo-complete".to_string(),
+        msg: EventMsg::UndoCompleted(UndoCompletedEvent {
+            success: true,
+            message: None,
+        }),
+    });
+
+    assert!(!chat.bottom_pane.is_task_running());
+    assert!(chat.queued_user_messages.is_empty());
+
+    let op = next_submit_op(&mut op_rx);
+    let actual_items = match op {
+        Op::UserTurn { items, .. } => items,
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    };
+    let expected_items = vec![UserInput::Text {
+        text: "next".to_string(),
+        text_elements: Vec::new(),
+    }];
+    assert_eq!(actual_items, expected_items);
+}
+
+#[tokio::test]
 async fn undo_failure_events_render_error_message() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -2572,7 +2611,7 @@ async fn undo_failure_events_render_error_message() {
 }
 
 #[tokio::test]
-async fn undo_started_hides_interrupt_hint() {
+async fn undo_started_shows_interrupt_hint() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {
@@ -2585,8 +2624,8 @@ async fn undo_started_hides_interrupt_hint() {
         .status_widget()
         .expect("status indicator should be active");
     assert!(
-        !status.interrupt_hint_visible(),
-        "undo should hide the interrupt hint because the operation cannot be cancelled"
+        status.interrupt_hint_visible(),
+        "undo should show the interrupt hint while work is in progress"
     );
 }
 

@@ -1576,7 +1576,10 @@ impl ChatWidget {
 
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
         self.bottom_pane.ensure_status_indicator();
-        self.bottom_pane.set_interrupt_hint_visible(false);
+        self.agent_turn_running = true;
+        self.update_task_running_state();
+        self.bottom_pane.set_interrupt_hint_visible(true);
+        self.request_redraw();
         let message = event
             .message
             .unwrap_or_else(|| "Undo in progress...".to_string());
@@ -1585,6 +1588,8 @@ impl ChatWidget {
 
     fn on_undo_completed(&mut self, event: UndoCompletedEvent) {
         let UndoCompletedEvent { success, message } = event;
+        self.agent_turn_running = false;
+        self.update_task_running_state();
         self.bottom_pane.hide_status_indicator();
         let message = message.unwrap_or_else(|| {
             if success {
@@ -1598,6 +1603,7 @@ impl ChatWidget {
         } else {
             self.add_error_message(message);
         }
+        self.maybe_send_next_queued_input();
     }
 
     fn on_stream_error(&mut self, message: String, additional_details: Option<String>) {
