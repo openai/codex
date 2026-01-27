@@ -260,6 +260,13 @@ fn line_width(line: &Line<'_>) -> usize {
         .sum()
 }
 
+/// Truncate a styled line to `max_width`, preferring a word boundary, and append an ellipsis.
+///
+/// This walks spans character-by-character, tracking the last width-safe position and the last
+/// whitespace boundary within the available width (excluding the ellipsis width). If the line
+/// overflows, it truncates at the last word boundary when possible (falling back to the last
+/// fitting character), trims trailing whitespace, then appends an ellipsis styled to match the
+/// last visible span (or the line style if nothing was kept).
 fn truncate_line_word_boundary_with_ellipsis(
     line: Line<'static>,
     max_width: usize,
@@ -285,6 +292,7 @@ fn truncate_line_word_boundary_with_ellipsis(
         byte_end: usize,
     }
 
+    // Track display width as we scan, along with the best "cut here" positions.
     let mut used = 0usize;
     let mut last_fit: Option<BreakPoint> = None;
     let mut last_word_break: Option<BreakPoint> = None;
@@ -310,10 +318,12 @@ fn truncate_line_word_boundary_with_ellipsis(
         }
     }
 
+    // If we never overflowed, the original line already fits.
     if !overflowed {
         return line;
     }
 
+    // Prefer breaking on whitespace; otherwise fall back to the last fitting character.
     let chosen_break = last_word_break.or(last_fit);
     let Some(chosen_break) = chosen_break else {
         return Line::from(ellipsis);

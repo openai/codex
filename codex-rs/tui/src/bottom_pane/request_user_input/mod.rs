@@ -1598,7 +1598,7 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         assert_eq!(overlay.current_index(), 1);
-        let answer = overlay.answers.get(0).expect("answer missing");
+        let answer = overlay.answers.first().expect("answer missing");
         assert_eq!(answer.selected, Some(1));
     }
 
