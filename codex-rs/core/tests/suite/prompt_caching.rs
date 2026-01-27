@@ -12,6 +12,7 @@ use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -91,7 +92,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.model = Some("gpt-5.1-codex-max".to_string());
             // Keep tool expectations stable when the default web_search mode changes.
-            config.web_search_mode = Some(WebSearchMode::Cached);
+            config.web_search_mode = WebSearchMode::Cached;
             config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
@@ -412,11 +413,14 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
 
     let TestCodex { codex, .. } = test_codex().build(&server).await?;
 
-    let collaboration_mode = CollaborationMode::Custom(Settings {
-        model: "gpt-5.1".to_string(),
-        reasoning_effort: Some(ReasoningEffort::High),
-        developer_instructions: None,
-    });
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Custom,
+        settings: Settings {
+            model: "gpt-5.1".to_string(),
+            reasoning_effort: Some(ReasoningEffort::High),
+            developer_instructions: None,
+        },
+    };
 
     codex
         .submit(Op::OverrideTurnContext {

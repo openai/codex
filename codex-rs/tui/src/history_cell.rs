@@ -19,7 +19,6 @@ use crate::exec_cell::output_lines;
 use crate::exec_cell::spinner;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
-use crate::key_hint;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
@@ -44,13 +43,13 @@ use codex_core::protocol::FileChange;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
-use codex_protocol::config_types::CollaborationMode;
+use codex_core::web_search::web_search_detail;
+use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::user_input::TextElement;
-use crossterm::event::KeyCode;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -906,8 +905,6 @@ pub(crate) fn new_session_info(
     requested_model: &str,
     event: SessionConfiguredEvent,
     is_first_event: bool,
-    is_collaboration: bool,
-    collaboration_mode: CollaborationMode,
 ) -> SessionInfoCell {
     let SessionConfiguredEvent {
         model,
@@ -920,8 +917,6 @@ pub(crate) fn new_session_info(
         reasoning_effort,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
-        is_collaboration,
-        collaboration_mode,
     );
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
 
@@ -1003,8 +998,6 @@ pub(crate) struct SessionHeaderHistoryCell {
     model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
-    is_collaboration: bool,
-    collaboration_mode: CollaborationMode,
 }
 
 impl SessionHeaderHistoryCell {
@@ -1013,8 +1006,6 @@ impl SessionHeaderHistoryCell {
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
         version: &'static str,
-        is_collaboration: bool,
-        collaboration_mode: CollaborationMode,
     ) -> Self {
         Self::new_with_style(
             model,
@@ -1022,8 +1013,6 @@ impl SessionHeaderHistoryCell {
             reasoning_effort,
             directory,
             version,
-            is_collaboration,
-            collaboration_mode,
         )
     }
 
@@ -1033,8 +1022,6 @@ impl SessionHeaderHistoryCell {
         reasoning_effort: Option<ReasoningEffortConfig>,
         directory: PathBuf,
         version: &'static str,
-        is_collaboration: bool,
-        collaboration_mode: CollaborationMode,
     ) -> Self {
         Self {
             version,
@@ -1042,20 +1029,6 @@ impl SessionHeaderHistoryCell {
             model_style,
             reasoning_effort,
             directory,
-            is_collaboration,
-            collaboration_mode,
-        }
-    }
-
-    fn collaboration_mode_label(&self) -> Option<&'static str> {
-        if !self.is_collaboration {
-            return None;
-        }
-        match &self.collaboration_mode {
-            CollaborationMode::Plan(_) => Some("Plan"),
-            CollaborationMode::PairProgramming(_) => Some("Pair Programming"),
-            CollaborationMode::Execute(_) => Some("Execute"),
-            CollaborationMode::Custom(_) => None,
         }
     }
 
@@ -1116,38 +1089,16 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
-        const CHANGE_MODE_HINT_EXPLANATION: &str = " to change mode";
         const DIR_LABEL: &str = "directory:";
         let label_width = DIR_LABEL.len();
 
-        let model_spans: Vec<Span<'static>> = if self.is_collaboration {
-            // Render collaboration mode instead of model
-            let collab_label = format!(
-                "{collab_label:<label_width$}",
-                collab_label = "mode:",
-                label_width = label_width
-            );
-            let mut spans = vec![Span::from(format!("{collab_label} ")).dim()];
-            if self.model == "loading" {
-                spans.push(Span::styled(self.model.clone(), self.model_style));
-            } else if let Some(mode_label) = self.collaboration_mode_label() {
-                spans.push(Span::styled(mode_label.to_string(), self.model_style));
-            } else {
-                spans.push(Span::styled("Custom", self.model_style));
-            }
-            spans.push("   ".dim());
-            let shift_tab_span: Span<'static> = key_hint::shift(KeyCode::Tab).into();
-            spans.push(shift_tab_span.cyan());
-            spans.push(CHANGE_MODE_HINT_EXPLANATION.dim());
-            spans
-        } else {
-            // Render model as before
-            let model_label = format!(
-                "{model_label:<label_width$}",
-                model_label = "model:",
-                label_width = label_width
-            );
-            let reasoning_label = self.reasoning_label();
+        let model_label = format!(
+            "{model_label:<label_width$}",
+            model_label = "model:",
+            label_width = label_width
+        );
+        let reasoning_label = self.reasoning_label();
+        let model_spans: Vec<Span<'static>> = {
             let mut spans = vec![
                 Span::from(format!("{model_label} ")).dim(),
                 Span::styled(self.model.clone(), self.model_style),
@@ -1393,9 +1344,89 @@ pub(crate) fn new_active_mcp_tool_call(
     McpToolCallCell::new(call_id, invocation, animations_enabled)
 }
 
-pub(crate) fn new_web_search_call(query: String) -> PrefixedWrappedHistoryCell {
-    let text: Text<'static> = Line::from(vec!["Searched".bold(), " ".into(), query.into()]).into();
-    PrefixedWrappedHistoryCell::new(text, "• ".dim(), "  ")
+fn web_search_header(completed: bool) -> &'static str {
+    if completed {
+        "Searched"
+    } else {
+        "Searching the web"
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct WebSearchCell {
+    call_id: String,
+    query: String,
+    action: Option<WebSearchAction>,
+    start_time: Instant,
+    completed: bool,
+    animations_enabled: bool,
+}
+
+impl WebSearchCell {
+    pub(crate) fn new(
+        call_id: String,
+        query: String,
+        action: Option<WebSearchAction>,
+        animations_enabled: bool,
+    ) -> Self {
+        Self {
+            call_id,
+            query,
+            action,
+            start_time: Instant::now(),
+            completed: false,
+            animations_enabled,
+        }
+    }
+
+    pub(crate) fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    pub(crate) fn update(&mut self, action: WebSearchAction, query: String) {
+        self.action = Some(action);
+        self.query = query;
+    }
+
+    pub(crate) fn complete(&mut self) {
+        self.completed = true;
+    }
+}
+
+impl HistoryCell for WebSearchCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let bullet = if self.completed {
+            "•".dim()
+        } else {
+            spinner(Some(self.start_time), self.animations_enabled)
+        };
+        let header = web_search_header(self.completed);
+        let detail = web_search_detail(self.action.as_ref(), &self.query);
+        let text: Text<'static> = if detail.is_empty() {
+            Line::from(vec![header.bold()]).into()
+        } else {
+            Line::from(vec![header.bold(), " ".into(), detail.into()]).into()
+        };
+        PrefixedWrappedHistoryCell::new(text, vec![bullet, " ".into()], "  ").display_lines(width)
+    }
+}
+
+pub(crate) fn new_active_web_search_call(
+    call_id: String,
+    query: String,
+    animations_enabled: bool,
+) -> WebSearchCell {
+    WebSearchCell::new(call_id, query, None, animations_enabled)
+}
+
+pub(crate) fn new_web_search_call(
+    call_id: String,
+    query: String,
+    action: WebSearchAction,
+) -> WebSearchCell {
+    let mut cell = WebSearchCell::new(call_id, query, Some(action), false);
+    cell.complete();
+    cell
 }
 
 /// If the first content is an image, return a new cell with the image.
@@ -1888,8 +1919,7 @@ mod tests {
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
     use codex_core::protocol::McpAuthStatus;
-    use codex_protocol::config_types::CollaborationMode;
-    use codex_protocol::config_types::Settings;
+    use codex_protocol::models::WebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
@@ -2006,6 +2036,7 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            scopes: None,
         };
         let mut servers = config.mcp_servers.get().clone();
         servers.insert("docs".to_string(), stdio_config);
@@ -2027,6 +2058,7 @@ mod tests {
             tool_timeout_sec: None,
             enabled_tools: None,
             disabled_tools: None,
+            scopes: None,
         };
         servers.insert("http".to_string(), http_config);
         config
@@ -2111,8 +2143,12 @@ mod tests {
 
     #[test]
     fn web_search_history_cell_snapshot() {
+        let query =
+            "example search query with several generic words to exercise wrapping".to_string();
         let cell = new_web_search_call(
-            "example search query with several generic words to exercise wrapping".to_string(),
+            "call-1".to_string(),
+            query.clone(),
+            WebSearchAction::Search { query: Some(query) },
         );
         let rendered = render_lines(&cell.display_lines(64)).join("\n");
 
@@ -2121,8 +2157,12 @@ mod tests {
 
     #[test]
     fn web_search_history_cell_wraps_with_indented_continuation() {
+        let query =
+            "example search query with several generic words to exercise wrapping".to_string();
         let cell = new_web_search_call(
-            "example search query with several generic words to exercise wrapping".to_string(),
+            "call-1".to_string(),
+            query.clone(),
+            WebSearchAction::Search { query: Some(query) },
         );
         let rendered = render_lines(&cell.display_lines(64));
 
@@ -2137,7 +2177,12 @@ mod tests {
 
     #[test]
     fn web_search_history_cell_short_query_does_not_wrap() {
-        let cell = new_web_search_call("short query".to_string());
+        let query = "short query".to_string();
+        let cell = new_web_search_call(
+            "call-1".to_string(),
+            query.clone(),
+            WebSearchAction::Search { query: Some(query) },
+        );
         let rendered = render_lines(&cell.display_lines(64));
 
         assert_eq!(rendered, vec!["• Searched short query".to_string()]);
@@ -2145,8 +2190,12 @@ mod tests {
 
     #[test]
     fn web_search_history_cell_transcript_snapshot() {
+        let query =
+            "example search query with several generic words to exercise wrapping".to_string();
         let cell = new_web_search_call(
-            "example search query with several generic words to exercise wrapping".to_string(),
+            "call-1".to_string(),
+            query.clone(),
+            WebSearchAction::Search { query: Some(query) },
         );
         let rendered = render_lines(&cell.transcript_lines(64)).join("\n");
 
@@ -2346,12 +2395,6 @@ mod tests {
             Some(ReasoningEffortConfig::High),
             std::env::temp_dir(),
             "test",
-            false,
-            CollaborationMode::Custom(Settings {
-                model: "gpt-4o".to_string(),
-                reasoning_effort: Some(ReasoningEffortConfig::High),
-                developer_instructions: None,
-            }),
         );
 
         let lines = render_lines(&cell.display_lines(80));

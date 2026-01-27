@@ -202,7 +202,11 @@ async fn resume_replays_permissions_messages() -> Result<()> {
         config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     });
     let initial = builder.build(&server).await?;
-    let rollout_path = initial.session_configured.rollout_path.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
     let home = initial.home.clone();
 
     initial
@@ -280,7 +284,11 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
         config.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     });
     let initial = builder.build(&server).await?;
-    let rollout_path = initial.session_configured.rollout_path.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
     let home = initial.home.clone();
 
     initial

@@ -79,6 +79,10 @@ Interrupt a running turn: `interruptConversation`.
 
 List/resume/archive: `listConversations`, `resumeConversation`, `archiveConversation`.
 
+For v2 threads, use `thread/list` with `archived: true` to list archived rollouts and
+`thread/unarchive` to restore them to the active sessions directory (it returns the restored
+thread summary).
+
 ## Models
 
 Fetch the catalog of models available in the current Codex build with `model/list`. The request accepts optional pagination inputs:
@@ -94,6 +98,7 @@ Each response yields:
     - `reasoningEffort` – one of `minimal|low|medium|high`
     - `description` – human-friendly label for the effort
   - `defaultReasoningEffort` – suggested effort for the UI
+  - `supportsPersonality` – whether the model supports personality-specific instructions
   - `isDefault` – whether the model is recommended for most users
 - `nextCursor` – pass into the next request to continue paging (optional)
 
@@ -101,7 +106,8 @@ Each response yields:
 
 Fetch the built-in collaboration mode presets with `collaborationMode/list`. This endpoint does not accept pagination and returns the full list in one response:
 
-- `data` – ordered list of collaboration mode presets
+- `data` – ordered list of collaboration mode masks (partial settings to apply on top of the base mode)
+  - For tri-state fields like `reasoning_effort` and `developer_instructions`, omit the field to keep the current value, set it to `null` to clear it, or set a concrete value to update it.
 
 ## Event stream
 

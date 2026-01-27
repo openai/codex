@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::ffi::OsStr;
 use std::io::{self};
 use std::num::NonZero;
 use std::ops::ControlFlow;
@@ -15,6 +16,7 @@ use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use uuid::Uuid;
 
+use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use crate::protocol::EventMsg;
 use codex_file_search as file_search;
@@ -72,6 +74,7 @@ struct HeadTailSummary {
 /// Hard cap to bound worst‑case work per request.
 const MAX_SCAN_FILES: usize = 10000;
 const HEAD_RECORD_LIMIT: usize = 10;
+const USER_EVENT_SCAN_LIMIT: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadSortKey {
@@ -943,14 +946,20 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
     let reader = tokio::io::BufReader::new(file);
     let mut lines = reader.lines();
     let mut summary = HeadTailSummary::default();
+    let mut lines_scanned = 0usize;
 
-    while summary.head.len() < head_limit {
+    while lines_scanned < head_limit
+        || (summary.saw_session_meta
+            && !summary.saw_user_event
+            && lines_scanned < head_limit + USER_EVENT_SCAN_LIMIT)
+    {
         let line_opt = lines.next_line().await?;
         let Some(line) = line_opt else { break };
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
+        lines_scanned += 1;
 
         let parsed: Result<RolloutLine, _> = serde_json::from_str(trimmed);
         let Ok(rollout_line) = parsed else { continue };
@@ -963,9 +972,11 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     .created_at
                     .clone()
                     .or_else(|| Some(rollout_line.timestamp.clone()));
-                if let Ok(val) = serde_json::to_value(session_meta_line) {
+                summary.saw_session_meta = true;
+                if summary.head.len() < head_limit
+                    && let Ok(val) = serde_json::to_value(session_meta_line)
+                {
                     summary.head.push(val);
-                    summary.saw_session_meta = true;
                 }
             }
             RolloutItem::ResponseItem(item) => {
@@ -973,7 +984,9 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     .created_at
                     .clone()
                     .or_else(|| Some(rollout_line.timestamp.clone()));
-                if let Ok(val) = serde_json::to_value(item) {
+                if summary.head.len() < head_limit
+                    && let Ok(val) = serde_json::to_value(item)
+                {
                     summary.head.push(val);
                 }
             }
@@ -1043,11 +1056,9 @@ fn truncate_to_seconds(dt: OffsetDateTime) -> Option<OffsetDateTime> {
     dt.replace_nanosecond(0).ok()
 }
 
-/// Locate a recorded thread rollout file by its UUID string using the existing
-/// paginated listing implementation. Returns `Ok(Some(path))` if found, `Ok(None)` if not present
-/// or the id is invalid.
-pub async fn find_thread_path_by_id_str(
+async fn find_thread_path_by_id_str_in_subdir(
     codex_home: &Path,
+    subdir: &str,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
     // Validate UUID format early.
@@ -1056,7 +1067,7 @@ pub async fn find_thread_path_by_id_str(
     }
 
     let mut root = codex_home.to_path_buf();
-    root.push(SESSIONS_SUBDIR);
+    root.push(subdir);
     if !root.exists() {
         return Ok(None);
     }
@@ -1087,4 +1098,32 @@ pub async fn find_thread_path_by_id_str(
         .into_iter()
         .next()
         .map(|m| root.join(m.path)))
+}
+
+/// Locate a recorded thread rollout file by its UUID string using the existing
+/// paginated listing implementation. Returns `Ok(Some(path))` if found, `Ok(None)` if not present
+/// or the id is invalid.
+pub async fn find_thread_path_by_id_str(
+    codex_home: &Path,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    find_thread_path_by_id_str_in_subdir(codex_home, SESSIONS_SUBDIR, id_str).await
+}
+
+/// Locate an archived thread rollout file by its UUID string.
+pub async fn find_archived_thread_path_by_id_str(
+    codex_home: &Path,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str).await
+}
+
+/// Extract the `YYYY/MM/DD` directory components from a rollout filename.
+pub fn rollout_date_parts(file_name: &OsStr) -> Option<(String, String, String)> {
+    let name = file_name.to_string_lossy();
+    let date = name.strip_prefix("rollout-")?.get(..10)?;
+    let year = date.get(..4)?.to_string();
+    let month = date.get(5..7)?.to_string();
+    let day = date.get(8..10)?.to_string();
+    Some((year, month, day))
 }

@@ -8,6 +8,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
@@ -93,6 +94,7 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
             "id": "confirm_path",
             "header": "Confirm",
             "question": "Proceed with the plan?",
+            "isOther": false,
             "options": [{
                 "label": "Yes (Recommended)",
                 "description": "Continue the current plan."
@@ -132,11 +134,14 @@ async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> 
             model: session_model,
             effort: None,
             summary: ReasoningSummary::Auto,
-            collaboration_mode: Some(CollaborationMode::Plan(Settings {
-                model: session_configured.model.clone(),
-                reasoning_effort: None,
-                developer_instructions: None,
-            })),
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Plan,
+                settings: Settings {
+                    model: session_configured.model.clone(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            }),
             personality: None,
         })
         .await?;
@@ -209,6 +214,7 @@ where
             "id": "confirm_path",
             "header": "Confirm",
             "question": "Proceed with the plan?",
+            "isOther": false,
             "options": [{
                 "label": "Yes (Recommended)",
                 "description": "Continue the current plan."
@@ -269,24 +275,39 @@ where
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_rejected_in_execute_mode() -> anyhow::Result<()> {
-    assert_request_user_input_rejected("Execute", |model| {
-        CollaborationMode::Execute(Settings {
+    assert_request_user_input_rejected("Execute", |model| CollaborationMode {
+        mode: ModeKind::Execute,
+        settings: Settings {
             model,
             reasoning_effort: None,
             developer_instructions: None,
-        })
+        },
+    })
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn request_user_input_rejected_in_code_mode() -> anyhow::Result<()> {
+    assert_request_user_input_rejected("Code", |model| CollaborationMode {
+        mode: ModeKind::Code,
+        settings: Settings {
+            model,
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
     })
     .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_rejected_in_custom_mode() -> anyhow::Result<()> {
-    assert_request_user_input_rejected("Custom", |model| {
-        CollaborationMode::Custom(Settings {
+    assert_request_user_input_rejected("Custom", |model| CollaborationMode {
+        mode: ModeKind::Custom,
+        settings: Settings {
             model,
             reasoning_effort: None,
             developer_instructions: None,
-        })
+        },
     })
     .await
 }

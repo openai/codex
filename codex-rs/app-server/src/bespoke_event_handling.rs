@@ -25,6 +25,7 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::DeprecationNoticeNotification;
+use codex_app_server_protocol::DynamicToolCallParams;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
@@ -85,6 +86,7 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
+use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
@@ -276,6 +278,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         id: question.id,
                         header: question.header,
                         question: question.question,
+                        is_other: question.is_other,
                         options: question.options.map(|options| {
                             options
                                 .into_iter()
@@ -316,6 +319,40 @@ pub(crate) async fn apply_bespoke_event_handling(
                 {
                     error!("failed to submit UserInputAnswer: {err}");
                 }
+            }
+        }
+        EventMsg::DynamicToolCallRequest(request) => {
+            if matches!(api_version, ApiVersion::V2) {
+                let call_id = request.call_id;
+                let params = DynamicToolCallParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: request.turn_id,
+                    call_id: call_id.clone(),
+                    tool: request.tool,
+                    arguments: request.arguments,
+                };
+                let rx = outgoing
+                    .send_request(ServerRequestPayload::DynamicToolCall(params))
+                    .await;
+                tokio::spawn(async move {
+                    crate::dynamic_tools::on_call_response(call_id, rx, conversation).await;
+                });
+            } else {
+                error!(
+                    "dynamic tool calls are only supported on api v2 (call_id: {})",
+                    request.call_id
+                );
+                let call_id = request.call_id;
+                let _ = conversation
+                    .submit(Op::DynamicToolResponse {
+                        id: call_id.clone(),
+                        response: CoreDynamicToolResponse {
+                            call_id,
+                            output: "dynamic tool calls require api v2".to_string(),
+                            success: false,
+                        },
+                    })
+                    .await;
             }
         }
         // TODO(celia): properly construct McpToolCall TurnItem in core.
@@ -1006,7 +1043,15 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
 
             if let Some(request_id) = pending {
-                let rollout_path = conversation.rollout_path();
+                let Some(rollout_path) = conversation.rollout_path() else {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: "thread has no persisted rollout".to_string(),
+                        data: None,
+                    };
+                    outgoing.send_error(request_id, error).await;
+                    return;
+                };
                 let response = match read_summary_from_rollout(
                     rollout_path.as_path(),
                     fallback_model_provider.as_str(),

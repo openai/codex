@@ -226,13 +226,11 @@ impl ModelClient {
 
         let mut extra_headers = ApiHeaderMap::new();
         if let SessionSource::SubAgent(sub) = &self.state.session_source {
-            let subagent = if let crate::protocol::SubAgentSource::Other(label) = sub {
-                label.clone()
-            } else {
-                serde_json::to_value(sub)
-                    .ok()
-                    .and_then(|v| v.as_str().map(std::string::ToString::to_string))
-                    .unwrap_or_else(|| "other".to_string())
+            let subagent = match sub {
+                crate::protocol::SubAgentSource::Review => "review".to_string(),
+                crate::protocol::SubAgentSource::Compact => "compact".to_string(),
+                crate::protocol::SubAgentSource::ThreadSpawn { .. } => "collab_spawn".to_string(),
+                crate::protocol::SubAgentSource::Other(label) => label.clone(),
             };
             if let Ok(val) = HeaderValue::from_str(&subagent) {
                 extra_headers.insert("x-openai-subagent", val);
@@ -627,11 +625,13 @@ fn build_api_prompt(prompt: &Prompt, instructions: String, tools_json: Vec<Value
     }
 }
 
-fn beta_feature_headers(config: &Config) -> ApiHeaderMap {
+fn experimental_feature_headers(config: &Config) -> ApiHeaderMap {
     let enabled = FEATURES
         .iter()
         .filter_map(|spec| {
-            if spec.stage.beta_menu_description().is_some() && config.features.enabled(spec.id) {
+            if spec.stage.experimental_menu_description().is_some()
+                && config.features.enabled(spec.id)
+            {
                 Some(spec.key)
             } else {
                 None
@@ -652,16 +652,14 @@ fn build_responses_headers(
     config: &Config,
     turn_state: Option<&Arc<OnceLock<String>>>,
 ) -> ApiHeaderMap {
-    let mut headers = beta_feature_headers(config);
+    let mut headers = experimental_feature_headers(config);
     headers.insert(
         WEB_SEARCH_ELIGIBLE_HEADER,
-        HeaderValue::from_static(
-            if matches!(config.web_search_mode, Some(WebSearchMode::Disabled)) {
-                "false"
-            } else {
-                "true"
-            },
-        ),
+        HeaderValue::from_static(if config.web_search_mode == WebSearchMode::Disabled {
+            "false"
+        } else {
+            "true"
+        }),
     );
     if let Some(turn_state) = turn_state
         && let Some(state) = turn_state.get()
