@@ -73,7 +73,6 @@ struct DependencyTool {
 
 const SKILLS_FILENAME: &str = "SKILL.md";
 const SKILLS_JSON_FILENAME: &str = "SKILL.json";
-const SKILLS_TOML_FILENAME: &str = "SKILL.toml";
 const SKILLS_DIR_NAME: &str = "skills";
 const MAX_NAME_LEN: usize = 64;
 const MAX_DESCRIPTION_LEN: usize = 1024;
@@ -403,56 +402,39 @@ fn load_skill_metadata(skill_path: &Path) -> (Option<SkillInterface>, Option<Ski
     let Some(skill_dir) = skill_path.parent() else {
         return (None, None);
     };
-    let metadata_paths = [
-        (skill_dir.join(SKILLS_JSON_FILENAME), InterfaceFormat::Json),
-        (skill_dir.join(SKILLS_TOML_FILENAME), InterfaceFormat::Toml),
-    ];
-
-    let mut interface: Option<SkillInterface> = None;
-    let mut dependencies: Option<SkillDependencies> = None;
-
-    for (metadata_path, format) in metadata_paths {
-        if !metadata_path.exists() {
-            continue;
-        }
-
-        let contents = match fs::read_to_string(&metadata_path) {
-            Ok(contents) => contents,
-            Err(error) => {
-                tracing::warn!(
-                    "ignoring {path}: failed to read {label}: {error}",
-                    path = metadata_path.display(),
-                    label = format.label()
-                );
-                continue;
-            }
-        };
-
-        let parsed = match format.parse(&contents) {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                tracing::warn!(
-                    "ignoring {path}: invalid {label}: {error}",
-                    path = metadata_path.display(),
-                    label = format.label()
-                );
-                continue;
-            }
-        };
-
-        if interface.is_none() {
-            interface = resolve_interface(parsed.interface, skill_dir);
-        }
-        if dependencies.is_none() {
-            dependencies = resolve_dependencies(parsed.dependencies);
-        }
-
-        if interface.is_some() && dependencies.is_some() {
-            break;
-        }
+    let metadata_path = skill_dir.join(SKILLS_JSON_FILENAME);
+    if !metadata_path.exists() {
+        return (None, None);
     }
 
-    (interface, dependencies)
+    let contents = match fs::read_to_string(&metadata_path) {
+        Ok(contents) => contents,
+        Err(error) => {
+            tracing::warn!(
+                "ignoring {path}: failed to read {label}: {error}",
+                path = metadata_path.display(),
+                label = SKILLS_JSON_FILENAME
+            );
+            return (None, None);
+        }
+    };
+
+    let parsed: SkillMetadataFile = match serde_json::from_str(&contents) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            tracing::warn!(
+                "ignoring {path}: invalid {label}: {error}",
+                path = metadata_path.display(),
+                label = SKILLS_JSON_FILENAME
+            );
+            return (None, None);
+        }
+    };
+
+    (
+        resolve_interface(parsed.interface, skill_dir),
+        resolve_dependencies(parsed.dependencies),
+    )
 }
 
 fn resolve_interface(interface: Option<Interface>, skill_dir: &Path) -> Option<SkillInterface> {
@@ -536,30 +518,6 @@ fn resolve_dependency_tool(tool: DependencyTool) -> Option<SkillToolDependency> 
         command,
         url,
     })
-}
-
-#[derive(Clone, Copy)]
-enum InterfaceFormat {
-    Json,
-    Toml,
-}
-
-impl InterfaceFormat {
-    fn label(self) -> &'static str {
-        match self {
-            InterfaceFormat::Json => "SKILL.json",
-            InterfaceFormat::Toml => "SKILL.toml",
-        }
-    }
-
-    fn parse(self, contents: &str) -> Result<SkillMetadataFile, String> {
-        match self {
-            InterfaceFormat::Json => {
-                serde_json::from_str(contents).map_err(|error| error.to_string())
-            }
-            InterfaceFormat::Toml => toml::from_str(contents).map_err(|error| error.to_string()),
-        }
-    }
 }
 
 fn resolve_asset_path(
@@ -912,88 +870,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loads_skill_interface_metadata_from_toml() {
+    async fn loads_skill_dependencies_metadata_from_json() {
         let codex_home = tempfile::tempdir().expect("tempdir");
-        let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from toml");
-        let skill_dir = skill_path.parent().expect("skill dir");
-        let normalized_skill_dir = normalized(skill_dir);
-
-        write_skill_metadata_at(
-            skill_dir,
-            SKILLS_TOML_FILENAME,
-            r##"
-[interface]
-display_name = "UI Skill"
-short_description = "  short    desc   "
-icon_small = "./assets/small-400px.png"
-icon_large = "./assets/large-logo.svg"
-brand_color = "#3B82F6"
-default_prompt = "  default   prompt   "
-"##,
-        );
-
-        let cfg = make_config(&codex_home).await;
-        let outcome = load_skills(&cfg);
-
-        assert!(
-            outcome.errors.is_empty(),
-            "unexpected errors: {:?}",
-            outcome.errors
-        );
-        assert_eq!(
-            outcome.skills,
-            vec![SkillMetadata {
-                name: "ui-skill".to_string(),
-                description: "from toml".to_string(),
-                short_description: None,
-                interface: Some(SkillInterface {
-                    display_name: Some("UI Skill".to_string()),
-                    short_description: Some("short desc".to_string()),
-                    icon_small: Some(normalized_skill_dir.join("assets/small-400px.png")),
-                    icon_large: Some(normalized_skill_dir.join("assets/large-logo.svg")),
-                    brand_color: Some("#3B82F6".to_string()),
-                    default_prompt: Some("default prompt".to_string()),
-                }),
-                dependencies: None,
-                path: normalized(&skill_path),
-                scope: SkillScope::User,
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn loads_skill_dependencies_metadata_happy_path() {
-        let codex_home = tempfile::tempdir().expect("tempdir");
-        let skill_path = write_skill(&codex_home, "demo", "dep-skill", "from toml");
+        let skill_path = write_skill(&codex_home, "demo", "dep-skill", "from json");
         let skill_dir = skill_path.parent().expect("skill dir");
 
         write_skill_metadata_at(
             skill_dir,
-            SKILLS_TOML_FILENAME,
+            SKILLS_JSON_FILENAME,
             r#"
-[[dependencies.tools]]
-type = "env_var"
-value = "GITHUB_TOKEN"
-description = "GitHub API token with repo scopes"
-
-[[dependencies.tools]]
-type = "mcp"
-value = "github"
-description = "GitHub MCP server"
-transport = "streamable_http"
-url = "https://example.com/mcp"
-
-[[dependencies.tools]]
-type = "cli"
-value = "gh"
-description = "GitHub CLI"
-
-[[dependencies.tools]]
-type = "mcp"
-value = "local-gh"
-description = "Local GH MCP server"
-transport = "stdio"
-command = "gh-mcp"
+{
+  "dependencies": {
+    "tools": [
+      {
+        "type": "env_var",
+        "value": "GITHUB_TOKEN",
+        "description": "GitHub API token with repo scopes"
+      },
+      {
+        "type": "mcp",
+        "value": "github",
+        "description": "GitHub MCP server",
+        "transport": "streamable_http",
+        "url": "https://example.com/mcp"
+      },
+      {
+        "type": "cli",
+        "value": "gh",
+        "description": "GitHub CLI"
+      },
+      {
+        "type": "mcp",
+        "value": "local-gh",
+        "description": "Local GH MCP server",
+        "transport": "stdio",
+        "command": "gh-mcp"
+      }
+    ]
+  }
+}
 "#,
         );
 
@@ -1009,7 +924,7 @@ command = "gh-mcp"
             outcome.skills,
             vec![SkillMetadata {
                 name: "dep-skill".to_string(),
-                description: "from toml".to_string(),
+                description: "from json".to_string(),
                 short_description: None,
                 interface: None,
                 dependencies: Some(SkillDependencies {
