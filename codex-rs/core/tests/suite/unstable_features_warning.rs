@@ -14,19 +14,18 @@ use core::time::Duration;
 use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
-use toml::toml;
-use toml::Value as TomlValue;
 use tokio::time::timeout;
+use toml::Value as TomlValue;
+use toml::toml;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn emits_warning_when_unstable_features_enabled_via_config() {
     let home = TempDir::new().expect("tempdir");
     let mut config = load_default_config_for_test(&home).await;
     config.features.enable(Feature::ChildAgentsMd);
-    let user_config_path = AbsolutePathBuf::from_absolute_path(
-        config.codex_home.join(CONFIG_TOML_FILE),
-    )
-    .expect("absolute user config path");
+    let user_config_path =
+        AbsolutePathBuf::from_absolute_path(config.codex_home.join(CONFIG_TOML_FILE))
+            .expect("absolute user config path");
     config.config_layer_stack = config.config_layer_stack.with_user_config(
         &user_config_path,
         toml! { features = { child_agents_md = true } },
@@ -61,10 +60,9 @@ async fn suppresses_warning_when_configured() {
     let mut config = load_default_config_for_test(&home).await;
     config.features.enable(Feature::ChildAgentsMd);
     config.suppress_experimental_warning = true;
-    let user_config_path = AbsolutePathBuf::from_absolute_path(
-        config.codex_home.join(CONFIG_TOML_FILE),
-    )
-    .expect("absolute user config path");
+    let user_config_path =
+        AbsolutePathBuf::from_absolute_path(config.codex_home.join(CONFIG_TOML_FILE))
+            .expect("absolute user config path");
     config.config_layer_stack = config.config_layer_stack.with_user_config(
         &user_config_path,
         toml! { features = { child_agents_md = true } },
