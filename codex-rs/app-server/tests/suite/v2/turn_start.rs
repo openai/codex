@@ -8,6 +8,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
+use app_test_support::write_models_cache_with_models;
 use codex_app_server_protocol::ByteRange;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
@@ -41,7 +42,14 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
+use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelInstructionsTemplate;
+use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::PersonalityMessages;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::openai_models::TruncationPolicyConfig;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -421,12 +429,13 @@ async fn turn_start_accepts_personality_override_v2() -> Result<()> {
     let response_mock = responses::mount_sse_once(&server, body).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(
+    write_models_cache_with_models(
         codex_home.path(),
-        &server.uri(),
-        "never",
-        &BTreeMap::default(),
+        vec![personality_enabled_model("exp-codex-personality")],
     )?;
+    let mut feature_flags = BTreeMap::new();
+    feature_flags.insert(Feature::RemoteModels, true);
+    create_config_toml(codex_home.path(), &server.uri(), "never", &feature_flags)?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -1680,4 +1689,46 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+fn personality_enabled_model(slug: &str) -> ModelInfo {
+    ModelInfo {
+        slug: slug.to_string(),
+        display_name: slug.to_string(),
+        description: Some(format!("{slug} description")),
+        default_reasoning_level: Some(ReasoningEffort::Medium),
+        supported_reasoning_levels: vec![
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Low,
+                description: "low".to_string(),
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Medium,
+                description: "medium".to_string(),
+            },
+        ],
+        shell_type: ConfigShellToolType::ShellCommand,
+        visibility: ModelVisibility::List,
+        supported_in_api: true,
+        priority: 0,
+        upgrade: None,
+        base_instructions: "base instructions".to_string(),
+        model_instructions_template: Some(ModelInstructionsTemplate {
+            template: "Base instructions\n{{ personality_message }}\n".to_string(),
+            personality_messages: Some(PersonalityMessages(BTreeMap::from([
+                (Personality::Friendly, "Friendly message".to_string()),
+                (Personality::Pragmatic, "Pragmatic message".to_string()),
+            ]))),
+        }),
+        supports_reasoning_summaries: false,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        supports_parallel_tool_calls: false,
+        context_window: Some(128_000),
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
+        experimental_supported_tools: Vec::new(),
+    }
 }
