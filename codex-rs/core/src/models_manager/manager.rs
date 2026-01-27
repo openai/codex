@@ -110,7 +110,7 @@ impl ModelsManager {
             .ok()
             .and_then(|remote_models| remote_models.into_iter().find(|info| info.slug == model));
         if let Some(remote) = remote {
-            return remote.supports_personality();
+            return model_info::with_config_overrides(remote, config).supports_personality();
         }
         model_info::with_config_overrides(model_info::find_model_info_for_slug(model), config)
             .supports_personality()
@@ -381,11 +381,14 @@ mod tests {
     use crate::features::Feature;
     use crate::model_provider_info::WireApi;
     use chrono::Utc;
+    use codex_protocol::config_types::Personality;
     use codex_protocol::openai_models::ModelInstructionsTemplate;
     use codex_protocol::openai_models::ModelsResponse;
+    use codex_protocol::openai_models::PersonalityMessages;
     use core_test_support::responses::mount_models_once;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::BTreeMap;
     use tempfile::tempdir;
     use wiremock::MockServer;
 
@@ -742,6 +745,38 @@ mod tests {
         assert!(!manager.supports_personality("gpt-5.2-codex", &config));
         let model = manager.get_model_info("gpt-5.2-codex", &config).await;
         assert!(!model.supports_personality());
+    }
+
+    #[tokio::test]
+    async fn supports_personality_respects_base_instructions_override() {
+        let codex_home = tempdir().expect("temp dir");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("load default test config");
+        config.features.enable(Feature::RemoteModels);
+        config.base_instructions = Some("override instructions".to_string());
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+        let provider = provider_for("http://example.test".to_string());
+        let manager =
+            ModelsManager::with_provider(codex_home.path().to_path_buf(), auth_manager, provider);
+
+        let mut remote = remote_model("gpt-5.2-codex", "Remote gpt-5.2-codex", 0);
+        remote.model_instructions_template = Some(ModelInstructionsTemplate {
+            template: "{{ personality_message }}".to_string(),
+            personality_messages: Some(PersonalityMessages(BTreeMap::from([
+                (Personality::Friendly, "Friendly template".to_string()),
+                (Personality::Pragmatic, "Pragmatic template".to_string()),
+            ]))),
+        });
+        *manager.remote_models.write().await = vec![remote];
+
+        assert!(!manager.supports_personality("gpt-5.2-codex", &config));
+        let model = manager.get_model_info("gpt-5.2-codex", &config).await;
+        assert!(!model.supports_personality());
+        assert_eq!(model.base_instructions, "override instructions");
     }
 
     #[test]
