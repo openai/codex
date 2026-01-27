@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
@@ -10,8 +11,34 @@ use tempfile::TempDir;
 const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
+const LOCK_FILENAME: &str = ".lock";
 
-pub fn arg0_dispatch() -> Option<TempDir> {
+/// Keeps the per-session PATH entry alive and locked for the process lifetime.
+pub struct Arg0PathEntryGuard {
+    temp_dir: TempDir,
+    lock_file: File,
+}
+
+impl Arg0PathEntryGuard {
+    fn new(temp_dir: TempDir, lock_file: File) -> Self {
+        Self {
+            temp_dir,
+            lock_file,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn path(&self) -> &Path {
+        self.temp_dir.path()
+    }
+
+    #[allow(dead_code)]
+    pub fn lock_file(&self) -> &File {
+        &self.lock_file
+    }
+}
+
+pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     // Determine if we were invoked via the special alias.
     let mut args = std::env::args_os();
     let argv0 = args.next().unwrap_or_default();
@@ -149,7 +176,7 @@ where
 ///
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
 /// be called before multiple threads are spawned.
-pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
+pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGuard> {
     let codex_home = codex_core::config::find_codex_home()?;
     #[cfg(not(debug_assertions))]
     {
@@ -167,7 +194,7 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
 
     std::fs::create_dir_all(&codex_home)?;
     // Use a CODEX_HOME-scoped temp root to avoid cluttering the top-level directory.
-    let temp_root = codex_home.join("tmp").join("path");
+    let temp_root = codex_home.join("tmp").join("path2");
     std::fs::create_dir_all(&temp_root)?;
     #[cfg(unix)]
     {
@@ -177,10 +204,24 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
         std::fs::set_permissions(&temp_root, std::fs::Permissions::from_mode(0o700))?;
     }
 
+    // Best-effort cleanup of stale per-session dirs. Ignore failures so startup proceeds.
+    if let Err(err) = janitor_cleanup(&temp_root) {
+        eprintln!("WARNING: failed to clean up stale arg0 temp dirs: {err}");
+    }
+
     let temp_dir = tempfile::Builder::new()
         .prefix("codex-arg0")
         .tempdir_in(&temp_root)?;
     let path = temp_dir.path();
+
+    let lock_path = path.join(LOCK_FILENAME);
+    let lock_file = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    lock_file.try_lock()?;
 
     for filename in &[
         APPLY_PATCH_ARG0,
@@ -231,5 +272,50 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<TempDir> {
         std::env::set_var("PATH", updated_path_env_var);
     }
 
-    Ok(temp_dir)
+    Ok(Arg0PathEntryGuard::new(temp_dir, lock_file))
+}
+
+fn janitor_cleanup(temp_root: &Path) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(temp_root) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        // Skip the directory if locking fails or the lock is currently held.
+        let Some(_lock_file) = try_lock_dir(&path)? else {
+            continue;
+        };
+
+        std::fs::remove_dir_all(&path)?;
+    }
+
+    Ok(())
+}
+
+fn try_lock_dir(dir: &Path) -> std::io::Result<Option<File>> {
+    let lock_path = dir.join(LOCK_FILENAME);
+    let lock_file = match File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+
+    match lock_file.try_lock() {
+        Ok(()) => Ok(Some(lock_file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(err) => Err(err.into()),
+    }
 }

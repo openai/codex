@@ -1,16 +1,41 @@
 // Aggregates all former standalone integration tests as modules.
+use codex_arg0::Arg0PathEntryGuard;
 use codex_arg0::arg0_dispatch;
 use ctor::ctor;
 use tempfile::TempDir;
+
+struct TestCodexAliasesGuard {
+    _codex_home: TempDir,
+    _arg0: Arg0PathEntryGuard,
+}
+
+const CODEX_HOME_ENV_VAR: &str = "CODEX_HOME";
 
 // This code runs before any other tests are run.
 // It allows the test binary to behave like codex and dispatch to apply_patch and codex-linux-sandbox
 // based on the arg0.
 // NOTE: this doesn't work on ARM
 #[ctor]
-pub static CODEX_ALIASES_TEMP_DIR: TempDir = unsafe {
+pub static CODEX_ALIASES_TEMP_DIR: TestCodexAliasesGuard = unsafe {
     #[allow(clippy::unwrap_used)]
-    arg0_dispatch().unwrap()
+    let codex_home = tempfile::Builder::new()
+        .prefix("codex-core-tests")
+        .tempdir()
+        .unwrap();
+    unsafe {
+        std::env::set_var(CODEX_HOME_ENV_VAR, codex_home.path());
+    }
+
+    #[allow(clippy::unwrap_used)]
+    let arg0 = arg0_dispatch().unwrap();
+    unsafe {
+        std::env::remove_var(CODEX_HOME_ENV_VAR);
+    }
+
+    TestCodexAliasesGuard {
+        _codex_home: codex_home,
+        _arg0: arg0,
+    }
 };
 
 #[cfg(not(target_os = "windows"))]
