@@ -1,7 +1,9 @@
 use ratatui::layout::Rect;
 
+pub mod adapter_ratatui;
 pub mod highlight;
 pub mod line_utils;
+pub mod model;
 pub mod renderable;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
