@@ -221,6 +221,7 @@ fn normalize_connector_value(value: Option<&str>) -> Option<String> {
 }
 
 const ALLOWED_APPS_SDK_APPS: &[&str] = &["asdk_app_69781557cc1481919cf5e9824fa2e792"];
+const DISALLOWED_CONNECTOR_IDS: &[&str] = &["asdk_app_6938a94a61d881918ef32cb999ff937c"];
 const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
 
 fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
@@ -233,7 +234,9 @@ fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
 
 fn is_connector_allowed(connector: &AppInfo) -> bool {
     let connector_id = connector.id.as_str();
-    if connector_id.starts_with(DISALLOWED_CONNECTOR_PREFIX) {
+    if connector_id.starts_with(DISALLOWED_CONNECTOR_PREFIX)
+        || DISALLOWED_CONNECTOR_IDS.contains(&connector_id)
+    {
         return false;
     }
     if connector_id.starts_with("asdk_app_") {
@@ -289,5 +292,14 @@ mod tests {
             app("gamma"),
         ]);
         assert_eq!(filtered, vec![app("gamma")]);
+    }
+
+    #[test]
+    fn filters_disallowed_connector_ids() {
+        let filtered = filter_disallowed_connectors(vec![
+            app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
+            app("delta"),
+        ]);
+        assert_eq!(filtered, vec![app("delta")]);
     }
 }

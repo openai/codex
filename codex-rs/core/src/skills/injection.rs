@@ -80,6 +80,12 @@ pub(crate) fn collect_explicit_skill_mentions(
     skill_name_counts: &HashMap<String, usize>,
     connector_slug_counts: &HashMap<String, usize>,
 ) -> Vec<SkillMetadata> {
+    let selection_context = SkillSelectionContext {
+        skills,
+        disabled_paths,
+        skill_name_counts,
+        connector_slug_counts,
+    };
     let mut selected: Vec<SkillMetadata> = Vec::new();
     let mut seen_names: HashSet<String> = HashSet::new();
     let mut seen_paths: HashSet<PathBuf> = HashSet::new();
@@ -88,11 +94,8 @@ pub(crate) fn collect_explicit_skill_mentions(
         if let UserInput::Text { text, .. } = input {
             let mentioned_names = extract_tool_mentions(text);
             select_skills_from_mentions(
-                skills,
-                disabled_paths,
+                &selection_context,
                 &mentioned_names,
-                skill_name_counts,
-                connector_slug_counts,
                 &mut seen_names,
                 &mut seen_paths,
                 &mut selected,
@@ -101,6 +104,13 @@ pub(crate) fn collect_explicit_skill_mentions(
     }
 
     selected
+}
+
+struct SkillSelectionContext<'a> {
+    skills: &'a [SkillMetadata],
+    disabled_paths: &'a HashSet<PathBuf>,
+    skill_name_counts: &'a HashMap<String, usize>,
+    connector_slug_counts: &'a HashMap<String, usize>,
 }
 
 pub(crate) struct ToolMentions<'a> {
@@ -224,11 +234,8 @@ pub(crate) fn extract_tool_mentions(text: &str) -> ToolMentions<'_> {
 
 /// Select mentioned skills while preserving the order of `skills`.
 fn select_skills_from_mentions(
-    skills: &[SkillMetadata],
-    disabled_paths: &HashSet<PathBuf>,
+    selection_context: &SkillSelectionContext<'_>,
     mentions: &ToolMentions<'_>,
-    skill_name_counts: &HashMap<String, usize>,
-    connector_slug_counts: &HashMap<String, usize>,
     seen_names: &mut HashSet<String>,
     seen_paths: &mut HashSet<PathBuf>,
     selected: &mut Vec<SkillMetadata>,
@@ -248,8 +255,10 @@ fn select_skills_from_mentions(
         .map(normalize_skill_path)
         .collect();
 
-    for skill in skills {
-        if disabled_paths.contains(&skill.path) || seen_paths.contains(&skill.path) {
+    for skill in selection_context.skills {
+        if selection_context.disabled_paths.contains(&skill.path)
+            || seen_paths.contains(&skill.path)
+        {
             continue;
         }
 
@@ -261,8 +270,10 @@ fn select_skills_from_mentions(
         }
     }
 
-    for skill in skills {
-        if disabled_paths.contains(&skill.path) || seen_paths.contains(&skill.path) {
+    for skill in selection_context.skills {
+        if selection_context.disabled_paths.contains(&skill.path)
+            || seen_paths.contains(&skill.path)
+        {
             continue;
         }
 
@@ -270,11 +281,13 @@ fn select_skills_from_mentions(
             continue;
         }
 
-        let skill_count = skill_name_counts
+        let skill_count = selection_context
+            .skill_name_counts
             .get(skill.name.as_str())
             .copied()
             .unwrap_or(0);
-        let connector_count = connector_slug_counts
+        let connector_count = selection_context
+            .connector_slug_counts
             .get(&skill.name.to_ascii_lowercase())
             .copied()
             .unwrap_or(0);

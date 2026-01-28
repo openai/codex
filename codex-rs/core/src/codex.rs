@@ -3270,14 +3270,17 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
+        let tool_selection = SamplingRequestToolSelection {
+            explicit_app_paths: &explicit_app_paths,
+            skill_name_counts_lower: &skill_name_counts_lower,
+        };
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
             sampling_request_input,
-            &explicit_app_paths,
-            &skill_name_counts_lower,
+            tool_selection,
             cancellation_token.child_token(),
         )
         .await
@@ -3444,6 +3447,11 @@ fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Op
     tool.connector_id.as_deref()
 }
 
+struct SamplingRequestToolSelection<'a> {
+    explicit_app_paths: &'a [String],
+    skill_name_counts_lower: &'a HashMap<String, usize>,
+}
+
 #[instrument(level = "trace",
     skip_all,
     fields(
@@ -3458,8 +3466,7 @@ async fn run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
     input: Vec<ResponseItem>,
-    explicit_app_paths: &[String],
-    skill_name_counts_lower: &HashMap<String, usize>,
+    tool_selection: SamplingRequestToolSelection<'_>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<SamplingRequestResult> {
     let mut mcp_tools = sess
@@ -3475,8 +3482,8 @@ async fn run_sampling_request(
         Some(filter_connectors_for_input(
             connectors,
             &input,
-            explicit_app_paths,
-            skill_name_counts_lower,
+            tool_selection.explicit_app_paths,
+            tool_selection.skill_name_counts_lower,
         ))
     } else {
         None
