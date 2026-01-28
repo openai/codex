@@ -702,8 +702,8 @@ impl RequestUserInputOverlay {
             answer_state.draft.clone()
         };
         let notes = draft.text_with_pending().trim().to_string();
-        let selected_label =
-            selected_idx.and_then(|selected_idx| Self::option_label_for_index(question, selected_idx));
+        let selected_label = selected_idx
+            .and_then(|selected_idx| Self::option_label_for_index(question, selected_idx));
         let mut answers = selected_label.into_iter().collect::<Vec<_>>();
         if !notes.is_empty() {
             answers.push(format!("user_note: {notes}"));
@@ -2201,6 +2201,7 @@ mod tests {
         overlay.composer.move_cursor_to_end();
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
         assert_eq!(overlay.answers[0].answer_committed, true);
+        let _ = rx.try_recv();
 
         overlay.move_question(false);
         overlay
