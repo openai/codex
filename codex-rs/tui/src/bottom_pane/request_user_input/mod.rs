@@ -68,13 +68,26 @@ struct ComposerDraft {
 
 impl ComposerDraft {
     fn text_with_pending(&self) -> String {
-        let mut text = self.text.clone();
-        for (placeholder, actual) in &self.pending_pastes {
-            if text.contains(placeholder) {
-                text = text.replace(placeholder, actual);
-            }
+        if self.pending_pastes.is_empty() {
+            return self.text.clone();
         }
-        text
+        if self.text_elements.is_empty() {
+            return self.pending_pastes.iter().fold(
+                self.text.clone(),
+                |mut text, (placeholder, actual)| {
+                    if text.contains(placeholder) {
+                        text = text.replace(placeholder, actual);
+                    }
+                    text
+                },
+            );
+        }
+        let (expanded, _) = ChatComposer::expand_pending_pastes(
+            &self.text,
+            self.text_elements.clone(),
+            &self.pending_pastes,
+        );
+        expanded
     }
 }
 
