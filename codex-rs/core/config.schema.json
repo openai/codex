@@ -189,6 +189,9 @@
             "remote_models": {
               "type": "boolean"
             },
+            "request_rule": {
+              "type": "boolean"
+            },
             "responses_websockets": {
               "type": "boolean"
             },
@@ -196,6 +199,12 @@
               "type": "boolean"
             },
             "shell_tool": {
+              "type": "boolean"
+            },
+            "skill_mcp_dependency_install": {
+              "type": "boolean"
+            },
+            "sqlite": {
               "type": "boolean"
             },
             "steer": {
@@ -441,7 +450,6 @@
       "type": "object"
     },
     "Notice": {
-      "additionalProperties": false,
       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
       "properties": {
         "hide_full_access_warning": {
@@ -474,6 +482,14 @@
         }
       },
       "type": "object"
+    },
+    "NotificationMethod": {
+      "enum": [
+        "auto",
+        "osc9",
+        "bel"
+      ],
+      "type": "string"
     },
     "Notifications": {
       "anyOf": [
@@ -983,6 +999,15 @@
           "default": null,
           "description": "Start the TUI in the specified collaboration mode (plan/execute/etc.). Defaults to unset."
         },
+        "notification_method": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/NotificationMethod"
+            }
+          ],
+          "default": "auto",
+          "description": "Notification method to use for unfocused terminal notifications. Defaults to `auto`."
+        },
         "notifications": {
           "allOf": [
             {
@@ -1182,6 +1207,9 @@
         "remote_models": {
           "type": "boolean"
         },
+        "request_rule": {
+          "type": "boolean"
+        },
         "responses_websockets": {
           "type": "boolean"
         },
@@ -1189,6 +1217,12 @@
           "type": "boolean"
         },
         "shell_tool": {
+          "type": "boolean"
+        },
+        "skill_mcp_dependency_install": {
+          "type": "boolean"
+        },
+        "sqlite": {
           "type": "boolean"
         },
         "steer": {

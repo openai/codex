@@ -8,12 +8,15 @@ use codex_core::config::Config;
 use codex_core::features::Feature;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ItemCompletedEvent;
+use codex_core::protocol::ItemStartedEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::WarningEvent;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::items::TurnItem;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_reasoning_item;
@@ -438,6 +441,80 @@ async fn manual_compact_emits_api_and_local_token_usage_events() {
         last > 0,
         "second TokenCount should reflect a non-zero estimated context size after compaction"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn manual_compact_emits_context_compaction_items() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed("r2"),
+    ]);
+    mount_sse_sequence(&server, vec![sse1, sse2]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "manual compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex.submit(Op::Compact).await.unwrap();
+
+    let mut started_item = None;
+    let mut completed_item = None;
+    let mut legacy_event = false;
+    let mut saw_turn_complete = false;
+
+    while !saw_turn_complete || started_item.is_none() || completed_item.is_none() || !legacy_event
+    {
+        let event = codex.next_event().await.unwrap();
+        match event.msg {
+            EventMsg::ItemStarted(ItemStartedEvent {
+                item: TurnItem::ContextCompaction(item),
+                ..
+            }) => {
+                started_item = Some(item);
+            }
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                item: TurnItem::ContextCompaction(item),
+                ..
+            }) => {
+                completed_item = Some(item);
+            }
+            EventMsg::ContextCompacted(_) => {
+                legacy_event = true;
+            }
+            EventMsg::TurnComplete(_) => {
+                saw_turn_complete = true;
+            }
+            _ => {}
+        }
+    }
+
+    let started_item = started_item.expect("context compaction item started");
+    let completed_item = completed_item.expect("context compaction item completed");
+    assert_eq!(started_item.id, completed_item.id);
+    assert!(legacy_event);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1177,6 +1254,89 @@ async fn auto_compact_runs_after_token_limit_hit() {
             .any(|text| text.contains(prefixed_auto_summary)),
         "auto compact follow-up request should include the summary message"
     );
+}
+
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn auto_compact_emits_context_compaction_items() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 70_000),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", "SECOND_REPLY"),
+        ev_completed_with_tokens("r2", 330_000),
+    ]);
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r3", 200),
+    ]);
+    let sse4 = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_tokens("r4", 120),
+    ]);
+
+    mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        set_test_compact_prompt(config);
+        config.model_auto_compact_token_limit = Some(200_000);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
+
+    let mut started_item = None;
+    let mut completed_item = None;
+    let mut legacy_event = false;
+
+    for user in [FIRST_AUTO_MSG, SECOND_AUTO_MSG, POST_AUTO_USER_MSG] {
+        codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: user.into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            })
+            .await
+            .unwrap();
+
+        loop {
+            let event = codex.next_event().await.unwrap();
+            match event.msg {
+                EventMsg::ItemStarted(ItemStartedEvent {
+                    item: TurnItem::ContextCompaction(item),
+                    ..
+                }) => {
+                    started_item = Some(item);
+                }
+                EventMsg::ItemCompleted(ItemCompletedEvent {
+                    item: TurnItem::ContextCompaction(item),
+                    ..
+                }) => {
+                    completed_item = Some(item);
+                }
+                EventMsg::ContextCompacted(_) => {
+                    legacy_event = true;
+                }
+                EventMsg::TurnComplete(_) if !event.id.starts_with("auto-compact-") => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let started_item = started_item.expect("context compaction item started");
+    let completed_item = completed_item.expect("context compaction item completed");
+    assert_eq!(started_item.id, completed_item.id);
+    assert!(legacy_event);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

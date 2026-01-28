@@ -911,3 +911,165 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
 
     Ok(())
 }
+
+mod requirements_exec_policy_tests {
+    use super::super::requirements_exec_policy::RequirementsExecPolicyDecisionToml;
+    use super::super::requirements_exec_policy::RequirementsExecPolicyPatternTokenToml;
+    use super::super::requirements_exec_policy::RequirementsExecPolicyPrefixRuleToml;
+    use super::super::requirements_exec_policy::RequirementsExecPolicyToml;
+    use super::super::requirements_exec_policy::RequirementsExecPolicyTomlRoot;
+    use codex_execpolicy::Decision;
+    use codex_execpolicy::Evaluation;
+    use codex_execpolicy::RuleMatch;
+    use pretty_assertions::assert_eq;
+    use toml::from_str;
+
+    fn tokens(cmd: &[&str]) -> Vec<String> {
+        cmd.iter().map(std::string::ToString::to_string).collect()
+    }
+
+    fn allow_all(_: &[String]) -> Decision {
+        Decision::Allow
+    }
+
+    #[test]
+    fn parses_single_prefix_rule_from_raw_toml() -> anyhow::Result<()> {
+        let toml_str = r#"
+[exec_policy]
+prefix_rules = [
+    { pattern = [{ token = "rm" }], decision = "forbidden" },
+]
+"#;
+
+        let parsed: RequirementsExecPolicyTomlRoot = from_str(toml_str)?;
+
+        assert_eq!(
+            parsed,
+            RequirementsExecPolicyTomlRoot {
+                exec_policy: RequirementsExecPolicyToml {
+                    prefix_rules: vec![RequirementsExecPolicyPrefixRuleToml {
+                        pattern: vec![RequirementsExecPolicyPatternTokenToml {
+                            token: Some("rm".to_string()),
+                            any_of: None,
+                        }],
+                        decision: Some(RequirementsExecPolicyDecisionToml::Forbidden),
+                        justification: None,
+                    }],
+                },
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn parses_multiple_prefix_rules_from_raw_toml() -> anyhow::Result<()> {
+        let toml_str = r#"
+[exec_policy]
+prefix_rules = [
+    { pattern = [{ token = "rm" }], decision = "forbidden" },
+    { pattern = [{ token = "git" }, { any_of = ["push", "commit"] }], decision = "prompt", justification = "review changes before push or commit" },
+]
+"#;
+
+        let parsed: RequirementsExecPolicyTomlRoot = from_str(toml_str)?;
+
+        assert_eq!(
+            parsed,
+            RequirementsExecPolicyTomlRoot {
+                exec_policy: RequirementsExecPolicyToml {
+                    prefix_rules: vec![
+                        RequirementsExecPolicyPrefixRuleToml {
+                            pattern: vec![RequirementsExecPolicyPatternTokenToml {
+                                token: Some("rm".to_string()),
+                                any_of: None,
+                            }],
+                            decision: Some(RequirementsExecPolicyDecisionToml::Forbidden),
+                            justification: None,
+                        },
+                        RequirementsExecPolicyPrefixRuleToml {
+                            pattern: vec![
+                                RequirementsExecPolicyPatternTokenToml {
+                                    token: Some("git".to_string()),
+                                    any_of: None,
+                                },
+                                RequirementsExecPolicyPatternTokenToml {
+                                    token: None,
+                                    any_of: Some(vec!["push".to_string(), "commit".to_string()]),
+                                },
+                            ],
+                            decision: Some(RequirementsExecPolicyDecisionToml::Prompt),
+                            justification: Some("review changes before push or commit".to_string()),
+                        },
+                    ],
+                },
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn converts_rules_toml_into_internal_policy_representation() -> anyhow::Result<()> {
+        let toml_str = r#"
+[exec_policy]
+prefix_rules = [
+    { pattern = [{ token = "rm" }], decision = "forbidden" },
+]
+"#;
+
+        let parsed: RequirementsExecPolicyTomlRoot = from_str(toml_str)?;
+        let policy = parsed.exec_policy.to_policy()?;
+
+        assert_eq!(
+            policy.check(&tokens(&["rm", "-rf", "/tmp"]), &allow_all),
+            Evaluation {
+                decision: Decision::Forbidden,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["rm"]),
+                    decision: Decision::Forbidden,
+                    justification: None,
+                }],
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn head_any_of_expands_into_multiple_program_rules() -> anyhow::Result<()> {
+        let toml_str = r#"
+[exec_policy]
+prefix_rules = [
+    { pattern = [{ any_of = ["git", "hg"] }, { token = "status" }], decision = "prompt" },
+]
+"#;
+        let parsed: RequirementsExecPolicyTomlRoot = from_str(toml_str)?;
+        let policy = parsed.exec_policy.to_policy()?;
+
+        assert_eq!(
+            policy.check(&tokens(&["git", "status"]), &allow_all),
+            Evaluation {
+                decision: Decision::Prompt,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["git", "status"]),
+                    decision: Decision::Prompt,
+                    justification: None,
+                }],
+            }
+        );
+        assert_eq!(
+            policy.check(&tokens(&["hg", "status"]), &allow_all),
+            Evaluation {
+                decision: Decision::Prompt,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: tokens(&["hg", "status"]),
+                    decision: Decision::Prompt,
+                    justification: None,
+                }],
+            }
+        );
+
+        Ok(())
+    }
+}

@@ -15,6 +15,16 @@
 //! [`ChatComposer::handle_key_event_without_popup`]. After every handled key, we call
 //! [`ChatComposer::sync_popups`] so UI state follows the latest buffer/cursor.
 //!
+//! # History Navigation (↑/↓)
+//!
+//! The Up/Down history path is managed by [`ChatComposerHistory`]. It merges:
+//!
+//! - Persistent cross-session history (text-only; no element ranges or attachments).
+//! - Local in-session history (full text + text elements + local image paths).
+//!
+//! When recalling a local entry, the composer rehydrates text elements and image attachments.
+//! When recalling a persistent entry, only the text is restored.
+//!
 //! # Submission and Prompt Expansion
 //!
 //! On submit/queue paths, the composer:
@@ -89,6 +99,7 @@ use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
 use super::chat_composer_history::ChatComposerHistory;
+use super::chat_composer_history::HistoryEntry;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::command_popup::CommandPopupFlags;
@@ -96,15 +107,20 @@ use super::file_search_popup::FileSearchPopup;
 use super::footer::CollaborationModeIndicator;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
+use super::footer::SummaryLeft;
+use super::footer::can_show_left_with_context;
+use super::footer::context_window_line;
 use super::footer::esc_hint_mode;
 use super::footer::footer_height;
 use super::footer::footer_hint_items_width;
 use super::footer::footer_line_width;
 use super::footer::inset_footer_hint_area;
-use super::footer::render_footer;
+use super::footer::render_context_right;
+use super::footer::render_footer_from_props;
 use super::footer::render_footer_hint_items;
-use super::footer::render_mode_indicator;
+use super::footer::render_footer_line;
 use super::footer::reset_mode_after_activity;
+use super::footer::single_line_footer_layout;
 use super::footer::toggle_shortcut_mode;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
@@ -227,7 +243,6 @@ impl ChatComposerConfig {
         }
     }
 }
-
 pub(crate) struct ChatComposer {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
@@ -268,6 +283,7 @@ pub(crate) struct ChatComposer {
     config: ChatComposerConfig,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     personality_command_enabled: bool,
+    windows_degraded_sandbox_active: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -341,7 +357,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
-            footer_mode: FooterMode::ShortcutSummary,
+            footer_mode: FooterMode::ComposerEmpty,
             footer_hint_override: None,
             footer_flash: None,
             context_window_percent: None,
@@ -353,6 +369,7 @@ impl ChatComposer {
             config,
             collaboration_mode_indicator: None,
             personality_command_enabled: false,
+            windows_degraded_sandbox_active: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -387,7 +404,6 @@ impl ChatComposer {
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.personality_command_enabled = enabled;
     }
-
     /// Centralized feature gating keeps config checks out of call sites.
     fn popups_enabled(&self) -> bool {
         self.config.popups_enabled
@@ -399,6 +415,10 @@ impl ChatComposer {
 
     fn image_paste_enabled(&self) -> bool {
         self.config.image_paste_enabled
+    }
+    #[cfg(target_os = "windows")]
+    pub fn set_windows_degraded_sandbox_active(&mut self, enabled: bool) {
+        self.windows_degraded_sandbox_active = enabled;
     }
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
         let footer_props = self.footer_props();
@@ -451,11 +471,12 @@ impl ChatComposer {
         offset: usize,
         entry: Option<String>,
     ) -> bool {
-        let Some(text) = self.history.on_entry_response(log_id, offset, entry) else {
+        let Some(entry) = self.history.on_entry_response(log_id, offset, entry) else {
             return false;
         };
-        // Composer history (↑/↓) stores plain text only; no UI element ranges/attachments to restore here.
-        self.set_text_content(text, Vec::new(), Vec::new());
+        // Persistent ↑/↓ history is text-only (backwards-compatible and avoids persisting
+        // attachments), but local in-session ↑/↓ history can rehydrate elements and image paths.
+        self.set_text_content(entry.text, entry.text_elements, entry.local_image_paths);
         true
     }
 
@@ -632,6 +653,18 @@ impl ChatComposer {
         text
     }
 
+    pub(crate) fn pending_pastes(&self) -> Vec<(String, String)> {
+        self.pending_pastes.clone()
+    }
+
+    pub(crate) fn set_pending_pastes(&mut self, pending_pastes: Vec<(String, String)>) {
+        let text = self.textarea.text().to_string();
+        self.pending_pastes = pending_pastes
+            .into_iter()
+            .filter(|(placeholder, _)| text.contains(placeholder))
+            .collect();
+    }
+
     /// Override the footer hint items displayed beneath the composer. Passing
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
@@ -698,9 +731,19 @@ impl ChatComposer {
             return None;
         }
         let previous = self.current_text();
+        let text_elements = self.textarea.text_elements();
+        let local_image_paths = self
+            .attached_images
+            .iter()
+            .map(|img| img.path.clone())
+            .collect();
         self.set_text_content(String::new(), Vec::new(), Vec::new());
         self.history.reset_navigation();
-        self.history.record_local_submission(&previous);
+        self.history.record_local_submission(HistoryEntry {
+            text: previous.clone(),
+            text_elements,
+            local_image_paths,
+        });
         Some(previous)
     }
 
@@ -1400,7 +1443,7 @@ impl ChatComposer {
     }
 
     /// Expand large-paste placeholders using element ranges and rebuild other element spans.
-    fn expand_pending_pastes(
+    pub(crate) fn expand_pending_pastes(
         text: &str,
         mut elements: Vec<TextElement>,
         pending_pastes: &[(String, String)],
@@ -1723,6 +1766,7 @@ impl ChatComposer {
                     name,
                     self.collaboration_modes_enabled,
                     self.personality_command_enabled,
+                    self.windows_degraded_sandbox_active,
                 )
                 .is_some();
                 let prompt_prefix = format!("{PROMPTS_CMD_PREFIX}:");
@@ -1782,8 +1826,17 @@ impl ChatComposer {
         if text.is_empty() && self.attached_images.is_empty() {
             return None;
         }
-        if !text.is_empty() {
-            self.history.record_local_submission(&text);
+        if !text.is_empty() || !self.attached_images.is_empty() {
+            let local_image_paths = self
+                .attached_images
+                .iter()
+                .map(|img| img.path.clone())
+                .collect();
+            self.history.record_local_submission(HistoryEntry {
+                text: text.clone(),
+                text_elements: text_elements.clone(),
+                local_image_paths,
+            });
         }
         self.pending_pastes.clear();
         Some((text, text_elements))
@@ -1899,6 +1952,7 @@ impl ChatComposer {
                 name,
                 self.collaboration_modes_enabled,
                 self.personality_command_enabled,
+                self.windows_degraded_sandbox_active,
             )
         {
             self.textarea.set_text_clearing_elements("");
@@ -1926,6 +1980,7 @@ impl ChatComposer {
                     name,
                     self.collaboration_modes_enabled,
                     self.personality_command_enabled,
+                    self.windows_degraded_sandbox_active,
                 )
                 && cmd == SlashCommand::Review
             {
@@ -1977,15 +2032,19 @@ impl ChatComposer {
                     .history
                     .should_handle_navigation(self.textarea.text(), self.textarea.cursor())
                 {
-                    let replace_text = match key_event.code {
+                    let replace_entry = match key_event.code {
                         KeyCode::Up => self.history.navigate_up(&self.app_event_tx),
                         KeyCode::Down => self.history.navigate_down(&self.app_event_tx),
                         KeyCode::Char('p') => self.history.navigate_up(&self.app_event_tx),
                         KeyCode::Char('n') => self.history.navigate_down(&self.app_event_tx),
                         _ => unreachable!(),
                     };
-                    if let Some(text) = replace_text {
-                        self.set_text_content(text, Vec::new(), Vec::new());
+                    if let Some(entry) = replace_entry {
+                        self.set_text_content(
+                            entry.text,
+                            entry.text_elements,
+                            entry.local_image_paths,
+                        );
                         return (InputResult::None, true);
                     }
                 }
@@ -2234,39 +2293,69 @@ impl ChatComposer {
             return false;
         }
 
-        let next = toggle_shortcut_mode(self.footer_mode, self.quit_shortcut_hint_visible());
+        let next = toggle_shortcut_mode(
+            self.footer_mode,
+            self.quit_shortcut_hint_visible(),
+            self.is_empty(),
+        );
         let changed = next != self.footer_mode;
         self.footer_mode = next;
         changed
     }
 
     fn footer_props(&self) -> FooterProps {
+        let mode = self.footer_mode();
+        let is_wsl = {
+            #[cfg(target_os = "linux")]
+            {
+                mode == FooterMode::ShortcutOverlay && crate::clipboard_paste::is_probably_wsl()
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                false
+            }
+        };
+
         FooterProps {
-            mode: self.footer_mode(),
+            mode,
             esc_backtrack_hint: self.esc_backtrack_hint,
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
             quit_shortcut_key: self.quit_shortcut_key,
             steer_enabled: self.steer_enabled,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
+            is_wsl,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
         }
     }
 
+    /// Resolve the effective footer mode via a small priority waterfall.
+    ///
+    /// The base mode is derived solely from whether the composer is empty:
+    /// `ComposerEmpty` iff empty, otherwise `ComposerHasDraft`. Transient
+    /// modes (Esc hint, overlay, quit reminder) can override that base when
+    /// their conditions are active.
     fn footer_mode(&self) -> FooterMode {
+        let base_mode = if self.is_empty() {
+            FooterMode::ComposerEmpty
+        } else {
+            FooterMode::ComposerHasDraft
+        };
+
         match self.footer_mode {
             FooterMode::EscHint => FooterMode::EscHint,
             FooterMode::ShortcutOverlay => FooterMode::ShortcutOverlay,
             FooterMode::QuitShortcutReminder if self.quit_shortcut_hint_visible() => {
                 FooterMode::QuitShortcutReminder
             }
-            FooterMode::QuitShortcutReminder => FooterMode::ShortcutSummary,
-            FooterMode::ShortcutSummary if self.quit_shortcut_hint_visible() => {
+            FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft
+                if self.quit_shortcut_hint_visible() =>
+            {
                 FooterMode::QuitShortcutReminder
             }
-            FooterMode::ShortcutSummary if !self.is_empty() => FooterMode::ContextOnly,
-            other => other,
+            FooterMode::QuitShortcutReminder => base_mode,
+            FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft => base_mode,
         }
     }
 
@@ -2291,6 +2380,11 @@ impl ChatComposer {
         // When browsing input history (shell-style Up/Down recall), skip all popup
         // synchronization so nothing steals focus from continued history navigation.
         if browsing_history {
+            if self.current_file_query.is_some() {
+                self.app_event_tx
+                    .send(AppEvent::StartFileSearch(String::new()));
+                self.current_file_query = None;
+            }
             self.active_popup = ActivePopup::None;
             return;
         }
@@ -2301,12 +2395,22 @@ impl ChatComposer {
         self.sync_command_popup(allow_command_popup);
 
         if matches!(self.active_popup, ActivePopup::Command(_)) {
+            if self.current_file_query.is_some() {
+                self.app_event_tx
+                    .send(AppEvent::StartFileSearch(String::new()));
+                self.current_file_query = None;
+            }
             self.dismissed_file_popup_token = None;
             self.dismissed_skill_popup_token = None;
             return;
         }
 
         if let Some(token) = skill_token {
+            if self.current_file_query.is_some() {
+                self.app_event_tx
+                    .send(AppEvent::StartFileSearch(String::new()));
+                self.current_file_query = None;
+            }
             self.sync_skill_popup(token);
             return;
         }
@@ -2317,6 +2421,11 @@ impl ChatComposer {
             return;
         }
 
+        if self.current_file_query.is_some() {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(String::new()));
+            self.current_file_query = None;
+        }
         self.dismissed_file_popup_token = None;
         if matches!(
             self.active_popup,
@@ -2369,6 +2478,7 @@ impl ChatComposer {
             name,
             self.collaboration_modes_enabled,
             self.personality_command_enabled,
+            self.windows_degraded_sandbox_active,
         ) {
             return true;
         }
@@ -2425,6 +2535,7 @@ impl ChatComposer {
                         CommandPopupFlags {
                             collaboration_modes_enabled,
                             personality_command_enabled,
+                            windows_degraded_sandbox_active: self.windows_degraded_sandbox_active,
                         },
                     );
                     command_popup.on_composer_text_change(first_line.to_string());
@@ -2448,7 +2559,10 @@ impl ChatComposer {
             return;
         }
 
-        if !query.is_empty() {
+        if query.is_empty() {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(String::new()));
+        } else {
             self.app_event_tx
                 .send(AppEvent::StartFileSearch(query.clone()));
         }
@@ -2472,7 +2586,11 @@ impl ChatComposer {
             }
         }
 
-        self.current_file_query = Some(query);
+        if query.is_empty() {
+            self.current_file_query = None;
+        } else {
+            self.current_file_query = Some(query);
+        }
         self.dismissed_file_popup_token = None;
     }
 
@@ -2584,6 +2702,28 @@ impl Renderable for ChatComposer {
             }
             ActivePopup::None => {
                 let footer_props = self.footer_props();
+                let show_cycle_hint = !footer_props.is_task_running;
+                let show_shortcuts_hint = match footer_props.mode {
+                    FooterMode::ComposerEmpty => !self.is_in_paste_burst(),
+                    FooterMode::QuitShortcutReminder
+                    | FooterMode::ShortcutOverlay
+                    | FooterMode::EscHint
+                    | FooterMode::ComposerHasDraft => false,
+                };
+                let show_queue_hint = match footer_props.mode {
+                    FooterMode::ComposerHasDraft => {
+                        footer_props.is_task_running && footer_props.steer_enabled
+                    }
+                    FooterMode::QuitShortcutReminder
+                    | FooterMode::ComposerEmpty
+                    | FooterMode::ShortcutOverlay
+                    | FooterMode::EscHint => false,
+                };
+                let context_line = context_window_line(
+                    footer_props.context_window_percent,
+                    footer_props.context_window_used_tokens,
+                );
+                let context_width = context_line.width() as u16;
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
                     custom_height.unwrap_or_else(|| footer_height(footer_props));
@@ -2598,26 +2738,102 @@ impl Renderable for ChatComposer {
                 } else {
                     popup_rect
                 };
-                let mut left_content_width = None;
-                if self.footer_flash_visible() {
+                let left_width = if self.footer_flash_visible() {
+                    self.footer_flash
+                        .as_ref()
+                        .map(|flash| flash.line.width() as u16)
+                        .unwrap_or(0)
+                } else if let Some(items) = self.footer_hint_override.as_ref() {
+                    footer_hint_items_width(items)
+                } else {
+                    footer_line_width(
+                        footer_props,
+                        self.collaboration_mode_indicator,
+                        show_cycle_hint,
+                        show_shortcuts_hint,
+                        show_queue_hint,
+                    )
+                };
+                let can_show_left_and_context =
+                    can_show_left_with_context(hint_rect, left_width, context_width);
+                let has_override =
+                    self.footer_flash_visible() || self.footer_hint_override.is_some();
+                let single_line_layout = if has_override {
+                    None
+                } else {
+                    match footer_props.mode {
+                        FooterMode::ComposerEmpty | FooterMode::ComposerHasDraft => {
+                            // Both of these modes render the single-line footer style (with
+                            // either the shortcuts hint or the optional queue hint). We still
+                            // want the single-line collapse rules so the mode label can win over
+                            // the context indicator on narrow widths.
+                            Some(single_line_footer_layout(
+                                hint_rect,
+                                context_width,
+                                self.collaboration_mode_indicator,
+                                show_cycle_hint,
+                                show_shortcuts_hint,
+                                show_queue_hint,
+                            ))
+                        }
+                        FooterMode::EscHint
+                        | FooterMode::QuitShortcutReminder
+                        | FooterMode::ShortcutOverlay => None,
+                    }
+                };
+                let show_context = if matches!(
+                    footer_props.mode,
+                    FooterMode::EscHint
+                        | FooterMode::QuitShortcutReminder
+                        | FooterMode::ShortcutOverlay
+                ) {
+                    false
+                } else {
+                    single_line_layout
+                        .as_ref()
+                        .map(|(_, show_context)| *show_context)
+                        .unwrap_or(can_show_left_and_context)
+                };
+
+                if let Some((summary_left, _)) = single_line_layout {
+                    match summary_left {
+                        SummaryLeft::Default => {
+                            render_footer_from_props(
+                                hint_rect,
+                                buf,
+                                footer_props,
+                                self.collaboration_mode_indicator,
+                                show_cycle_hint,
+                                show_shortcuts_hint,
+                                show_queue_hint,
+                            );
+                        }
+                        SummaryLeft::Custom(line) => {
+                            render_footer_line(hint_rect, buf, line);
+                        }
+                        SummaryLeft::None => {}
+                    }
+                } else if self.footer_flash_visible() {
                     if let Some(flash) = self.footer_flash.as_ref() {
                         flash.line.render(inset_footer_hint_area(hint_rect), buf);
-                        left_content_width = Some(flash.line.width() as u16);
                     }
                 } else if let Some(items) = self.footer_hint_override.as_ref() {
                     render_footer_hint_items(hint_rect, buf, items);
-                    left_content_width = Some(footer_hint_items_width(items));
                 } else {
-                    render_footer(hint_rect, buf, footer_props);
-                    left_content_width = Some(footer_line_width(footer_props));
+                    render_footer_from_props(
+                        hint_rect,
+                        buf,
+                        footer_props,
+                        self.collaboration_mode_indicator,
+                        show_cycle_hint,
+                        show_shortcuts_hint,
+                        show_queue_hint,
+                    );
                 }
-                render_mode_indicator(
-                    hint_rect,
-                    buf,
-                    self.collaboration_mode_indicator,
-                    !footer_props.is_task_running,
-                    left_content_width,
-                );
+
+                if show_context {
+                    render_context_right(hint_rect, buf, &context_line);
+                }
             }
         }
         let style = user_message_style();
@@ -2647,8 +2863,11 @@ impl Renderable for ChatComposer {
                     .unwrap_or("Input disabled.")
                     .to_string()
             };
-            let placeholder = Span::from(text).dim();
-            Line::from(vec![placeholder]).render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
+            if !textarea_rect.is_empty() {
+                let placeholder = Span::from(text).dim();
+                Line::from(vec![placeholder])
+                    .render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
+            }
         }
     }
 }
@@ -2861,14 +3080,17 @@ mod tests {
         );
     }
 
-    fn snapshot_composer_state<F>(name: &str, enhanced_keys_supported: bool, setup: F)
-    where
+    fn snapshot_composer_state_with_width<F>(
+        name: &str,
+        width: u16,
+        enhanced_keys_supported: bool,
+        setup: F,
+    ) where
         F: FnOnce(&mut ChatComposer),
     {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let width = 100;
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -2888,6 +3110,13 @@ mod tests {
             .draw(|f| composer.render(f.area(), f.buffer_mut()))
             .unwrap();
         insta::assert_snapshot!(name, terminal.backend());
+    }
+
+    fn snapshot_composer_state<F>(name: &str, enhanced_keys_supported: bool, setup: F)
+    where
+        F: FnOnce(&mut ChatComposer),
+    {
+        snapshot_composer_state_with_width(name, 100, enhanced_keys_supported, setup);
     }
 
     #[test]
@@ -2943,6 +3172,100 @@ mod tests {
     }
 
     #[test]
+    fn footer_collapse_snapshots() {
+        fn setup_collab_footer(
+            composer: &mut ChatComposer,
+            context_percent: i64,
+            indicator: CollaborationModeIndicator,
+        ) {
+            composer.set_collaboration_modes_enabled(true);
+            composer.set_collaboration_mode_indicator(Some(indicator));
+            composer.set_context_window(Some(context_percent), None);
+        }
+
+        // Empty textarea, agent idle: shortcuts hint can show, and cycle hint is available.
+        snapshot_composer_state_with_width("footer_collapse_empty_full", 120, true, |composer| {
+            setup_collab_footer(composer, 100, CollaborationModeIndicator::Code);
+        });
+        snapshot_composer_state_with_width(
+            "footer_collapse_empty_mode_cycle_with_context",
+            60,
+            true,
+            |composer| {
+                setup_collab_footer(composer, 100, CollaborationModeIndicator::Code);
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_collapse_empty_mode_cycle_without_context",
+            44,
+            true,
+            |composer| {
+                setup_collab_footer(composer, 100, CollaborationModeIndicator::Code);
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_collapse_empty_mode_only",
+            26,
+            true,
+            |composer| {
+                setup_collab_footer(composer, 100, CollaborationModeIndicator::Code);
+            },
+        );
+
+        // Textarea has content, agent running, steer enabled: queue hint is shown.
+        snapshot_composer_state_with_width("footer_collapse_queue_full", 120, true, |composer| {
+            setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+            composer.set_steer_enabled(true);
+            composer.set_task_running(true);
+            composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
+        });
+        snapshot_composer_state_with_width(
+            "footer_collapse_queue_short_with_context",
+            50,
+            true,
+            |composer| {
+                setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+                composer.set_steer_enabled(true);
+                composer.set_task_running(true);
+                composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_collapse_queue_message_without_context",
+            40,
+            true,
+            |composer| {
+                setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+                composer.set_steer_enabled(true);
+                composer.set_task_running(true);
+                composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_collapse_queue_short_without_context",
+            30,
+            true,
+            |composer| {
+                setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+                composer.set_steer_enabled(true);
+                composer.set_task_running(true);
+                composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_collapse_queue_mode_only",
+            20,
+            true,
+            |composer| {
+                setup_collab_footer(composer, 98, CollaborationModeIndicator::Code);
+                composer.set_steer_enabled(true);
+                composer.set_task_running(true);
+                composer.set_text_content("Test".to_string(), Vec::new(), Vec::new());
+            },
+        );
+    }
+
+    #[test]
     fn esc_hint_stays_hidden_with_draft_content() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -2962,13 +3285,38 @@ mod tests {
 
         assert!(!composer.is_empty());
         assert_eq!(composer.current_text(), "d");
-        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
+        assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
         assert!(matches!(composer.active_popup, ActivePopup::None));
 
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
 
-        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
+        assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
         assert!(!composer.esc_backtrack_hint);
+    }
+
+    #[test]
+    fn base_footer_mode_tracks_empty_state_after_quit_hint_expires() {
+        use crossterm::event::KeyCode;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        type_chars_humanlike(&mut composer, &['d']);
+        composer.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')), true);
+        composer.quit_shortcut_expires_at =
+            Some(Instant::now() - std::time::Duration::from_secs(1));
+
+        assert_eq!(composer.footer_mode(), FooterMode::ComposerHasDraft);
+
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
+        assert_eq!(composer.footer_mode(), FooterMode::ComposerEmpty);
     }
 
     #[test]
@@ -2994,7 +3342,7 @@ mod tests {
 
         assert_eq!(
             composer.history.navigate_up(&composer.app_event_tx),
-            Some("draft text".to_string())
+            Some(HistoryEntry::from_text("draft text".to_string()))
         );
     }
 
@@ -3031,11 +3379,11 @@ mod tests {
 
         // Toggle back to prompt mode so subsequent typing captures characters.
         let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
-        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
+        assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
 
         type_chars_humanlike(&mut composer, &['h']);
         assert_eq!(composer.textarea.text(), "h");
-        assert_eq!(composer.footer_mode(), FooterMode::ContextOnly);
+        assert_eq!(composer.footer_mode(), FooterMode::ComposerHasDraft);
 
         let (result, needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
@@ -3043,8 +3391,8 @@ mod tests {
         assert!(needs_redraw, "typing should still mark the view dirty");
         let _ = flush_after_paste_burst(&mut composer);
         assert_eq!(composer.textarea.text(), "h?");
-        assert_eq!(composer.footer_mode, FooterMode::ShortcutSummary);
-        assert_eq!(composer.footer_mode(), FooterMode::ContextOnly);
+        assert_eq!(composer.footer_mode, FooterMode::ComposerEmpty);
+        assert_eq!(composer.footer_mode(), FooterMode::ComposerHasDraft);
     }
 
     /// Behavior: while a paste-like burst is being captured, `?` must not toggle the shortcut
@@ -4445,6 +4793,37 @@ mod tests {
         }
         let imgs = composer.take_recent_submission_images();
         assert_eq!(vec![path], imgs);
+    }
+
+    #[test]
+    fn history_navigation_restores_image_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+        let path = PathBuf::from("/tmp/image1.png");
+        composer.attach_image(path.clone());
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+
+        let text = composer.current_text();
+        assert_eq!(text, "[Image #1]");
+        let text_elements = composer.text_elements();
+        assert_eq!(text_elements.len(), 1);
+        assert_eq!(text_elements[0].placeholder(&text), Some("[Image #1]"));
+        assert_eq!(composer.local_image_paths(), vec![path]);
     }
 
     #[test]

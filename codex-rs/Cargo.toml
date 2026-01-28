@@ -47,6 +47,7 @@ members = [
     "utils/string",
     "codex-client",
     "codex-api",
+    "state",
 ]
 resolver = "2"
 
@@ -91,6 +92,7 @@ codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
+codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
@@ -126,6 +128,7 @@ clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
 crossterm = "0.28.1"
+crossbeam-channel = "0.5.15"
 ctor = "0.6.3"
 derive_more = "2"
 diffy = "0.4.2"
@@ -159,7 +162,7 @@ maplit = "1.0.2"
 mime_guess = "2.0.5"
 multimap = "0.10.0"
 notify = "8.2.0"
-nucleo-matcher = "0.3.1"
+nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "4253de9faabb4e5c6d81d946a5e35a90f87347ee" }
 once_cell = "1.20.2"
 openssl-sys = "*"
 opentelemetry = "0.31.0"
@@ -198,6 +201,7 @@ semver = "1.0"
 shlex = "1.3.0"
 similar = "2.7.0"
 socket2 = "0.6.1"
+sqlx = { version = "0.8.6", default-features = false, features = ["chrono", "json", "macros", "migrate", "runtime-tokio-rustls", "sqlite", "time", "uuid"] }
 starlark = "0.13.0"
 strum = "0.27.2"
 strum_macros = "0.27.2"

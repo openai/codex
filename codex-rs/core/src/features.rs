@@ -89,6 +89,8 @@ pub enum Feature {
     WebSearchCached,
     /// Gate the execpolicy enforcement for shell/unified exec.
     ExecPolicy,
+    /// Allow the model to request approval and propose exec rules.
+    RequestRule,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
     /// Use the elevated Windows sandbox pipeline (setup + runner).
@@ -99,6 +101,8 @@ pub enum Feature {
     RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
+    /// Persist rollout metadata to a local SQLite database.
+    Sqlite,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
     /// Enforce UTF8 output in Powershell.
@@ -109,6 +113,8 @@ pub enum Feature {
     Collab,
     /// Enable connectors (apps).
     Connectors,
+    /// Allow prompting and installing missing MCP dependencies.
+    SkillMcpDependencyInstall,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
@@ -142,6 +148,8 @@ impl Feature {
 pub struct LegacyFeatureUsage {
     pub alias: String,
     pub feature: Feature,
+    pub summary: String,
+    pub details: Option<String>,
 }
 
 /// Holds the effective set of enabled features.
@@ -198,9 +206,12 @@ impl Features {
     }
 
     pub fn record_legacy_usage_force(&mut self, alias: &str, feature: Feature) {
+        let (summary, details) = legacy_usage_notice(alias, feature);
         self.legacy_usages.insert(LegacyFeatureUsage {
             alias: alias.to_string(),
             feature,
+            summary,
+            details,
         });
     }
 
@@ -211,10 +222,8 @@ impl Features {
         self.record_legacy_usage_force(alias, feature);
     }
 
-    pub fn legacy_feature_usages(&self) -> impl Iterator<Item = (&str, Feature)> + '_ {
-        self.legacy_usages
-            .iter()
-            .map(|usage| (usage.alias.as_str(), usage.feature))
+    pub fn legacy_feature_usages(&self) -> impl Iterator<Item = &LegacyFeatureUsage> + '_ {
+        self.legacy_usages.iter()
     }
 
     pub fn emit_metrics(&self, otel: &OtelManager) {
@@ -235,6 +244,21 @@ impl Features {
     /// Apply a table of key -> bool toggles (e.g. from TOML).
     pub fn apply_map(&mut self, m: &BTreeMap<String, bool>) {
         for (k, v) in m {
+            match k.as_str() {
+                "web_search_request" => {
+                    self.record_legacy_usage_force(
+                        "features.web_search_request",
+                        Feature::WebSearchRequest,
+                    );
+                }
+                "web_search_cached" => {
+                    self.record_legacy_usage_force(
+                        "features.web_search_cached",
+                        Feature::WebSearchCached,
+                    );
+                }
+                _ => {}
+            }
             match feature_for_key(k) {
                 Some(feat) => {
                     if k != feat.key() {
@@ -295,6 +319,42 @@ impl Features {
     }
 }
 
+fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>) {
+    let canonical = feature.key();
+    match feature {
+        Feature::WebSearchRequest | Feature::WebSearchCached => {
+            let label = match alias {
+                "web_search" => "[features].web_search",
+                "tools.web_search" => "[tools].web_search",
+                "features.web_search_request" | "web_search_request" => {
+                    "[features].web_search_request"
+                }
+                "features.web_search_cached" | "web_search_cached" => {
+                    "[features].web_search_cached"
+                }
+                _ => alias,
+            };
+            let summary = format!("`{label}` is deprecated. Use `web_search` instead.");
+            (summary, Some(web_search_details().to_string()))
+        }
+        _ => {
+            let summary = format!("`{alias}` is deprecated. Use `[features].{canonical}` instead.");
+            let details = if alias == canonical {
+                None
+            } else {
+                Some(format!(
+                    "Enable it with `--enable {canonical}` or `[features].{canonical}` in config.toml. See https://github.com/openai/codex/blob/main/docs/config.md#feature-flags for details."
+                ))
+            };
+            (summary, details)
+        }
+    }
+}
+
+fn web_search_details() -> &'static str {
+    "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` in config.toml."
+}
+
 /// Keys accepted in `[features]` tables.
 fn feature_for_key(key: &str) -> Option<Feature> {
     for spec in FEATURES {
@@ -343,13 +403,13 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WebSearchRequest,
         key: "web_search_request",
-        stage: Stage::Stable,
+        stage: Stage::Deprecated,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WebSearchCached,
         key: "web_search_cached",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Deprecated,
         default_enabled: false,
     },
     // Experimental program. Rendered in the `/experimental` menu for users.
@@ -374,6 +434,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::Sqlite,
+        key: "sqlite",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ChildAgentsMd,
         key: "child_agents_md",
         stage: Stage::UnderDevelopment,
@@ -390,6 +456,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "exec_policy",
         stage: Stage::UnderDevelopment,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::RequestRule,
+        key: "request_rule",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,
@@ -434,8 +506,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::EnableRequestCompression,
         key: "enable_request_compression",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Collab,
@@ -448,6 +520,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "connectors",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SkillMcpDependencyInstall,
+        key: "skill_mcp_dependency_install",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Steer,

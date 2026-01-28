@@ -39,12 +39,12 @@ pub use self::frame_requester::FrameRequester;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::notifications::DesktopNotificationBackend;
-use crate::notifications::NotificationBackendKind;
 use crate::notifications::detect_backend;
 use crate::tui::event_stream::EventBroker;
 use crate::tui::event_stream::TuiEventStream;
 #[cfg(unix)]
 use crate::tui::job_control::SuspendContext;
+use codex_core::config::types::NotificationMethod;
 
 mod event_stream;
 mod frame_rate_limiter;
@@ -275,7 +275,7 @@ impl Tui {
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
-            notification_backend: Some(detect_backend()),
+            notification_backend: Some(detect_backend(NotificationMethod::default())),
             alt_screen_enabled: true,
         }
     }
@@ -283,6 +283,10 @@ impl Tui {
     /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
     pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
         self.alt_screen_enabled = enabled;
+    }
+
+    pub fn set_notification_method(&mut self, method: NotificationMethod) {
+        self.notification_backend = Some(detect_backend(method));
     }
 
     pub fn frame_requester(&self) -> FrameRequester {
@@ -361,36 +365,16 @@ impl Tui {
         let message = message.as_ref().to_string();
         match backend.notify(&message) {
             Ok(()) => true,
-            Err(err) => match backend.kind() {
-                NotificationBackendKind::WindowsToast => {
-                    tracing::error!(
-                        error = %err,
-                        "Failed to send Windows toast notification; falling back to OSC 9"
-                    );
-                    self.notification_backend = Some(DesktopNotificationBackend::osc9());
-                    if let Some(backend) = self.notification_backend.as_mut() {
-                        if let Err(osc_err) = backend.notify(&message) {
-                            tracing::warn!(
-                                error = %osc_err,
-                                "Failed to emit OSC 9 notification after toast fallback; \
-                                 disabling future notifications"
-                            );
-                            self.notification_backend = None;
-                            return false;
-                        }
-                        return true;
-                    }
-                    false
-                }
-                NotificationBackendKind::Osc9 => {
-                    tracing::warn!(
-                        error = %err,
-                        "Failed to emit OSC 9 notification; disabling future notifications"
-                    );
-                    self.notification_backend = None;
-                    false
-                }
-            },
+            Err(err) => {
+                let method = backend.method();
+                tracing::warn!(
+                    error = %err,
+                    method = %method,
+                    "Failed to emit terminal notification; disabling future notifications"
+                );
+                self.notification_backend = None;
+                false
+            }
         }
     }
 

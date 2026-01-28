@@ -92,7 +92,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.model = Some("gpt-5.1-codex-max".to_string());
             // Keep tool expectations stable when the default web_search mode changes.
-            config.web_search_mode = WebSearchMode::Cached;
+            config.web_search_mode = Some(WebSearchMode::Cached);
             config.features.enable(Feature::CollaborationModes);
         })
         .build(&server)
@@ -350,6 +350,7 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(new_policy.clone()),
+            windows_sandbox_level: None,
             model: Some("o3".to_string()),
             effort: Some(Some(ReasoningEffort::High)),
             summary: Some(ReasoningSummary::Detailed),
@@ -427,6 +428,7 @@ async fn override_before_first_turn_emits_environment_context() -> anyhow::Resul
             cwd: None,
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: Some("gpt-5.1-codex".to_string()),
             effort: Some(Some(ReasoningEffort::Low)),
             summary: None,
