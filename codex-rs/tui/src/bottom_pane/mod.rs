@@ -868,6 +868,11 @@ impl BottomPane {
         self.composer.set_status_line(status_line);
         self.request_redraw();
     }
+
+    pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
+        self.composer.set_status_line_enabled(enabled);
+        self.request_redraw();
+    }
 }
 
 impl Renderable for BottomPane {

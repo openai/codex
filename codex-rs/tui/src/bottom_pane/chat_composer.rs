@@ -82,6 +82,7 @@
 //! edits and renders a placeholder prompt instead of the editable textarea. This is part of the
 //! overall state machine, since it affects which transitions are even possible from a given UI
 //! state.
+use crate::bottom_pane::footer::mode_indicator_line;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
@@ -297,6 +298,7 @@ pub(crate) struct ChatComposer {
     personality_command_enabled: bool,
     windows_degraded_sandbox_active: bool,
     status_line_value: Option<StatusLineValue>,
+    status_line_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -387,6 +389,7 @@ impl ChatComposer {
             personality_command_enabled: false,
             windows_degraded_sandbox_active: false,
             status_line_value: None,
+            status_line_enabled: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -2528,6 +2531,7 @@ impl ChatComposer {
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
             status_line_value: self.status_line_value.clone(),
+            status_line_enabled: self.status_line_enabled,
         }
     }
 
@@ -3014,6 +3018,10 @@ impl ChatComposer {
     pub(crate) fn set_status_line(&mut self, status_line: Option<StatusLineValue>) {
         self.status_line_value = status_line;
     }
+
+    pub(crate) fn set_status_line_enabled(&mut self, enabled: bool) {
+        self.status_line_enabled = enabled;
+    }
 }
 
 fn skill_display_name(skill: &SkillMetadata) -> &str {
@@ -3107,11 +3115,20 @@ impl ChatComposer {
                     | FooterMode::ShortcutOverlay
                     | FooterMode::EscHint => false,
                 };
-                let context_line = context_window_line(
-                    footer_props.context_window_percent,
-                    footer_props.context_window_used_tokens,
-                );
-                let context_width = context_line.width() as u16;
+                let left_mode_indicator = if footer_props.status_line_enabled {
+                    None
+                } else {
+                    self.collaboration_mode_indicator
+                };
+                let right_line = if footer_props.status_line_enabled {
+                    mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint)
+                } else {
+                    Some(context_window_line(
+                        footer_props.context_window_percent,
+                        footer_props.context_window_used_tokens,
+                    ))
+                };
+                let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                 let custom_height = self.custom_footer_height();
                 let footer_hint_height =
                     custom_height.unwrap_or_else(|| footer_height(&footer_props));
@@ -3136,14 +3153,14 @@ impl ChatComposer {
                 } else {
                     footer_line_width(
                         &footer_props,
-                        self.collaboration_mode_indicator,
+                        left_mode_indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
                         show_queue_hint,
                     )
                 };
                 let can_show_left_and_context =
-                    can_show_left_with_context(hint_rect, left_width, context_width);
+                    can_show_left_with_context(hint_rect, left_width, right_width);
                 let has_override =
                     self.footer_flash_visible() || self.footer_hint_override.is_some();
                 let single_line_layout = if has_override {
@@ -3157,8 +3174,8 @@ impl ChatComposer {
                             // the context indicator on narrow widths.
                             Some(single_line_footer_layout(
                                 hint_rect,
-                                context_width,
-                                self.collaboration_mode_indicator,
+                                right_width,
+                                left_mode_indicator,
                                 show_cycle_hint,
                                 show_shortcuts_hint,
                                 show_queue_hint,
@@ -3169,7 +3186,7 @@ impl ChatComposer {
                         | FooterMode::ShortcutOverlay => None,
                     }
                 };
-                let show_context = if matches!(
+                let show_right = if matches!(
                     footer_props.mode,
                     FooterMode::EscHint
                         | FooterMode::QuitShortcutReminder
@@ -3189,8 +3206,8 @@ impl ChatComposer {
                             render_footer_from_props(
                                 hint_rect,
                                 buf,
-                                footer_props,
-                                self.collaboration_mode_indicator,
+                                &footer_props,
+                                left_mode_indicator,
                                 show_cycle_hint,
                                 show_shortcuts_hint,
                                 show_queue_hint,
@@ -3211,7 +3228,7 @@ impl ChatComposer {
                     render_footer_from_props(
                         hint_rect,
                         buf,
-                        footer_props.clone(),
+                        &footer_props,
                         self.collaboration_mode_indicator,
                         show_cycle_hint,
                         show_shortcuts_hint,
@@ -3219,8 +3236,10 @@ impl ChatComposer {
                     );
                 }
 
-                if show_context {
-                    render_context_right(hint_rect, buf, &context_line);
+                if show_right {
+                    if let Some(line) = &right_line {
+                        render_context_right(hint_rect, buf, line);
+                    }
                 }
             }
         }

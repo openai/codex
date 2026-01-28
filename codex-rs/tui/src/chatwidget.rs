@@ -2355,6 +2355,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget
+            .bottom_pane
+            .set_status_line_enabled(widget.config.tui_status_line.is_some());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -2505,6 +2508,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget
+            .bottom_pane
+            .set_status_line_enabled(widget.config.tui_status_line.is_some());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -2644,6 +2650,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
+        widget
+            .bottom_pane
+            .set_status_line_enabled(widget.config.tui_status_line.is_some());
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
@@ -6445,9 +6454,9 @@ pub fn build_status_line_payload(chat: &ChatWidget, config: &Config) -> serde_js
         .token_info
         .as_ref()
         .and_then(|ti| ti.model_context_window);
-    let used_percentage = context_window_size
+    let remaining_percentage = context_window_size
         .map(|cws| chat.token_usage().percent_of_context_window_remaining(cws) as f64);
-    let remaining_percentage = used_percentage.map(|up| 100f64 - up);
+    let used_percentage = remaining_percentage.map(|rp| 100f64 - rp);
     let input_tokens = chat.token_usage().input_tokens;
     let output_tokens = chat.token_usage().output_tokens;
     let cache_read_input_tokens = chat.token_usage().cached_input_tokens;
@@ -6468,6 +6477,7 @@ pub fn build_status_line_payload(chat: &ChatWidget, config: &Config) -> serde_js
     });
     payload.insert("context_window".to_string(), context_window);
 
+    tracing::info!("status line payload: {:#?}", payload);
     serde_json::Value::Object(payload)
 }
 
