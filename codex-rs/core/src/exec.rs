@@ -362,7 +362,11 @@ async fn exec_windows_sandbox(
     let capture = match spawn_res {
         Ok(Ok(v)) => v,
         Ok(Err(err)) => {
-            record_windows_sandbox_spawn_failure(command_path.as_deref(), sandbox_level, &err.to_string());
+            record_windows_sandbox_spawn_failure(
+                command_path.as_deref(),
+                sandbox_level,
+                &err.to_string(),
+            );
             return Err(CodexErr::Io(io::Error::other(format!(
                 "windows sandbox: {err}"
             ))));
