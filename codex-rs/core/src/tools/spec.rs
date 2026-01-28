@@ -3,7 +3,7 @@ use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::features::Features;
-use crate::tools::handlers::PLAN_TOOL;
+use crate::tools::handlers::TODO_WRITE_TOOL;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
@@ -1273,12 +1273,12 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
-    use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
+    use crate::tools::handlers::TodoWriteHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
     use std::sync::Arc;
@@ -1287,7 +1287,7 @@ pub(crate) fn build_specs(
 
     let shell_handler = Arc::new(ShellHandler);
     let unified_exec_handler = Arc::new(UnifiedExecHandler);
-    let plan_handler = Arc::new(PlanHandler);
+    let todo_handler = Arc::new(TodoWriteHandler);
     let apply_patch_handler = Arc::new(ApplyPatchHandler);
     let dynamic_tool_handler = Arc::new(DynamicToolHandler);
     let view_image_handler = Arc::new(ViewImageHandler);
@@ -1332,8 +1332,10 @@ pub(crate) fn build_specs(
     builder.register_handler("list_mcp_resource_templates", mcp_resource_handler.clone());
     builder.register_handler("read_mcp_resource", mcp_resource_handler);
 
-    builder.push_spec(PLAN_TOOL.clone());
-    builder.register_handler("update_plan", plan_handler);
+    builder.push_spec(TODO_WRITE_TOOL.clone());
+    builder.register_handler("todo_write", todo_handler.clone());
+    // TODO: Remove this backward-compat alias once clients migrate; it is the old tool name, not Plan mode.
+    builder.register_handler("update_plan", todo_handler);
 
     if config.collaboration_modes_tools {
         builder.push_spec(create_request_user_input_tool());
@@ -1590,7 +1592,7 @@ mod tests {
             create_list_mcp_resources_tool(),
             create_list_mcp_resource_templates_tool(),
             create_read_mcp_resource_tool(),
-            PLAN_TOOL.clone(),
+            TODO_WRITE_TOOL.clone(),
             create_request_user_input_tool(),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
@@ -1737,7 +1739,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
-                "update_plan",
+                "todo_write",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -1759,7 +1761,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
-                "update_plan",
+                "todo_write",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -1783,7 +1785,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
-                "update_plan",
+                "todo_write",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -1807,7 +1809,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
-                "update_plan",
+                "todo_write",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -1829,7 +1831,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
-                "update_plan",
+                "todo_write",
                 "request_user_input",
                 "web_search",
                 "view_image",
@@ -1850,7 +1852,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
-                "update_plan",
+                "todo_write",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -1872,7 +1874,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
-                "update_plan",
+                "todo_write",
                 "request_user_input",
                 "web_search",
                 "view_image",
@@ -1893,7 +1895,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
-                "update_plan",
+                "todo_write",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -1916,7 +1918,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
-                "update_plan",
+                "todo_write",
                 "request_user_input",
                 "apply_patch",
                 "web_search",
@@ -1940,7 +1942,7 @@ mod tests {
                 "list_mcp_resources",
                 "list_mcp_resource_templates",
                 "read_mcp_resource",
-                "update_plan",
+                "todo_write",
                 "request_user_input",
                 "web_search",
                 "view_image",
@@ -1962,7 +1964,7 @@ mod tests {
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
 
         // Only check the shell variant and a couple of core tools.
-        let mut subset = vec!["exec_command", "write_stdin", "update_plan"];
+        let mut subset = vec!["exec_command", "write_stdin", "todo_write"];
         if let Some(shell_tool) = shell_tool_name(&tools_config) {
             subset.push(shell_tool);
         }

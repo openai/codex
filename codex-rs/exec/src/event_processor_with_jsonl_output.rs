@@ -176,7 +176,7 @@ impl EventProcessorWithJsonOutput {
                 };
                 vec![ThreadEvent::Error(ThreadErrorEvent { message })]
             }
-            protocol::EventMsg::PlanUpdate(ev) => self.handle_plan_update(ev),
+            protocol::EventMsg::PlanUpdate(ev) => self.handle_todo_update(ev),
             _ => Vec::new(),
         }
     }
@@ -700,7 +700,7 @@ impl EventProcessorWithJsonOutput {
         vec![ThreadEvent::ItemCompleted(ItemCompletedEvent { item })]
     }
 
-    fn todo_items_from_plan(&self, args: &UpdatePlanArgs) -> Vec<TodoItem> {
+    fn todo_items_from_update(&self, args: &UpdatePlanArgs) -> Vec<TodoItem> {
         args.plan
             .iter()
             .map(|p| TodoItem {
@@ -710,8 +710,8 @@ impl EventProcessorWithJsonOutput {
             .collect()
     }
 
-    fn handle_plan_update(&mut self, args: &UpdatePlanArgs) -> Vec<ThreadEvent> {
-        let items = self.todo_items_from_plan(args);
+    fn handle_todo_update(&mut self, args: &UpdatePlanArgs) -> Vec<ThreadEvent> {
+        let items = self.todo_items_from_update(args);
 
         if let Some(running) = &mut self.running_todo_list {
             running.items = items.clone();

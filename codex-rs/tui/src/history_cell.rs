@@ -1727,19 +1727,25 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
-/// Render a user‑friendly plan update styled like a checkbox todo list.
-pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
-    let UpdatePlanArgs { explanation, plan } = update;
-    PlanUpdateCell { explanation, plan }
+/// Render a user-friendly todo list update styled like a checkbox list.
+pub(crate) fn new_todo_update(update: UpdatePlanArgs) -> TodoUpdateCell {
+    let UpdatePlanArgs {
+        explanation,
+        plan: todo_items,
+    } = update;
+    TodoUpdateCell {
+        explanation,
+        todo_items,
+    }
 }
 
 #[derive(Debug)]
-pub(crate) struct PlanUpdateCell {
+pub(crate) struct TodoUpdateCell {
     explanation: Option<String>,
-    plan: Vec<PlanItemArg>,
+    todo_items: Vec<PlanItemArg>,
 }
 
-impl HistoryCell for PlanUpdateCell {
+impl HistoryCell for TodoUpdateCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let render_note = |text: &str| -> Vec<Line<'static>> {
             let wrap_width = width.saturating_sub(4).max(1) as usize;
@@ -1768,7 +1774,7 @@ impl HistoryCell for PlanUpdateCell {
         };
 
         let mut lines: Vec<Line<'static>> = vec![];
-        lines.push(vec!["• ".dim(), "Updated Plan".bold()].into());
+        lines.push(vec!["• ".dim(), "Updated Todo List".bold()].into());
 
         let mut indented_lines = vec![];
         let note = self
@@ -1780,10 +1786,10 @@ impl HistoryCell for PlanUpdateCell {
             indented_lines.extend(render_note(expl));
         };
 
-        if self.plan.is_empty() {
+        if self.todo_items.is_empty() {
             indented_lines.push(Line::from("(no steps provided)".dim().italic()));
         } else {
-            for PlanItemArg { step, status } in self.plan.iter() {
+            for PlanItemArg { step, status } in self.todo_items.iter() {
                 indented_lines.extend(render_step(status, step));
             }
         }
@@ -2910,7 +2916,7 @@ mod tests {
             ],
         };
 
-        let cell = new_plan_update(update);
+        let cell = new_todo_update(update);
         // Narrow width to force wrapping for both the note and steps
         let lines = cell.display_lines(32);
         let rendered = render_lines(&lines).join("\n");
@@ -2933,7 +2939,7 @@ mod tests {
             ],
         };
 
-        let cell = new_plan_update(update);
+        let cell = new_todo_update(update);
         let lines = cell.display_lines(40);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);

@@ -810,6 +810,7 @@ pub enum EventMsg {
     /// Notification that skill data may have been updated and clients may want to reload.
     SkillsUpdateAvailable,
 
+    /// Todo list update from the todo_write tool. The plan name is legacy.
     PlanUpdate(UpdatePlanArgs),
 
     TurnAborted(TurnAbortedEvent),

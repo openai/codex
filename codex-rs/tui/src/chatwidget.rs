@@ -519,8 +519,8 @@ pub(crate) struct ChatWidget {
     // This gates rendering of the "Worked for …" separator so purely conversational turns don't
     // show an empty divider. It is reset when the separator is emitted.
     had_work_activity: bool,
-    // Whether the current turn emitted a plan update.
-    saw_plan_update_this_turn: bool,
+    // Whether the current turn emitted a todo list update.
+    saw_todo_update_this_turn: bool,
     // Status-indicator elapsed seconds captured at the last emitted final-message separator.
     //
     // This lets the separator show per-chunk work time (since the previous separator) rather than
@@ -911,7 +911,7 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
-        self.saw_plan_update_this_turn = false;
+        self.saw_todo_update_this_turn = false;
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
@@ -962,7 +962,7 @@ impl ChatWidget {
             return;
         }
         let has_message = last_agent_message.is_some_and(|message| !message.trim().is_empty());
-        if !has_message && !self.saw_plan_update_this_turn {
+        if !has_message && !self.saw_todo_update_this_turn {
             return;
         }
         if !self.bottom_pane.no_modal_or_popup_active() {
@@ -1324,9 +1324,9 @@ impl ChatWidget {
         Some(combined)
     }
 
-    fn on_plan_update(&mut self, update: UpdatePlanArgs) {
-        self.saw_plan_update_this_turn = true;
-        self.add_to_history(history_cell::new_plan_update(update));
+    fn on_todo_update(&mut self, update: UpdatePlanArgs) {
+        self.saw_todo_update_this_turn = true;
+        self.add_to_history(history_cell::new_todo_update(update));
     }
 
     fn on_exec_approval_request(&mut self, id: String, ev: ExecApprovalRequestEvent) {
@@ -2093,7 +2093,7 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
-            saw_plan_update_this_turn: false,
+            saw_todo_update_this_turn: false,
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -2221,7 +2221,7 @@ impl ChatWidget {
             retry_status_header: None,
             thread_id: None,
             forked_from: None,
-            saw_plan_update_this_turn: false,
+            saw_todo_update_this_turn: false,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
@@ -2358,7 +2358,7 @@ impl ChatWidget {
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
-            saw_plan_update_this_turn: false,
+            saw_todo_update_this_turn: false,
             last_separator_elapsed_secs: None,
             last_rendered_width: std::cell::Cell::new(None),
             feedback,
@@ -3099,7 +3099,7 @@ impl ChatWidget {
                     self.on_interrupted_turn(ev.reason);
                 }
             },
-            EventMsg::PlanUpdate(update) => self.on_plan_update(update),
+            EventMsg::PlanUpdate(update) => self.on_todo_update(update),
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).
                 self.on_exec_approval_request(id.unwrap_or_default(), ev)

@@ -833,7 +833,7 @@ async fn make_chatwidget_manual(
         pre_review_token_info: None,
         needs_final_message_separator: false,
         had_work_activity: false,
-        saw_plan_update_this_turn: false,
+        saw_todo_update_this_turn: false,
         last_separator_elapsed_secs: None,
         last_rendered_width: std::cell::Cell::new(None),
         feedback: codex_feedback::CodexFeedback::new(),
@@ -1270,7 +1270,7 @@ async fn plan_implementation_popup_skips_when_messages_queued() {
 }
 
 #[tokio::test]
-async fn plan_implementation_popup_shows_on_plan_update_without_message() {
+async fn plan_implementation_popup_shows_on_todo_update_without_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
@@ -1279,7 +1279,7 @@ async fn plan_implementation_popup_shows_on_plan_update_without_message() {
     chat.set_collaboration_mask(plan_mask);
 
     chat.on_task_started();
-    chat.on_plan_update(UpdatePlanArgs {
+    chat.on_todo_update(UpdatePlanArgs {
         explanation: None,
         plan: vec![PlanItemArg {
             step: "First".to_string(),
@@ -1291,7 +1291,7 @@ async fn plan_implementation_popup_shows_on_plan_update_without_message() {
     let popup = render_bottom_popup(&chat, 80);
     assert!(
         popup.contains(PLAN_IMPLEMENTATION_TITLE),
-        "expected plan popup after plan update, got {popup:?}"
+        "expected implementation popup after todo list update, got {popup:?}"
     );
 }
 
@@ -1307,7 +1307,7 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
     chat.set_collaboration_mask(plan_mask);
 
     chat.on_task_started();
-    chat.on_plan_update(UpdatePlanArgs {
+    chat.on_todo_update(UpdatePlanArgs {
         explanation: None,
         plan: vec![PlanItemArg {
             step: "First".to_string(),
@@ -4404,7 +4404,7 @@ async fn apply_patch_request_shows_diff_summary() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn plan_update_renders_history_cell() {
+async fn todo_update_renders_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let update = UpdatePlanArgs {
         explanation: Some("Adapting plan".to_string()),
@@ -4428,11 +4428,14 @@ async fn plan_update_renders_history_cell() {
         msg: EventMsg::PlanUpdate(update),
     });
     let cells = drain_insert_history(&mut rx);
-    assert!(!cells.is_empty(), "expected plan update cell to be sent");
+    assert!(
+        !cells.is_empty(),
+        "expected todo list update cell to be sent"
+    );
     let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
-        blob.contains("Updated Plan"),
-        "missing plan header: {blob:?}"
+        blob.contains("Updated Todo List"),
+        "missing todo list header: {blob:?}"
     );
     assert!(blob.contains("Explore codebase"));
     assert!(blob.contains("Implement feature"));

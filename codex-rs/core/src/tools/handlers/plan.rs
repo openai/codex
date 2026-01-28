@@ -15,22 +15,22 @@ use codex_protocol::protocol::EventMsg;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-pub struct PlanHandler;
+pub struct TodoWriteHandler;
 
-pub static PLAN_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
-    let mut plan_item_props = BTreeMap::new();
-    plan_item_props.insert("step".to_string(), JsonSchema::String { description: None });
-    plan_item_props.insert(
+pub static TODO_WRITE_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
+    let mut todo_item_props = BTreeMap::new();
+    todo_item_props.insert("step".to_string(), JsonSchema::String { description: None });
+    todo_item_props.insert(
         "status".to_string(),
         JsonSchema::String {
             description: Some("One of: pending, in_progress, completed".to_string()),
         },
     );
 
-    let plan_items_schema = JsonSchema::Array {
+    let todo_items_schema = JsonSchema::Array {
         description: Some("The list of steps".to_string()),
         items: Box::new(JsonSchema::Object {
-            properties: plan_item_props,
+            properties: todo_item_props,
             required: Some(vec!["step".to_string(), "status".to_string()]),
             additional_properties: Some(false.into()),
         }),
@@ -41,12 +41,13 @@ pub static PLAN_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         "explanation".to_string(),
         JsonSchema::String { description: None },
     );
-    properties.insert("plan".to_string(), plan_items_schema);
+    // NOTE: The "plan" field name is legacy tool payload shape, unrelated to Plan mode.
+    properties.insert("plan".to_string(), todo_items_schema);
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "update_plan".to_string(),
-        description: r#"Updates the task plan.
-Provide an optional explanation and a list of plan items, each with a step and status.
+        name: "todo_write".to_string(),
+        description: r#"Updates the task list.
+Provide an optional explanation and a list of todo items, each with a step and status.
 At most one step can be in_progress at a time.
 "#
         .to_string(),
@@ -60,7 +61,7 @@ At most one step can be in_progress at a time.
 });
 
 #[async_trait]
-impl ToolHandler for PlanHandler {
+impl ToolHandler for TodoWriteHandler {
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -78,13 +79,13 @@ impl ToolHandler for PlanHandler {
             ToolPayload::Function { arguments } => arguments,
             _ => {
                 return Err(FunctionCallError::RespondToModel(
-                    "update_plan handler received unsupported payload".to_string(),
+                    "todo_write handler received unsupported payload".to_string(),
                 ));
             }
         };
 
         let content =
-            handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id).await?;
+            handle_todo_write(session.as_ref(), turn.as_ref(), arguments, call_id).await?;
 
         Ok(ToolOutput::Function {
             content,
@@ -94,23 +95,24 @@ impl ToolHandler for PlanHandler {
     }
 }
 
-/// This function doesn't do anything useful. However, it gives the model a structured way to record its plan that clients can read and render.
-/// So it's the _inputs_ to this function that are useful to clients, not the outputs and neither are actually useful for the model other
-/// than forcing it to come up and document a plan (TBD how that affects performance).
-pub(crate) async fn handle_update_plan(
+/// This function doesn't do anything useful. However, it gives the model a structured way to record
+/// its task list that clients can read and render. So it's the _inputs_ to this function that are
+/// useful to clients, not the outputs and neither are actually useful for the model other than
+/// forcing it to come up and document a task list (TBD how that affects performance).
+pub(crate) async fn handle_todo_write(
     session: &Session,
     turn_context: &TurnContext,
     arguments: String,
     _call_id: String,
 ) -> Result<String, FunctionCallError> {
-    let args = parse_update_plan_arguments(&arguments)?;
+    let args = parse_todo_write_arguments(&arguments)?;
     session
         .send_event(turn_context, EventMsg::PlanUpdate(args))
         .await;
-    Ok("Plan updated".to_string())
+    Ok("Todo list updated".to_string())
 }
 
-fn parse_update_plan_arguments(arguments: &str) -> Result<UpdatePlanArgs, FunctionCallError> {
+fn parse_todo_write_arguments(arguments: &str) -> Result<UpdatePlanArgs, FunctionCallError> {
     serde_json::from_str::<UpdatePlanArgs>(arguments).map_err(|e| {
         FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}"))
     })

@@ -3,7 +3,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-// Types for the TODO tool arguments matching codex-vscode/todo-mcp/src/main.rs
+// Types for the todo_write tool arguments matching codex-vscode/todo-mcp/src/main.rs.
+// The plan-named types and fields are legacy payload shape and are not related to Plan mode.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum StepStatus {
@@ -24,5 +25,6 @@ pub struct PlanItemArg {
 pub struct UpdatePlanArgs {
     #[serde(default)]
     pub explanation: Option<String>,
+    /// Legacy field name for todo items; kept for compatibility.
     pub plan: Vec<PlanItemArg>,
 }

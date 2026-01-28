@@ -2,6 +2,6 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-• Updated Plan
+• Updated Todo List
   └ □ Define error taxonomy
     □ Implement mapping to user messages

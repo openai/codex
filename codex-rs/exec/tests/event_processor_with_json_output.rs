@@ -220,10 +220,10 @@ fn web_search_begin_then_end_reuses_item_id() {
 }
 
 #[test]
-fn plan_update_emits_todo_list_started_updated_and_completed() {
+fn todo_update_emits_todo_list_started_updated_and_completed() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
 
-    // First plan update => item.started (todo_list)
+    // First todo_write update (PlanUpdate event) => item.started (todo_list)
     let first = event(
         "p1",
         EventMsg::PlanUpdate(UpdatePlanArgs {
@@ -262,7 +262,7 @@ fn plan_update_emits_todo_list_started_updated_and_completed() {
         })]
     );
 
-    // Second plan update in same turn => item.updated (same id)
+    // Second todo_write update (PlanUpdate event) => item.updated (same id)
     let second = event(
         "p2",
         EventMsg::PlanUpdate(UpdatePlanArgs {
@@ -660,7 +660,7 @@ fn collab_wait_end_without_begin_synthesizes_failed_item() {
 }
 
 #[test]
-fn plan_update_after_complete_starts_new_todo_list_with_new_id() {
+fn todo_update_after_complete_starts_new_todo_list_with_new_id() {
     let mut ep = EventProcessorWithJsonOutput::new(None);
 
     // First turn: start + complete

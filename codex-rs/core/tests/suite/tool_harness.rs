@@ -108,7 +108,7 @@ async fn shell_tool_executes_command_and_streams_output() -> anyhow::Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
+async fn todo_write_tool_emits_todo_update_event() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -121,8 +121,8 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
         ..
     } = builder.build(&server).await?;
 
-    let call_id = "plan-tool-call";
-    let plan_args = json!({
+    let call_id = "todo-tool-call";
+    let todo_args = json!({
         "explanation": "Tool harness check",
         "plan": [
             {"step": "Inspect workspace", "status": "in_progress"},
@@ -133,13 +133,13 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
 
     let first_response = sse(vec![
         ev_response_created("resp-1"),
-        ev_function_call(call_id, "update_plan", &plan_args),
+        ev_function_call(call_id, "todo_write", &todo_args),
         ev_completed("resp-1"),
     ]);
     responses::mount_sse_once(&server, first_response).await;
 
     let second_response = sse(vec![
-        ev_assistant_message("msg-1", "plan acknowledged"),
+        ev_assistant_message("msg-1", "todo list acknowledged"),
         ev_completed("resp-2"),
     ]);
     let second_mock = responses::mount_sse_once(&server, second_response).await;
@@ -149,7 +149,7 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
-                text: "please update the plan".into(),
+                text: "please update the todo list".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
@@ -164,10 +164,10 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
         })
         .await?;
 
-    let mut saw_plan_update = false;
+    let mut saw_todo_update = false;
     wait_for_event(&codex, |event| match event {
         EventMsg::PlanUpdate(update) => {
-            saw_plan_update = true;
+            saw_todo_update = true;
             assert_eq!(update.explanation.as_deref(), Some("Tool harness check"));
             assert_eq!(update.plan.len(), 2);
             assert_eq!(update.plan[0].step, "Inspect workspace");
@@ -181,17 +181,17 @@ async fn update_plan_tool_emits_plan_update_event() -> anyhow::Result<()> {
     })
     .await;
 
-    assert!(saw_plan_update, "expected PlanUpdate event");
+    assert!(saw_todo_update, "expected PlanUpdate (todo list) event");
 
     let req = second_mock.single_request();
     let (output_text, _success_flag) = call_output(&req, call_id);
-    assert_eq!(output_text, "Plan updated");
+    assert_eq!(output_text, "Todo list updated");
 
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
+async fn todo_write_tool_rejects_malformed_payload() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -204,21 +204,21 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
         ..
     } = builder.build(&server).await?;
 
-    let call_id = "plan-tool-invalid";
+    let call_id = "todo-tool-invalid";
     let invalid_args = json!({
-        "explanation": "Missing plan data"
+        "explanation": "Missing todo data"
     })
     .to_string();
 
     let first_response = sse(vec![
         ev_response_created("resp-1"),
-        ev_function_call(call_id, "update_plan", &invalid_args),
+        ev_function_call(call_id, "todo_write", &invalid_args),
         ev_completed("resp-1"),
     ]);
     responses::mount_sse_once(&server, first_response).await;
 
     let second_response = sse(vec![
-        ev_assistant_message("msg-1", "malformed plan payload"),
+        ev_assistant_message("msg-1", "malformed todo payload"),
         ev_completed("resp-2"),
     ]);
     let second_mock = responses::mount_sse_once(&server, second_response).await;
@@ -228,7 +228,7 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
     codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
-                text: "please update the plan".into(),
+                text: "please update the todo list".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
@@ -243,10 +243,10 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
         })
         .await?;
 
-    let mut saw_plan_update = false;
+    let mut saw_todo_update = false;
     wait_for_event(&codex, |event| match event {
         EventMsg::PlanUpdate(_) => {
-            saw_plan_update = true;
+            saw_todo_update = true;
             false
         }
         EventMsg::TurnComplete(_) => true,
@@ -255,8 +255,8 @@ async fn update_plan_tool_rejects_malformed_payload() -> anyhow::Result<()> {
     .await;
 
     assert!(
-        !saw_plan_update,
-        "did not expect PlanUpdate event for malformed payload"
+        !saw_todo_update,
+        "did not expect PlanUpdate (todo list) event for malformed payload"
     );
 
     let req = second_mock.single_request();

@@ -1106,11 +1106,11 @@ pub(crate) async fn apply_bespoke_event_handling(
             )
             .await;
         }
-        EventMsg::PlanUpdate(plan_update_event) => {
-            handle_turn_plan_update(
+        EventMsg::PlanUpdate(todo_update_event) => {
+            handle_turn_todo_update(
                 conversation_id,
                 &event_turn_id,
-                plan_update_event,
+                todo_update_event,
                 api_version,
                 outgoing.as_ref(),
             )
@@ -1140,19 +1140,20 @@ async fn handle_turn_diff(
     }
 }
 
-async fn handle_turn_plan_update(
+async fn handle_turn_todo_update(
     conversation_id: ThreadId,
     event_turn_id: &str,
-    plan_update_event: UpdatePlanArgs,
+    todo_update_event: UpdatePlanArgs,
     api_version: ApiVersion,
     outgoing: &OutgoingMessageSender,
 ) {
     if let ApiVersion::V2 = api_version {
+        // NOTE: The protocol keeps plan-named fields/events for compatibility; this is the todo list update.
         let notification = TurnPlanUpdatedNotification {
             thread_id: conversation_id.to_string(),
             turn_id: event_turn_id.to_string(),
-            explanation: plan_update_event.explanation,
-            plan: plan_update_event
+            explanation: todo_update_event.explanation,
+            plan: todo_update_event
                 .plan
                 .into_iter()
                 .map(TurnPlanStep::from)
@@ -1988,11 +1989,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_turn_plan_update_emits_notification_for_v2() -> Result<()> {
+    async fn test_handle_turn_todo_update_emits_notification_for_v2() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = OutgoingMessageSender::new(tx);
         let update = UpdatePlanArgs {
-            explanation: Some("need plan".to_string()),
+            explanation: Some("need todo list".to_string()),
             plan: vec![
                 PlanItemArg {
                     step: "first".to_string(),
@@ -2007,7 +2008,7 @@ mod tests {
 
         let conversation_id = ThreadId::new();
 
-        handle_turn_plan_update(
+        handle_turn_todo_update(
             conversation_id,
             "turn-123",
             update,
@@ -2024,7 +2025,7 @@ mod tests {
             OutgoingMessage::AppServerNotification(ServerNotification::TurnPlanUpdated(n)) => {
                 assert_eq!(n.thread_id, conversation_id.to_string());
                 assert_eq!(n.turn_id, "turn-123");
-                assert_eq!(n.explanation.as_deref(), Some("need plan"));
+                assert_eq!(n.explanation.as_deref(), Some("need todo list"));
                 assert_eq!(n.plan.len(), 2);
                 assert_eq!(n.plan[0].step, "first");
                 assert_eq!(n.plan[0].status, TurnPlanStepStatus::Pending);

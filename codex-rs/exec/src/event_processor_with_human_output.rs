@@ -538,11 +538,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 ts_msg!(self, "model: {}", model);
                 eprintln!();
             }
-            EventMsg::PlanUpdate(plan_update_event) => {
-                let UpdatePlanArgs { explanation, plan } = plan_update_event;
+            EventMsg::PlanUpdate(todo_update_event) => {
+                let UpdatePlanArgs {
+                    explanation,
+                    plan: todo_items,
+                } = todo_update_event;
 
                 // Header
-                ts_msg!(self, "{}", "Plan update".style(self.magenta));
+                ts_msg!(self, "{}", "Todo list update".style(self.magenta));
 
                 // Optional explanation
                 if let Some(explanation) = explanation
@@ -551,21 +554,21 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(self, "{}", explanation.style(self.italic));
                 }
 
-                // Pretty-print the plan items with simple status markers.
-                for item in plan {
-                    match item.status {
+                // Pretty-print the todo items with simple status markers.
+                for todo_item in todo_items {
+                    match todo_item.status {
                         StepStatus::Completed => {
-                            ts_msg!(self, "  {} {}", "✓".style(self.green), item.step);
+                            ts_msg!(self, "  {} {}", "✓".style(self.green), todo_item.step);
                         }
                         StepStatus::InProgress => {
-                            ts_msg!(self, "  {} {}", "→".style(self.cyan), item.step);
+                            ts_msg!(self, "  {} {}", "→".style(self.cyan), todo_item.step);
                         }
                         StepStatus::Pending => {
                             ts_msg!(
                                 self,
                                 "  {} {}",
                                 "•".style(self.dimmed),
-                                item.step.style(self.dimmed)
+                                todo_item.step.style(self.dimmed)
                             );
                         }
                     }
