@@ -77,10 +77,7 @@ pub(crate) async fn init_if_enabled(
 }
 
 /// Get the DB if the feature is enabled and the DB exists.
-pub async fn get_state_db(
-    config: &Config,
-    otel: Option<&OtelManager>,
-) -> Option<StateDbHandle> {
+pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option<StateDbHandle> {
     let state_path = config.codex_home.join(STATE_DB_FILENAME);
     if !config.features.enabled(Feature::Sqlite)
         || !tokio::fs::try_exists(&state_path).await.unwrap_or(false)
