@@ -16,6 +16,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
 use toml::Value as TomlValue;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -118,23 +119,9 @@ async fn emits_deprecation_notice_for_web_search_feature_flags() -> anyhow::Resu
     let server = start_mock_server().await;
 
     let mut builder = test_codex().with_config(|config| {
-        let mut features = toml::map::Map::new();
-        features.insert("web_search_request".to_string(), TomlValue::Boolean(true));
-        let mut table = toml::map::Map::new();
-        table.insert("features".to_string(), TomlValue::Table(features));
-        let config_layer = ConfigLayerEntry::new(
-            ConfigLayerSource::User {
-                file: test_absolute_path("/tmp/config.toml"),
-            },
-            TomlValue::Table(table),
-        );
-        let config_layer_stack = ConfigLayerStack::new(
-            vec![config_layer],
-            ConfigRequirements::default(),
-            ConfigRequirementsToml::default(),
-        )
-        .expect("build config layer stack");
-        config.config_layer_stack = config_layer_stack;
+        let mut entries = BTreeMap::new();
+        entries.insert("web_search_request".to_string(), true);
+        config.features.apply_map(&entries);
     });
 
     let TestCodex { codex, .. } = builder.build(&server).await?;
@@ -154,9 +141,42 @@ async fn emits_deprecation_notice_for_web_search_feature_flags() -> anyhow::Resu
     );
     assert_eq!(
         details.as_deref(),
-        Some(
-            "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` in config.toml (or under a profile)."
-        ),
+        Some("Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` in config.toml."),
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn emits_deprecation_notice_for_disabled_web_search_feature_flag() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        let mut entries = BTreeMap::new();
+        entries.insert("web_search_request".to_string(), false);
+        config.features.apply_map(&entries);
+    });
+
+    let TestCodex { codex, .. } = builder.build(&server).await?;
+
+    let notice = wait_for_event_match(&codex, |event| match event {
+        EventMsg::DeprecationNotice(ev) if ev.summary.contains("[features].web_search_request") => {
+            Some(ev.clone())
+        }
+        _ => None,
+    })
+    .await;
+
+    let DeprecationNoticeEvent { summary, details } = notice;
+    assert_eq!(
+        summary,
+        "`[features].web_search_request` is deprecated. Use `web_search` instead.".to_string(),
+    );
+    assert_eq!(
+        details.as_deref(),
+        Some("Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` in config.toml."),
     );
 
     Ok(())
