@@ -444,7 +444,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    steps
+    steps:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
