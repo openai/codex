@@ -3,6 +3,7 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -16,7 +17,6 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -24,11 +24,12 @@ use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
-use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const AUTO_COMPACT_LIMIT: i64 = 1_000;
+const COMPACT_PROMPT: &str = "Summarize the conversation.";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compaction_local_emits_started_and_completed_items() -> Result<()> {
@@ -54,13 +55,14 @@ async fn auto_compaction_local_emits_started_and_completed_items() -> Result<()>
     responses::mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml(
+    write_mock_responses_config_toml(
         codex_home.path(),
         &server.uri(),
         &BTreeMap::default(),
-        200_000,
+        AUTO_COMPACT_LIMIT,
         None,
         "mock_provider",
+        COMPACT_PROMPT,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -129,13 +131,14 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
     let codex_home = TempDir::new()?;
     let mut features = BTreeMap::default();
     features.insert(Feature::RemoteCompaction, true);
-    create_config_toml(
+    write_mock_responses_config_toml(
         codex_home.path(),
         &server.uri(),
         &features,
-        200_000,
+        AUTO_COMPACT_LIMIT,
         Some(true),
         "openai",
+        COMPACT_PROMPT,
     )?;
     write_chatgpt_auth(
         codex_home.path(),
@@ -267,68 +270,4 @@ async fn wait_for_context_compaction_completed(
             return Ok(completed);
         }
     }
-}
-
-fn create_config_toml(
-    codex_home: &Path,
-    server_uri: &str,
-    feature_flags: &BTreeMap<Feature, bool>,
-    auto_compact_limit: i64,
-    requires_openai_auth: Option<bool>,
-    model_provider_id: &str,
-) -> std::io::Result<()> {
-    let mut features = BTreeMap::from([(Feature::RemoteModels, false)]);
-    for (feature, enabled) in feature_flags {
-        features.insert(*feature, *enabled);
-    }
-    let feature_entries = features
-        .into_iter()
-        .map(|(feature, enabled)| {
-            let key = FEATURES
-                .iter()
-                .find(|spec| spec.id == feature)
-                .map(|spec| spec.key)
-                .unwrap_or_else(|| panic!("missing feature key for {feature:?}"));
-            format!("{key} = {enabled}")
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let requires_line = match requires_openai_auth {
-        Some(true) => "requires_openai_auth = true\n".to_string(),
-        Some(false) | None => String::new(),
-    };
-    let provider_block = if model_provider_id == "openai" {
-        String::new()
-    } else {
-        format!(
-            r#"
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-{requires_line}
-"#
-        )
-    };
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "read-only"
-compact_prompt = "Summarize the conversation."
-model_auto_compact_token_limit = {auto_compact_limit}
-
-model_provider = "{model_provider_id}"
-
-[features]
-{feature_entries}
-{provider_block}
-"#
-        ),
-    )
 }
