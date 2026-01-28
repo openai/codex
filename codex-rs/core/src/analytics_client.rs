@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::default_client::create_client;
 use crate::git_info::collect_git_info;
 use crate::git_info::get_git_repo_root;
@@ -5,17 +6,16 @@ use codex_app_server_protocol::AuthMode;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use serde::Serialize;
-use serde_json::Value as JsonValue;
 use sha1::Digest;
 use sha1::Sha1;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub(crate) struct AnalyticsContext {
+#[derive(Clone)]
+pub(crate) struct TrackEventsContext {
     pub(crate) auth_mode: Option<AuthMode>,
     pub(crate) access_token: Option<String>,
     pub(crate) account_id: Option<String>,
-    pub(crate) chatgpt_base_url: String,
     pub(crate) model_slug: String,
     pub(crate) conversation_id: String,
     pub(crate) session_source: SessionSource,
@@ -53,7 +53,8 @@ struct TrackEventParams {
 }
 
 pub(crate) async fn track_skill_invocations(
-    tracking: Option<&AnalyticsContext>,
+    config: &Config,
+    tracking: Option<&TrackEventsContext>,
     invocations: Vec<SkillInvocation>,
 ) {
     let Some(tracking) = tracking else {
@@ -114,12 +115,9 @@ pub(crate) async fn track_skill_invocations(
         });
     }
 
-    let url = format!(
-        "{}{}",
-        tracking.chatgpt_base_url, "/api/codex/analytics-events/track-events"
-    );
+    let base_url = config.chatgpt_base_url.trim_end_matches('/');
+    let url = format!("{base_url}/api/codex/analytics-events/track-events");
     let payload = TrackEventsRequest { events };
-    let _payload_json = serde_json::to_value(&payload).unwrap_or(JsonValue::Null);
 
     let response = create_client()
         .post(&url)

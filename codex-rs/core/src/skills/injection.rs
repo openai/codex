@@ -1,14 +1,16 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::analytics_client::AnalyticsContext;
 use crate::analytics_client::SkillInvocation;
+use crate::analytics_client::TrackEventsContext;
 use crate::analytics_client::track_skill_invocations;
+use crate::config::Config;
 use crate::instructions::SkillInstructions;
 use crate::skills::SkillMetadata;
 use codex_otel::OtelManager;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
+use std::sync::Arc;
 use tokio::fs;
 
 #[derive(Debug, Default)]
@@ -20,7 +22,8 @@ pub(crate) struct SkillInjections {
 pub(crate) async fn build_skill_injections(
     mentioned_skills: &[SkillMetadata],
     otel: Option<&OtelManager>,
-    tracking: Option<&AnalyticsContext>,
+    tracking: Option<&TrackEventsContext>,
+    config: Arc<Config>,
 ) -> SkillInjections {
     if mentioned_skills.is_empty() {
         return SkillInjections::default();
@@ -60,8 +63,9 @@ pub(crate) async fn build_skill_injections(
     }
 
     let tracking = tracking.cloned();
+    let config = Arc::clone(&config);
     tokio::spawn(async move {
-        track_skill_invocations(tracking.as_ref(), invocations).await;
+        track_skill_invocations(config.as_ref(), tracking.as_ref(), invocations).await;
     });
 
     result
