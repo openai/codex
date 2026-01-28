@@ -28,6 +28,8 @@ pub struct IdTokenInfo {
     /// (e.g., "free", "plus", "pro", "business", "enterprise", "edu").
     /// (Note: values may vary by backend.)
     pub(crate) chatgpt_plan_type: Option<PlanType>,
+    /// ChatGPT user identifier associated with the token, if present.
+    pub chatgpt_user_id: Option<String>,
     /// Organization/workspace identifier associated with the token, if present.
     pub chatgpt_account_id: Option<String>,
     pub raw_jwt: String,
@@ -74,6 +76,10 @@ struct AuthClaims {
     #[serde(default)]
     chatgpt_plan_type: Option<PlanType>,
     #[serde(default)]
+    chatgpt_user_id: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+    #[serde(default)]
     chatgpt_account_id: Option<String>,
 }
 
@@ -103,12 +109,14 @@ pub fn parse_id_token(id_token: &str) -> Result<IdTokenInfo, IdTokenInfoError> {
             email: claims.email,
             raw_jwt: id_token.to_string(),
             chatgpt_plan_type: auth.chatgpt_plan_type,
+            chatgpt_user_id: auth.chatgpt_user_id.or(auth.user_id),
             chatgpt_account_id: auth.chatgpt_account_id,
         }),
         None => Ok(IdTokenInfo {
             email: claims.email,
             raw_jwt: id_token.to_string(),
             chatgpt_plan_type: None,
+            chatgpt_user_id: None,
             chatgpt_account_id: None,
         }),
     }

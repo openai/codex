@@ -1,3 +1,4 @@
+use crate::models::WebSearchAction;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningEvent;
 use crate::protocol::AgentReasoningRawContentEvent;
@@ -49,10 +50,11 @@ pub struct ReasoningItem {
     pub raw_content: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct WebSearchItem {
     pub id: String,
     pub query: String,
+    pub action: WebSearchAction,
 }
 
 impl UserMessageItem {
@@ -181,6 +183,7 @@ impl WebSearchItem {
         EventMsg::WebSearchEnd(WebSearchEndEvent {
             call_id: self.id.clone(),
             query: self.query.clone(),
+            action: self.action.clone(),
         })
     }
 }
