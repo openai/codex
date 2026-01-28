@@ -59,7 +59,10 @@ pub(crate) async fn build_skill_injections(
         }
     }
 
-    track_skill_invocations(tracking, invocations).await;
+    let tracking = tracking.cloned();
+    tokio::spawn(async move {
+        track_skill_invocations(tracking.as_ref(), invocations).await;
+    });
 
     result
 }
