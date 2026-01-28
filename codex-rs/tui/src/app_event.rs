@@ -104,6 +104,7 @@ pub(crate) enum AppEvent {
     /// Open the app link view in the bottom pane.
     OpenAppLink {
         title: String,
+        description: Option<String>,
         instructions: String,
         url: String,
     },

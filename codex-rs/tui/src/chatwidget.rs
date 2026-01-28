@@ -822,8 +822,14 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn open_app_link_view(&mut self, title: String, instructions: String, url: String) {
-        let view = crate::bottom_pane::AppLinkView::new(title, instructions, url);
+    pub(crate) fn open_app_link_view(
+        &mut self,
+        title: String,
+        description: Option<String>,
+        instructions: String,
+        url: String,
+    ) {
+        let view = crate::bottom_pane::AppLinkView::new(title, description, instructions, url);
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
     }
@@ -5178,6 +5184,7 @@ impl ChatWidget {
         for connector in connectors {
             let connector_label = connectors::connector_display_label(connector);
             let connector_title = connector_label.clone();
+            let link_description = Self::connector_description(connector);
             let description = Self::connector_brief_description(connector);
             let search_value = format!("{connector_label} {}", connector.id);
             let mut item = SelectionItem {
@@ -5202,9 +5209,11 @@ impl ChatWidget {
             if let Some(install_url) = connector.install_url.clone() {
                 let title = connector_title.clone();
                 let instructions = instructions.to_string();
+                let description = link_description.clone();
                 item.actions = vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenAppLink {
                         title: title.clone(),
+                        description: description.clone(),
                         instructions: instructions.clone(),
                         url: install_url.clone(),
                     });
@@ -5226,7 +5235,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Apps".to_string()),
             subtitle: Some(
-                "Use $ to insert an app in the prompt. Browse apps to view connector links."
+                "Use $ to insert a connected app into your prompt. Install or manage apps below."
                     .to_string(),
             ),
             footer_hint: Some(Self::connectors_popup_hint_line()),

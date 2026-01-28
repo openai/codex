@@ -21,15 +21,22 @@ use crate::wrapping::word_wrap_lines;
 
 pub(crate) struct AppLinkView {
     title: String,
+    description: Option<String>,
     instructions: String,
     url: String,
     complete: bool,
 }
 
 impl AppLinkView {
-    pub(crate) fn new(title: String, instructions: String, url: String) -> Self {
+    pub(crate) fn new(
+        title: String,
+        description: Option<String>,
+        instructions: String,
+        url: String,
+    ) -> Self {
         Self {
             title,
+            description,
             instructions,
             url,
             complete: false,
@@ -41,6 +48,16 @@ impl AppLinkView {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         lines.push(Line::from(self.title.clone().bold()));
+        if let Some(description) = self
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+        {
+            for line in wrap(description, usable_width) {
+                lines.push(Line::from(line.into_owned().dim()));
+            }
+        }
         lines.push(Line::from(""));
         for line in wrap("Use $ to insert an app into the prompt.", usable_width) {
             lines.push(Line::from(line.into_owned()));

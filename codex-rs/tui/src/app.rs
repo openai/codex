@@ -1508,11 +1508,12 @@ impl App {
             }
             AppEvent::OpenAppLink {
                 title,
+                description,
                 instructions,
                 url,
             } => {
                 self.chat_widget
-                    .open_app_link_view(title, instructions, url);
+                    .open_app_link_view(title, description, instructions, url);
             }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
