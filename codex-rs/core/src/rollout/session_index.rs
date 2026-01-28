@@ -53,9 +53,9 @@ pub async fn append_session_index_entry(
         .append(true)
         .open(&path)
         .await?;
-    let line = serde_json::to_string(entry).map_err(std::io::Error::other)?;
+    let mut line = serde_json::to_string(entry).map_err(std::io::Error::other)?;
+    line.push('\n');
     file.write_all(line.as_bytes()).await?;
-    file.write_all(b"\n").await?;
     file.flush().await?;
     Ok(())
 }
