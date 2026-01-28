@@ -295,6 +295,12 @@ jobs:
           echo "RUSTFLAGS=" >> "$GITHUB_ENV"
           echo "CARGO_ENCODED_RUSTFLAGS=" >> "$GITHUB_ENV"
           echo "RUSTDOCFLAGS=" >> "$GITHUB_ENV"
+          # Override any runner-level Cargo config rustflags as well.
+          echo "CARGO_BUILD_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
 
           sanitize_flags() {
             local input="$1"
