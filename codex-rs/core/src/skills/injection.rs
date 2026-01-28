@@ -77,7 +77,8 @@ pub(crate) fn collect_explicit_skill_mentions(
     disabled_paths: &HashSet<PathBuf>,
 ) -> Vec<SkillMetadata> {
     let mut selected: Vec<SkillMetadata> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen_names: HashSet<String> = HashSet::new();
+    let mut seen_paths: HashSet<PathBuf> = HashSet::new();
 
     for input in inputs {
         if let UserInput::Text { text, .. } = input {
@@ -86,7 +87,8 @@ pub(crate) fn collect_explicit_skill_mentions(
                 skills,
                 disabled_paths,
                 &mentioned_names,
-                &mut seen,
+                &mut seen_names,
+                &mut seen_paths,
                 &mut selected,
             );
         }
@@ -95,23 +97,53 @@ pub(crate) fn collect_explicit_skill_mentions(
     selected
 }
 
+struct SkillMentions<'a> {
+    names: HashSet<&'a str>,
+    paths: HashSet<&'a str>,
+}
+
+impl<'a> SkillMentions<'a> {
+    fn is_empty(&self) -> bool {
+        self.names.is_empty() && self.paths.is_empty()
+    }
+}
+
 /// Extract `$skill-name` mentions from a single text input.
 ///
-/// This is a single pass over the bytes; a token ends at the first non-name character.
-fn extract_skill_mentions(text: &str) -> HashSet<&str> {
+/// Supports explicit resource links in the form `[$skill-name](resource path)`. When a
+/// resource path is present, it is captured for exact path matching while also tracking
+/// the name for fallback matching.
+fn extract_skill_mentions(text: &str) -> SkillMentions<'_> {
     let text_bytes = text.as_bytes();
     let mut mentioned_names: HashSet<&str> = HashSet::new();
+    let mut mentioned_paths: HashSet<&str> = HashSet::new();
 
-    for (index, byte) in text_bytes.iter().copied().enumerate() {
+    let mut index = 0;
+    while index < text_bytes.len() {
+        let byte = text_bytes[index];
+        if byte == b'[' {
+            if let Some((name, path, end_index)) =
+                parse_linked_skill_mention(text, text_bytes, index)
+            {
+                mentioned_names.insert(name);
+                mentioned_paths.insert(path);
+                index = end_index;
+                continue;
+            }
+        }
+
         if byte != b'$' {
+            index += 1;
             continue;
         }
 
         let name_start = index + 1;
         let Some(first_name_byte) = text_bytes.get(name_start) else {
+            index += 1;
             continue;
         };
         if !is_skill_name_char(*first_name_byte) {
+            index += 1;
             continue;
         }
 
@@ -124,28 +156,109 @@ fn extract_skill_mentions(text: &str) -> HashSet<&str> {
 
         let name = &text[name_start..name_end];
         mentioned_names.insert(name);
+        index = name_end;
     }
 
-    mentioned_names
+    SkillMentions {
+        names: mentioned_names,
+        paths: mentioned_paths,
+    }
 }
 
 /// Select mentioned skills while preserving the order of `skills`.
 fn select_skills_from_mentions(
     skills: &[SkillMetadata],
     disabled_paths: &HashSet<PathBuf>,
-    mentioned_names: &HashSet<&str>,
-    seen: &mut HashSet<String>,
+    mentions: &SkillMentions<'_>,
+    seen_names: &mut HashSet<String>,
+    seen_paths: &mut HashSet<PathBuf>,
     selected: &mut Vec<SkillMetadata>,
 ) {
+    if mentions.is_empty() {
+        return;
+    }
+
     for skill in skills {
-        if disabled_paths.contains(&skill.path) {
+        if disabled_paths.contains(&skill.path) || seen_paths.contains(&skill.path) {
             continue;
         }
 
-        if mentioned_names.contains(skill.name.as_str()) && seen.insert(skill.name.clone()) {
+        let path_str = skill.path.to_string_lossy();
+        if mentions.paths.contains(path_str.as_ref()) {
+            seen_paths.insert(skill.path.clone());
+            seen_names.insert(skill.name.clone());
             selected.push(skill.clone());
         }
     }
+
+    for skill in skills {
+        if disabled_paths.contains(&skill.path) || seen_paths.contains(&skill.path) {
+            continue;
+        }
+
+        if mentions.names.contains(skill.name.as_str()) && seen_names.insert(skill.name.clone()) {
+            seen_paths.insert(skill.path.clone());
+            selected.push(skill.clone());
+        }
+    }
+}
+
+fn parse_linked_skill_mention<'a>(
+    text: &'a str,
+    text_bytes: &[u8],
+    start: usize,
+) -> Option<(&'a str, &'a str, usize)> {
+    let dollar_index = start + 1;
+    if text_bytes.get(dollar_index) != Some(&b'$') {
+        return None;
+    }
+
+    let name_start = dollar_index + 1;
+    let Some(first_name_byte) = text_bytes.get(name_start) else {
+        return None;
+    };
+    if !is_skill_name_char(*first_name_byte) {
+        return None;
+    }
+
+    let mut name_end = name_start + 1;
+    while let Some(next_byte) = text_bytes.get(name_end)
+        && is_skill_name_char(*next_byte)
+    {
+        name_end += 1;
+    }
+
+    if text_bytes.get(name_end) != Some(&b']') {
+        return None;
+    }
+
+    let mut path_start = name_end + 1;
+    while let Some(next_byte) = text_bytes.get(path_start)
+        && next_byte.is_ascii_whitespace()
+    {
+        path_start += 1;
+    }
+    if text_bytes.get(path_start) != Some(&b'(') {
+        return None;
+    }
+
+    let mut path_end = path_start + 1;
+    while let Some(next_byte) = text_bytes.get(path_end)
+        && *next_byte != b')'
+    {
+        path_end += 1;
+    }
+    if text_bytes.get(path_end) != Some(&b')') {
+        return None;
+    }
+
+    let path = text[path_start + 1..path_end].trim();
+    if path.is_empty() {
+        return None;
+    }
+
+    let name = &text[name_start..name_end];
+    Some((name, path, path_end + 1))
 }
 
 #[cfg(test)]
@@ -188,6 +301,7 @@ fn is_skill_name_char(byte: u8) -> bool {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::collections::HashSet;
 
     fn make_skill(name: &str, path: &str) -> SkillMetadata {
         SkillMetadata {
@@ -199,6 +313,16 @@ mod tests {
             path: PathBuf::from(path),
             scope: codex_protocol::protocol::SkillScope::User,
         }
+    }
+
+    fn set<'a>(items: &'a [&'a str]) -> HashSet<&'a str> {
+        items.iter().copied().collect()
+    }
+
+    fn assert_mentions(text: &str, expected_names: &[&str], expected_paths: &[&str]) {
+        let mentions = extract_skill_mentions(text);
+        assert_eq!(mentions.names, set(expected_names));
+        assert_eq!(mentions.paths, set(expected_paths));
     }
 
     #[test]
@@ -243,6 +367,36 @@ mod tests {
     }
 
     #[test]
+    fn extract_skill_mentions_handles_plain_and_linked_mentions() {
+        assert_mentions(
+            "use $alpha and [$beta](/tmp/beta)",
+            &["alpha", "beta"],
+            &["/tmp/beta"],
+        );
+    }
+
+    #[test]
+    fn extract_skill_mentions_requires_link_syntax() {
+        assert_mentions("[beta](/tmp/beta)", &[], &[]);
+        assert_mentions("[$beta] /tmp/beta", &["beta"], &[]);
+        assert_mentions("[$beta]()", &["beta"], &[]);
+    }
+
+    #[test]
+    fn extract_skill_mentions_trims_linked_paths_and_allows_spacing() {
+        assert_mentions("use [$beta]   ( /tmp/beta )", &["beta"], &["/tmp/beta"]);
+    }
+
+    #[test]
+    fn extract_skill_mentions_stops_at_non_name_chars() {
+        assert_mentions(
+            "use $alpha.skill and $beta_extra",
+            &["alpha", "beta_extra"],
+            &[],
+        );
+    }
+
+    #[test]
     fn collect_explicit_skill_mentions_text_respects_skill_order() {
         let alpha = make_skill("alpha-skill", "/tmp/alpha");
         let beta = make_skill("beta-skill", "/tmp/beta");
@@ -273,6 +427,96 @@ mod tests {
                 path: PathBuf::from("/tmp/beta"),
             },
         ];
+
+        let selected = collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new());
+
+        assert_eq!(selected, vec![alpha]);
+    }
+
+    #[test]
+    fn collect_explicit_skill_mentions_dedupes_by_path() {
+        let alpha = make_skill("alpha-skill", "/tmp/alpha");
+        let skills = vec![alpha.clone()];
+        let inputs = vec![UserInput::Text {
+            text: "use [$alpha-skill](/tmp/alpha) and [$alpha-skill](/tmp/alpha)".to_string(),
+            text_elements: Vec::new(),
+        }];
+
+        let selected = collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new());
+
+        assert_eq!(selected, vec![alpha]);
+    }
+
+    #[test]
+    fn collect_explicit_skill_mentions_dedupes_by_name() {
+        let alpha = make_skill("demo-skill", "/tmp/alpha");
+        let beta = make_skill("demo-skill", "/tmp/beta");
+        let skills = vec![alpha.clone(), beta];
+        let inputs = vec![UserInput::Text {
+            text: "use $demo-skill and again $demo-skill".to_string(),
+            text_elements: Vec::new(),
+        }];
+
+        let selected = collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new());
+
+        assert_eq!(selected, vec![alpha]);
+    }
+
+    #[test]
+    fn collect_explicit_skill_mentions_prefers_linked_path_over_name() {
+        let alpha = make_skill("demo-skill", "/tmp/alpha");
+        let beta = make_skill("demo-skill", "/tmp/beta");
+        let skills = vec![alpha, beta.clone()];
+        let inputs = vec![UserInput::Text {
+            text: "use $demo-skill and [$demo-skill](/tmp/beta)".to_string(),
+            text_elements: Vec::new(),
+        }];
+
+        let selected = collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new());
+
+        assert_eq!(selected, vec![beta]);
+    }
+
+    #[test]
+    fn collect_explicit_skill_mentions_falls_back_when_linked_path_disabled() {
+        let alpha = make_skill("demo-skill", "/tmp/alpha");
+        let beta = make_skill("demo-skill", "/tmp/beta");
+        let skills = vec![alpha, beta.clone()];
+        let inputs = vec![UserInput::Text {
+            text: "use [$demo-skill](/tmp/alpha)".to_string(),
+            text_elements: Vec::new(),
+        }];
+        let disabled = HashSet::from([PathBuf::from("/tmp/alpha")]);
+
+        let selected = collect_explicit_skill_mentions(&inputs, &skills, &disabled);
+
+        assert_eq!(selected, vec![beta]);
+    }
+
+    #[test]
+    fn collect_explicit_skill_mentions_prefers_resource_path() {
+        let alpha = make_skill("demo-skill", "/tmp/alpha");
+        let beta = make_skill("demo-skill", "/tmp/beta");
+        let skills = vec![alpha, beta.clone()];
+        let inputs = vec![UserInput::Text {
+            text: "use [$demo-skill](/tmp/beta)".to_string(),
+            text_elements: Vec::new(),
+        }];
+
+        let selected = collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new());
+
+        assert_eq!(selected, vec![beta]);
+    }
+
+    #[test]
+    fn collect_explicit_skill_mentions_falls_back_to_name_when_path_missing() {
+        let alpha = make_skill("demo-skill", "/tmp/alpha");
+        let beta = make_skill("demo-skill", "/tmp/beta");
+        let skills = vec![alpha.clone(), beta];
+        let inputs = vec![UserInput::Text {
+            text: "use [$demo-skill](/tmp/missing)".to_string(),
+            text_elements: Vec::new(),
+        }];
 
         let selected = collect_explicit_skill_mentions(&inputs, &skills, &HashSet::new());
 
