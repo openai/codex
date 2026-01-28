@@ -1,4 +1,8 @@
 pub mod auth;
+mod skill_dependencies;
+
+pub(crate) use skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
+
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
@@ -97,6 +101,7 @@ fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> Mc
         tool_timeout_sec: None,
         enabled_tools: None,
         disabled_tools: None,
+        scopes: None,
     }
 }
 

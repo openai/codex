@@ -19,7 +19,7 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
@@ -158,7 +158,7 @@ impl ThreadManager {
             .await
     }
 
-    pub fn list_collaboration_modes(&self) -> Vec<CollaborationMode> {
+    pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
         self.state.models_manager.list_collaboration_modes()
     }
 
@@ -196,12 +196,21 @@ impl ThreadManager {
     }
 
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
+        self.start_thread_with_tools(config, Vec::new()).await
+    }
+
+    pub async fn start_thread_with_tools(
+        &self,
+        config: Config,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+    ) -> CodexResult<NewThread> {
         self.state
             .spawn_thread(
                 config,
                 InitialHistory::New,
                 Arc::clone(&self.state.auth_manager),
                 self.agent_control(),
+                dynamic_tools,
             )
             .await
     }
@@ -224,7 +233,13 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewThread> {
         self.state
-            .spawn_thread(config, initial_history, auth_manager, self.agent_control())
+            .spawn_thread(
+                config,
+                initial_history,
+                auth_manager,
+                self.agent_control(),
+                Vec::new(),
+            )
             .await
     }
 
@@ -262,6 +277,7 @@ impl ThreadManager {
                 history,
                 Arc::clone(&self.state.auth_manager),
                 self.agent_control(),
+                Vec::new(),
             )
             .await
     }
@@ -330,6 +346,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            Vec::new(),
         )
         .await
     }
@@ -341,6 +358,7 @@ impl ThreadManagerState {
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     ) -> CodexResult<NewThread> {
         self.spawn_thread_with_source(
             config,
@@ -348,6 +366,7 @@ impl ThreadManagerState {
             auth_manager,
             agent_control,
             self.session_source.clone(),
+            dynamic_tools,
         )
         .await
     }
@@ -359,6 +378,7 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         session_source: SessionSource,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
     ) -> CodexResult<NewThread> {
         let CodexSpawnOk {
             codex, thread_id, ..
@@ -370,6 +390,7 @@ impl ThreadManagerState {
             initial_history,
             session_source,
             agent_control,
+            dynamic_tools,
         )
         .await?;
         self.finalize_thread_spawn(codex, thread_id).await

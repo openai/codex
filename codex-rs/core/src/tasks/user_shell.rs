@@ -109,6 +109,7 @@ impl SessionTask for UserShellCommandTask {
             // should use that instead of an "arbitrarily large" timeout here.
             expiration: USER_SHELL_TIMEOUT_MS.into(),
             sandbox: SandboxType::None,
+            windows_sandbox_level: turn_context.windows_sandbox_level,
             sandbox_permissions: SandboxPermissions::UseDefault,
             justification: None,
             arg0: None,

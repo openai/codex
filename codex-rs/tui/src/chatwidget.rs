@@ -88,13 +88,19 @@ use codex_core::protocol::WarningEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_core::skills::model::SkillMetadata;
+#[cfg(target_os = "windows")]
+use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
+#[cfg(target_os = "windows")]
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::request_user_input::RequestUserInputEvent;
@@ -131,12 +137,12 @@ use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event::WindowsSandboxFallbackReason;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::ApprovalRequest;
-use crate::bottom_pane::BetaFeatureItem;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::CollaborationModeIndicator;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
+use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
@@ -160,6 +166,7 @@ use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
 use crate::history_cell::PlainHistoryCell;
+use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
@@ -415,12 +422,12 @@ pub(crate) struct ChatWidget {
     /// where the overlay may briefly treat new tail content as already cached.
     active_cell_revision: u64,
     config: Config,
-    /// Stored collaboration mode with model and reasoning effort.
+    /// The unmasked collaboration mode settings (always Custom mode).
     ///
-    /// When collaboration modes feature is enabled, this is initialized to the first preset.
-    /// When disabled, this is Custom. The model and reasoning effort are stored here instead of
-    /// being read from config or current_model.
-    stored_collaboration_mode: CollaborationMode,
+    /// Masks are applied on top of this base mode to derive the effective mode.
+    current_collaboration_mode: CollaborationMode,
+    /// The currently active collaboration mask, if any.
+    active_collaboration_mask: Option<CollaborationModeMask>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
     otel_manager: OtelManager,
@@ -731,16 +738,13 @@ impl ChatWidget {
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
         self.session_header.set_model(&model_for_header);
-        // Only update stored collaboration settings when collaboration modes are disabled.
-        // When enabled, we preserve the selected variant (Plan/Pair/Execute/Custom) and its
-        // instructions as-is; the session configured event should not override it.
-        if !self.collaboration_modes_enabled() {
-            self.stored_collaboration_mode = self.stored_collaboration_mode.with_updates(
-                Some(model_for_header.clone()),
-                Some(event.reasoning_effort),
-                None,
-            );
-        }
+        self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
+            Some(model_for_header.clone()),
+            Some(event.reasoning_effort),
+            None,
+        );
+        self.refresh_model_display();
+        self.sync_personality_command_enabled();
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -910,7 +914,7 @@ impl ChatWidget {
         if !self.queued_user_messages.is_empty() {
             return;
         }
-        if self.stored_collaboration_mode.mode != ModeKind::Plan {
+        if self.active_mode_kind() != ModeKind::Plan {
             return;
         }
         let has_message = last_agent_message.is_some_and(|message| !message.trim().is_empty());
@@ -932,14 +936,14 @@ impl ChatWidget {
     }
 
     fn open_plan_implementation_prompt(&mut self) {
-        let code_mode = collaboration_modes::code_mode(self.models_manager.as_ref());
-        let (implement_actions, implement_disabled_reason) = match code_mode {
-            Some(collaboration_mode) => {
+        let code_mask = collaboration_modes::code_mask(self.models_manager.as_ref());
+        let (implement_actions, implement_disabled_reason) = match code_mask {
+            Some(mask) => {
                 let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                     tx.send(AppEvent::SubmitUserMessageWithMode {
                         text: user_text.clone(),
-                        collaboration_mode: collaboration_mode.clone(),
+                        collaboration_mode: mask.clone(),
                     });
                 })];
                 (actions, None)
@@ -1491,13 +1495,43 @@ impl ChatWidget {
         self.defer_or_handle(|q| q.push_mcp_end(ev), |s| s.handle_mcp_end_now(ev2));
     }
 
-    fn on_web_search_begin(&mut self, _ev: WebSearchBeginEvent) {
+    fn on_web_search_begin(&mut self, ev: WebSearchBeginEvent) {
         self.flush_answer_stream_with_separator();
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(history_cell::new_active_web_search_call(
+            ev.call_id,
+            String::new(),
+            self.config.animations,
+        )));
+        self.bump_active_cell_revision();
+        self.request_redraw();
     }
 
     fn on_web_search_end(&mut self, ev: WebSearchEndEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_web_search_call(ev.query));
+        let WebSearchEndEvent {
+            call_id,
+            query,
+            action,
+        } = ev;
+        let mut handled = false;
+        if let Some(cell) = self
+            .active_cell
+            .as_mut()
+            .and_then(|cell| cell.as_any_mut().downcast_mut::<WebSearchCell>())
+            && cell.call_id() == call_id
+        {
+            cell.update(action.clone(), query.clone());
+            cell.complete();
+            self.bump_active_cell_revision();
+            self.flush_active_cell();
+            handled = true;
+        }
+
+        if !handled {
+            self.add_to_history(history_cell::new_web_search_call(call_id, query, action));
+        }
+        self.had_work_activity = true;
     }
 
     fn on_collab_event(&mut self, cell: PlainHistoryCell) {
@@ -1930,23 +1964,25 @@ impl ChatWidget {
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
 
-        let model_for_header = model.unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let model_override = model.as_deref();
+        let model_for_header = model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let active_collaboration_mask =
+            Self::initial_collaboration_mask(&config, models_manager.as_ref(), model_override);
+        let header_model = active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.model.clone())
+            .unwrap_or_else(|| model_for_header.clone());
         let fallback_custom = Settings {
-            model: model_for_header.clone(),
+            model: header_model.clone(),
             reasoning_effort: None,
             developer_instructions: None,
         };
-        let stored_collaboration_mode = if config.features.enabled(Feature::CollaborationModes) {
-            initial_collaboration_mode(
-                models_manager.as_ref(),
-                fallback_custom,
-                config.experimental_mode,
-            )
-        } else {
-            CollaborationMode {
-                mode: ModeKind::Custom,
-                settings: fallback_custom,
-            }
+        // Collaboration modes start in Custom mode (not activated).
+        let current_collaboration_mode = CollaborationMode {
+            mode: ModeKind::Custom,
+            settings: fallback_custom,
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
@@ -1970,11 +2006,12 @@ impl ChatWidget {
             config,
             skills_all: Vec::new(),
             skills_initial_state: None,
-            stored_collaboration_mode,
+            current_collaboration_mode,
+            active_collaboration_mask,
             auth_manager,
             models_manager,
             otel_manager,
-            session_header: SessionHeader::new(model_for_header),
+            session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
@@ -2022,6 +2059,15 @@ impl ChatWidget {
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
+        );
+        widget.sync_personality_command_enabled();
+        #[cfg(target_os = "windows")]
+        widget.bottom_pane.set_windows_degraded_sandbox_active(
+            codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                && matches!(
+                    WindowsSandboxLevel::from_config(&widget.config),
+                    WindowsSandboxLevel::RestrictedToken
+                ),
         );
         widget.update_collaboration_mode_indicator();
 
@@ -2051,23 +2097,25 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
-        let model_for_header = model.unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let model_override = model.as_deref();
+        let model_for_header = model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
+        let active_collaboration_mask =
+            Self::initial_collaboration_mask(&config, models_manager.as_ref(), model_override);
+        let header_model = active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.model.clone())
+            .unwrap_or_else(|| model_for_header.clone());
         let fallback_custom = Settings {
-            model: model_for_header.clone(),
+            model: header_model.clone(),
             reasoning_effort: None,
             developer_instructions: None,
         };
-        let stored_collaboration_mode = if config.features.enabled(Feature::CollaborationModes) {
-            initial_collaboration_mode(
-                models_manager.as_ref(),
-                fallback_custom,
-                config.experimental_mode,
-            )
-        } else {
-            CollaborationMode {
-                mode: ModeKind::Custom,
-                settings: fallback_custom,
-            }
+        // Collaboration modes start in Custom mode (not activated).
+        let current_collaboration_mode = CollaborationMode {
+            mode: ModeKind::Custom,
+            settings: fallback_custom,
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
@@ -2091,11 +2139,12 @@ impl ChatWidget {
             config,
             skills_all: Vec::new(),
             skills_initial_state: None,
-            stored_collaboration_mode,
+            current_collaboration_mode,
+            active_collaboration_mask,
             auth_manager,
             models_manager,
             otel_manager,
-            session_header: SessionHeader::new(model_for_header),
+            session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
             rate_limit_snapshot: None,
@@ -2144,6 +2193,7 @@ impl ChatWidget {
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
         );
+        widget.sync_personality_command_enabled();
 
         widget
     }
@@ -2171,7 +2221,16 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
-        let header_model = model.unwrap_or_else(|| session_configured.model.clone());
+        let model_override = model.as_deref();
+        let header_model = model
+            .clone()
+            .unwrap_or_else(|| session_configured.model.clone());
+        let active_collaboration_mask =
+            Self::initial_collaboration_mask(&config, models_manager.as_ref(), model_override);
+        let header_model = active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.model.clone())
+            .unwrap_or(header_model);
 
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
@@ -2181,17 +2240,10 @@ impl ChatWidget {
             reasoning_effort: None,
             developer_instructions: None,
         };
-        let stored_collaboration_mode = if config.features.enabled(Feature::CollaborationModes) {
-            initial_collaboration_mode(
-                models_manager.as_ref(),
-                fallback_custom,
-                config.experimental_mode,
-            )
-        } else {
-            CollaborationMode {
-                mode: ModeKind::Custom,
-                settings: fallback_custom,
-            }
+        // Collaboration modes start in Custom mode (not activated).
+        let current_collaboration_mode = CollaborationMode {
+            mode: ModeKind::Custom,
+            settings: fallback_custom,
         };
 
         let mut widget = Self {
@@ -2213,7 +2265,8 @@ impl ChatWidget {
             config,
             skills_all: Vec::new(),
             skills_initial_state: None,
-            stored_collaboration_mode,
+            current_collaboration_mode,
+            active_collaboration_mask,
             auth_manager,
             models_manager,
             otel_manager,
@@ -2265,6 +2318,15 @@ impl ChatWidget {
             .set_steer_enabled(widget.config.features.enabled(Feature::Steer));
         widget.bottom_pane.set_collaboration_modes_enabled(
             widget.config.features.enabled(Feature::CollaborationModes),
+        );
+        widget.sync_personality_command_enabled();
+        #[cfg(target_os = "windows")]
+        widget.bottom_pane.set_windows_degraded_sandbox_active(
+            codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                && matches!(
+                    WindowsSandboxLevel::from_config(&widget.config),
+                    WindowsSandboxLevel::RestrictedToken
+                ),
         );
         widget.update_collaboration_mode_indicator();
 
@@ -2501,6 +2563,9 @@ impl ChatWidget {
             SlashCommand::Model => {
                 self.open_model_popup();
             }
+            SlashCommand::Personality => {
+                self.open_personality_popup();
+            }
             SlashCommand::Collab => {
                 if self.collaboration_modes_enabled() {
                     self.open_collaboration_modes_popup();
@@ -2518,9 +2583,9 @@ impl ChatWidget {
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
                 {
-                    let windows_degraded_sandbox_enabled = codex_core::get_platform_sandbox()
-                        .is_some()
-                        && !codex_core::is_windows_elevated_sandbox_enabled();
+                    let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+                    let windows_degraded_sandbox_enabled =
+                        matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
                     if !windows_degraded_sandbox_enabled
                         || !codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                     {
@@ -2816,19 +2881,29 @@ impl ChatWidget {
             }
         }
 
+        let effective_mode = self.effective_collaboration_mode();
+        let collaboration_mode = if self.collaboration_modes_enabled() {
+            self.active_collaboration_mask
+                .as_ref()
+                .map(|_| effective_mode.clone())
+        } else {
+            None
+        };
+        let personality = self
+            .config
+            .model_personality
+            .filter(|_| self.current_model_supports_personality());
         let op = Op::UserTurn {
             items,
             cwd: self.config.cwd.clone(),
             approval_policy: self.config.approval_policy.value(),
             sandbox_policy: self.config.sandbox_policy.get().clone(),
-            model: self.stored_collaboration_mode.model().to_string(),
-            effort: self.stored_collaboration_mode.reasoning_effort(),
+            model: effective_mode.model().to_string(),
+            effort: effective_mode.reasoning_effort(),
             summary: self.config.model_reasoning_summary,
             final_output_json_schema: None,
-            collaboration_mode: self
-                .collaboration_modes_enabled()
-                .then(|| self.stored_collaboration_mode.clone()),
-            personality: None,
+            collaboration_mode,
+            personality,
         };
 
         self.codex_op_tx.send(op).unwrap_or_else(|e| {
@@ -3019,7 +3094,8 @@ impl ChatWidget {
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ReasoningRawContentDelta(_) => {}
+            | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::DynamicToolCallRequest(_) => {}
         }
     }
 
@@ -3180,7 +3256,7 @@ impl ChatWidget {
             .map(|ti| &ti.total_token_usage)
             .unwrap_or(&default_usage);
         let collaboration_mode = self.collaboration_mode_label();
-        let reasoning_effort_override = Some(self.stored_collaboration_mode.reasoning_effort());
+        let reasoning_effort_override = Some(self.effective_reasoning_effort());
         self.add_to_history(crate::status::new_status_output(
             &self.config,
             self.auth_manager.as_ref(),
@@ -3284,6 +3360,7 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: None,
                 sandbox_policy: None,
+                windows_sandbox_level: None,
                 model: Some(switch_model.clone()),
                 effort: Some(Some(default_effort)),
                 summary: None,
@@ -3368,6 +3445,77 @@ impl ChatWidget {
             }
         };
         self.open_model_popup_with_presets(presets);
+    }
+
+    pub(crate) fn open_personality_popup(&mut self) {
+        if !self.is_session_configured() {
+            self.add_info_message(
+                "Personality selection is disabled until startup completes.".to_string(),
+                None,
+            );
+            return;
+        }
+        self.open_personality_popup_for_current_model();
+    }
+
+    fn open_personality_popup_for_current_model(&mut self) {
+        let current_model = self.current_model();
+        let current_personality = self.config.model_personality;
+        let personalities = [Personality::Friendly, Personality::Pragmatic];
+        let supports_personality = self.current_model_supports_personality();
+        let disabled_message = (!supports_personality).then(|| {
+            format!(
+                "Current model ({current_model}) doesn't support personalities. Try /model to switch to a newer model."
+            )
+        });
+
+        let items: Vec<SelectionItem> = personalities
+            .into_iter()
+            .map(|personality| {
+                let name = Self::personality_label(personality).to_string();
+                let description = Some(Self::personality_description(personality).to_string());
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        model: None,
+                        effort: None,
+                        summary: None,
+                        collaboration_mode: None,
+                        windows_sandbox_level: None,
+                        personality: Some(personality),
+                    }));
+                    tx.send(AppEvent::UpdatePersonality(personality));
+                    tx.send(AppEvent::PersistPersonalitySelection { personality });
+                })];
+                SelectionItem {
+                    name,
+                    description,
+                    is_current: current_personality == Some(personality),
+                    is_disabled: !supports_personality,
+                    actions,
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }
+            })
+            .collect();
+
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from("Select Personality".bold()));
+        header.push(Line::from(
+            "Choose a communication style for future responses.".dim(),
+        ));
+        if let Some(message) = disabled_message {
+            header.push(Line::from(message.red()));
+        }
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
     }
 
     fn model_menu_header(&self, title: &str, subtitle: &str) -> Box<dyn Renderable> {
@@ -3558,23 +3706,24 @@ impl ChatWidget {
             return;
         }
 
+        let current_kind = self
+            .active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.mode)
+            .or_else(|| {
+                collaboration_modes::default_mask(self.models_manager.as_ref())
+                    .and_then(|mask| mask.mode)
+            });
         let items: Vec<SelectionItem> = presets
             .into_iter()
-            .map(|preset| {
-                let name = match preset.mode {
-                    ModeKind::Plan => "Plan",
-                    ModeKind::Code => "Code",
-                    ModeKind::PairProgramming => "Pair Programming",
-                    ModeKind::Execute => "Execute",
-                    ModeKind::Custom => "Custom",
-                };
-                let is_current =
-                    collaboration_modes::same_variant(&self.stored_collaboration_mode, &preset);
+            .map(|mask| {
+                let name = mask.name.clone();
+                let is_current = current_kind == mask.mode;
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::UpdateCollaborationMode(preset.clone()));
+                    tx.send(AppEvent::UpdateCollaborationMode(mask.clone()));
                 })];
                 SelectionItem {
-                    name: name.to_string(),
+                    name,
                     is_current,
                     actions,
                     dismiss_on_select: true,
@@ -3604,6 +3753,7 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: None,
                 sandbox_policy: None,
+                windows_sandbox_level: None,
                 model: Some(model_for_action.clone()),
                 effort: Some(effort_for_action),
                 summary: None,
@@ -3690,7 +3840,7 @@ impl ChatWidget {
         let model_slug = preset.model.to_string();
         let is_current_model = self.current_model() == preset.model.as_str();
         let highlight_choice = if is_current_model {
-            self.stored_collaboration_mode.reasoning_effort()
+            self.effective_reasoning_effort()
         } else {
             default_choice
         };
@@ -3777,6 +3927,7 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: None,
                 sandbox_policy: None,
+                windows_sandbox_level: None,
                 model: Some(model.clone()),
                 effort: Some(effort),
                 summary: None,
@@ -3817,8 +3968,10 @@ impl ChatWidget {
         let presets: Vec<ApprovalPreset> = builtin_approval_presets();
 
         #[cfg(target_os = "windows")]
-        let windows_degraded_sandbox_enabled = codex_core::get_platform_sandbox().is_some()
-            && !codex_core::is_windows_elevated_sandbox_enabled();
+        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+        #[cfg(target_os = "windows")]
+        let windows_degraded_sandbox_enabled =
+            matches!(windows_sandbox_level, WindowsSandboxLevel::RestrictedToken);
         #[cfg(not(target_os = "windows"))]
         let windows_degraded_sandbox_enabled = false;
 
@@ -3859,7 +4012,9 @@ impl ChatWidget {
             } else if preset.id == "auto" {
                 #[cfg(target_os = "windows")]
                 {
-                    if codex_core::get_platform_sandbox().is_none() {
+                    if WindowsSandboxLevel::from_config(&self.config)
+                        == WindowsSandboxLevel::Disabled
+                    {
                         let preset_clone = preset.clone();
                         if codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
                             && codex_core::windows_sandbox::sandbox_setup_is_complete(
@@ -3933,12 +4088,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_experimental_popup(&mut self) {
-        let features: Vec<BetaFeatureItem> = FEATURES
+        let features: Vec<ExperimentalFeatureItem> = FEATURES
             .iter()
             .filter_map(|spec| {
-                let name = spec.stage.beta_menu_name()?;
-                let description = spec.stage.beta_menu_description()?;
-                Some(BetaFeatureItem {
+                let name = spec.stage.experimental_menu_name()?;
+                let description = spec.stage.experimental_menu_description()?;
+                Some(ExperimentalFeatureItem {
                     feature: spec.id,
                     name: name.to_string(),
                     description: description.to_string(),
@@ -3961,6 +4116,7 @@ impl ChatWidget {
                 cwd: None,
                 approval_policy: Some(approval),
                 sandbox_policy: Some(sandbox_clone.clone()),
+                windows_sandbox_level: None,
                 model: None,
                 effort: None,
                 summary: None,
@@ -4464,7 +4620,7 @@ impl ChatWidget {
     #[cfg(target_os = "windows")]
     pub(crate) fn maybe_prompt_windows_sandbox_enable(&mut self) {
         if self.config.forced_auto_mode_downgraded_on_windows
-            && codex_core::get_platform_sandbox().is_none()
+            && WindowsSandboxLevel::from_config(&self.config) == WindowsSandboxLevel::Disabled
             && let Some(preset) = builtin_approval_presets()
                 .into_iter()
                 .find(|preset| preset.id == "auto")
@@ -4524,7 +4680,7 @@ impl ChatWidget {
     pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) -> ConstraintResult<()> {
         #[cfg(target_os = "windows")]
         let should_clear_downgrade = !matches!(&policy, SandboxPolicy::ReadOnly)
-            || codex_core::get_platform_sandbox().is_some();
+            || WindowsSandboxLevel::from_config(&self.config) != WindowsSandboxLevel::Disabled;
 
         self.config.sandbox_policy.set(policy)?;
 
@@ -4548,21 +4704,28 @@ impl ChatWidget {
         }
         if feature == Feature::CollaborationModes {
             self.bottom_pane.set_collaboration_modes_enabled(enabled);
-            let settings = self.stored_collaboration_mode.settings.clone();
-            let fallback_custom = settings.clone();
-            self.stored_collaboration_mode = if enabled {
-                initial_collaboration_mode(
-                    self.models_manager.as_ref(),
-                    fallback_custom,
-                    self.config.experimental_mode,
-                )
-            } else {
-                CollaborationMode {
-                    mode: ModeKind::Custom,
-                    settings,
-                }
+            let settings = self.current_collaboration_mode.settings.clone();
+            self.current_collaboration_mode = CollaborationMode {
+                mode: ModeKind::Custom,
+                settings,
             };
+            self.active_collaboration_mask = None;
             self.update_collaboration_mode_indicator();
+            self.refresh_model_display();
+            self.request_redraw();
+        }
+        #[cfg(target_os = "windows")]
+        if matches!(
+            feature,
+            Feature::WindowsSandbox | Feature::WindowsSandboxElevated
+        ) {
+            self.bottom_pane.set_windows_degraded_sandbox_active(
+                codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
+                    && matches!(
+                        WindowsSandboxLevel::from_config(&self.config),
+                        WindowsSandboxLevel::RestrictedToken
+                    ),
+            );
         }
     }
 
@@ -4591,31 +4754,77 @@ impl ChatWidget {
 
     /// Set the reasoning effort in the stored collaboration mode.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.stored_collaboration_mode =
-            self.stored_collaboration_mode
+        self.current_collaboration_mode =
+            self.current_collaboration_mode
                 .with_updates(None, Some(effort), None);
+        if self.collaboration_modes_enabled()
+            && let Some(mask) = self.active_collaboration_mask.as_mut()
+        {
+            mask.reasoning_effort = Some(effort);
+        }
+    }
+
+    /// Set the personality in the widget's config copy.
+    pub(crate) fn set_personality(&mut self, personality: Personality) {
+        self.config.model_personality = Some(personality);
     }
 
     /// Set the model in the widget's config copy and stored collaboration mode.
     pub(crate) fn set_model(&mut self, model: &str) {
-        self.session_header.set_model(model);
-        self.stored_collaboration_mode =
-            self.stored_collaboration_mode
+        self.current_collaboration_mode =
+            self.current_collaboration_mode
                 .with_updates(Some(model.to_string()), None, None);
+        if self.collaboration_modes_enabled()
+            && let Some(mask) = self.active_collaboration_mask.as_mut()
+        {
+            mask.model = Some(model.to_string());
+        }
+        self.refresh_model_display();
+        self.sync_personality_command_enabled();
     }
 
     pub(crate) fn current_model(&self) -> &str {
-        self.stored_collaboration_mode.model()
+        if !self.collaboration_modes_enabled() {
+            return self.current_collaboration_mode.model();
+        }
+        self.active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.model.as_deref())
+            .unwrap_or_else(|| self.current_collaboration_mode.model())
+    }
+
+    fn sync_personality_command_enabled(&mut self) {
+        self.bottom_pane
+            .set_personality_command_enabled(self.current_model_supports_personality());
+    }
+
+    fn current_model_supports_personality(&self) -> bool {
+        let model = self.current_model();
+        self.models_manager
+            .try_list_models(&self.config)
+            .ok()
+            .and_then(|models| {
+                models
+                    .into_iter()
+                    .find(|preset| preset.model == model)
+                    .map(|preset| preset.supports_personality)
+            })
+            .unwrap_or(false)
     }
 
     #[allow(dead_code)] // Used in tests
-    pub(crate) fn stored_collaboration_mode(&self) -> &CollaborationMode {
-        &self.stored_collaboration_mode
+    pub(crate) fn current_collaboration_mode(&self) -> &CollaborationMode {
+        &self.current_collaboration_mode
     }
 
     #[cfg(test)]
     pub(crate) fn current_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
-        self.stored_collaboration_mode.reasoning_effort()
+        self.effective_reasoning_effort()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_collaboration_mode_kind(&self) -> ModeKind {
+        self.active_mode_kind()
     }
 
     fn is_session_configured(&self) -> bool {
@@ -4624,6 +4833,57 @@ impl ChatWidget {
 
     fn collaboration_modes_enabled(&self) -> bool {
         self.config.features.enabled(Feature::CollaborationModes)
+    }
+
+    fn initial_collaboration_mask(
+        config: &Config,
+        models_manager: &ModelsManager,
+        model_override: Option<&str>,
+    ) -> Option<CollaborationModeMask> {
+        if !config.features.enabled(Feature::CollaborationModes) {
+            return None;
+        }
+        let mut mask = match config.experimental_mode {
+            Some(kind) => collaboration_modes::mask_for_kind(models_manager, kind)?,
+            None => collaboration_modes::default_mask(models_manager)?,
+        };
+        if let Some(model_override) = model_override {
+            mask.model = Some(model_override.to_string());
+        }
+        Some(mask)
+    }
+
+    fn active_mode_kind(&self) -> ModeKind {
+        self.active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.mode)
+            .unwrap_or(ModeKind::Custom)
+    }
+
+    fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
+        if !self.collaboration_modes_enabled() {
+            return self.current_collaboration_mode.reasoning_effort();
+        }
+        let current_effort = self.current_collaboration_mode.reasoning_effort();
+        self.active_collaboration_mask
+            .as_ref()
+            .and_then(|mask| mask.reasoning_effort)
+            .unwrap_or(current_effort)
+    }
+
+    fn effective_collaboration_mode(&self) -> CollaborationMode {
+        if !self.collaboration_modes_enabled() {
+            return self.current_collaboration_mode.clone();
+        }
+        self.active_collaboration_mask.as_ref().map_or_else(
+            || self.current_collaboration_mode.clone(),
+            |mask| self.current_collaboration_mode.apply_mask(mask),
+        )
+    }
+
+    fn refresh_model_display(&mut self) {
+        let effective = self.effective_collaboration_mode();
+        self.session_header.set_model(effective.model());
     }
 
     fn model_display_name(&self) -> &str {
@@ -4640,7 +4900,7 @@ impl ChatWidget {
         if !self.collaboration_modes_enabled() {
             return None;
         }
-        match self.stored_collaboration_mode.mode {
+        match self.active_mode_kind() {
             ModeKind::Plan => Some("Plan"),
             ModeKind::Code => Some("Code"),
             ModeKind::PairProgramming => Some("Pair Programming"),
@@ -4653,7 +4913,7 @@ impl ChatWidget {
         if !self.collaboration_modes_enabled() {
             return None;
         }
-        match self.stored_collaboration_mode.mode {
+        match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
             ModeKind::Code => Some(CollaborationModeIndicator::Code),
             ModeKind::PairProgramming => Some(CollaborationModeIndicator::PairProgramming),
@@ -4667,32 +4927,45 @@ impl ChatWidget {
         self.bottom_pane.set_collaboration_mode_indicator(indicator);
     }
 
+    fn personality_label(personality: Personality) -> &'static str {
+        match personality {
+            Personality::Friendly => "Friendly",
+            Personality::Pragmatic => "Pragmatic",
+        }
+    }
+
+    fn personality_description(personality: Personality) -> &'static str {
+        match personality {
+            Personality::Friendly => "Warm, collaborative, and helpful.",
+            Personality::Pragmatic => "Concise, task-focused, and direct.",
+        }
+    }
+
     /// Cycle to the next collaboration mode variant (Plan -> Code -> Plan).
     fn cycle_collaboration_mode(&mut self) {
         if !self.collaboration_modes_enabled() {
             return;
         }
 
-        if let Some(next_mode) = collaboration_modes::next_mode(
+        if let Some(next_mask) = collaboration_modes::next_mask(
             self.models_manager.as_ref(),
-            &self.stored_collaboration_mode,
+            self.active_collaboration_mask.as_ref(),
         ) {
-            self.set_collaboration_mode(next_mode);
+            self.set_collaboration_mask(next_mask);
         }
     }
 
-    /// Update the stored collaboration mode.
+    /// Update the active collaboration mask.
     ///
-    /// When collaboration modes are enabled, the current mode is attached to *every*
-    /// submission as `Op::UserTurn { collaboration_mode: Some(...) }`.
-    pub(crate) fn set_collaboration_mode(&mut self, mode: CollaborationMode) {
+    /// When collaboration modes are enabled and a preset is selected (not Custom),
+    /// the current mode is attached to submissions as `Op::UserTurn { collaboration_mode: Some(...) }`.
+    pub(crate) fn set_collaboration_mask(&mut self, mask: CollaborationModeMask) {
         if !self.collaboration_modes_enabled() {
             return;
         }
-        let old_model = self.stored_collaboration_mode.model().to_string();
-        let mode = mode.with_updates(Some(old_model), None, None);
-        self.stored_collaboration_mode = mode;
+        self.active_collaboration_mask = Some(mask);
         self.update_collaboration_mode_indicator();
+        self.refresh_model_display();
         self.request_redraw();
     }
 
@@ -4875,11 +5148,9 @@ impl ChatWidget {
     pub(crate) fn submit_user_message_with_mode(
         &mut self,
         text: String,
-        collaboration_mode: CollaborationMode,
+        collaboration_mode: CollaborationModeMask,
     ) {
-        let model = collaboration_mode.model().to_string();
-        self.set_collaboration_mode(collaboration_mode);
-        self.set_model(&model);
+        self.set_collaboration_mask(collaboration_mode);
         self.submit_user_message(text.into());
     }
 
@@ -5304,29 +5575,6 @@ fn extract_first_bold(s: &str) -> Option<String> {
         i += 1;
     }
     None
-}
-
-fn initial_collaboration_mode(
-    models_manager: &ModelsManager,
-    fallback_custom: Settings,
-    desired_mode: Option<ModeKind>,
-) -> CollaborationMode {
-    if let Some(kind) = desired_mode {
-        if kind == ModeKind::Custom {
-            return CollaborationMode {
-                mode: ModeKind::Custom,
-                settings: fallback_custom,
-            };
-        }
-        if let Some(mode) = collaboration_modes::mode_for_kind(models_manager, kind) {
-            return mode;
-        }
-    }
-
-    collaboration_modes::default_mode(models_manager).unwrap_or(CollaborationMode {
-        mode: ModeKind::Custom,
-        settings: fallback_custom,
-    })
 }
 
 async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Option<RateLimitSnapshot> {

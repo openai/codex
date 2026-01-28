@@ -122,7 +122,7 @@ async fn config_personality_some_sets_instructions_template() -> anyhow::Result<
     let server = start_mock_server().await;
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
     let mut builder = test_codex()
-        .with_model("gpt-5.2-codex")
+        .with_model("exp-codex-personality")
         .with_config(|config| {
             config.model_personality = Some(Personality::Friendly);
             config.features.disable(Feature::RemoteModels);
@@ -179,7 +179,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
     )
     .await;
     let mut builder = test_codex()
-        .with_model("gpt-5.2-codex")
+        .with_model("exp-codex-personality")
         .with_config(|config| {
             config.features.disable(Feature::RemoteModels);
         });
@@ -210,6 +210,7 @@ async fn user_turn_personality_some_adds_update_message() -> anyhow::Result<()> 
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
@@ -362,6 +363,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: Some(remote_slug.to_string()),
             effort: None,
             summary: None,
