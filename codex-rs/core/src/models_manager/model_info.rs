@@ -259,9 +259,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             truncation_policy: TruncationPolicyConfig::tokens(10_000),
             context_window: Some(CONTEXT_WINDOW_272K),
         )
-    } else if (slug.starts_with("gpt-5.2") || slug.starts_with("boomslang"))
-        && !slug.contains("codex")
-    {
+    } else if slug.starts_with("gpt-5.2") || slug.starts_with("boomslang") {
         model_info!(
             slug,
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),
@@ -276,7 +274,7 @@ pub(crate) fn find_model_info_for_slug(slug: &str) -> ModelInfo {
             context_window: Some(CONTEXT_WINDOW_272K),
             supported_reasoning_levels: supported_reasoning_level_low_medium_high_xhigh_non_codex(),
         )
-    } else if slug.starts_with("gpt-5.1") && !slug.contains("codex") {
+    } else if slug.starts_with("gpt-5.1") {
         model_info!(
             slug,
             apply_patch_tool_type: Some(ApplyPatchToolType::Freeform),

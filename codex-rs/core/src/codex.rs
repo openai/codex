@@ -100,6 +100,7 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
+use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
@@ -114,6 +115,7 @@ use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::effective_mcp_servers;
+use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::model_provider_info::CHAT_WIRE_API_DEPRECATION_SUMMARY;
@@ -137,9 +139,11 @@ use crate::protocol::RequestUserInputEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
+use crate::protocol::SkillDependencies as ProtocolSkillDependencies;
 use crate::protocol::SkillErrorInfo;
 use crate::protocol::SkillInterface as ProtocolSkillInterface;
 use crate::protocol::SkillMetadata as ProtocolSkillMetadata;
+use crate::protocol::SkillToolDependency as ProtocolSkillToolDependency;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
@@ -157,6 +161,7 @@ use crate::skills::SkillInjections;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
+use crate::skills::collect_explicit_skill_mentions;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -581,6 +586,10 @@ impl Session {
             session_configuration.collaboration_mode.reasoning_effort();
         per_turn_config.model_reasoning_summary = session_configuration.model_reasoning_summary;
         per_turn_config.model_personality = session_configuration.personality;
+        per_turn_config.web_search_mode = Some(resolve_web_search_mode_for_turn(
+            per_turn_config.web_search_mode,
+            session_configuration.sandbox_policy.get(),
+        ));
         per_turn_config.features = config.features.clone();
         per_turn_config
     }
@@ -1852,6 +1861,19 @@ impl Session {
         self.send_token_count_event(turn_context).await;
     }
 
+    pub(crate) async fn mcp_dependency_prompted(&self) -> HashSet<String> {
+        let state = self.state.lock().await;
+        state.mcp_dependency_prompted()
+    }
+
+    pub(crate) async fn record_mcp_dependency_prompted<I>(&self, names: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut state = self.state.lock().await;
+        state.record_mcp_dependency_prompted(names);
+    }
+
     pub(crate) async fn set_server_reasoning_included(&self, included: bool) {
         let mut state = self.state.lock().await;
         state.set_server_reasoning_included(included);
@@ -2096,35 +2118,12 @@ impl Session {
         Arc::clone(&self.services.user_shell)
     }
 
-    async fn refresh_mcp_servers_if_requested(&self, turn_context: &TurnContext) {
-        let refresh_config = { self.pending_mcp_server_refresh_config.lock().await.take() };
-        let Some(refresh_config) = refresh_config else {
-            return;
-        };
-
-        let McpServerRefreshConfig {
-            mcp_servers,
-            mcp_oauth_credentials_store_mode,
-        } = refresh_config;
-
-        let mcp_servers =
-            match serde_json::from_value::<HashMap<String, McpServerConfig>>(mcp_servers) {
-                Ok(servers) => servers,
-                Err(err) => {
-                    warn!("failed to parse MCP server refresh config: {err}");
-                    return;
-                }
-            };
-        let store_mode = match serde_json::from_value::<OAuthCredentialsStoreMode>(
-            mcp_oauth_credentials_store_mode,
-        ) {
-            Ok(mode) => mode,
-            Err(err) => {
-                warn!("failed to parse MCP OAuth refresh config: {err}");
-                return;
-            }
-        };
-
+    async fn refresh_mcp_servers_inner(
+        &self,
+        turn_context: &TurnContext,
+        mcp_servers: HashMap<String, McpServerConfig>,
+        store_mode: OAuthCredentialsStoreMode,
+    ) {
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
         let mcp_servers = with_codex_apps_mcp(
@@ -2155,6 +2154,49 @@ impl Session {
 
         let mut manager = self.services.mcp_connection_manager.write().await;
         *manager = refreshed_manager;
+    }
+
+    async fn refresh_mcp_servers_if_requested(&self, turn_context: &TurnContext) {
+        let refresh_config = { self.pending_mcp_server_refresh_config.lock().await.take() };
+        let Some(refresh_config) = refresh_config else {
+            return;
+        };
+
+        let McpServerRefreshConfig {
+            mcp_servers,
+            mcp_oauth_credentials_store_mode,
+        } = refresh_config;
+
+        let mcp_servers =
+            match serde_json::from_value::<HashMap<String, McpServerConfig>>(mcp_servers) {
+                Ok(servers) => servers,
+                Err(err) => {
+                    warn!("failed to parse MCP server refresh config: {err}");
+                    return;
+                }
+            };
+        let store_mode = match serde_json::from_value::<OAuthCredentialsStoreMode>(
+            mcp_oauth_credentials_store_mode,
+        ) {
+            Ok(mode) => mode,
+            Err(err) => {
+                warn!("failed to parse MCP OAuth refresh config: {err}");
+                return;
+            }
+        };
+
+        self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode)
+            .await;
+    }
+
+    pub(crate) async fn refresh_mcp_servers_now(
+        &self,
+        turn_context: &TurnContext,
+        mcp_servers: HashMap<String, McpServerConfig>,
+        store_mode: OAuthCredentialsStoreMode,
+    ) {
+        self.refresh_mcp_servers_inner(turn_context, mcp_servers, store_mode)
+            .await;
     }
 
     async fn mcp_startup_cancellation_token(&self) -> CancellationToken {
@@ -2888,7 +2930,7 @@ async fn spawn_review_thread(
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
         features: &review_features,
-        web_search_mode: review_web_search_mode,
+        web_search_mode: Some(review_web_search_mode),
     });
 
     let review_prompt = resolved.prompt.clone();
@@ -2900,7 +2942,7 @@ async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
-    per_turn_config.web_search_mode = review_web_search_mode;
+    per_turn_config.web_search_mode = Some(review_web_search_mode);
 
     let otel_manager = parent_turn_context
         .client
@@ -2980,6 +3022,22 @@ fn skills_to_info(
                     brand_color: interface.brand_color,
                     default_prompt: interface.default_prompt,
                 }),
+            dependencies: skill.dependencies.clone().map(|dependencies| {
+                ProtocolSkillDependencies {
+                    tools: dependencies
+                        .tools
+                        .into_iter()
+                        .map(|tool| ProtocolSkillToolDependency {
+                            r#type: tool.r#type,
+                            value: tool.value,
+                            description: tool.description,
+                            transport: tool.transport,
+                            command: tool.command,
+                            url: tool.url,
+                        })
+                        .collect(),
+                }
+            }),
             path: skill.path.clone(),
             scope: skill.scope,
             enabled: !disabled_paths.contains(&skill.path),
@@ -3039,11 +3097,23 @@ pub(crate) async fn run_turn(
             .await,
     );
 
+    let mentioned_skills = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
+        collect_explicit_skill_mentions(&input, &outcome.skills, &outcome.disabled_paths)
+    });
+
+    maybe_prompt_and_install_mcp_dependencies(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        &cancellation_token,
+        &mentioned_skills,
+    )
+    .await;
+
     let otel_manager = turn_context.client.get_otel_manager();
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
-    } = build_skill_injections(&input, skills_outcome.as_ref(), Some(&otel_manager)).await;
+    } = build_skill_injections(&mentioned_skills, Some(&otel_manager)).await;
 
     for message in skill_warnings {
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))

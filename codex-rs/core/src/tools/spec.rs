@@ -27,7 +27,7 @@ use std::collections::HashMap;
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
-    pub web_search_mode: WebSearchMode,
+    pub web_search_mode: Option<WebSearchMode>,
     pub collab_tools: bool,
     pub collaboration_modes_tools: bool,
     pub experimental_supported_tools: Vec<String>,
@@ -36,7 +36,7 @@ pub(crate) struct ToolsConfig {
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_info: &'a ModelInfo,
     pub(crate) features: &'a Features,
-    pub(crate) web_search_mode: WebSearchMode,
+    pub(crate) web_search_mode: Option<WebSearchMode>,
 }
 
 impl ToolsConfig {
@@ -1384,17 +1384,17 @@ pub(crate) fn build_specs(
     }
 
     match config.web_search_mode {
-        WebSearchMode::Cached => {
+        Some(WebSearchMode::Cached) => {
             builder.push_spec(ToolSpec::WebSearch {
                 external_web_access: Some(false),
             });
         }
-        WebSearchMode::Live => {
+        Some(WebSearchMode::Live) => {
             builder.push_spec(ToolSpec::WebSearch {
                 external_web_access: Some(true),
             });
         }
-        WebSearchMode::Disabled => {}
+        Some(WebSearchMode::Disabled) | None => {}
     }
 
     builder.push_spec_with_parallel_support(create_view_image_tool(), true);
@@ -1556,7 +1556,7 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Live,
+            web_search_mode: Some(WebSearchMode::Live),
         });
         let (tools, _) = build_specs(&config, None, &[]).build();
 
@@ -1620,7 +1620,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: Some(WebSearchMode::Cached),
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(
@@ -1638,7 +1638,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: Some(WebSearchMode::Cached),
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert!(
@@ -1650,7 +1650,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: Some(WebSearchMode::Cached),
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
         assert_contains_tool_names(&tools, &["request_user_input"]);
@@ -1659,7 +1659,7 @@ mod tests {
     fn assert_model_tools(
         model_slug: &str,
         features: &Features,
-        web_search_mode: WebSearchMode,
+        web_search_mode: Option<WebSearchMode>,
         expected_tools: &[&str],
     ) {
         let config = test_config();
@@ -1683,7 +1683,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: Some(WebSearchMode::Cached),
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -1705,7 +1705,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Live,
+            web_search_mode: Some(WebSearchMode::Live),
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -1725,7 +1725,7 @@ mod tests {
         assert_model_tools(
             "gpt-5-codex",
             &features,
-            WebSearchMode::Cached,
+            Some(WebSearchMode::Cached),
             &[
                 "shell_command",
                 "list_mcp_resources",
@@ -1747,7 +1747,7 @@ mod tests {
         assert_model_tools(
             "gpt-5.1-codex",
             &features,
-            WebSearchMode::Cached,
+            Some(WebSearchMode::Cached),
             &[
                 "shell_command",
                 "list_mcp_resources",
@@ -1770,7 +1770,7 @@ mod tests {
         assert_model_tools(
             "gpt-5-codex",
             &features,
-            WebSearchMode::Live,
+            Some(WebSearchMode::Live),
             &[
                 "exec_command",
                 "write_stdin",
@@ -1794,7 +1794,7 @@ mod tests {
         assert_model_tools(
             "gpt-5.1-codex",
             &features,
-            WebSearchMode::Live,
+            Some(WebSearchMode::Live),
             &[
                 "exec_command",
                 "write_stdin",
@@ -1817,7 +1817,7 @@ mod tests {
         assert_model_tools(
             "codex-mini-latest",
             &features,
-            WebSearchMode::Cached,
+            Some(WebSearchMode::Cached),
             &[
                 "local_shell",
                 "list_mcp_resources",
@@ -1838,7 +1838,7 @@ mod tests {
         assert_model_tools(
             "gpt-5.1-codex-mini",
             &features,
-            WebSearchMode::Cached,
+            Some(WebSearchMode::Cached),
             &[
                 "shell_command",
                 "list_mcp_resources",
@@ -1860,7 +1860,7 @@ mod tests {
         assert_model_tools(
             "gpt-5",
             &features,
-            WebSearchMode::Cached,
+            Some(WebSearchMode::Cached),
             &[
                 "shell",
                 "list_mcp_resources",
@@ -1881,7 +1881,7 @@ mod tests {
         assert_model_tools(
             "gpt-5.1",
             &features,
-            WebSearchMode::Cached,
+            Some(WebSearchMode::Cached),
             &[
                 "shell_command",
                 "list_mcp_resources",
@@ -1903,7 +1903,7 @@ mod tests {
         assert_model_tools(
             "exp-5.1",
             &features,
-            WebSearchMode::Cached,
+            Some(WebSearchMode::Cached),
             &[
                 "exec_command",
                 "write_stdin",
@@ -1927,7 +1927,7 @@ mod tests {
         assert_model_tools(
             "codex-mini-latest",
             &features,
-            WebSearchMode::Live,
+            Some(WebSearchMode::Live),
             &[
                 "exec_command",
                 "write_stdin",
@@ -1951,7 +1951,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Live,
+            web_search_mode: Some(WebSearchMode::Live),
         });
         let (tools, _) = build_specs(&tools_config, Some(HashMap::new()), &[]).build();
 
@@ -1973,7 +1973,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: Some(WebSearchMode::Cached),
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -1992,7 +1992,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: Some(WebSearchMode::Cached),
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
 
@@ -2023,7 +2023,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Live,
+            web_search_mode: Some(WebSearchMode::Live),
         });
         let (tools, _) = build_specs(
             &tools_config,
@@ -2119,7 +2119,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: Some(WebSearchMode::Cached),
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -2196,7 +2196,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: Some(WebSearchMode::Cached),
         });
 
         let (tools, _) = build_specs(
@@ -2254,7 +2254,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: Some(WebSearchMode::Cached),
         });
 
         let (tools, _) = build_specs(
@@ -2309,7 +2309,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: Some(WebSearchMode::Cached),
         });
 
         let (tools, _) = build_specs(
@@ -2366,7 +2366,7 @@ mod tests {
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: Some(WebSearchMode::Cached),
         });
 
         let (tools, _) = build_specs(
@@ -2479,7 +2479,7 @@ Examples of valid command strings:
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: Some(WebSearchMode::Cached),
         });
         let (tools, _) = build_specs(
             &tools_config,

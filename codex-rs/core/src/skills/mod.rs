@@ -7,6 +7,7 @@ pub mod system;
 
 pub(crate) use injection::SkillInjections;
 pub(crate) use injection::build_skill_injections;
+pub(crate) use injection::collect_explicit_skill_mentions;
 pub use loader::load_skills;
 pub use manager::SkillsManager;
 pub use model::SkillError;
