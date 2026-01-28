@@ -1352,6 +1352,7 @@ dependencies = [
  "codex-tui",
  "codex-utils-cargo-bin",
  "codex-windows-sandbox",
+ "crossterm",
  "libc",
  "owo-colors",
  "predicates",

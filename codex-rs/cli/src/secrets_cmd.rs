@@ -1,5 +1,6 @@
 use std::io::IsTerminal;
 use std::io::Read;
+use std::io::Write;
 
 use anyhow::Context;
 use anyhow::Result;
@@ -11,6 +12,11 @@ use codex_core::secrets::SecretName;
 use codex_core::secrets::SecretScope;
 use codex_core::secrets::SecretsManager;
 use codex_core::secrets::environment_id_from_cwd;
+use crossterm::event::Event;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyModifiers;
+use crossterm::terminal::disable_raw_mode;
+use crossterm::terminal::enable_raw_mode;
 
 #[derive(Debug, Parser)]
 pub struct SecretsCli {
@@ -94,7 +100,7 @@ async fn load_config(cli_config_overrides: CliConfigOverrides) -> Result<Config>
 fn run_set(config: &Config, manager: &SecretsManager, args: SecretsSetArgs) -> Result<()> {
     let name = SecretName::new(&args.name)?;
     let scope = resolve_scope(config, &args.scope)?;
-    let value = resolve_value(args.value)?;
+    let value = resolve_value(&name, args.value)?;
     manager.set(&scope, &name, &value)?;
     println!("Stored {name} in {}.", scope_label(&scope));
     Ok(())
@@ -159,13 +165,13 @@ fn default_environment_scope(config: &Config) -> Result<SecretScope> {
     SecretScope::environment(environment_id)
 }
 
-fn resolve_value(explicit: Option<String>) -> Result<String> {
+fn resolve_value(name: &SecretName, explicit: Option<String>) -> Result<String> {
     if let Some(value) = explicit {
         return Ok(value);
     }
 
     if std::io::stdin().is_terminal() {
-        bail!("secret value must be provided via --value or piped stdin");
+        return prompt_secret_value(name);
     }
 
     let mut buf = String::new();
@@ -175,6 +181,67 @@ fn resolve_value(explicit: Option<String>) -> Result<String> {
     let trimmed = buf.trim_end_matches(['\n', '\r']).to_string();
     anyhow::ensure!(!trimmed.is_empty(), "secret value must not be empty");
     Ok(trimmed)
+}
+
+fn prompt_secret_value(name: &SecretName) -> Result<String> {
+    print!("Enter value for {name}: ");
+    std::io::stdout()
+        .flush()
+        .context("failed to flush stdout before prompt")?;
+
+    enable_raw_mode().context("failed to enable raw mode for secret prompt")?;
+    let _raw_mode_guard = RawModeGuard;
+
+    let mut value = String::new();
+
+    loop {
+        let event = crossterm::event::read().context("failed to read secret input")?;
+        let Event::Key(key_event) = event else {
+            continue;
+        };
+
+        match key_event.code {
+            KeyCode::Enter => {
+                println!();
+                break;
+            }
+            KeyCode::Backspace => {
+                if value.pop().is_some() {
+                    print!("\u{8} \u{8}");
+                    std::io::stdout()
+                        .flush()
+                        .context("failed to flush stdout after backspace")?;
+                }
+            }
+            KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                println!();
+                bail!("secret input cancelled");
+            }
+            KeyCode::Esc => {
+                println!();
+                bail!("secret input cancelled");
+            }
+            KeyCode::Char(ch) if !key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                value.push(ch);
+                print!("*");
+                std::io::stdout()
+                    .flush()
+                    .context("failed to flush stdout after input")?;
+            }
+            _ => {}
+        }
+    }
+
+    anyhow::ensure!(!value.is_empty(), "secret value must not be empty");
+    Ok(value)
+}
+
+struct RawModeGuard;
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
 }
 
 fn scope_label(scope: &SecretScope) -> String {
