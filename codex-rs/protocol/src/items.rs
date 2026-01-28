@@ -76,6 +76,12 @@ impl ContextCompactionItem {
     }
 }
 
+impl Default for ContextCompactionItem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UserMessageItem {
     pub fn new(content: &[UserInput]) -> Self {
         Self {

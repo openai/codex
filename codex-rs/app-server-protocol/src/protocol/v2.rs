@@ -2365,6 +2365,7 @@ pub struct WindowsWorldWritableWarningNotification {
     pub failed_scan: bool,
 }
 
+/// Deprecated: Use `ContextCompaction` item type instead.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
