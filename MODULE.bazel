@@ -53,7 +53,7 @@ rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
     edition = "2024",
     extra_target_triples = RUST_TRIPLES,
-    versions = ["1.90.0"],
+    versions = ["1.93.0"],
 )
 use_repo(rust, "rust_toolchains")
 
@@ -66,6 +66,11 @@ crate.from_cargo(
     cargo_lock = "//codex-rs:Cargo.lock",
     cargo_toml = "//codex-rs:Cargo.toml",
     platform_triples = RUST_TRIPLES,
+)
+crate.annotation(
+    crate = "nucleo-matcher",
+    strip_prefix = "matcher",
+    version = "0.3.1",
 )
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")

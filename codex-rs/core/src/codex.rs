@@ -158,6 +158,7 @@ use crate::protocol::WarningEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
+use crate::rollout::metadata;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
@@ -172,6 +173,7 @@ use crate::skills::injection::tool_kind_for_path;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
+use crate::state_db;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
@@ -197,6 +199,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::render_command_prefix_list;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
@@ -425,6 +428,10 @@ impl Codex {
     pub(crate) async fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         let state = self.session.state.lock().await;
         state.session_configuration.thread_config_snapshot()
+    }
+
+    pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
+        self.session.state_db()
     }
 }
 
@@ -705,6 +712,13 @@ impl Session {
                 RolloutRecorderParams::resume(resumed_history.rollout_path.clone()),
             ),
         };
+        let state_builder = match &initial_history {
+            InitialHistory::Resumed(resumed) => metadata::builder_from_items(
+                resumed.history.as_slice(),
+                resumed.rollout_path.as_path(),
+            ),
+            InitialHistory::New | InitialHistory::Forked(_) => None,
+        };
 
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
@@ -713,11 +727,17 @@ impl Session {
         // - load history metadata
         let rollout_fut = async {
             if config.ephemeral {
-                Ok(None)
+                Ok::<_, anyhow::Error>((None, None))
             } else {
-                RolloutRecorder::new(&config, rollout_params)
-                    .await
-                    .map(Some)
+                let state_db_ctx = state_db::init_if_enabled(&config, None).await;
+                let rollout_recorder = RolloutRecorder::new(
+                    &config,
+                    rollout_params,
+                    state_db_ctx.clone(),
+                    state_builder.clone(),
+                )
+                .await?;
+                Ok((Some(rollout_recorder), state_db_ctx))
             }
         };
 
@@ -737,14 +757,14 @@ impl Session {
 
         // Join all independent futures.
         let (
-            rollout_recorder,
+            rollout_recorder_and_state_db,
             (history_log_id, history_entry_count),
             (auth, mcp_servers, auth_statuses),
         ) = tokio::join!(rollout_fut, history_meta_fut, auth_and_mcp_fut);
 
-        let rollout_recorder = rollout_recorder.map_err(|e| {
+        let (rollout_recorder, state_db_ctx) = rollout_recorder_and_state_db.map_err(|e| {
             error!("failed to initialize rollout recorder: {e:#}");
-            anyhow::Error::from(e)
+            e
         })?;
         let rollout_path = rollout_recorder
             .as_ref()
@@ -752,19 +772,13 @@ impl Session {
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
-        for (alias, feature) in config.features.legacy_feature_usages() {
-            let canonical = feature.key();
-            let summary = format!("`{alias}` is deprecated. Use `[features].{canonical}` instead.");
-            let details = if alias == canonical {
-                None
-            } else {
-                Some(format!(
-                    "Enable it with `--enable {canonical}` or `[features].{canonical}` in config.toml. See https://github.com/openai/codex/blob/main/docs/config.md#feature-flags for details."
-                ))
-            };
+        for usage in config.features.legacy_feature_usages() {
             post_session_configured_events.push(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
-                msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }),
+                msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
+                    summary: usage.summary.clone(),
+                    details: usage.details.clone(),
+                }),
             });
         }
         if crate::config::uses_deprecated_instructions_file(&config.config_layer_stack) {
@@ -848,6 +862,7 @@ impl Session {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            state_db: state_db_ctx.clone(),
         };
 
         let sess = Arc::new(Session {
@@ -918,6 +933,10 @@ impl Session {
 
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
         self.tx_event.clone()
+    }
+
+    pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
+        self.services.state_db.clone()
     }
 
     /// Ensure all rollout writes are durably flushed.
@@ -1233,6 +1252,8 @@ impl Session {
             DeveloperInstructions::from_policy(
                 &next.sandbox_policy,
                 next.approval_policy,
+                self.services.exec_policy.current().as_ref(),
+                self.features.enabled(Feature::RequestRule),
                 &next.cwd,
             )
             .into(),
@@ -1421,6 +1442,44 @@ impl Session {
             .await?;
 
         Ok(())
+    }
+
+    async fn turn_context_for_sub_id(&self, sub_id: &str) -> Option<Arc<TurnContext>> {
+        let active = self.active_turn.lock().await;
+        active
+            .as_ref()
+            .and_then(|turn| turn.tasks.get(sub_id))
+            .map(|task| Arc::clone(&task.turn_context))
+    }
+
+    pub(crate) async fn record_execpolicy_amendment_message(
+        &self,
+        sub_id: &str,
+        amendment: &ExecPolicyAmendment,
+    ) {
+        let Some(prefixes) = render_command_prefix_list([amendment.command.as_slice()]) else {
+            warn!("execpolicy amendment for {sub_id} had no command prefix");
+            return;
+        };
+        let text = format!("Approved command prefix saved:\n{prefixes}");
+        let message: ResponseItem = DeveloperInstructions::new(text.clone()).into();
+
+        if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
+            self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
+                .await;
+            return;
+        }
+
+        if self
+            .inject_response_items(vec![ResponseInputItem::Message {
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText { text }],
+            }])
+            .await
+            .is_err()
+        {
+            warn!("no active turn found to record execpolicy amendment message for {sub_id}");
+        }
     }
 
     /// Emit an exec approval request event and await the user's decision.
@@ -1756,6 +1815,8 @@ impl Session {
             DeveloperInstructions::from_policy(
                 &turn_context.sandbox_policy,
                 turn_context.approval_policy,
+                self.services.exec_policy.current().as_ref(),
+                self.features.enabled(Feature::RequestRule),
                 &turn_context.cwd,
             )
             .into(),
@@ -2602,18 +2663,26 @@ mod handlers {
         if let ReviewDecision::ApprovedExecpolicyAmendment {
             proposed_execpolicy_amendment,
         } = &decision
-            && let Err(err) = sess
+        {
+            match sess
                 .persist_execpolicy_amendment(proposed_execpolicy_amendment)
                 .await
-        {
-            let message = format!("Failed to apply execpolicy amendment: {err}");
-            tracing::warn!("{message}");
-            let warning = EventMsg::Warning(WarningEvent { message });
-            sess.send_event_raw(Event {
-                id: id.clone(),
-                msg: warning,
-            })
-            .await;
+            {
+                Ok(()) => {
+                    sess.record_execpolicy_amendment_message(&id, proposed_execpolicy_amendment)
+                        .await;
+                }
+                Err(err) => {
+                    let message = format!("Failed to apply execpolicy amendment: {err}");
+                    tracing::warn!("{message}");
+                    let warning = EventMsg::Warning(WarningEvent { message });
+                    sess.send_event_raw(Event {
+                        id: id.clone(),
+                        msg: warning,
+                    })
+                    .await;
+                }
+            }
         }
         match decision {
             ReviewDecision::Abort => {
@@ -4670,6 +4739,7 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            state_db: None,
         };
 
         let turn_context = Session::make_turn_context(
@@ -4781,6 +4851,7 @@ mod tests {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             skills_manager,
             agent_control,
+            state_db: None,
         };
 
         let turn_context = Arc::new(Session::make_turn_context(

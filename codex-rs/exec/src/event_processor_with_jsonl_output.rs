@@ -849,16 +849,17 @@ impl EventProcessor for EventProcessorWithJsonOutput {
 
         let protocol::Event { msg, .. } = event;
 
-        if let protocol::EventMsg::TurnComplete(protocol::TurnCompleteEvent {
-            last_agent_message,
-        }) = msg
-        {
-            if let Some(output_file) = self.last_message_path.as_deref() {
-                handle_last_message(last_agent_message.as_deref(), output_file);
+        match msg {
+            protocol::EventMsg::TurnComplete(protocol::TurnCompleteEvent {
+                last_agent_message,
+            }) => {
+                if let Some(output_file) = self.last_message_path.as_deref() {
+                    handle_last_message(last_agent_message.as_deref(), output_file);
+                }
+                CodexStatus::InitiateShutdown
             }
-            CodexStatus::InitiateShutdown
-        } else {
-            CodexStatus::Running
+            protocol::EventMsg::ShutdownComplete => CodexStatus::Shutdown,
+            _ => CodexStatus::Running,
         }
     }
 }

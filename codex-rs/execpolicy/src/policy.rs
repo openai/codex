@@ -31,6 +31,30 @@ impl Policy {
         &self.rules_by_program
     }
 
+    pub fn get_allowed_prefixes(&self) -> Vec<Vec<String>> {
+        let mut prefixes = Vec::new();
+
+        for (_program, rules) in self.rules_by_program.iter_all() {
+            for rule in rules {
+                let Some(prefix_rule) = rule.as_any().downcast_ref::<PrefixRule>() else {
+                    continue;
+                };
+                if prefix_rule.decision != Decision::Allow {
+                    continue;
+                }
+
+                let mut prefix = Vec::with_capacity(prefix_rule.pattern.rest.len() + 1);
+                prefix.push(prefix_rule.pattern.first.as_ref().to_string());
+                prefix.extend(prefix_rule.pattern.rest.iter().map(render_pattern_token));
+                prefixes.push(prefix);
+            }
+        }
+
+        prefixes.sort();
+        prefixes.dedup();
+        prefixes
+    }
+
     pub fn add_prefix_rule(&mut self, prefix: &[String], decision: Decision) -> Result<()> {
         let (first_token, rest) = prefix
             .split_first()
@@ -113,6 +137,13 @@ impl Policy {
         } else {
             matched_rules
         }
+    }
+}
+
+fn render_pattern_token(token: &PatternToken) -> String {
+    match token {
+        PatternToken::Single(value) => value.clone(),
+        PatternToken::Alts(alternatives) => format!("[{}]", alternatives.join("|")),
     }
 }
 

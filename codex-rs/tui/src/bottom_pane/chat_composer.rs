@@ -675,6 +675,18 @@ impl ChatComposer {
         text
     }
 
+    pub(crate) fn pending_pastes(&self) -> Vec<(String, String)> {
+        self.pending_pastes.clone()
+    }
+
+    pub(crate) fn set_pending_pastes(&mut self, pending_pastes: Vec<(String, String)>) {
+        let text = self.textarea.text().to_string();
+        self.pending_pastes = pending_pastes
+            .into_iter()
+            .filter(|(placeholder, _)| text.contains(placeholder))
+            .collect();
+    }
+
     /// Override the footer hint items displayed beneath the composer. Passing
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
@@ -1468,7 +1480,7 @@ impl ChatComposer {
     }
 
     /// Expand large-paste placeholders using element ranges and rebuild other element spans.
-    fn expand_pending_pastes(
+    pub(crate) fn expand_pending_pastes(
         text: &str,
         mut elements: Vec<TextElement>,
         pending_pastes: &[(String, String)],
@@ -2440,6 +2452,11 @@ impl ChatComposer {
         // When browsing input history (shell-style Up/Down recall), skip all popup
         // synchronization so nothing steals focus from continued history navigation.
         if browsing_history {
+            if self.current_file_query.is_some() {
+                self.app_event_tx
+                    .send(AppEvent::StartFileSearch(String::new()));
+                self.current_file_query = None;
+            }
             self.active_popup = ActivePopup::None;
             return;
         }
@@ -2450,12 +2467,22 @@ impl ChatComposer {
         self.sync_command_popup(allow_command_popup);
 
         if matches!(self.active_popup, ActivePopup::Command(_)) {
+            if self.current_file_query.is_some() {
+                self.app_event_tx
+                    .send(AppEvent::StartFileSearch(String::new()));
+                self.current_file_query = None;
+            }
             self.dismissed_file_popup_token = None;
             self.dismissed_mention_popup_token = None;
             return;
         }
 
         if let Some(token) = mention_token {
+            if self.current_file_query.is_some() {
+                self.app_event_tx
+                    .send(AppEvent::StartFileSearch(String::new()));
+                self.current_file_query = None;
+            }
             self.sync_mention_popup(token);
             return;
         }
@@ -2466,6 +2493,11 @@ impl ChatComposer {
             return;
         }
 
+        if self.current_file_query.is_some() {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(String::new()));
+            self.current_file_query = None;
+        }
         self.dismissed_file_popup_token = None;
         if matches!(
             self.active_popup,
@@ -2602,7 +2634,10 @@ impl ChatComposer {
             return;
         }
 
-        if !query.is_empty() {
+        if query.is_empty() {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(String::new()));
+        } else {
             self.app_event_tx
                 .send(AppEvent::StartFileSearch(query.clone()));
         }
@@ -2626,7 +2661,11 @@ impl ChatComposer {
             }
         }
 
-        self.current_file_query = Some(query);
+        if query.is_empty() {
+            self.current_file_query = None;
+        } else {
+            self.current_file_query = Some(query);
+        }
         self.dismissed_file_popup_token = None;
     }
 
