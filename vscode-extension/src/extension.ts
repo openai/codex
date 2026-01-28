@@ -396,6 +396,7 @@ type SessionRuntime = {
   compactInFlight: boolean;
   pendingCompactBlockId: string | null;
   pendingAssistantDeltas: Map<string, string>;
+  pendingAssistantMetaById: Map<string, string>;
   pendingAssistantDeltaFlushTimer: NodeJS.Timeout | null;
   streamingAssistantItemIds: Set<string>;
   activeTurnId: string | null;
@@ -461,7 +462,10 @@ export function activate(context: vscode.ExtensionContext): void {
       SESSIONS_V1_MIGRATION_PROMPTED_KEY,
     );
     if (!prompted) {
-      void context.workspaceState.update(SESSIONS_V1_MIGRATION_PROMPTED_KEY, true);
+      void context.workspaceState.update(
+        SESSIONS_V1_MIGRATION_PROMPTED_KEY,
+        true,
+      );
       void vscode.window
         .showInformationMessage(
           "保存済みセッションの形式が更新されました。移行コマンドを実行すると、旧形式（v1）のセッションを codex/codez/opencode のいずれかに割り当てて復元できます。",
@@ -509,15 +513,15 @@ export function activate(context: vscode.ExtensionContext): void {
 
     const fallbackCommand =
       req.method === "item/commandExecution/requestApproval"
-        ? req.params.command ?? null
+        ? (req.params.command ?? null)
         : null;
     const fallbackCwd =
       req.method === "item/commandExecution/requestApproval"
-        ? req.params.cwd ?? null
+        ? (req.params.cwd ?? null)
         : null;
     const fallbackGrantRoot =
       req.method === "item/fileChange/requestApproval"
-        ? req.params.grantRoot ?? null
+        ? (req.params.grantRoot ?? null)
         : null;
 
     rt.pendingApprovals.set(requestKey, {
@@ -828,9 +832,8 @@ export function activate(context: vscode.ExtensionContext): void {
     async (session) => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       const providers = await backendManager.opencodeListProviders(session);
-      const authMethods = await backendManager.opencodeListProviderAuthMethods(
-        session,
-      );
+      const authMethods =
+        await backendManager.opencodeListProviderAuthMethods(session);
       return { providers, authMethods };
     },
     async (session, args) => {
@@ -1192,33 +1195,41 @@ export function activate(context: vscode.ExtensionContext): void {
       for (const [workspaceFolderUri, list] of byWorkspaceFolder.entries()) {
         let folderLabel = workspaceFolderUri;
         try {
-          folderLabel = vscode.Uri.parse(workspaceFolderUri).fsPath || folderLabel;
+          folderLabel =
+            vscode.Uri.parse(workspaceFolderUri).fsPath || folderLabel;
         } catch {
           // Keep original label.
         }
         const backendChoices: BackendId[] = ["codez", "codex", "opencode"];
-        const items: Array<vscode.QuickPickItem & { backendId: BackendId | null }> =
-          [
-            ...backendChoices.map((backendId) => ({
-              label: backendId,
-              description: "",
-              backendId,
-            })),
-            { label: "(このフォルダはスキップ)", description: "", backendId: null },
-          ];
-        const picked = await vscode.window.showQuickPick(items,
+        const items: Array<
+          vscode.QuickPickItem & { backendId: BackendId | null }
+        > = [
+          ...backendChoices.map((backendId) => ({
+            label: backendId,
+            description: "",
+            backendId,
+          })),
           {
-            title: `セッション移行: ${folderLabel}`,
-            placeHolder: "このフォルダの旧セッションをどのバックエンド群に割り当てますか？",
+            label: "(このフォルダはスキップ)",
+            description: "",
+            backendId: null,
           },
-        );
+        ];
+        const picked = await vscode.window.showQuickPick(items, {
+          title: `セッション移行: ${folderLabel}`,
+          placeHolder:
+            "このフォルダの旧セッションをどのバックエンド群に割り当てますか？",
+        });
         if (!picked || !picked.backendId) {
           skippedFolders.push(folderLabel);
           continue;
         }
 
         const backendId = picked.backendId;
-        const backendKey = makeBackendInstanceKey(workspaceFolderUri, backendId);
+        const backendKey = makeBackendInstanceKey(
+          workspaceFolderUri,
+          backendId,
+        );
         for (const s of list) {
           migrated.push({
             id: s.id,
@@ -1259,7 +1270,10 @@ export function activate(context: vscode.ExtensionContext): void {
       const combined = [...existing, ...dedupedMigrated];
       await extensionContext.workspaceState.update(SESSIONS_V2_KEY, combined);
       if (skippedFolders.length === 0) {
-        await extensionContext.workspaceState.update(SESSIONS_V1_KEY, undefined);
+        await extensionContext.workspaceState.update(
+          SESSIONS_V1_KEY,
+          undefined,
+        );
       }
 
       sessions.reset();
@@ -1269,7 +1283,9 @@ export function activate(context: vscode.ExtensionContext): void {
       chatView?.refresh();
 
       const skippedText =
-        skippedFolders.length > 0 ? `（スキップ: ${skippedFolders.length}フォルダ）` : "";
+        skippedFolders.length > 0
+          ? `（スキップ: ${skippedFolders.length}フォルダ）`
+          : "";
       const dedupeText = skipped > 0 ? `（重複でスキップ: ${skipped}件）` : "";
       void vscode.window.showInformationMessage(
         `移行完了: ${dedupedMigrated.length}件${skippedText}${dedupeText}`,
@@ -1300,9 +1316,9 @@ export function activate(context: vscode.ExtensionContext): void {
             folder,
             backendId,
             {
-            cursor,
-            limit: 50,
-            modelProviders: null,
+              cursor,
+              limit: 50,
+              modelProviders: null,
             },
           );
         } catch (err) {
@@ -1416,7 +1432,10 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
 
-        const backendKey = makeBackendInstanceKey(src.workspaceFolderUri, backendId);
+        const backendKey = makeBackendInstanceKey(
+          src.workspaceFolderUri,
+          backendId,
+        );
         const existing = sessions.getByThreadId(backendKey, src.threadId);
         if (existing) {
           setActiveSession(existing.id);
@@ -1527,10 +1546,7 @@ export function activate(context: vscode.ExtensionContext): void {
         void vscode.window.showInformationMessage(
           "Reload は codez セッションのみ対応です。",
         );
-        chatView?.toast(
-          "info",
-          "Reload は codez セッションのみ対応です。",
-        );
+        chatView?.toast("info", "Reload は codez セッションのみ対応です。");
         return;
       }
 
@@ -1726,20 +1742,17 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      "codez.debug.stopStressUi",
-      async () => {
-        if (!outputChannel) throw new Error("outputChannel is not initialized");
-        if (!stressUiJob) {
-          void vscode.window.showInformationMessage(
-            "No UI stress job is running.",
-          );
-          return;
-        }
-        stressUiJob.cancel();
-        stressUiJob = null;
-      },
-    ),
+    vscode.commands.registerCommand("codez.debug.stopStressUi", async () => {
+      if (!outputChannel) throw new Error("outputChannel is not initialized");
+      if (!stressUiJob) {
+        void vscode.window.showInformationMessage(
+          "No UI stress job is running.",
+        );
+        return;
+      }
+      stressUiJob.cancel();
+      stressUiJob = null;
+    }),
   );
 
   context.subscriptions.push(
@@ -3006,7 +3019,9 @@ async function handleSlashCommand(
 
     if (!backendManager) throw new Error("backendManager is not initialized");
     try {
-      const response = await backendManager.listMcpServerStatus(session.backendKey);
+      const response = await backendManager.listMcpServerStatus(
+        session.backendKey,
+      );
       const serverNames = response.data.map((s) => s.name).filter(Boolean);
 
       const statusMap = getMcpStatusMap(session.backendKey);
@@ -3998,6 +4013,7 @@ function ensureRuntime(sessionId: string): SessionRuntime {
     compactInFlight: false,
     pendingCompactBlockId: null,
     pendingAssistantDeltas: new Map(),
+    pendingAssistantMetaById: new Map(),
     pendingAssistantDeltaFlushTimer: null,
     streamingAssistantItemIds: new Set(),
     activeTurnId: null,
@@ -4765,6 +4781,11 @@ function applyItemLifecycle(
         if (completed && typeof (item as any).text === "string") {
           block.text = String((item as any).text);
         }
+        const pendingMeta = rt.pendingAssistantMetaById.get(id) ?? null;
+        if (pendingMeta) {
+          (block as any).meta = pendingMeta;
+          rt.pendingAssistantMetaById.delete(id);
+        }
         (block as any).streaming = !completed;
       }
       if (completed) rt.streamingAssistantItemIds.delete(id);
@@ -4773,9 +4794,264 @@ function applyItemLifecycle(
       break;
     }
     default:
+      {
+        const anyItem = item as any;
+        if (anyItem?.type === "opencodeStep") {
+          const id = String(anyItem.id ?? "");
+          const messageID =
+            typeof anyItem.messageID === "string" && anyItem.messageID.trim()
+              ? String(anyItem.messageID)
+              : "";
+          const reason =
+            typeof anyItem.reason === "string" && anyItem.reason.trim()
+              ? String(anyItem.reason)
+              : null;
+
+          const idx = id ? rt.blockIndexById.get(id) : undefined;
+          const existing =
+            idx !== undefined ? (rt.blocks[idx] as any) : (null as any);
+          const toolCount =
+            existing && existing.type === "step" && Array.isArray(existing.tools)
+              ? existing.tools.length
+              : 0;
+
+          // If this is a terminal "stop" step with no tools, do not show a Step card.
+          // Instead, attach a small meta line to the assistant message (same messageID).
+          if (
+            reason === "stop" &&
+            anyItem.status === "completed" &&
+            toolCount === 0 &&
+            messageID
+          ) {
+            const tokens =
+              typeof anyItem.tokens === "object" && anyItem.tokens !== null
+                ? (anyItem.tokens as any)
+                : null;
+            const parts: string[] = [];
+            if (typeof anyItem.cost === "number" && Number.isFinite(anyItem.cost))
+              parts.push(`cost=${String(anyItem.cost)}`);
+            if (tokens) {
+              if (typeof tokens.input === "number") parts.push(`in=${String(tokens.input)}`);
+              if (typeof tokens.output === "number")
+                parts.push(`out=${String(tokens.output)}`);
+              if (typeof tokens.reasoning === "number")
+                parts.push(`reasoning=${String(tokens.reasoning)}`);
+              if (tokens.cache && typeof tokens.cache === "object") {
+                if (typeof tokens.cache.read === "number")
+                  parts.push(`cacheRead=${String(tokens.cache.read)}`);
+                if (typeof tokens.cache.write === "number")
+                  parts.push(`cacheWrite=${String(tokens.cache.write)}`);
+              }
+            }
+            const meta = parts.length > 0 ? parts.join(" ") : "stop";
+
+            const msgIdx = rt.blockIndexById.get(messageID);
+            if (msgIdx !== undefined) {
+              const b = rt.blocks[msgIdx];
+              if (b && b.type === "assistant") {
+                (b as any).meta = meta;
+                chatView?.postBlockUpsert(sessionId, b);
+              }
+            } else {
+              rt.pendingAssistantMetaById.set(messageID, meta);
+            }
+
+            if (idx !== undefined) {
+              rt.blocks.splice(idx, 1);
+              rebuildBlockIndex(rt);
+            }
+            break;
+          }
+
+          const status =
+            anyItem.status === "completed"
+              ? "completed"
+              : anyItem.status === "failed"
+                ? "failed"
+                : "inProgress";
+          const tokens =
+            typeof anyItem.tokens === "object" && anyItem.tokens !== null
+              ? {
+                  input:
+                    typeof anyItem.tokens.input === "number"
+                      ? anyItem.tokens.input
+                      : undefined,
+                  output:
+                    typeof anyItem.tokens.output === "number"
+                      ? anyItem.tokens.output
+                      : undefined,
+                  reasoning:
+                    typeof anyItem.tokens.reasoning === "number"
+                      ? anyItem.tokens.reasoning
+                      : undefined,
+                  cache:
+                    typeof anyItem.tokens.cache === "object" &&
+                    anyItem.tokens.cache !== null
+                      ? {
+                          read:
+                            typeof anyItem.tokens.cache.read === "number"
+                              ? anyItem.tokens.cache.read
+                              : undefined,
+                          write:
+                            typeof anyItem.tokens.cache.write === "number"
+                              ? anyItem.tokens.cache.write
+                              : undefined,
+                        }
+                      : undefined,
+                }
+              : null;
+
+          if (!id) break;
+          const block = getOrCreateBlock(rt, id, () => ({
+            id,
+            type: "step",
+            title: "Step",
+            status,
+            snapshot:
+              typeof anyItem.snapshot === "string"
+                ? String(anyItem.snapshot)
+                : null,
+            reason:
+              typeof anyItem.reason === "string" ? String(anyItem.reason) : null,
+            cost:
+              typeof anyItem.cost === "number" && Number.isFinite(anyItem.cost)
+                ? Number(anyItem.cost)
+                : null,
+            tokens,
+            tools: [],
+          }));
+          if (block.type === "step") {
+            block.status = status;
+            block.snapshot =
+              typeof anyItem.snapshot === "string"
+                ? String(anyItem.snapshot)
+                : null;
+            block.reason =
+              typeof anyItem.reason === "string" ? String(anyItem.reason) : null;
+            block.cost =
+              typeof anyItem.cost === "number" && Number.isFinite(anyItem.cost)
+                ? Number(anyItem.cost)
+                : null;
+            block.tokens = tokens;
+          }
+          chatView?.postBlockUpsert(sessionId, block);
+          break;
+        }
+
+        if (anyItem?.type === "opencodeTool") {
+          const stepId =
+            typeof anyItem.stepId === "string" &&
+            anyItem.stepId.trim().length > 0
+              ? String(anyItem.stepId)
+              : null;
+          const messageID =
+            typeof anyItem.messageID === "string" && anyItem.messageID.trim()
+              ? String(anyItem.messageID)
+              : "";
+          const containerId = stepId ?? `${messageID}:step:unknown`;
+          const containerTitle = stepId ? "Step" : "Step (missing step-start)";
+          const container = getOrCreateBlock(rt, containerId, () => ({
+            id: containerId,
+            type: "step",
+            title: containerTitle,
+            status: "inProgress",
+            snapshot: null,
+            reason: null,
+            cost: null,
+            tokens: null,
+            tools: [],
+          }));
+          if (container.type !== "step") break;
+
+          const status =
+            anyItem.status === "completed"
+              ? "completed"
+              : anyItem.status === "failed"
+                ? "failed"
+                : "inProgress";
+          const toolName =
+            typeof anyItem.tool === "string" && anyItem.tool.trim().length > 0
+              ? String(anyItem.tool)
+              : "tool";
+          const title =
+            typeof anyItem.title === "string" && anyItem.title.trim().length > 0
+              ? String(anyItem.title)
+              : toolName;
+
+          const detailLines: string[] = [];
+          const input = (anyItem.input ?? null) as any;
+          const output = (anyItem.output ?? null) as any;
+          if (toolName === "bash" && typeof input?.command === "string") {
+            detailLines.push(`$ ${input.command}`);
+          } else if (input !== null) {
+            detailLines.push("input:");
+            detailLines.push(JSON.stringify(input, null, 2));
+          }
+          if (typeof output === "string") {
+            if (detailLines.length > 0) detailLines.push("");
+            detailLines.push(output);
+          } else if (output !== null) {
+            if (detailLines.length > 0) detailLines.push("");
+            detailLines.push("output:");
+            detailLines.push(JSON.stringify(output, null, 2));
+          } else if (detailLines.length === 0) {
+            detailLines.push(JSON.stringify(anyItem.raw ?? {}, null, 2));
+          }
+
+          const toolId = String(anyItem.id ?? "");
+          if (!toolId) break;
+          const inputPreview = opencodeToolInputPreview(toolName, input);
+          const existing = container.tools.find((t) => t.id === toolId) ?? null;
+          if (existing) {
+            existing.tool = toolName;
+            existing.title = title;
+            existing.status = status;
+            (existing as any).inputPreview = inputPreview;
+            existing.detail = detailLines.join("\n");
+          } else {
+            container.tools.push({
+              id: toolId,
+              tool: toolName,
+              title,
+              status,
+              inputPreview,
+              detail: detailLines.join("\n"),
+            });
+          }
+
+          chatView?.postBlockUpsert(sessionId, container);
+          break;
+        }
+      }
+
       // Hide userMessage/agentMessage lifecycle; handled elsewhere.
       break;
   }
+}
+
+function opencodeToolInputPreview(
+  toolName: string,
+  input: unknown,
+): string | null {
+  if (!input || typeof input !== "object") return null;
+  const anyInput = input as Record<string, unknown>;
+
+  if (toolName === "bash") {
+    return null;
+  }
+  if (toolName === "glob") {
+    const pattern = anyInput["pattern"];
+    if (typeof pattern === "string" && pattern.trim())
+      return `pattern=${pattern.trim()}`;
+    return null;
+  }
+  if (toolName === "read") {
+    const path = anyInput["path"];
+    if (typeof path === "string" && path.trim()) return path.trim();
+    return null;
+  }
+
+  return null;
 }
 
 function scheduleAssistantDeltaFlush(
@@ -5464,14 +5740,22 @@ function applyGlobalNotification(
     }
     case "sessionConfigured": {
       const p = (n as any).params as Record<string, unknown>;
-      const threadId = typeof (p as any).sessionId === "string" ? ((p as any).sessionId as string) : null;
-      const model = typeof (p as any).model === "string" ? ((p as any).model as string) : null;
+      const threadId =
+        typeof (p as any).sessionId === "string"
+          ? ((p as any).sessionId as string)
+          : null;
+      const model =
+        typeof (p as any).model === "string"
+          ? ((p as any).model as string)
+          : null;
       const reasoning =
         typeof (p as any).reasoningEffort === "string"
           ? ((p as any).reasoningEffort as string)
           : null;
       const session =
-        threadId && sessions ? sessions.getByThreadId(backendKey, threadId) : null;
+        threadId && sessions
+          ? sessions.getByThreadId(backendKey, threadId)
+          : null;
       if (session && model) {
         setSessionModelState(session.id, { model, provider: null, reasoning });
       }
@@ -5598,9 +5882,7 @@ function updateThreadStartedBlocks(): void {
     const cwd = b.id.startsWith(cwdPrefix)
       ? b.id.slice(cwdPrefix.length)
       : null;
-    const backendKey = cwd
-      ? backendKeyForCwdAndBackendId(cwd, "codez")
-      : null;
+    const backendKey = cwd ? backendKeyForCwdAndBackendId(cwd, "codez") : null;
     const summary = backendKey ? formatMcpStatusSummary(backendKey) : null;
     const lines = b.text
       .split("\n")
@@ -5992,6 +6274,7 @@ function hydrateRuntimeFromThread(
       case "command":
       case "fileChange":
       case "mcp":
+      case "step":
       case "webSearch":
       case "reasoning":
       case "plan":
@@ -6086,7 +6369,8 @@ function formatApprovalDetail(
       const paramsCwd = anyParams["cwd"];
       const paramsCommand = anyParams["command"];
       if (!cwd && typeof paramsCwd === "string") cwd = paramsCwd;
-      if (!command && typeof paramsCommand === "string") command = paramsCommand;
+      if (!command && typeof paramsCommand === "string")
+        command = paramsCommand;
     }
     if (method === "item/fileChange/requestApproval") {
       const paramsGrantRoot = anyParams["grantRoot"];
@@ -6123,14 +6407,26 @@ function updatePendingApprovalsFromItem(
 
 const SESSIONS_V1_KEY = "codez.sessions.v1";
 const SESSIONS_V2_KEY = "codez.sessions.v2";
-const SESSIONS_V1_MIGRATION_PROMPTED_KEY = "codez.sessions.v1.migrationPrompted.v1";
+const SESSIONS_V1_MIGRATION_PROMPTED_KEY =
+  "codez.sessions.v1.migrationPrompted.v1";
 type PersistedSessionV1 = Pick<
   Session,
-  "id" | "backendKey" | "workspaceFolderUri" | "title" | "threadId" | "customTitle"
+  | "id"
+  | "backendKey"
+  | "workspaceFolderUri"
+  | "title"
+  | "threadId"
+  | "customTitle"
 >;
 type PersistedSessionV2 = Pick<
   Session,
-  "id" | "backendKey" | "backendId" | "workspaceFolderUri" | "title" | "threadId" | "customTitle"
+  | "id"
+  | "backendKey"
+  | "backendId"
+  | "workspaceFolderUri"
+  | "title"
+  | "threadId"
+  | "customTitle"
 >;
 
 function readPersistedSessionsV1(
@@ -6216,7 +6512,9 @@ function saveSessions(
   context: vscode.ExtensionContext,
   store: SessionStore,
 ): void {
-  const sessions = store.listAll().map<PersistedSessionV2>(toPersistedSessionV2);
+  const sessions = store
+    .listAll()
+    .map<PersistedSessionV2>(toPersistedSessionV2);
   void context.workspaceState.update(SESSIONS_V2_KEY, sessions);
 }
 
@@ -6229,8 +6527,7 @@ function toPersistedSessionV2(session: Session): PersistedSessionV2 {
     title,
     customTitle,
     threadId,
-  } =
-    session;
+  } = session;
   return {
     id,
     backendKey,

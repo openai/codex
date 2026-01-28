@@ -9,7 +9,13 @@ import type { AskUserQuestionResponse } from "../generated/v2/AskUserQuestionRes
 
 export type ChatBlock =
   | { id: string; type: "user"; text: string }
-  | { id: string; type: "assistant"; text: string; streaming?: boolean }
+  | {
+      id: string;
+      type: "assistant";
+      text: string;
+      streaming?: boolean;
+      meta?: string | null;
+    }
   | {
       id: string;
       type: "divider";
@@ -90,6 +96,29 @@ export type ChatBlock =
       tool: string;
       detail: string;
     }
+  | {
+      id: string;
+      type: "step";
+      title: string;
+      status: "inProgress" | "completed" | "failed";
+      snapshot: string | null;
+      reason: string | null;
+      cost: number | null;
+      tokens: {
+        input?: number;
+        output?: number;
+        reasoning?: number;
+        cache?: { read?: number; write?: number };
+      } | null;
+      tools: Array<{
+        id: string;
+        tool: string;
+        title: string;
+        status: "inProgress" | "completed" | "failed";
+        inputPreview?: string | null;
+        detail: string;
+      }>;
+    }
   | { id: string; type: "plan"; title: string; text: string }
   | { id: string; type: "error"; title: string; text: string }
   | { id: string; type: "system"; title: string; text: string };
@@ -156,7 +185,10 @@ export function getSessionModelState(sessionId: string | null): ModelState {
   return modelStateBySessionId.get(sessionId) ?? sessionModelState;
 }
 
-export function setSessionModelState(sessionId: string, state: ModelState): void {
+export function setSessionModelState(
+  sessionId: string,
+  state: ModelState,
+): void {
   modelStateBySessionId.set(sessionId, state);
 }
 
@@ -247,9 +279,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       session: Session,
       apiKey: string,
     ) => Promise<unknown>,
-    private readonly onOpencodeProviderLoad: (
-      session: Session,
-    ) => Promise<{
+    private readonly onOpencodeProviderLoad: (session: Session) => Promise<{
       providers: unknown;
       authMethods: unknown;
     }>,
@@ -735,7 +765,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               ? await this.onOpencodeProviderLoad(active)
               : null;
           const account =
-            sessionBackendId === "opencode" ? null : await this.onAccountRead(active);
+            sessionBackendId === "opencode"
+              ? null
+              : await this.onAccountRead(active);
           const accounts =
             sessionBackendId === "opencode"
               ? null
@@ -768,7 +800,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             await respondErr("Invalid backendId.");
             return;
           }
-          if (typeof sessionId === "string" && sessionId && sessionId !== active.id) {
+          if (
+            typeof sessionId === "string" &&
+            sessionId &&
+            sessionId !== active.id
+          ) {
             await respondErr("Session is not active.");
             return;
           }
@@ -1481,6 +1517,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .tool.changes { background: rgba(255, 140, 0, 0.10); }
       .tool.mcp { background: rgba(0, 200, 170, 0.08); }
       .tool.webSearch { background: rgba(0, 180, 255, 0.10); border-color: rgba(0, 180, 255, 0.22); }
+      .tool.step { background: rgba(153, 69, 255, 0.06); border-color: rgba(153, 69, 255, 0.18); }
+      details.toolChild { margin: 6px 0 0 12px; background: rgba(127,127,127,0.04); }
+      details.toolChild > summary { font-weight: 500; }
       .reasoning { background: rgba(0, 169, 110, 0.12); }
       .divider { background: rgba(255, 185, 0, 0.06); border-style: dashed; position: relative; padding-right: 28px; }
       .imageBlock { display: flex; flex-direction: column; gap: 8px; }
@@ -1518,6 +1557,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .msgHeaderTitle { font-size: 12px; opacity: 0.7; }
       .msgActions { display: flex; gap: 8px; }
       .msgActionBtn { padding: 2px 8px; font-size: 12px; border-radius: 999px; }
+      .msgMeta { margin-top: 8px; font-size: 11px; opacity: 0.65; white-space: pre-wrap; word-break: break-word; }
 
       /* inProgress: spinner */
       .statusIcon.status-inProgress::before { width: 14px; height: 14px; border: 2px solid rgba(180, 180, 180, 0.95); border-top-color: rgba(180, 180, 180, 0.15); border-radius: 50%; animation: cmSpin 0.9s linear infinite; margin: 1px; }

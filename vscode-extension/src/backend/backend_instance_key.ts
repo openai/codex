@@ -21,17 +21,29 @@ export function parseBackendInstanceKey(key: string): {
   }
 
   if (!Array.isArray(parsed) || parsed.length !== 2) {
-    throw new Error("Invalid backend instance key (expected [workspaceFolderUri, backendId])");
+    throw new Error(
+      "Invalid backend instance key (expected [workspaceFolderUri, backendId])",
+    );
   }
 
   const workspaceFolderUri = parsed[0];
   const backendId = parsed[1];
-  if (typeof workspaceFolderUri !== "string" || workspaceFolderUri.length === 0) {
-    throw new Error("Invalid backend instance key: workspaceFolderUri must be a non-empty string");
+  if (
+    typeof workspaceFolderUri !== "string" ||
+    workspaceFolderUri.length === 0
+  ) {
+    throw new Error(
+      "Invalid backend instance key: workspaceFolderUri must be a non-empty string",
+    );
   }
-  if (backendId !== "codex" && backendId !== "codez" && backendId !== "opencode") {
-    throw new Error("Invalid backend instance key: backendId must be codex|codez|opencode");
+  if (
+    backendId !== "codex" &&
+    backendId !== "codez" &&
+    backendId !== "opencode"
+  ) {
+    throw new Error(
+      "Invalid backend instance key: backendId must be codex|codez|opencode",
+    );
   }
   return { workspaceFolderUri, backendId };
 }
-

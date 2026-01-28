@@ -31,7 +31,13 @@ type ModelState = {
 
 type ChatBlock =
   | { id: string; type: "user"; text: string }
-  | { id: string; type: "assistant"; text: string; streaming?: boolean }
+  | {
+      id: string;
+      type: "assistant";
+      text: string;
+      streaming?: boolean;
+      meta?: string | null;
+    }
   | {
       id: string;
       type: "divider";
@@ -111,6 +117,29 @@ type ChatBlock =
       server: string;
       tool: string;
       detail: string;
+    }
+  | {
+      id: string;
+      type: "step";
+      title: string;
+      status: "inProgress" | "completed" | "failed";
+      snapshot: string | null;
+      reason: string | null;
+      cost: number | null;
+      tokens: {
+        input?: number;
+        output?: number;
+        reasoning?: number;
+        cache?: { read?: number; write?: number };
+      } | null;
+      tools: Array<{
+        id: string;
+        tool: string;
+        title: string;
+        status: "inProgress" | "completed" | "failed";
+        inputPreview?: string | null;
+        detail: string;
+      }>;
     }
   | { id: string; type: "plan"; title: string; text: string }
   | { id: string; type: "error"; title: string; text: string }
@@ -1260,7 +1289,9 @@ function main(): void {
     }
   };
 
-  const tabsResizeObserver = new ResizeObserver(() => syncTabGroupLabelWidths());
+  const tabsResizeObserver = new ResizeObserver(() =>
+    syncTabGroupLabelWidths(),
+  );
   tabsResizeObserver.observe(tabsEl);
 
   type SettingsResponseResult =
@@ -1346,9 +1377,13 @@ function main(): void {
     const providers = d?.providers ?? d ?? null;
     const authMethods = d?.authMethods ?? null;
     const all = Array.isArray(providers?.all) ? providers.all : [];
-    const connected = Array.isArray(providers?.connected) ? providers.connected : [];
+    const connected = Array.isArray(providers?.connected)
+      ? providers.connected
+      : [];
     const methodsByProvider =
-      authMethods && typeof authMethods === "object" ? (authMethods as any) : {};
+      authMethods && typeof authMethods === "object"
+        ? (authMethods as any)
+        : {};
 
     settingsOpencodeProviders = all
       .map((p: any) => {
@@ -1466,7 +1501,9 @@ function main(): void {
       newBtn.className = "settingsBtn primary";
       newBtn.textContent = "New session…";
       newBtn.disabled = settingsBusy;
-      newBtn.addEventListener("click", () => vscode.postMessage({ type: "newSession" }));
+      newBtn.addEventListener("click", () =>
+        vscode.postMessage({ type: "newSession" }),
+      );
       right.appendChild(newBtn);
 
       actions.appendChild(left);
@@ -1720,7 +1757,7 @@ function main(): void {
       help.className = "settingsHelp";
       help.textContent =
         "Account names: [A-Za-z0-9_-], 1..64 chars\nLogout logs out the active account only.";
-        sectionAcct.appendChild(help);
+      sectionAcct.appendChild(help);
 
       const sectionLogin = document.createElement("div");
       sectionLogin.className = "settingsSubsection";
@@ -1813,8 +1850,7 @@ function main(): void {
       if (settingsLoginInFlight) {
         const inflight = document.createElement("div");
         inflight.className = "settingsHelp";
-        inflight.textContent =
-          `Login in progress…\nloginId=${settingsLoginInFlight.loginId}`;
+        inflight.textContent = `Login in progress…\nloginId=${settingsLoginInFlight.loginId}`;
         sectionLogin.appendChild(inflight);
       }
 
@@ -2130,7 +2166,9 @@ function main(): void {
 
     const accounts = data?.accounts ?? null;
     const activeAccount =
-      typeof accounts?.activeAccount === "string" ? accounts.activeAccount : null;
+      typeof accounts?.activeAccount === "string"
+        ? accounts.activeAccount
+        : null;
     const list = Array.isArray(accounts?.accounts) ? accounts.accounts : [];
 
     const account = data?.account ?? null;
@@ -2153,10 +2191,11 @@ function main(): void {
         email: typeof x.email === "string" ? x.email : undefined,
       }));
     settingsSelectedAccount =
-      settingsSelectedAccount && settingsAccounts.some((a) => a.name === settingsSelectedAccount)
+      settingsSelectedAccount &&
+      settingsAccounts.some((a) => a.name === settingsSelectedAccount)
         ? settingsSelectedAccount
-        : settingsActiveAccount ??
-          (settingsAccounts.length > 0 ? settingsAccounts[0]!.name : null);
+        : (settingsActiveAccount ??
+          (settingsAccounts.length > 0 ? settingsAccounts[0]!.name : null));
 
     if (settingsSessionBackendId === "opencode") {
       const opencode = data?.opencode ?? null;
@@ -2420,7 +2459,9 @@ function main(): void {
   function buildSlashSuggestions(): SuggestItem[] {
     const agents = state.capabilities?.agents ?? false;
     const base =
-      state.activeSession?.backendId === "codez" ? baseSlashSuggestions : ([] as const);
+      state.activeSession?.backendId === "codez"
+        ? baseSlashSuggestions
+        : ([] as const);
     const ui = agents
       ? uiSlashSuggestions
       : uiSlashSuggestions.filter((s) => s.label !== "/agents");
@@ -2747,6 +2788,60 @@ function main(): void {
     );
     const sum = document.createElement("summary");
     sum.textContent = summaryText;
+    det.appendChild(sum);
+    blockElByKey.set(key, det);
+    parent.appendChild(det);
+    return det;
+  }
+
+  function ensureNestedDetailsWithStatusIcon(
+    parent: HTMLElement,
+    key: string,
+    className: string,
+    openDefault: boolean,
+    summaryText: string,
+    onToggleKey: string,
+  ): HTMLDetailsElement {
+    const existing = blockElByKey.get(key);
+    if (existing && existing.tagName.toLowerCase() === "details") {
+      const det = existing as HTMLDetailsElement;
+      det.className = className;
+      const sum = det.querySelector(":scope > summary");
+      if (sum) {
+        const txt = sum.querySelector(
+          ':scope > span[data-k="summaryText"]',
+        ) as HTMLSpanElement | null;
+        if (txt) txt.textContent = summaryText;
+        else sum.textContent = summaryText;
+        const icon = sum.querySelector(
+          ':scope > span[data-k="statusIcon"]',
+        ) as HTMLSpanElement | null;
+        if (!icon) {
+          const sp = document.createElement("span");
+          sp.dataset.k = "statusIcon";
+          sp.className = "statusIcon";
+          sp.style.display = "none";
+          sum.appendChild(sp);
+        }
+      }
+      if (det.parentElement !== parent) parent.appendChild(det);
+      return det;
+    }
+
+    const det = document.createElement("details");
+    det.className = className;
+    det.open = isOpen(onToggleKey, openDefault);
+    det.addEventListener("toggle", () => saveDetailsState(onToggleKey, det.open));
+    const sum = document.createElement("summary");
+    const txt = document.createElement("span");
+    txt.dataset.k = "summaryText";
+    txt.textContent = summaryText;
+    sum.appendChild(txt);
+    const icon = document.createElement("span");
+    icon.dataset.k = "statusIcon";
+    icon.className = "statusIcon";
+    icon.style.display = "none";
+    sum.appendChild(icon);
     det.appendChild(sum);
     blockElByKey.set(key, det);
     parent.appendChild(det);
@@ -3516,7 +3611,9 @@ function main(): void {
         ? "Reload session (re-read config.toml, agents, etc.)"
         : "Reload session (codez sessions only)";
     settingsBtn.disabled = false;
-    settingsBtn.title = backendId ? `Settings (session backend: ${backendId})` : "Settings";
+    settingsBtn.title = backendId
+      ? `Settings (session backend: ${backendId})`
+      : "Settings";
     if (backendId !== "codez" && rewindTurnIndex !== null) setEditMode(null);
     // Keep input enabled so the user can draft messages even before selecting a session,
     // but do not override ask_user_question which intentionally locks the composer.
@@ -3829,6 +3926,16 @@ function main(): void {
     for (const block of s.blocks || []) {
       if (block.type === "divider") {
         const key = "b:" + block.id;
+        const dividerText = String(block.text ?? "");
+        const hasText = dividerText.trim().length > 0;
+        const hasStatus = Boolean(block.status);
+        if (!hasText && !hasStatus) {
+          const existing = blockElByKey.get(key);
+          if (existing?.parentElement) existing.parentElement.removeChild(existing);
+          blockElByKey.delete(key);
+          delete detailsState[key];
+          continue;
+        }
         const div = ensureDiv(key, "msg system divider");
         const status = block.status;
         const existingIcon = div.querySelector(
@@ -3857,7 +3964,7 @@ function main(): void {
           existingIcon.remove();
         }
         const pre = ensurePre(div, "body");
-        if (pre.textContent !== block.text) pre.textContent = block.text;
+        if (pre.textContent !== dividerText) pre.textContent = dividerText;
         continue;
       }
 
@@ -4069,8 +4176,9 @@ function main(): void {
           editBtn.className = "msgActionBtn";
           editBtn.textContent = "Edit";
           editBtn.disabled = Boolean(state.sending);
-          editBtn.title =
-            canEdit ? "Edit this turn (rewind)" : "Edit (codez/opencode sessions only)";
+          editBtn.title = canEdit
+            ? "Edit this turn (rewind)"
+            : "Edit (codez/opencode sessions only)";
           editBtn.addEventListener("click", () => {
             if (state.sending) return;
             if (!canEdit) {
@@ -4099,6 +4207,28 @@ function main(): void {
           if (pre) pre.remove();
           const mdEl = ensureMd(div, "body");
           renderMarkdownInto(mdEl, block.text);
+        }
+
+        const metaText =
+          typeof (block as any).meta === "string"
+            ? String((block as any).meta || "").trim()
+            : "";
+        const existingMeta = div.querySelector(
+          'div[data-k="meta"]',
+        ) as HTMLDivElement | null;
+        if (!metaText) {
+          if (existingMeta) existingMeta.remove();
+        } else {
+          const metaEl =
+            existingMeta ??
+            (() => {
+              const m = document.createElement("div");
+              m.dataset.k = "meta";
+              m.className = "msgMeta";
+              div.appendChild(m);
+              return m;
+            })();
+          if (metaEl.textContent !== metaText) metaEl.textContent = metaText;
         }
         continue;
       }
@@ -4324,6 +4454,96 @@ function main(): void {
         const pre = ensurePre(det, "body");
         const text = block.detail || "";
         if (pre.textContent !== text) pre.textContent = text;
+        continue;
+      }
+
+      if (block.type === "step") {
+        const id = "step:" + block.id;
+        const tools = Array.isArray(block.tools) ? block.tools : [];
+        const toolCount = tools.length;
+        const reason =
+          typeof block.reason === "string" && block.reason.trim()
+            ? block.reason.trim()
+            : null;
+        const summaryText =
+          toolCount > 0
+            ? reason
+              ? `${block.title} (${String(toolCount)} tools, ${reason})`
+              : `${block.title} (${String(toolCount)} tools)`
+            : reason
+              ? `${block.title} (${reason})`
+              : block.title;
+
+        const det = ensureDetails(
+          id,
+          "tool step opencodeStep",
+          block.status === "inProgress",
+          summaryText,
+          id,
+        );
+        setStatusIcon(det, block.status);
+
+        const meta = ensureMeta(det, "meta");
+        const metaParts: string[] = [];
+        if (block.snapshot) metaParts.push("snapshot=" + block.snapshot.slice(0, 8));
+        if (typeof block.cost === "number") metaParts.push("cost=" + String(block.cost));
+        if (block.tokens) {
+          if (typeof block.tokens.input === "number")
+            metaParts.push("in=" + String(block.tokens.input));
+          if (typeof block.tokens.output === "number")
+            metaParts.push("out=" + String(block.tokens.output));
+          if (typeof block.tokens.reasoning === "number")
+            metaParts.push("reasoning=" + String(block.tokens.reasoning));
+          if (block.tokens.cache) {
+            if (typeof block.tokens.cache.read === "number")
+              metaParts.push("cacheRead=" + String(block.tokens.cache.read));
+            if (typeof block.tokens.cache.write === "number")
+              metaParts.push("cacheWrite=" + String(block.tokens.cache.write));
+          }
+        }
+        const metaText = metaParts.join(" ");
+        if (meta.textContent !== metaText) meta.textContent = metaText;
+
+        const wantedKeys = new Set<string>();
+        for (let ti = 0; ti < tools.length; ti++) {
+          const t = tools[ti];
+          if (
+            !t ||
+            typeof t.id !== "string" ||
+            typeof t.tool !== "string" ||
+            typeof t.title !== "string"
+          )
+            continue;
+          const toolId = `${id}:tool:${t.id}`;
+          wantedKeys.add(toolId);
+          const inputPreview =
+            typeof (t as any).inputPreview === "string"
+              ? String((t as any).inputPreview || "").trim()
+              : "";
+          const suffix = inputPreview ? truncateOneLine(inputPreview, 80) : "";
+          const toolSummary = suffix ? `${t.tool}: ${t.title} — ${suffix}` : `${t.tool}: ${t.title}`;
+          const toolDet = ensureNestedDetailsWithStatusIcon(
+            det,
+            toolId,
+            "toolChild",
+            false,
+            toolSummary,
+            toolId,
+          );
+          setStatusIcon(toolDet, t.status);
+          const pre = ensurePre(toolDet, "body");
+          const text = t.detail || "";
+          if (pre.textContent !== text) pre.textContent = text;
+        }
+
+        for (const [k, el] of blockElByKey.entries()) {
+          if (!k.startsWith(id + ":tool:")) continue;
+          if (wantedKeys.has(k)) continue;
+          if (el.parentElement) el.parentElement.removeChild(el);
+          blockElByKey.delete(k);
+          delete detailsState[k];
+        }
+
         continue;
       }
 
@@ -4644,10 +4864,7 @@ function main(): void {
       : (() => {
           const backendId = state.activeSession?.backendId ?? null;
           if (backendId !== "codez") {
-            showToast(
-              "info",
-              "Reload は codez セッションのみ対応です。",
-            );
+            showToast("info", "Reload は codez セッションのみ対応です。");
             return;
           }
           vscode.postMessage({ type: "reloadSession" });
@@ -4887,13 +5104,18 @@ function main(): void {
     if (anyMsg.type === "accountLoginCompleted") {
       const success = Boolean((anyMsg as any).success);
       const error =
-        typeof (anyMsg as any).error === "string" ? String((anyMsg as any).error) : null;
+        typeof (anyMsg as any).error === "string"
+          ? String((anyMsg as any).error)
+          : null;
       settingsLoginInFlight = null;
       if (settingsOpen) {
         if (success) {
           showToast("success", "Login completed.");
         } else {
-          showToast("error", error ? `Login failed: ${error}` : "Login failed.");
+          showToast(
+            "error",
+            error ? `Login failed: ${error}` : "Login failed.",
+          );
         }
         void loadSettings();
       }

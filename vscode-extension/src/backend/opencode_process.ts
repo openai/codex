@@ -49,7 +49,12 @@ export class OpencodeServerProcess implements vscode.Disposable {
     return this.resolvedBaseUrl;
   }
 
-  public onDidExit(handler: (info: { code: number | null; signal: NodeJS.Signals | null }) => void): void {
+  public onDidExit(
+    handler: (info: {
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    }) => void,
+  ): void {
     this.child.on("exit", (code, signal) => {
       handler({ code, signal });
     });

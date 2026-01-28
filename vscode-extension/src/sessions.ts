@@ -53,14 +53,19 @@ export class SessionStore {
   }
 
   public getByThreadId(backendKey: string, threadId: string): Session | null {
-    return this.sessionsByThreadKey.get(this.threadKey(backendKey, threadId)) ?? null;
+    return (
+      this.sessionsByThreadKey.get(this.threadKey(backendKey, threadId)) ?? null
+    );
   }
 
   public add(backendKey: string, session: Session): void {
     const list = this.sessionsByBackendKey.get(backendKey) ?? [];
     this.sessionsByBackendKey.set(backendKey, [...list, session]);
     this.sessionsById.set(session.id, session);
-    this.sessionsByThreadKey.set(this.threadKey(backendKey, session.threadId), session);
+    this.sessionsByThreadKey.set(
+      this.threadKey(backendKey, session.threadId),
+      session,
+    );
   }
 
   public rename(sessionId: string, title: string): Session | null {
@@ -90,7 +95,9 @@ export class SessionStore {
     if (!session) return null;
 
     this.sessionsById.delete(sessionId);
-    this.sessionsByThreadKey.delete(this.threadKey(session.backendKey, session.threadId));
+    this.sessionsByThreadKey.delete(
+      this.threadKey(session.backendKey, session.threadId),
+    );
 
     const list = this.sessionsByBackendKey.get(session.backendKey) ?? [];
     const next = list.filter((s) => s.id !== sessionId);

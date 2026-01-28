@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+（なし）
+
+## 0.2.3
+
+- 改善: OpenCode の `step` と `tool` を「Step」カードに集約し、ToolUse のスパム表示（謎のMCP）を抑制
+- 改善: `Step (stop)` のような最終ステップはカード化せず、assistant メッセージ末尾のメタ情報（cost/tokens）に吸収
+- 改善: 一部ツール（例: `glob`, `read`）の input をツール見出しにプレビュー表示（カードを開かなくても分かる）
+
 ## 0.2.2
 
 - 修正: opencode backend のモデル一覧が欠けることがある問題を修正（provider の models 形式差に対応）
