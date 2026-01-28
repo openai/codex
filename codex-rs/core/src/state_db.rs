@@ -27,15 +27,16 @@ pub type StateDbHandle = Arc<codex_state::StateRuntime>;
 
 /// Initialize the state runtime when the `sqlite` feature flag is enabled.
 pub async fn init_if_enabled(config: &Config, otel: Option<&OtelManager>) -> Option<StateDbHandle> {
+    let state_path = config.codex_home.join(STATE_DB_FILENAME);
     if !config.features.enabled(Feature::Sqlite) {
         // We delete the file on best effort basis to maintain retro-compatibility in the future.
-        tokio::fs::remove_file(config.codex_home.join(STATE_DB_FILENAME))
-            .await
-            .ok();
+        let wal_path = state_path.with_extension("sqlite-wal");
+        let shm_path = state_path.with_extension("sqlite-shm");
+        for path in [state_path.as_path(), wal_path.as_path(), shm_path.as_path()] {
+            tokio::fs::remove_file(path).await.ok();
+        }
         return None;
     }
-
-    let state_path = config.codex_home.join(STATE_DB_FILENAME);
     let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
     let runtime = match codex_state::StateRuntime::init(
         config.codex_home.clone(),
