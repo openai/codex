@@ -187,9 +187,10 @@ FROM threads
             .collect::<Result<Vec<_>, _>>()?;
         let num_scanned_rows = items.len();
         let next_anchor = if items.len() > page_size {
+            items.pop();
             items
-                .pop()
-                .and_then(|extra| anchor_from_item(&extra, sort_key))
+                .last()
+                .and_then(|item| anchor_from_item(item, sort_key))
         } else {
             None
         };
