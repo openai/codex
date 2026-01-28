@@ -428,18 +428,12 @@ impl Default for Notifications {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NotificationMethod {
     Auto,
     Osc9,
     Bel,
-}
-
-impl Default for NotificationMethod {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl fmt::Display for NotificationMethod {
