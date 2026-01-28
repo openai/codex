@@ -5,6 +5,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use std::borrow::Cow;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
@@ -33,6 +34,28 @@ struct UnansweredConfirmationData {
     hint_line: Line<'static>,
     rows: Vec<crate::bottom_pane::selection_popup_common::GenericDisplayRow>,
     state: ScrollState,
+}
+
+struct UnansweredConfirmationLayout {
+    header_lines: Vec<Line<'static>>,
+    hint_lines: Vec<Line<'static>>,
+    rows: Vec<crate::bottom_pane::selection_popup_common::GenericDisplayRow>,
+    state: ScrollState,
+}
+
+fn line_to_owned(line: Line<'_>) -> Line<'static> {
+    Line {
+        style: line.style,
+        alignment: line.alignment,
+        spans: line
+            .spans
+            .into_iter()
+            .map(|span| Span {
+                style: span.style,
+                content: Cow::Owned(span.content.into_owned()),
+            })
+            .collect(),
+    }
 }
 
 impl Renderable for RequestUserInputOverlay {
@@ -106,26 +129,41 @@ impl RequestUserInputOverlay {
         }
     }
 
+    fn unanswered_confirmation_layout(&self, width: u16) -> UnansweredConfirmationLayout {
+        let data = self.unanswered_confirmation_data();
+        let content_width = width.max(1);
+        let mut header_lines = wrap_styled_line(&data.title_line, content_width);
+        let mut subtitle_lines = wrap_styled_line(&data.subtitle_line, content_width);
+        header_lines.append(&mut subtitle_lines);
+        let header_lines = header_lines.into_iter().map(line_to_owned).collect();
+        let hint_lines = wrap_styled_line(&data.hint_line, content_width)
+            .into_iter()
+            .map(line_to_owned)
+            .collect();
+        UnansweredConfirmationLayout {
+            header_lines,
+            hint_lines,
+            rows: data.rows,
+            state: data.state,
+        }
+    }
+
     fn unanswered_confirmation_height(&self, width: u16) -> u16 {
         let outer = Rect::new(0, 0, width, u16::MAX);
         let inner = menu_surface_inset(outer);
         let inner_width = inner.width.max(1);
-        let data = self.unanswered_confirmation_data();
-        let mut header_lines = wrap_styled_line(&data.title_line, inner_width);
-        let mut subtitle_lines = wrap_styled_line(&data.subtitle_line, inner_width);
-        header_lines.append(&mut subtitle_lines);
-        let hint_lines = wrap_styled_line(&data.hint_line, inner_width);
+        let layout = self.unanswered_confirmation_layout(inner_width);
         let rows_height = measure_rows_height(
-            &data.rows,
-            &data.state,
-            data.rows.len().max(1),
+            &layout.rows,
+            &layout.state,
+            layout.rows.len().max(1),
             inner_width.max(1),
         );
-        let height = header_lines.len() as u16
+        let height = layout.header_lines.len() as u16
             + 1
             + rows_height
             + 1
-            + hint_lines.len() as u16
+            + layout.hint_lines.len() as u16
             + menu_surface_padding_height();
         height.max(MIN_OVERLAY_HEIGHT as u16)
     }
@@ -136,13 +174,10 @@ impl RequestUserInputOverlay {
             return;
         }
         let width = content_area.width.max(1);
-        let data = self.unanswered_confirmation_data();
-        let mut header_lines = wrap_styled_line(&data.title_line, width);
-        let mut subtitle_lines = wrap_styled_line(&data.subtitle_line, width);
-        header_lines.append(&mut subtitle_lines);
+        let layout = self.unanswered_confirmation_layout(width);
 
         let mut cursor_y = content_area.y;
-        for line in header_lines {
+        for line in layout.header_lines {
             if cursor_y >= content_area.y + content_area.height {
                 return;
             }
@@ -169,8 +204,7 @@ impl RequestUserInputOverlay {
             return;
         }
 
-        let hint_lines = wrap_styled_line(&data.hint_line, width);
-        let hint_height = hint_lines.len() as u16;
+        let hint_height = layout.hint_lines.len() as u16;
         let spacer_before_hint = u16::from(remaining > hint_height);
         let rows_height = remaining.saturating_sub(hint_height + spacer_before_hint);
 
@@ -183,9 +217,9 @@ impl RequestUserInputOverlay {
         render_rows(
             rows_area,
             buf,
-            &data.rows,
-            &data.state,
-            data.rows.len().max(1),
+            &layout.rows,
+            &layout.state,
+            layout.rows.len().max(1),
             "No choices",
         );
 
@@ -193,7 +227,7 @@ impl RequestUserInputOverlay {
         if spacer_before_hint > 0 {
             cursor_y = cursor_y.saturating_add(1);
         }
-        for (offset, line) in hint_lines.into_iter().enumerate() {
+        for (offset, line) in layout.hint_lines.into_iter().enumerate() {
             let y = cursor_y.saturating_add(offset as u16);
             if y >= content_area.y + content_area.height {
                 break;
