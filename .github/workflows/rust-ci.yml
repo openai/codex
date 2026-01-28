@@ -318,7 +318,6 @@ jobs:
           if command -v ldconfig >/dev/null 2>&1; then
             ubsan="$(ldconfig -p | grep -m1 'libubsan\.so\.1' | sed -E 's/.*=> (.*)$/\1/')"
           fi
-          rustc_bin="$(command -v rustc)"
           wrapper_root="${RUNNER_TEMP:-/tmp}"
           wrapper="${wrapper_root}/rustc-ubsan-wrapper"
           cat > "${wrapper}" <<EOF
@@ -327,7 +326,7 @@ jobs:
           if [[ -n "${ubsan}" ]]; then
             export LD_PRELOAD="${ubsan}\${LD_PRELOAD:+:\${LD_PRELOAD}}"
           fi
-          exec "${rustc_bin}" "\$@"
+          exec "\$1" "\${@:2}"
           EOF
           chmod +x "${wrapper}"
           echo "RUSTC_WRAPPER=${wrapper}" >> "$GITHUB_ENV"
