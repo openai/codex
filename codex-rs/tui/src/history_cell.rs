@@ -1937,7 +1937,6 @@ mod tests {
     use codex_core::config::types::McpServerConfig;
     use codex_core::config::types::McpServerTransportConfig;
     use codex_core::protocol::McpAuthStatus;
-    use codex_core::protocol::ReviewDecision;
     use codex_protocol::models::WebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
     use dirs::home_dir;
