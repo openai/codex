@@ -115,6 +115,10 @@ pub enum Feature {
     Connectors,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
+    /// Reload AGENTS.md-based instructions when AGENTS files change on disk.
+    LiveAgentsReload,
+    /// Reload skill metadata when skill files change on disk.
+    LiveSkillsReload,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
@@ -526,6 +530,26 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "skill_mcp_dependency_install",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::LiveAgentsReload,
+        key: "live_agents_reload",
+        stage: Stage::Experimental {
+            name: "Live AGENTS reload",
+            menu_description: "Reload AGENTS.md instructions on the next turn after AGENTS files change.",
+            announcement: "NEW! Try live AGENTS reload to pick up AGENTS.md changes between turns. Enable in /experimental!",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::LiveSkillsReload,
+        key: "live_skills_reload",
+        stage: Stage::Experimental {
+            name: "Live skills reload",
+            menu_description: "Reload skills and notify sessions when skill files change on disk.",
+            announcement: "NEW! Try live skills reload to pick up skill changes between turns. Enable in /experimental!",
+        },
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Steer,

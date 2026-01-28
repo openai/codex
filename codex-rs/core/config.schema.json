@@ -180,6 +180,12 @@
             "include_apply_patch_tool": {
               "type": "boolean"
             },
+            "live_agents_reload": {
+              "type": "boolean"
+            },
+            "live_skills_reload": {
+              "type": "boolean"
+            },
             "powershell_utf8": {
               "type": "boolean"
             },
@@ -1196,6 +1202,12 @@
           "type": "boolean"
         },
         "include_apply_patch_tool": {
+          "type": "boolean"
+        },
+        "live_agents_reload": {
+          "type": "boolean"
+        },
+        "live_skills_reload": {
           "type": "boolean"
         },
         "powershell_utf8": {

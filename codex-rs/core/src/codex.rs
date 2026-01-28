@@ -448,6 +448,8 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     agents_changed: Arc<AtomicBool>,
     agents_watch_dirs: Vec<PathBuf>,
+    live_agents_reload: bool,
+    live_skills_reload: bool,
     next_internal_sub_id: AtomicU64,
 }
 
@@ -622,17 +624,23 @@ impl Session {
     }
 
     fn start_file_watcher_listener(self: &Arc<Self>) {
+        if !self.live_agents_reload && !self.live_skills_reload {
+            return;
+        }
         let mut rx = self.services.file_watcher.subscribe();
         let agents_changed = Arc::clone(&self.agents_changed);
         let agents_watch_dirs = self.agents_watch_dirs.clone();
+        let live_agents_reload = self.live_agents_reload;
+        let live_skills_reload = self.live_skills_reload;
         let weak_sess = Arc::downgrade(self);
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
                     Ok(FileWatcherEvent::AgentsChanged { paths }) => {
-                        if paths
-                            .iter()
-                            .any(|path| agents_watch_dirs.iter().any(|root| path.starts_with(root)))
+                        if live_agents_reload
+                            && paths.iter().any(|path| {
+                                agents_watch_dirs.iter().any(|root| path.starts_with(root))
+                            })
                             && !agents_changed.swap(true, Ordering::SeqCst)
                         {
                             info!(
@@ -642,6 +650,9 @@ impl Session {
                         }
                     }
                     Ok(FileWatcherEvent::SkillsChanged { .. }) => {
+                        if !live_skills_reload {
+                            continue;
+                        }
                         let Some(sess) = weak_sess.upgrade() else {
                             break;
                         };
@@ -897,7 +908,13 @@ impl Session {
             );
         }
         let state = SessionState::new(session_configuration.clone());
-        let agents_watch_dirs = Self::build_agents_watch_dirs(&config);
+        let live_agents_reload = config.features.enabled(Feature::LiveAgentsReload);
+        let live_skills_reload = config.features.enabled(Feature::LiveSkillsReload);
+        let agents_watch_dirs = if live_agents_reload {
+            Self::build_agents_watch_dirs(&config)
+        } else {
+            Vec::new()
+        };
 
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
@@ -929,6 +946,8 @@ impl Session {
             services,
             agents_changed: Arc::new(AtomicBool::new(false)),
             agents_watch_dirs,
+            live_agents_reload,
+            live_skills_reload,
             next_internal_sub_id: AtomicU64::new(0),
         });
 
@@ -1860,6 +1879,9 @@ impl Session {
     // If `AGENTS.md` changed, reload skills, recompute user instructions, and
     // update session state; otherwise return `None`.
     pub(crate) async fn refresh_user_instructions_if_needed(&self) -> Option<String> {
+        if !self.live_agents_reload {
+            return None;
+        }
         if !self.agents_changed.swap(false, Ordering::SeqCst) {
             return None;
         }
@@ -4708,6 +4730,13 @@ mod tests {
             agent_control,
             state_db: None,
         };
+        let live_agents_reload = config.features.enabled(Feature::LiveAgentsReload);
+        let live_skills_reload = config.features.enabled(Feature::LiveSkillsReload);
+        let agents_watch_dirs = if live_agents_reload {
+            Session::build_agents_watch_dirs(config.as_ref())
+        } else {
+            Vec::new()
+        };
 
         let turn_context = Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
@@ -4730,7 +4759,9 @@ mod tests {
             active_turn: Mutex::new(None),
             services,
             agents_changed: Arc::new(AtomicBool::new(false)),
-            agents_watch_dirs: Session::build_agents_watch_dirs(&config),
+            agents_watch_dirs,
+            live_agents_reload,
+            live_skills_reload,
             next_internal_sub_id: AtomicU64::new(0),
         };
 
@@ -4824,6 +4855,13 @@ mod tests {
             agent_control,
             state_db: None,
         };
+        let live_agents_reload = config.features.enabled(Feature::LiveAgentsReload);
+        let live_skills_reload = config.features.enabled(Feature::LiveSkillsReload);
+        let agents_watch_dirs = if live_agents_reload {
+            Session::build_agents_watch_dirs(config.as_ref())
+        } else {
+            Vec::new()
+        };
 
         let turn_context = Arc::new(Session::make_turn_context(
             Some(Arc::clone(&auth_manager)),
@@ -4846,7 +4884,9 @@ mod tests {
             active_turn: Mutex::new(None),
             services,
             agents_changed: Arc::new(AtomicBool::new(false)),
-            agents_watch_dirs: Session::build_agents_watch_dirs(&config),
+            agents_watch_dirs,
+            live_agents_reload,
+            live_skills_reload,
             next_internal_sub_id: AtomicU64::new(0),
         });
 
