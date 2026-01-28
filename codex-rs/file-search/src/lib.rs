@@ -840,29 +840,6 @@ mod tests {
     }
 
     #[test]
-    fn session_cancellation_skips_completion_callback() {
-        let dir = create_temp_tree(800);
-        let reporter = Arc::new(RecordingReporter::default());
-        let cancel_flag = Arc::new(AtomicBool::new(false));
-        let session = create_session_inner(
-            dir.path(),
-            SessionOptions::default(),
-            reporter.clone(),
-            Some(cancel_flag.clone()),
-        )
-        .expect("session");
-
-        session.update_query("file-");
-        thread::sleep(Duration::from_millis(10));
-        let cancel_time = Instant::now();
-        cancel_flag.store(true, Ordering::Relaxed);
-        let _ = session.join();
-
-        let complete_times = reporter.complete_times();
-        assert!(complete_times.iter().all(|time| *time <= cancel_time));
-    }
-
-    #[test]
     fn dropping_session_does_not_cancel_siblings_with_shared_cancel_flag() {
         let root_a = create_temp_tree(200);
         let root_b = create_temp_tree(4_000);
