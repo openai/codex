@@ -925,6 +925,10 @@ pub enum AgentStatus {
 pub enum CodexErrorInfo {
     ContextWindowExceeded,
     UsageLimitExceeded,
+    ModelCap {
+        model: String,
+        reset_after_seconds: Option<u64>,
+    },
     HttpConnectionFailed {
         http_status_code: Option<u16>,
     },

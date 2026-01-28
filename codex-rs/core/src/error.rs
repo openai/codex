@@ -114,6 +114,9 @@ pub enum CodexErr {
     UsageLimitReached(UsageLimitReachedError),
 
     #[error("{0}")]
+    ModelCap(ModelCapError),
+
+    #[error("{0}")]
     ResponseStreamFailed(ResponseStreamFailed),
 
     #[error("{0}")]
@@ -205,7 +208,8 @@ impl CodexErr {
             | CodexErr::AgentLimitReached { .. }
             | CodexErr::Spawn
             | CodexErr::SessionConfiguredNotFirstEvent
-            | CodexErr::UsageLimitReached(_) => false,
+            | CodexErr::UsageLimitReached(_)
+            | CodexErr::ModelCap(_) => false,
             CodexErr::Stream(..)
             | CodexErr::Timeout
             | CodexErr::UnexpectedStatus(_)
@@ -394,6 +398,28 @@ impl std::fmt::Display for UsageLimitReachedError {
     }
 }
 
+#[derive(Debug)]
+pub struct ModelCapError {
+    pub(crate) model: String,
+    pub(crate) reset_after_seconds: Option<u64>,
+}
+
+impl std::fmt::Display for ModelCapError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut message = format!(
+            "Model {} is at capacity. Please try a different model.",
+            self.model
+        );
+        if let Some(seconds) = self.reset_after_seconds {
+            message.push_str(&format!(
+                " Try again in {}.",
+                format_duration_short(seconds)
+            ));
+        }
+        write!(f, "{message}")
+    }
+}
+
 fn retry_suffix(resets_at: Option<&DateTime<Utc>>) -> String {
     if let Some(resets_at) = resets_at {
         let formatted = format_retry_timestamp(resets_at);
@@ -422,6 +448,18 @@ fn format_retry_timestamp(resets_at: &DateTime<Utc>) -> String {
         local_reset
             .format(&format!("%b %-d{suffix}, %Y %-I:%M %p"))
             .to_string()
+    }
+}
+
+fn format_duration_short(seconds: u64) -> String {
+    if seconds < 60 {
+        "less than a minute".to_string()
+    } else if seconds < 3600 {
+        format!("{}m", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{}h", seconds / 3600)
+    } else {
+        format!("{}d", seconds / 86_400)
     }
 }
 
@@ -488,6 +526,10 @@ impl CodexErr {
             CodexErr::UsageLimitReached(_)
             | CodexErr::QuotaExceeded
             | CodexErr::UsageNotIncluded => CodexErrorInfo::UsageLimitExceeded,
+            CodexErr::ModelCap(err) => CodexErrorInfo::ModelCap {
+                model: err.model.clone(),
+                reset_after_seconds: err.reset_after_seconds,
+            },
             CodexErr::RetryLimit(_) => CodexErrorInfo::ResponseTooManyFailedAttempts {
                 http_status_code: self.http_status_code_value(),
             },
@@ -628,6 +670,33 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again later."
+        );
+    }
+
+    #[test]
+    fn model_cap_error_formats_message() {
+        let err = ModelCapError {
+            model: "boomslang".to_string(),
+            reset_after_seconds: Some(120),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Model boomslang is at capacity. Please try a different model. Try again in 2m."
+        );
+    }
+
+    #[test]
+    fn model_cap_error_maps_to_protocol() {
+        let err = CodexErr::ModelCap(ModelCapError {
+            model: "boomslang".to_string(),
+            reset_after_seconds: Some(30),
+        });
+        assert_eq!(
+            err.to_codex_protocol_error(),
+            CodexErrorInfo::ModelCap {
+                model: "boomslang".to_string(),
+                reset_after_seconds: Some(30),
+            }
         );
     }
 
