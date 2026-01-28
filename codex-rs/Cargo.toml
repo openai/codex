@@ -110,6 +110,7 @@ mcp-types = { path = "mcp-types" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
 # External
+age = "0.11.1"
 allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"

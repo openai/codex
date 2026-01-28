@@ -1,6 +1,7 @@
 //! Session-wide mutable state.
 
 use codex_protocol::models::ResponseItem;
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::codex::SessionConfiguration;
@@ -17,6 +18,8 @@ pub(crate) struct SessionState {
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
+    pub(crate) skill_secret_prompted: HashSet<String>,
+    pub(crate) skill_env_overrides: HashMap<String, HashMap<String, String>>,
     /// Whether the session's initial context has been seeded into history.
     ///
     /// TODO(owen): This is a temporary solution to avoid updating a thread's updated_at
@@ -34,6 +37,8 @@ impl SessionState {
             latest_rate_limits: None,
             server_reasoning_included: false,
             mcp_dependency_prompted: HashSet::new(),
+            skill_secret_prompted: HashSet::new(),
+            skill_env_overrides: HashMap::new(),
             initial_context_seeded: false,
         }
     }
@@ -111,6 +116,37 @@ impl SessionState {
 
     pub(crate) fn mcp_dependency_prompted(&self) -> HashSet<String> {
         self.mcp_dependency_prompted.clone()
+    }
+
+    pub(crate) fn record_skill_secret_prompted<I>(&mut self, keys: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        self.skill_secret_prompted.extend(keys);
+    }
+
+    pub(crate) fn skill_secret_prompted(&self) -> HashSet<String> {
+        self.skill_secret_prompted.clone()
+    }
+
+    pub(crate) fn set_skill_env_overrides(
+        &mut self,
+        sub_id: String,
+        overrides: HashMap<String, String>,
+    ) {
+        if overrides.is_empty() {
+            self.skill_env_overrides.remove(&sub_id);
+            return;
+        }
+        self.skill_env_overrides.insert(sub_id, overrides);
+    }
+
+    pub(crate) fn skill_env_overrides(&self, sub_id: &str) -> Option<HashMap<String, String>> {
+        self.skill_env_overrides.get(sub_id).cloned()
+    }
+
+    pub(crate) fn clear_skill_env_overrides(&mut self, sub_id: &str) {
+        self.skill_env_overrides.remove(sub_id);
     }
 }
 

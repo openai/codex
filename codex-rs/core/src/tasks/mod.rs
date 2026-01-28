@@ -191,6 +191,7 @@ impl Session {
             false
         };
         drop(active);
+        self.clear_skill_env_overrides(&turn_context.sub_id).await;
         if should_close_processes {
             self.close_unified_exec_processes().await;
         }

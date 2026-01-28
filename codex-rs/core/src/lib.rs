@@ -87,6 +87,7 @@ pub mod project_doc;
 mod rollout;
 pub(crate) mod safety;
 pub mod seatbelt;
+pub mod secrets;
 pub mod shell;
 pub mod shell_snapshot;
 pub mod skills;

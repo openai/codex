@@ -1,0 +1,11 @@
+{
+  "dependencies": {
+    "tools": [
+      {
+        "type": "env_var",
+        "value": "TEST_SECRET",
+        "description": "POC secret"
+      }
+    ]
+  }
+}

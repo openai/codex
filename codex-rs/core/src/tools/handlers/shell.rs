@@ -216,7 +216,7 @@ impl ShellHandler {
     async fn run_exec_like(args: RunExecLikeArgs) -> Result<ToolOutput, FunctionCallError> {
         let RunExecLikeArgs {
             tool_name,
-            exec_params,
+            mut exec_params,
             prefix_rule,
             session,
             turn,
@@ -232,6 +232,10 @@ impl ShellHandler {
         } else {
             None
         };
+
+        if let Some(overrides) = session.skill_env_overrides(&turn.sub_id).await {
+            exec_params.env.extend(overrides);
+        }
 
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params
