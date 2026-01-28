@@ -49,3 +49,22 @@ index 6ece0d2c8..641577d40 100644
          expanded_flags.append(flag)
      return expanded_flags
  
+
+diff --git a/rust/toolchain.bzl b/rust/toolchain.bzl
+index 6ece0d2c8..6ece0d2c8 100644
+--- a/rust/toolchain.bzl
++++ b/rust/toolchain.bzl
+@@ -542,6 +542,9 @@ def _rust_toolchain_impl(ctx):
+     all_files_depsets = [sysroot.all_files]
+     if cc_toolchain and cc_toolchain.all_files:
+         all_files_depsets.append(cc_toolchain.all_files)
++    if target_os == "linux" and target_abi == "gnu" and ctx.file._glibc_nonshared:
++        all_files_depsets.append(depset([ctx.file._glibc_nonshared]))
+@@ -713,6 +716,10 @@ rust_toolchain = rule(
+         "extra_rustc_flags": attr.string_list(
+             doc = "Extra flags to pass to rustc in non-exec configuration. Subject to location expansion with respect to the srcs of the `rust_std` attribute. Subject to Make variable expansion with respect to RUST_SYSROOT, RUST_SYSROOT_SHORT, RUSTC, etc.",
+         ),
++        "_glibc_nonshared": attr.label(
++            allow_single_file = True,
++            default = Label("@toolchains_llvm_bootstrapped//runtimes/glibc:glibc_libc_nonshared.static"),
++        ),
