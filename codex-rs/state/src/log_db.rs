@@ -44,10 +44,8 @@ pub struct LogDbLayer {
 pub fn start(state_db: std::sync::Arc<StateRuntime>) -> LogDbLayer {
     let (sender, receiver) = mpsc::channel(LOG_QUEUE_CAPACITY);
     tokio::spawn(run_inserter(state_db, receiver));
-    
-    LogDbLayer {
-        sender,
-    }
+
+    LogDbLayer { sender }
 }
 
 impl<S> Layer<S> for LogDbLayer
