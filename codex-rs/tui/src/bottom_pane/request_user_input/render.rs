@@ -27,10 +27,18 @@ const PROGRESS_ROW_HEIGHT: usize = 1;
 const SPACER_ROWS_WITH_NOTES: usize = 1;
 const SPACER_ROWS_NO_OPTIONS: usize = 0;
 
+struct UnansweredConfirmationData {
+    title_line: Line<'static>,
+    subtitle_line: Line<'static>,
+    hint_line: Line<'static>,
+    rows: Vec<crate::bottom_pane::selection_popup_common::GenericDisplayRow>,
+    state: ScrollState,
+}
+
 impl Renderable for RequestUserInputOverlay {
     fn desired_height(&self, width: u16) -> u16 {
         if self.confirm_unanswered_active() {
-            return self.confirm_unanswered_height(width);
+            return self.unanswered_confirmation_height(width);
         }
         let outer = Rect::new(0, 0, width, u16::MAX);
         let inner = menu_surface_inset(outer);
@@ -83,51 +91,54 @@ impl Renderable for RequestUserInputOverlay {
 }
 
 impl RequestUserInputOverlay {
-    fn confirm_unanswered_height(&self, width: u16) -> u16 {
-        let outer = Rect::new(0, 0, width, u16::MAX);
-        let inner = menu_surface_inset(outer);
-        let inner_width = inner.width.max(1);
+    fn unanswered_confirmation_data(&self) -> UnansweredConfirmationData {
         let unanswered = self.unanswered_question_count();
         let subtitle = format!(
             "{unanswered} unanswered question{}",
             if unanswered == 1 { "" } else { "s" }
         );
-        let title_line = Line::from(super::UNANSWERED_CONFIRM_TITLE.bold());
-        let subtitle_line = Line::from(subtitle.dim());
-        let mut header_lines = wrap_styled_line(&title_line, inner_width);
-        let mut subtitle_lines = wrap_styled_line(&subtitle_line, inner_width);
-        header_lines.append(&mut subtitle_lines);
+        UnansweredConfirmationData {
+            title_line: Line::from(super::UNANSWERED_CONFIRM_TITLE.bold()),
+            subtitle_line: Line::from(subtitle.dim()),
+            hint_line: standard_popup_hint_line(),
+            rows: self.unanswered_confirmation_rows(),
+            state: self.confirm_unanswered.unwrap_or_default(),
+        }
+    }
 
-        let rows = self.unanswered_confirmation_rows();
-        let default_state = ScrollState::new();
-        let state = self.confirm_unanswered.as_ref().unwrap_or(&default_state);
-        let rows_height = measure_rows_height(&rows, state, rows.len().max(1), inner_width.max(1));
-        let hint_line = standard_popup_hint_line();
-        let hint_lines = wrap_styled_line(&hint_line, inner_width);
+    fn unanswered_confirmation_height(&self, width: u16) -> u16 {
+        let outer = Rect::new(0, 0, width, u16::MAX);
+        let inner = menu_surface_inset(outer);
+        let inner_width = inner.width.max(1);
+        let data = self.unanswered_confirmation_data();
+        let mut header_lines = wrap_styled_line(&data.title_line, inner_width);
+        let mut subtitle_lines = wrap_styled_line(&data.subtitle_line, inner_width);
+        header_lines.append(&mut subtitle_lines);
+        let hint_lines = wrap_styled_line(&data.hint_line, inner_width);
+        let rows_height = measure_rows_height(
+            &data.rows,
+            &data.state,
+            data.rows.len().max(1),
+            inner_width.max(1),
+        );
         let height = header_lines.len() as u16
             + 1
             + rows_height
             + 1
             + hint_lines.len() as u16
             + menu_surface_padding_height();
-        height.max(8)
+        height.max(MIN_OVERLAY_HEIGHT as u16)
     }
 
-    fn render_confirm_unanswered(&self, area: Rect, buf: &mut Buffer) {
+    fn render_unanswered_confirmation(&self, area: Rect, buf: &mut Buffer) {
         let content_area = render_menu_surface(area, buf);
         if content_area.width == 0 || content_area.height == 0 {
             return;
         }
         let width = content_area.width.max(1);
-        let unanswered = self.unanswered_question_count();
-        let subtitle = format!(
-            "{unanswered} unanswered question{}",
-            if unanswered == 1 { "" } else { "s" }
-        );
-        let title_line = Line::from(super::UNANSWERED_CONFIRM_TITLE.bold());
-        let subtitle_line = Line::from(subtitle.dim());
-        let mut header_lines = wrap_styled_line(&title_line, width);
-        let mut subtitle_lines = wrap_styled_line(&subtitle_line, width);
+        let data = self.unanswered_confirmation_data();
+        let mut header_lines = wrap_styled_line(&data.title_line, width);
+        let mut subtitle_lines = wrap_styled_line(&data.subtitle_line, width);
         header_lines.append(&mut subtitle_lines);
 
         let mut cursor_y = content_area.y;
@@ -158,8 +169,7 @@ impl RequestUserInputOverlay {
             return;
         }
 
-        let hint_line = standard_popup_hint_line();
-        let hint_lines = wrap_styled_line(&hint_line, width);
+        let hint_lines = wrap_styled_line(&data.hint_line, width);
         let hint_height = hint_lines.len() as u16;
         let spacer_before_hint = u16::from(remaining > hint_height);
         let rows_height = remaining.saturating_sub(hint_height + spacer_before_hint);
@@ -170,15 +180,12 @@ impl RequestUserInputOverlay {
             width: content_area.width,
             height: rows_height,
         };
-        let rows = self.unanswered_confirmation_rows();
-        let default_state = ScrollState::new();
-        let state = self.confirm_unanswered.as_ref().unwrap_or(&default_state);
         render_rows(
             rows_area,
             buf,
-            &rows,
-            state,
-            rows.len().max(1),
+            &data.rows,
+            &data.state,
+            data.rows.len().max(1),
             "No choices",
         );
 
@@ -209,7 +216,7 @@ impl RequestUserInputOverlay {
             return;
         }
         if self.confirm_unanswered_active() {
-            self.render_confirm_unanswered(area, buf);
+            self.render_unanswered_confirmation(area, buf);
             return;
         }
         // Paint the same menu surface used by other bottom-pane overlays and
