@@ -24,11 +24,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: "npm"
+          cache: "pnpm"
 
       - name: Enable Corepack
         run: corepack enable
