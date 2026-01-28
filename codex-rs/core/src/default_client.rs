@@ -95,6 +95,12 @@ pub fn originator() -> Originator {
     get_originator_value(None)
 }
 
+pub fn is_first_party_originator(originator_value: &str) -> bool {
+    originator_value == DEFAULT_ORIGINATOR
+        || originator_value == "codex_vscode"
+        || originator_value.starts_with("Codex ")
+}
+
 pub fn get_codex_user_agent() -> String {
     let build_version = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();
@@ -185,6 +191,7 @@ fn is_sandboxed() -> bool {
 mod tests {
     use super::*;
     use core_test_support::skip_if_no_network;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn test_get_codex_user_agent() {
@@ -192,6 +199,15 @@ mod tests {
         let originator = originator().value;
         let prefix = format!("{originator}/");
         assert!(user_agent.starts_with(&prefix));
+    }
+
+    #[test]
+    fn is_first_party_originator_matches_known_values() {
+        assert_eq!(is_first_party_originator(DEFAULT_ORIGINATOR), true);
+        assert_eq!(is_first_party_originator("codex_vscode"), true);
+        assert_eq!(is_first_party_originator("Codex Something Else"), true);
+        assert_eq!(is_first_party_originator("codex_cli"), false);
+        assert_eq!(is_first_party_originator("Other"), false);
     }
 
     #[tokio::test]

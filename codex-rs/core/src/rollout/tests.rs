@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::ffi::OsStr;
 use std::fs::File;
 use std::fs::FileTimes;
 use std::fs::{self};
@@ -21,6 +22,7 @@ use crate::rollout::list::ThreadItem;
 use crate::rollout::list::ThreadSortKey;
 use crate::rollout::list::ThreadsPage;
 use crate::rollout::list::get_threads;
+use crate::rollout::rollout_date_parts;
 use anyhow::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
@@ -41,6 +43,16 @@ fn provider_vec(providers: &[&str]) -> Vec<String> {
         .iter()
         .map(std::string::ToString::to_string)
         .collect()
+}
+
+#[test]
+fn rollout_date_parts_extracts_directory_components() {
+    let file_name = OsStr::new("rollout-2025-03-01T09-00-00-123.jsonl");
+    let parts = rollout_date_parts(file_name);
+    assert_eq!(
+        parts,
+        Some(("2025".to_string(), "03".to_string(), "01".to_string()))
+    );
 }
 
 fn write_session_file(

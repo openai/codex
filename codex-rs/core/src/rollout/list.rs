@@ -1,4 +1,5 @@
 use std::cmp::Reverse;
+use std::ffi::OsStr;
 use std::io::{self};
 use std::num::NonZero;
 use std::ops::ControlFlow;
@@ -15,9 +16,12 @@ use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use uuid::Uuid;
 
+use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use crate::protocol::EventMsg;
+use crate::state_db;
 use codex_file_search as file_search;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
@@ -792,7 +796,7 @@ async fn collect_rollout_day_files(
     Ok(day_files)
 }
 
-fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uuid)> {
+pub(crate) fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uuid)> {
     // Expected: rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl
     let core = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
 
@@ -1054,11 +1058,9 @@ fn truncate_to_seconds(dt: OffsetDateTime) -> Option<OffsetDateTime> {
     dt.replace_nanosecond(0).ok()
 }
 
-/// Locate a recorded thread rollout file by its UUID string using the existing
-/// paginated listing implementation. Returns `Ok(Some(path))` if found, `Ok(None)` if not present
-/// or the id is invalid.
-pub async fn find_thread_path_by_id_str(
+async fn find_thread_path_by_id_str_in_subdir(
     codex_home: &Path,
+    subdir: &str,
     id_str: &str,
 ) -> io::Result<Option<PathBuf>> {
     // Validate UUID format early.
@@ -1067,7 +1069,7 @@ pub async fn find_thread_path_by_id_str(
     }
 
     let mut root = codex_home.to_path_buf();
-    root.push(SESSIONS_SUBDIR);
+    root.push(subdir);
     if !root.exists() {
         return Ok(None);
     }
@@ -1093,9 +1095,65 @@ pub async fn find_thread_path_by_id_str(
     )
     .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
-    Ok(results
+    let found = results
         .matches
         .into_iter()
         .next()
-        .map(|m| root.join(m.path)))
+        .map(|m| root.join(m.path));
+
+    // Checking if DB is at parity.
+    // TODO(jif): sqlite migration phase 1
+    let archived_only = match subdir {
+        SESSIONS_SUBDIR => Some(false),
+        ARCHIVED_SESSIONS_SUBDIR => Some(true),
+        _ => None,
+    };
+    let state_db_ctx = state_db::open_if_present(codex_home, "").await;
+    if let Some(state_db_ctx) = state_db_ctx.as_deref()
+        && let Ok(thread_id) = ThreadId::from_string(id_str)
+    {
+        let db_path = state_db::find_rollout_path_by_id(
+            Some(state_db_ctx),
+            thread_id,
+            archived_only,
+            "find_path_query",
+        )
+        .await;
+        let canonical_path = found.as_deref();
+        if db_path.as_deref() != canonical_path {
+            tracing::warn!(
+                "state db path mismatch for thread {thread_id:?}: canonical={canonical_path:?} db={db_path:?}"
+            );
+            state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "path_mismatch");
+        }
+    }
+    Ok(found)
+}
+
+/// Locate a recorded thread rollout file by its UUID string using the existing
+/// paginated listing implementation. Returns `Ok(Some(path))` if found, `Ok(None)` if not present
+/// or the id is invalid.
+pub async fn find_thread_path_by_id_str(
+    codex_home: &Path,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    find_thread_path_by_id_str_in_subdir(codex_home, SESSIONS_SUBDIR, id_str).await
+}
+
+/// Locate an archived thread rollout file by its UUID string.
+pub async fn find_archived_thread_path_by_id_str(
+    codex_home: &Path,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    find_thread_path_by_id_str_in_subdir(codex_home, ARCHIVED_SESSIONS_SUBDIR, id_str).await
+}
+
+/// Extract the `YYYY/MM/DD` directory components from a rollout filename.
+pub fn rollout_date_parts(file_name: &OsStr) -> Option<(String, String, String)> {
+    let name = file_name.to_string_lossy();
+    let date = name.strip_prefix("rollout-")?.get(..10)?;
+    let year = date.get(..4)?.to_string();
+    let month = date.get(5..7)?.to_string();
+    let day = date.get(8..10)?.to_string();
+    Some((year, month, day))
 }

@@ -178,6 +178,9 @@ pub(crate) enum AppEvent {
         mode: WindowsSandboxEnableMode,
     },
 
+    /// Update the Windows sandbox feature mode without changing approval presets.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+
     /// Update the current approval policy in the running app and widget.
     UpdateAskForApprovalPolicy(AskForApproval),
 

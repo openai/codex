@@ -92,16 +92,6 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::unbounded_channel;
 use toml::Value as TomlValue;
 
-#[cfg(target_os = "windows")]
-fn set_windows_sandbox_enabled(enabled: bool) {
-    codex_core::set_windows_sandbox_enabled(enabled);
-}
-
-#[cfg(target_os = "windows")]
-fn set_windows_elevated_sandbox_enabled(enabled: bool) {
-    codex_core::set_windows_elevated_sandbox_enabled(enabled);
-}
-
 async fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
     let codex_home = std::env::temp_dir();
@@ -1794,10 +1784,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 
     let images = chat.bottom_pane.take_recent_submission_images();
-    assert!(
-        images.is_empty(),
-        "attachments are not preserved in history recall"
-    );
+    assert_eq!(vec![PathBuf::from("/tmp/preview.png")], images);
 }
 
 #[tokio::test]
@@ -2946,13 +2933,13 @@ async fn experimental_features_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     let features = vec![
-        BetaFeatureItem {
+        ExperimentalFeatureItem {
             feature: Feature::GhostCommit,
             name: "Ghost snapshots".to_string(),
             description: "Capture undo snapshots each turn.".to_string(),
             enabled: false,
         },
-        BetaFeatureItem {
+        ExperimentalFeatureItem {
             feature: Feature::ShellTool,
             name: "Shell tool".to_string(),
             description: "Allow the model to run shell commands.".to_string(),
@@ -2972,7 +2959,7 @@ async fn experimental_features_toggle_saves_on_exit() {
 
     let expected_feature = Feature::GhostCommit;
     let view = ExperimentalFeaturesView::new(
-        vec![BetaFeatureItem {
+        vec![ExperimentalFeatureItem {
             feature: expected_feature,
             name: "Ghost snapshots".to_string(),
             description: "Capture undo snapshots each turn.".to_string(),
@@ -3085,16 +3072,9 @@ async fn approvals_selection_popup_snapshot() {
 async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    let was_sandbox_enabled = codex_core::get_platform_sandbox().is_some();
-    let was_elevated_enabled = codex_core::is_windows_elevated_sandbox_enabled();
-
     chat.config.notices.hide_full_access_warning = None;
-    chat.config.features.enable(Feature::WindowsSandbox);
-    chat.config
-        .features
-        .disable(Feature::WindowsSandboxElevated);
-    set_windows_sandbox_enabled(true);
-    set_windows_elevated_sandbox_enabled(false);
+    chat.set_feature_enabled(Feature::WindowsSandbox, true);
+    chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
 
     chat.open_approvals_popup();
 
@@ -3102,10 +3082,6 @@ async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
     insta::with_settings!({ snapshot_suffix => "windows_degraded" }, {
         assert_snapshot!("approvals_selection_popup", popup);
     });
-
-    // Avoid leaking sandbox global state into other tests.
-    set_windows_sandbox_enabled(was_sandbox_enabled);
-    set_windows_elevated_sandbox_enabled(was_elevated_enabled);
 }
 
 #[tokio::test]
@@ -3168,7 +3144,8 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
 async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    set_windows_sandbox_enabled(false);
+    chat.set_feature_enabled(Feature::WindowsSandbox, false);
+    chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
     chat.config.forced_auto_mode_downgraded_on_windows = true;
 
     chat.maybe_prompt_windows_sandbox_enable();
@@ -3186,8 +3163,6 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
         popup.contains("Stay in"),
         "expected startup prompt to offer staying in current mode: {popup}"
     );
-
-    set_windows_sandbox_enabled(true);
 }
 
 #[tokio::test]
