@@ -2236,6 +2236,7 @@ dependencies = [
  "tokio-tungstenite",
  "walkdir",
  "wiremock",
+ "zstd",
 ]
 
 [[package]]
