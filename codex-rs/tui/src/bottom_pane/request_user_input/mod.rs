@@ -71,17 +71,10 @@ impl ComposerDraft {
         if self.pending_pastes.is_empty() {
             return self.text.clone();
         }
-        if self.text_elements.is_empty() {
-            return self.pending_pastes.iter().fold(
-                self.text.clone(),
-                |mut text, (placeholder, actual)| {
-                    if text.contains(placeholder) {
-                        text = text.replace(placeholder, actual);
-                    }
-                    text
-                },
-            );
-        }
+        debug_assert!(
+            !self.text_elements.is_empty(),
+            "pending pastes should always have matching text elements"
+        );
         let (expanded, _) = ChatComposer::expand_pending_pastes(
             &self.text,
             self.text_elements.clone(),
