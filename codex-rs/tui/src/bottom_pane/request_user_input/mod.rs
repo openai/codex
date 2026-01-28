@@ -2480,6 +2480,32 @@ mod tests {
     }
 
     #[test]
+    fn request_user_input_unanswered_confirmation_snapshot() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "Area"),
+                    question_without_options("q2", "Goal"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay.open_unanswered_confirmation();
+
+        let area = Rect::new(0, 0, 80, 12);
+        insta::assert_snapshot!(
+            "request_user_input_unanswered_confirmation",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
     fn options_scroll_while_editing_notes() {
         let (tx, _rx) = test_sender();
         let mut overlay = RequestUserInputOverlay::new(
