@@ -97,7 +97,7 @@ crate.annotation(
 crate.annotation(
     crate = "ncurses",
     build_script_env = {
-        "NCURSES_RS_CFLAGS": "-I/usr/include -I/usr/include/ncursesw",
+        "NCURSES_RS_CFLAGS": "-I/usr/include -I/usr/include/ncursesw -I/usr/include/x86_64-linux-gnu -I/usr/include/aarch64-linux-gnu",
     },
 )
 
