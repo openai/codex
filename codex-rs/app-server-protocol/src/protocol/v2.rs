@@ -24,6 +24,8 @@ use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
+use codex_protocol::protocol::PromptSuggestionContext as CorePromptSuggestionContext;
+use codex_protocol::protocol::PromptSuggestionOrigin as CorePromptSuggestionOrigin;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
@@ -2178,6 +2180,8 @@ pub struct PromptSuggestionNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub suggestion: String,
+    pub origin: CorePromptSuggestionOrigin,
+    pub context: CorePromptSuggestionContext,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

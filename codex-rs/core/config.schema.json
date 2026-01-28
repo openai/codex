@@ -198,6 +198,9 @@
             "prompt_suggestions": {
               "type": "boolean"
             },
+            "prompt_suggestions_autorun": {
+              "type": "boolean"
+            },
             "remote_compaction": {
               "type": "boolean"
             },
@@ -1208,6 +1211,9 @@
           "type": "boolean"
         },
         "prompt_suggestions": {
+          "type": "boolean"
+        },
+        "prompt_suggestions_autorun": {
           "type": "boolean"
         },
         "remote_compaction": {

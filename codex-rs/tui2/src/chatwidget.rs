@@ -69,7 +69,9 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::PromptSuggestionContext;
 use codex_core::protocol::PromptSuggestionEvent;
+use codex_core::protocol::PromptSuggestionOrigin;
 use codex_core::protocol::RateLimitSnapshot;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
@@ -382,7 +384,7 @@ pub(crate) struct ChatWidget {
     last_unified_wait: Option<UnifiedExecWaitState>,
     task_complete_pending: bool,
     last_completed_turn_id: Option<String>,
-    latest_prompt_suggestion: Option<String>,
+    latest_prompt_suggestion: Option<PromptSuggestionEvent>,
     background_terminals_state: Arc<Mutex<BackgroundTerminalsState>>,
     /// Tracks whether codex-core currently considers an agent turn to be in progress.
     ///
@@ -726,8 +728,15 @@ impl ChatWidget {
         {
             return;
         }
-        let suggestion = event.suggestion;
-        self.latest_prompt_suggestion = Some(suggestion.clone());
+        if matches!(event.origin, PromptSuggestionOrigin::Unknown)
+            || matches!(event.context, PromptSuggestionContext::Unknown)
+        {
+            debug!("prompt suggestion metadata missing; using Unknown");
+        }
+        self.latest_prompt_suggestion = Some(event.clone());
+        if self.maybe_autorun_prompt_suggestion() {
+            return;
+        }
         if self.is_review_mode
             || self.bottom_pane.is_task_running()
             || !self.bottom_pane.composer_is_empty()
@@ -735,7 +744,31 @@ impl ChatWidget {
         {
             return;
         }
-        self.open_prompt_suggestions_view(Some(suggestion));
+        self.open_prompt_suggestions_view(Some(event));
+    }
+
+    fn can_autorun_prompt_suggestion(&self) -> bool {
+        self.config
+            .features
+            .enabled(Feature::PromptSuggestionsAutorun)
+            && self.config.features.enabled(Feature::PromptSuggestions)
+            && !self.is_review_mode
+            && !self.bottom_pane.is_task_running()
+            && self.bottom_pane.composer_is_empty()
+            && self.bottom_pane.no_modal_or_popup_active()
+            && self.queued_user_messages.is_empty()
+    }
+
+    fn maybe_autorun_prompt_suggestion(&mut self) -> bool {
+        if !self.can_autorun_prompt_suggestion() {
+            return false;
+        }
+        let Some(suggestion) = self.latest_prompt_suggestion.as_ref() else {
+            return false;
+        };
+        debug!("auto-running prompt suggestion");
+        self.submit_prompt_suggestion(suggestion.suggestion.clone());
+        true
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -3195,9 +3228,21 @@ impl ChatWidget {
         });
     }
 
-    pub(crate) fn open_prompt_suggestions_view(&mut self, suggestion: Option<String>) {
+    pub(crate) fn open_prompt_suggestions_view(
+        &mut self,
+        suggestion: Option<PromptSuggestionEvent>,
+    ) {
         let enabled = self.config.features.enabled(Feature::PromptSuggestions);
-        let view = PromptSuggestionsView::new(suggestion, enabled, self.app_event_tx.clone());
+        let auto_run_enabled = self
+            .config
+            .features
+            .enabled(Feature::PromptSuggestionsAutorun);
+        let view = PromptSuggestionsView::new(
+            suggestion,
+            enabled,
+            auto_run_enabled,
+            self.app_event_tx.clone(),
+        );
         self.bottom_pane.show_view(Box::new(view));
     }
 
@@ -3763,6 +3808,9 @@ impl ChatWidget {
         }
         if feature == Feature::PromptSuggestions && !enabled {
             self.latest_prompt_suggestion = None;
+        }
+        if feature == Feature::PromptSuggestionsAutorun && enabled {
+            self.maybe_autorun_prompt_suggestion();
         }
     }
 

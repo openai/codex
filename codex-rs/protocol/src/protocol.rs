@@ -1136,9 +1136,35 @@ pub struct TurnCompleteEvent {
     pub last_agent_message: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum PromptSuggestionOrigin {
+    Llm,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS, PartialEq, Eq, Default)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type", rename_all = "snake_case")]
+pub enum PromptSuggestionContext {
+    LastAssistant,
+    History {
+        depth: u32,
+    },
+    #[default]
+    Unknown,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct PromptSuggestionEvent {
     pub suggestion: String,
+    #[serde(default)]
+    pub origin: PromptSuggestionOrigin,
+    #[serde(default)]
+    pub context: PromptSuggestionContext,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

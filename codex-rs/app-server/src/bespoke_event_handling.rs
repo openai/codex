@@ -132,6 +132,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 thread_id: conversation_id.to_string(),
                 turn_id: event_turn_id,
                 suggestion: ev.suggestion,
+                origin: ev.origin,
+                context: ev.context,
             };
             outgoing
                 .send_server_notification(ServerNotification::PromptSuggestion(notification))

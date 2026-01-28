@@ -4,7 +4,9 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::PromptSuggestionContext;
 use codex_protocol::protocol::PromptSuggestionEvent;
+use codex_protocol::protocol::PromptSuggestionOrigin;
 use codex_protocol::protocol::SessionSource;
 use futures::StreamExt;
 use rand::Rng;
@@ -72,7 +74,14 @@ async fn generate_and_emit_prompt_suggestion(
     turn_context: Arc<TurnContext>,
     last_agent_message: String,
 ) -> Result<()> {
-    let mut input = if let Some(history_depth) = turn_context.history_depth {
+    let history_depth = turn_context.history_depth;
+    let context = match history_depth {
+        Some(depth) => PromptSuggestionContext::History { depth },
+        None => PromptSuggestionContext::LastAssistant,
+    };
+    let origin = PromptSuggestionOrigin::Llm;
+
+    let mut input = if let Some(history_depth) = history_depth {
         let mut history = session.clone_history().await;
         history.retain_last_n_user_turns(history_depth);
         history.for_prompt()
@@ -170,7 +179,11 @@ async fn generate_and_emit_prompt_suggestion(
     session
         .send_event(
             turn_context.as_ref(),
-            EventMsg::PromptSuggestion(PromptSuggestionEvent { suggestion }),
+            EventMsg::PromptSuggestion(PromptSuggestionEvent {
+                suggestion,
+                origin,
+                context,
+            }),
         )
         .await;
     Ok(())

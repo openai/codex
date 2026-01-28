@@ -20,26 +20,44 @@ use crate::render::RectExt as _;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
 use codex_core::features::Feature;
+use codex_core::protocol::PromptSuggestionContext;
+use codex_core::protocol::PromptSuggestionEvent;
+use codex_core::protocol::PromptSuggestionOrigin;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 
 pub(crate) struct PromptSuggestionsView {
     suggestion: Option<String>,
+    origin: PromptSuggestionOrigin,
+    context: PromptSuggestionContext,
     enabled: bool,
+    auto_run_enabled: bool,
     app_event_tx: AppEventSender,
     complete: bool,
 }
 
 impl PromptSuggestionsView {
     pub(crate) fn new(
-        suggestion: Option<String>,
+        suggestion: Option<PromptSuggestionEvent>,
         enabled: bool,
+        auto_run_enabled: bool,
         app_event_tx: AppEventSender,
     ) -> Self {
+        let (suggestion, origin, context) = match suggestion {
+            Some(event) => (Some(event.suggestion), event.origin, event.context),
+            None => (
+                None,
+                PromptSuggestionOrigin::Unknown,
+                PromptSuggestionContext::Unknown,
+            ),
+        };
         Self {
             suggestion,
+            origin,
+            context,
             enabled,
+            auto_run_enabled,
             app_event_tx,
             complete: false,
         }
@@ -54,9 +72,25 @@ impl PromptSuggestionsView {
 
     fn toggle_enabled(&mut self) {
         self.enabled = !self.enabled;
-        self.app_event_tx.send(AppEvent::UpdateFeatureFlags {
-            updates: vec![(Feature::PromptSuggestions, self.enabled)],
-        });
+        let mut updates = vec![(Feature::PromptSuggestions, self.enabled)];
+        if !self.enabled && self.auto_run_enabled {
+            self.auto_run_enabled = false;
+            updates.push((Feature::PromptSuggestionsAutorun, false));
+        }
+        self.app_event_tx
+            .send(AppEvent::UpdateFeatureFlags { updates });
+    }
+
+    fn toggle_auto_run(&mut self) {
+        let mut updates = Vec::new();
+        if !self.enabled {
+            self.enabled = true;
+            updates.push((Feature::PromptSuggestions, true));
+        }
+        self.auto_run_enabled = !self.auto_run_enabled;
+        updates.push((Feature::PromptSuggestionsAutorun, self.auto_run_enabled));
+        self.app_event_tx
+            .send(AppEvent::UpdateFeatureFlags { updates });
     }
 
     fn wrapped_lines(text: &str, width: u16, indent: &'static str) -> Vec<Line<'static>> {
@@ -76,14 +110,39 @@ impl PromptSuggestionsView {
         } else {
             "Off".red()
         };
+        let auto_run = if self.auto_run_enabled {
+            "On".green()
+        } else {
+            "Off".red()
+        };
         vec![
             Line::from("Prompt suggestions".bold()),
             Line::from(vec!["Status: ".dim(), status]),
+            Line::from(vec!["Auto-run: ".dim(), auto_run]),
+        ]
+    }
+
+    fn metadata_lines(&self) -> Vec<Line<'static>> {
+        let origin = match self.origin {
+            PromptSuggestionOrigin::Llm => "LLM",
+            PromptSuggestionOrigin::Unknown => "Unknown",
+        };
+        let context = match &self.context {
+            PromptSuggestionContext::LastAssistant => "Last assistant response".to_string(),
+            PromptSuggestionContext::History { depth } => {
+                format!("History (last {depth} user turns)")
+            }
+            PromptSuggestionContext::Unknown => "Unknown".to_string(),
+        };
+        vec![
+            Line::from(vec!["Origin: ".dim(), origin.into()]),
+            Line::from(vec!["Context: ".dim(), context.into()]),
         ]
     }
 
     fn content_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines = self.header_lines();
+        lines.extend(self.metadata_lines());
         lines.push(Line::from(""));
 
         if !self.enabled {
@@ -103,6 +162,14 @@ impl PromptSuggestionsView {
             lines.push("Suggested reply".bold().into());
             lines.push(Line::from(""));
             lines.extend(Self::wrapped_lines(text, width.saturating_sub(2), "  "));
+            if self.auto_run_enabled {
+                lines.push(Line::from(""));
+                lines.push(
+                    "Auto-run will submit the suggestion when the composer is idle."
+                        .dim()
+                        .into(),
+                );
+            }
         } else {
             lines.push("Waiting for a suggestion...".italic().into());
             lines.push(
@@ -152,6 +219,18 @@ impl BottomPaneView for PromptSuggestionsView {
                 ..
             } => {
                 self.toggle_enabled();
+            }
+            KeyEvent {
+                code: KeyCode::Char('a'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('A'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.toggle_auto_run();
             }
             KeyEvent {
                 code: KeyCode::Esc, ..
@@ -223,6 +302,8 @@ fn prompt_suggestions_hint_line(enabled: bool, has_suggestion: bool) -> Line<'st
     }
     spans.push(key_hint::plain(KeyCode::Char('t')).into());
     spans.push(if enabled { " toggle / " } else { " enable / " }.into());
+    spans.push(key_hint::plain(KeyCode::Char('a')).into());
+    spans.push(" auto-run / ".into());
     spans.push(key_hint::plain(KeyCode::Esc).into());
     spans.push(" dismiss".into());
     Line::from(spans)

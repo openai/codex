@@ -117,6 +117,8 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Suggest follow-up prompts after turns complete.
     PromptSuggestions,
+    /// Auto-run prompt suggestions when idle.
+    PromptSuggestionsAutorun,
     /// Enable the next-generation TUI experience.
     Tui2,
 }
@@ -349,6 +351,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "prompt_suggestions",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::PromptSuggestionsAutorun,
+        key: "prompt_suggestions_autorun",
+        stage: Stage::Stable,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WebSearchRequest,

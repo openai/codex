@@ -213,13 +213,20 @@ When a prompt suggestion arrives after a turn completes, the UI opens a prompt s
 enabled):
 
 - The pane opens only when the composer is empty, no task is running, and no modal/popup is active.
+- Auto-run submits the latest suggestion automatically when the same idle conditions are met,
+  plus there are no queued messages and the UI is not in review mode.
 - `Enter` submits the suggestion immediately.
 - `Tab` prefills the suggestion into the textarea for editing.
 - `T` toggles prompt suggestions on or off.
+- `A` toggles auto-run mode.
 - `Esc` dismisses the pane.
+- The pane also shows metadata for each suggestion: its origin (LLM) and the context used to
+  generate it (last assistant response vs history depth); if metadata is missing it is shown as
+  `Unknown`.
 
 You can also open the pane manually with `/suggestions`. The pane shows the most recent suggestion
-when one is available.
+when one is available; when auto-run is enabled, the pane does not auto-open but remains available
+on demand.
 
 This behavior is kept in sync between `codex-rs/tui` and `codex-rs/tui2`.
 
