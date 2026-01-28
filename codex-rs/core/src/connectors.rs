@@ -27,6 +27,8 @@ pub struct ConnectorInfo {
     pub connector_description: Option<String>,
     #[serde(default, rename = "logo_url")]
     pub logo_url: Option<String>,
+    #[serde(default, rename = "logo_url_dark")]
+    pub logo_url_dark: Option<String>,
     #[serde(default, rename = "install_url")]
     pub install_url: Option<String>,
     #[serde(default)]
@@ -133,6 +135,9 @@ pub fn merge_connectors(
             if existing.logo_url.is_none() && connector.logo_url.is_some() {
                 existing.logo_url = connector.logo_url;
             }
+            if existing.logo_url_dark.is_none() && connector.logo_url_dark.is_some() {
+                existing.logo_url_dark = connector.logo_url_dark;
+            }
         } else {
             merged.insert(connector_id, connector);
         }
@@ -180,6 +185,7 @@ where
             connector_name,
             connector_description: None,
             logo_url: None,
+            logo_url_dark: None,
             is_accessible: true,
         })
         .collect();
