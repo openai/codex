@@ -3,14 +3,15 @@ package ai.solace.coder.api.endpoint
 
 import ai.solace.coder.api.AuthProvider
 import ai.solace.coder.api.common.Prompt
-import ai.solace.coder.api.common.ResponseEvent
 import ai.solace.coder.api.common.ResponseStream
 import ai.solace.coder.api.provider.Provider
 import ai.solace.coder.api.provider.WireApi
 import ai.solace.coder.api.requests.ChatRequest
 import ai.solace.coder.api.requests.ChatRequestBuilder
+import ai.solace.coder.api.sse.ChannelResponseStream
 import ai.solace.coder.api.telemetry.RequestTelemetry
 import ai.solace.coder.api.telemetry.SseTelemetry
+import ai.solace.coder.protocol.ResponseEvent
 import io.ktor.client.*
 import kotlinx.serialization.json.JsonElement
 
@@ -30,7 +31,7 @@ class ChatClient<A : AuthProvider>(
         return this
     }
 
-    suspend fun streamRequest(request: ChatRequest): Result<ResponseStream> {
+    suspend fun streamRequest(request: ChatRequest): Result<ChannelResponseStream> {
         return stream(request.body, request.configureHeaders)
     }
 
@@ -39,7 +40,7 @@ class ChatClient<A : AuthProvider>(
         prompt: Prompt,
         conversationId: String?,
         sessionSource: ai.solace.coder.protocol.SessionSource?,
-    ): Result<ResponseStream> {
+    ): Result<ChannelResponseStream> {
         val request = ChatRequestBuilder(model, prompt.instructions, prompt.input, prompt.tools)
             .conversationId(conversationId)
             .sessionSource(sessionSource)
@@ -58,11 +59,8 @@ class ChatClient<A : AuthProvider>(
     suspend fun stream(
         body: JsonElement,
         configureExtraHeaders: io.ktor.client.request.HttpRequestBuilder.() -> Unit,
-    ): Result<ResponseStream> {
-        // TODO: Implement spawnChatStream once SSE parsing is ported
-        return streaming.stream(path(), body, configureExtraHeaders) { _, _, _ ->
-            TODO("spawnChatStream not yet implemented")
-        }
+    ): Result<ChannelResponseStream> {
+        return streaming.stream(path(), body, configureExtraHeaders, SseStreamType.Chat)
     }
 }
 

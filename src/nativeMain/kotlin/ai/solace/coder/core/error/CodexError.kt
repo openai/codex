@@ -177,6 +177,21 @@ sealed class CodexError {
         override fun httpStatusCodeValue(): Int? = null
     }
 
+    data class ConversationNotFound(val conversationId: String) : CodexError() {
+        override fun toErrorInfo(): CodexErrorInfo = CodexErrorInfo.Other
+        override fun httpStatusCodeValue(): Int? = null
+    }
+
+    data class NotImplemented(val message: String) : CodexError() {
+        override fun toErrorInfo(): CodexErrorInfo = CodexErrorInfo.Other
+        override fun httpStatusCodeValue(): Int? = null
+    }
+
+    object SessionConfiguredNotFirstEvent : CodexError() {
+        override fun toErrorInfo(): CodexErrorInfo = CodexErrorInfo.Other
+        override fun httpStatusCodeValue(): Int? = null
+    }
+
     sealed class SandboxError : CodexError() {
         data class Unsupported(val message: String) : SandboxError() {
             override fun toErrorInfo(): CodexErrorInfo = CodexErrorInfo.Other

@@ -69,6 +69,38 @@ sealed class ApiError : Exception() {
      * Rate limit error.
      */
     data class RateLimit(override val message: String) : ApiError()
+
+    /**
+     * HTTP 401 Unauthorized.
+     */
+    data class Unauthorized(val body: String? = null) : ApiError() {
+        override val message: String
+            get() = body?.let { "unauthorized: $it" } ?: "unauthorized"
+    }
+
+    /**
+     * HTTP 429 Rate Limited.
+     */
+    data class RateLimited(val body: String? = null) : ApiError() {
+        override val message: String
+            get() = body?.let { "rate limited: $it" } ?: "rate limited"
+    }
+
+    /**
+     * HTTP 5xx Server Error.
+     */
+    data class ServerError(val statusCode: Int, val body: String? = null) : ApiError() {
+        override val message: String
+            get() = "server error ($statusCode): ${body ?: "no body"}"
+    }
+
+    /**
+     * Generic HTTP error.
+     */
+    data class HttpError(val statusCode: Int, val body: String? = null) : ApiError() {
+        override val message: String
+            get() = "HTTP error ($statusCode): ${body ?: "no body"}"
+    }
 }
 
 

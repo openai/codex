@@ -4,11 +4,11 @@ package ai.solace.coder.api.endpoint
 import ai.solace.coder.api.AuthProvider
 import ai.solace.coder.api.common.Prompt
 import ai.solace.coder.api.common.Reasoning
-import ai.solace.coder.api.common.ResponseStream
 import ai.solace.coder.api.common.TextControls
 import ai.solace.coder.api.provider.Provider
 import ai.solace.coder.api.requests.ResponsesRequest
 import ai.solace.coder.api.requests.ResponsesRequestBuilder
+import ai.solace.coder.api.sse.ChannelResponseStream
 import ai.solace.coder.api.telemetry.RequestTelemetry
 import ai.solace.coder.api.telemetry.SseTelemetry
 import io.ktor.client.*
@@ -40,7 +40,7 @@ class ResponsesClient<A : AuthProvider>(
         return this
     }
 
-    suspend fun streamRequest(request: ResponsesRequest): Result<ResponseStream> {
+    suspend fun streamRequest(request: ResponsesRequest): Result<ChannelResponseStream> {
         return stream(request.body, request.configureHeaders)
     }
 
@@ -48,7 +48,7 @@ class ResponsesClient<A : AuthProvider>(
         model: String,
         prompt: Prompt,
         options: ResponsesOptions = ResponsesOptions(),
-    ): Result<ResponseStream> {
+    ): Result<ChannelResponseStream> {
         val request = ResponsesRequestBuilder(model, prompt.instructions, prompt.input)
             .tools(prompt.tools)
             .parallelToolCalls(prompt.parallelToolCalls)
@@ -67,11 +67,7 @@ class ResponsesClient<A : AuthProvider>(
     private suspend fun stream(
         body: kotlinx.serialization.json.JsonElement,
         configureExtraHeaders: io.ktor.client.request.HttpRequestBuilder.() -> Unit,
-    ): Result<ResponseStream> {
-        // TODO: Implement spawnResponsesStream once SSE parsing is ported
-        return streaming.stream("responses", body, configureExtraHeaders) { _, _, _ ->
-            TODO("spawnResponsesStream not yet implemented")
-        }
+    ): Result<ChannelResponseStream> {
+        return streaming.stream("responses", body, configureExtraHeaders, SseStreamType.Responses)
     }
 }
-
