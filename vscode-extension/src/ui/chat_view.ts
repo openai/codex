@@ -97,8 +97,6 @@ export type ChatBlock =
 export type ChatViewState = {
   capabilities?: {
     agents: boolean;
-    selectedCliVariant: "auto" | "codex" | "codez";
-    detectedCliVariant: "unknown" | "codex" | "codez";
   };
   workspaceColorOverrides?: Record<string, number>;
   customPrompts?: Array<{
@@ -267,17 +265,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       session: Session,
       args: { providerID: string; apiKey: string },
     ) => Promise<unknown>,
-    private readonly onSetBackendKind: (
-      folder: vscode.WorkspaceFolder,
-      args: {
-        kind: "app-server" | "opencode";
-        restartMode: "later" | "restartAll" | "forceRestartAll";
-      },
-    ) => Promise<void>,
-    private readonly onSetCliVariant: (args: {
-      variant: "auto" | "codex" | "codez";
-      restartMode: "later" | "restartAll" | "forceRestartAll";
-    }) => Promise<void>,
     private readonly onFileSearch: (
       sessionId: string,
       query: string,
@@ -703,11 +690,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    if (type === "selectCliVariant") {
-      await vscode.commands.executeCommand("codez.selectCliVariant");
-      return;
-    }
-
     if (type === "settingsRequest") {
       const requestId = anyMsg["requestId"];
       const op = anyMsg["op"];
@@ -734,48 +716,36 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       const st = this.getState();
       const active = st.activeSession;
-      const activeFolder =
-        active && vscode.workspace.workspaceFolders
-          ? vscode.workspace.workspaceFolders.find(
-              (f) => f.uri.toString() === active.workspaceFolderUri,
-            ) ?? null
-          : null;
-      const backendKind =
-        activeFolder
-          ? vscode.workspace
-              .getConfiguration("codez", activeFolder.uri)
-              .get<string>("backend.kind") ?? "app-server"
-          : "app-server";
+      const sessionBackendId = active?.backendId ?? null;
       try {
         if (op === "load") {
           if (!active) {
             await respondOk({
               hasActiveSession: false,
               capabilities: st.capabilities ?? null,
-              backendKind,
+              sessionBackendId: null,
               account: null,
               accounts: null,
               opencode: null,
             });
             return;
           }
-          const detected = st.capabilities?.detectedCliVariant ?? "unknown";
           const opencode =
-            backendKind === "opencode"
+            sessionBackendId === "opencode"
               ? await this.onOpencodeProviderLoad(active)
               : null;
           const account =
-            backendKind === "opencode" ? null : await this.onAccountRead(active);
+            sessionBackendId === "opencode" ? null : await this.onAccountRead(active);
           const accounts =
-            backendKind === "opencode"
+            sessionBackendId === "opencode"
               ? null
-              : detected === "codez"
+              : sessionBackendId === "codez"
                 ? await this.onAccountList(active)
                 : null;
           await respondOk({
             hasActiveSession: true,
             capabilities: st.capabilities ?? null,
-            backendKind,
+            sessionBackendId,
             account,
             accounts,
             opencode,
@@ -788,11 +758,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           return;
         }
 
+        if (op === "reopenSessionInBackend") {
+          const backendId = anyMsg["backendId"];
+          const sessionId = anyMsg["sessionId"];
+          if (
+            typeof backendId !== "string" ||
+            (backendId !== "codex" && backendId !== "codez")
+          ) {
+            await respondErr("Invalid backendId.");
+            return;
+          }
+          if (typeof sessionId === "string" && sessionId && sessionId !== active.id) {
+            await respondErr("Session is not active.");
+            return;
+          }
+          await vscode.commands.executeCommand("codez.reopenSessionInBackend", {
+            sessionId: active.id,
+            backendId,
+          });
+          await respondOk({});
+          return;
+        }
+
         if (op === "opencodeProviderLoad") {
-          if (backendKind !== "opencode") {
+          if (sessionBackendId !== "opencode") {
             await respondOk({
               unsupported: true,
-              message: "opencode backend is not active for this workspace.",
+              message: "このセッションは opencode ではありません。",
             });
             return;
           }
@@ -802,10 +794,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
 
         if (op === "opencodeProviderOauthAuthorize") {
-          if (backendKind !== "opencode") {
+          if (sessionBackendId !== "opencode") {
             await respondOk({
               unsupported: true,
-              message: "opencode backend is not active for this workspace.",
+              message: "このセッションは opencode ではありません。",
             });
             return;
           }
@@ -832,10 +824,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
 
         if (op === "opencodeProviderOauthCallback") {
-          if (backendKind !== "opencode") {
+          if (sessionBackendId !== "opencode") {
             await respondOk({
               unsupported: true,
-              message: "opencode backend is not active for this workspace.",
+              message: "このセッションは opencode ではありません。",
             });
             return;
           }
@@ -866,10 +858,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
 
         if (op === "opencodeProviderSetApiKey") {
-          if (backendKind !== "opencode") {
+          if (sessionBackendId !== "opencode") {
             await respondOk({
               unsupported: true,
-              message: "opencode backend is not active for this workspace.",
+              message: "このセッションは opencode ではありません。",
             });
             return;
           }
@@ -892,12 +884,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
 
         if (op === "accountSwitch") {
-          const detected = st.capabilities?.detectedCliVariant ?? "unknown";
-          if (detected !== "codez") {
+          if (sessionBackendId !== "codez") {
             await respondOk({
               unsupported: true,
               message:
-                "アカウントの作成/切り替えは codez 選択時のみ対応です。Settings (⚙) の CLI から codez を選択し、必要ならバックエンドを再起動してください。",
+                "アカウントの作成/切り替えは codez セッションのみ対応です。codez セッションを開くか、このスレッドを codez で開き直してください。",
             });
             return;
           }
@@ -945,51 +936,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           }
           const res = await this.onAccountLoginApiKey(active, apiKey.trim());
           await respondOk(res);
-          return;
-        }
-
-        if (op === "setCliVariant") {
-          const variant = anyMsg["variant"];
-          const restartMode = anyMsg["restartMode"];
-          if (
-            variant !== "auto" &&
-            variant !== "codex" &&
-            variant !== "codez"
-          ) {
-            await respondErr("Invalid CLI variant.");
-            return;
-          }
-          const restart =
-            restartMode === "restartAll" || restartMode === "forceRestartAll"
-              ? restartMode
-              : "later";
-          await this.onSetCliVariant({ variant, restartMode: restart });
-          await respondOk({});
-          this.refresh();
-          return;
-        }
-
-        if (op === "setBackendKind") {
-          if (!activeFolder) {
-            await respondErr("WorkspaceFolder not found for active session.");
-            return;
-          }
-          const kind = anyMsg["kind"];
-          const restartMode = anyMsg["restartMode"];
-          if (kind !== "app-server" && kind !== "opencode") {
-            await respondErr("Invalid backend kind.");
-            return;
-          }
-          const restart =
-            restartMode === "restartAll" || restartMode === "forceRestartAll"
-              ? restartMode
-              : "later";
-          await this.onSetBackendKind(activeFolder, {
-            kind,
-            restartMode: restart,
-          });
-          await respondOk({});
-          this.refresh();
           return;
         }
 
@@ -1311,12 +1257,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      const caps = st.capabilities ?? {
-        agents: false,
-        selectedCliVariant: "auto" as const,
-        detectedCliVariant: "unknown" as const,
-      };
-      if (!caps.agents) {
+      const agentsEnabled = st.capabilities?.agents ?? false;
+      if (!agentsEnabled) {
         this.view?.webview.postMessage({ type: "agentIndex", agents: [] });
         return;
       }

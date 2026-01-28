@@ -18,7 +18,11 @@ import type { ThreadCompactParams } from "../generated/v2/ThreadCompactParams";
 import type { TurnStartParams } from "../generated/v2/TurnStartParams";
 import type { UserInput } from "../generated/v2/UserInput";
 import type { ThreadItem } from "../generated/v2/ThreadItem";
-import type { Session, SessionStore } from "../sessions";
+import type { BackendId, Session, SessionStore } from "../sessions";
+import {
+  makeBackendInstanceKey,
+  parseBackendInstanceKey,
+} from "./backend_instance_key";
 import type { ApprovalDecision } from "../generated/v2/ApprovalDecision";
 import type { AskUserQuestionResponse } from "../generated/v2/AskUserQuestionResponse";
 import type { ServerRequest } from "../generated/ServerRequest";
@@ -66,6 +70,7 @@ export class BackendManager implements vscode.Disposable {
       sse: AbortController;
       messageRoleById: Map<string, "user" | "assistant">;
       activeTurnIdBySession: Map<string, string>;
+      partItemIdByKey: Map<string, string>;
     }
   >();
   private readonly startInFlight = new Map<string, Promise<void>>();
@@ -123,22 +128,50 @@ export class BackendManager implements vscode.Disposable {
     private readonly sessions: SessionStore,
   ) {}
 
-  public getRunningCommand(folder: vscode.WorkspaceFolder): string | null {
-    const key = folder.uri.toString();
-    const proc = this.processes.get(key);
+  public getRunningCommandForBackendId(
+    folder: vscode.WorkspaceFolder,
+    backendId: BackendId,
+  ): string | null {
+    const backendKey = makeBackendInstanceKey(folder.uri.toString(), backendId);
+    const proc = this.processes.get(backendKey);
     if (proc) return proc.getCommand();
-    const oc = this.opencode.get(key);
+    const oc = this.opencode.get(backendKey);
     if (oc) return "opencode";
     return null;
   }
 
   public stopForWorkspaceFolder(folder: vscode.WorkspaceFolder): void {
-    const key = folder.uri.toString();
-    const proc = this.processes.get(key);
-    const oc = this.opencode.get(key);
+    const folderUri = folder.uri.toString();
+    const toStop: Array<{ backendKey: string; backendId: BackendId }> = [];
+    for (const backendKey of this.processes.keys()) {
+      const parsed = parseBackendInstanceKey(backendKey);
+      if (parsed.workspaceFolderUri === folderUri) {
+        toStop.push({ backendKey, backendId: parsed.backendId });
+      }
+    }
+    for (const backendKey of this.opencode.keys()) {
+      const parsed = parseBackendInstanceKey(backendKey);
+      if (parsed.workspaceFolderUri === folderUri) {
+        toStop.push({ backendKey, backendId: parsed.backendId });
+      }
+    }
+    for (const { backendKey, backendId } of toStop) {
+      this.stopForBackendInstance(folder, backendId, backendKey);
+    }
+  }
+
+  public stopForBackendInstance(
+    folder: vscode.WorkspaceFolder,
+    backendId: BackendId,
+    backendKey = makeBackendInstanceKey(folder.uri.toString(), backendId),
+  ): void {
+    const proc = this.processes.get(backendKey);
+    const oc = this.opencode.get(backendKey);
     if (proc) {
-      this.output.appendLine(`Stopping backend for ${folder.uri.fsPath}`);
-      this.terminateBackend(key, proc, {
+      this.output.appendLine(
+        `Stopping backend (${backendId}) for ${folder.uri.fsPath}`,
+      );
+      this.terminateBackend(backendKey, proc, {
         reason: "stop",
         code: null,
         signal: null,
@@ -146,10 +179,12 @@ export class BackendManager implements vscode.Disposable {
       return;
     }
     if (oc) {
-      this.output.appendLine(`Stopping opencode backend for ${folder.uri.fsPath}`);
+      this.output.appendLine(
+        `Stopping opencode backend (${backendId}) for ${folder.uri.fsPath}`,
+      );
       oc.sse.abort();
       oc.server.dispose();
-      this.opencode.delete(key);
+      this.opencode.delete(backendKey);
     }
   }
 
@@ -160,31 +195,39 @@ export class BackendManager implements vscode.Disposable {
   public async restartForWorkspaceFolder(
     folder: vscode.WorkspaceFolder,
   ): Promise<void> {
+    const folderUri = folder.uri.toString();
+    const backendIds: BackendId[] = [];
+    for (const backendKey of this.processes.keys()) {
+      const parsed = parseBackendInstanceKey(backendKey);
+      if (parsed.workspaceFolderUri === folderUri) backendIds.push(parsed.backendId);
+    }
+    for (const backendKey of this.opencode.keys()) {
+      const parsed = parseBackendInstanceKey(backendKey);
+      if (parsed.workspaceFolderUri === folderUri) backendIds.push(parsed.backendId);
+    }
     this.stopForWorkspaceFolder(folder);
-    await this.startForWorkspaceFolder(folder);
+    for (const backendId of backendIds) {
+      await this.startForBackendId(folder, backendId);
+    }
   }
 
-  public async startForWorkspaceFolder(
+  public async startForBackendId(
     folder: vscode.WorkspaceFolder,
+    backendId: BackendId,
   ): Promise<void> {
-    const key = folder.uri.toString();
-    const existing = this.processes.get(key);
-    const existingOpencode = this.opencode.get(key);
+    const backendKey = makeBackendInstanceKey(folder.uri.toString(), backendId);
+    const existing = this.processes.get(backendKey);
+    const existingOpencode = this.opencode.get(backendKey);
     if (existing || existingOpencode) return;
 
-    const inflight = this.startInFlight.get(key);
+    const inflight = this.startInFlight.get(backendKey);
     if (inflight) {
       await inflight;
       return;
     }
 
     const cfg = vscode.workspace.getConfiguration("codez", folder.uri);
-    const backendKind =
-      (cfg.get<string>("backend.kind") ?? "app-server") === "opencode"
-        ? ("opencode" as const)
-        : ("app-server" as const);
-
-    if (backendKind === "opencode") {
+    if (backendId === "opencode") {
       const command = cfg.get<string>("opencode.command") ?? "opencode";
       const rawArgs = cfg.get<string[]>("opencode.args") ?? ["serve"];
       const args = [...rawArgs];
@@ -209,41 +252,50 @@ export class BackendManager implements vscode.Disposable {
 
         const messageRoleById = new Map<string, "user" | "assistant">();
         const activeTurnIdBySession = new Map<string, string>();
+        const partItemIdByKey = new Map<string, string>();
 
         const sse = await client.connectEventStream(
-          (evt) => this.onOpencodeEvent(key, evt, messageRoleById, activeTurnIdBySession, client),
+          (evt) => {
+            this.onOpencodeEvent(
+              backendKey,
+              evt,
+              messageRoleById,
+              activeTurnIdBySession,
+              partItemIdByKey,
+              client,
+            );
+          },
           (err) => {
             this.output.appendLine(`[opencode] event stream error: ${String(err)}`);
           },
         );
 
-        this.opencode.set(key, { server, client, sse, messageRoleById, activeTurnIdBySession });
+        this.opencode.set(backendKey, {
+          server,
+          client,
+          sse,
+          messageRoleById,
+          activeTurnIdBySession,
+          partItemIdByKey,
+        });
         server.onDidExit(({ code, signal }) => {
           // Backend died unexpectedly (e.g. killed from outside VS Code).
-          const current = this.opencode.get(key);
+          const current = this.opencode.get(backendKey);
           if (!current) return;
           current.sse.abort();
-          this.opencode.delete(key);
-          this.cleanupBackendCaches(key);
-          this.onBackendTerminated?.(key, { reason: "exit", code, signal });
+          this.opencode.delete(backendKey);
+          this.cleanupBackendCaches(backendKey);
+          this.onBackendTerminated?.(backendKey, { reason: "exit", code, signal });
         });
       })();
 
       this.startInFlight.set(
-        key,
-        startPromise.finally(() => this.startInFlight.delete(key)),
+        backendKey,
+        startPromise.finally(() => this.startInFlight.delete(backendKey)),
       );
       await startPromise;
       return;
     }
-
-    const cliVariantRaw = cfg.get<string>("cli.variant") ?? "auto";
-    const cliVariant =
-      cliVariantRaw === "upstream"
-        ? "codex"
-        : cliVariantRaw === "mine"
-          ? "codez"
-          : cliVariantRaw;
 
     const codexCommand =
       cfg.get<string>("cli.commands.codex") ??
@@ -253,31 +305,16 @@ export class BackendManager implements vscode.Disposable {
       cfg.get<string>("cli.commands.codez") ??
       cfg.get<string>("cli.commands.mine") ??
       "codez";
-    const commandFromBackend = cfg.get<string>("backend.command");
     const args = cfg.get<string[]>("backend.args");
     const logRpcPayloads = cfg.get<boolean>("debug.logRpcPayloads") ?? false;
 
-    const command =
-      cliVariant === "codez"
-        ? codezCommand
-        : cliVariant === "codex"
-          ? codexCommand
-          : commandFromBackend;
-
-    if (!command) {
-      const keyName =
-        cliVariant === "codez"
-          ? "codez.cli.commands.codez"
-          : cliVariant === "codex"
-            ? "codez.cli.commands.codex"
-            : "codez.backend.command";
-      throw new Error(`Missing configuration: ${keyName}`);
-    }
     if (!args) throw new Error("Missing configuration: codez.backend.args");
+
+    const command = backendId === "codez" ? codezCommand : codexCommand;
 
     const startPromise = (async () => {
       this.output.appendLine(
-        `Starting backend: ${command} ${args.join(" ")} (cwd=${folder.uri.fsPath})`,
+        `Starting backend (${backendId}): ${command} ${args.join(" ")} (cwd=${folder.uri.fsPath})`,
       );
       const proc = await BackendProcess.spawn({
         command,
@@ -287,22 +324,23 @@ export class BackendManager implements vscode.Disposable {
         output: this.output,
       });
 
-      this.processes.set(key, proc);
+      this.processes.set(backendKey, proc);
       proc.onDidExitWithInfo((info: BackendExitInfo) => {
         // Backend died unexpectedly (e.g. killed from outside VS Code).
-        this.processes.delete(key);
-        this.cleanupBackendCaches(key);
-        this.onBackendTerminated?.(key, { reason: "exit", ...info });
+        this.processes.delete(backendKey);
+        this.cleanupBackendCaches(backendKey);
+        this.onBackendTerminated?.(backendKey, { reason: "exit", ...info });
       });
-      proc.onNotification = (n) => this.onServerNotification(key, n);
-      proc.onApprovalRequest = async (req) => this.handleApprovalRequest(req);
+      proc.onNotification = (n) => this.onServerNotification(backendKey, n);
+      proc.onApprovalRequest = async (req) =>
+        this.handleApprovalRequest(backendKey, req);
       proc.onAskUserQuestionRequest = async (req) =>
-        this.handleAskUserQuestionRequest(req);
+        this.handleAskUserQuestionRequest(backendKey, req);
     })();
 
     this.startInFlight.set(
-      key,
-      startPromise.finally(() => this.startInFlight.delete(key)),
+      backendKey,
+      startPromise.finally(() => this.startInFlight.delete(backendKey)),
     );
     await startPromise;
   }
@@ -344,16 +382,18 @@ export class BackendManager implements vscode.Disposable {
 
   public async newSession(
     folder: vscode.WorkspaceFolder,
+    backendId: BackendId,
     modelSettings?: ModelSettings,
   ): Promise<Session> {
-    await this.startForWorkspaceFolder(folder);
-    const backendKey = folder.uri.toString();
+    const backendKey = makeBackendInstanceKey(folder.uri.toString(), backendId);
+    await this.startForBackendId(folder, backendId);
     const oc = this.opencode.get(backendKey);
     if (oc) {
       const created = await oc.client.createSession();
       const session: Session = {
         id: randomUUID(),
         backendKey,
+        backendId,
         workspaceFolderUri: folder.uri.toString(),
         title: folder.name,
         threadId: created.id,
@@ -387,6 +427,7 @@ export class BackendManager implements vscode.Disposable {
     const session: Session = {
       id: randomUUID(),
       backendKey,
+      backendId,
       workspaceFolderUri: folder.uri.toString(),
       title: folder.name,
       threadId: res.thread.id,
@@ -413,7 +454,7 @@ export class BackendManager implements vscode.Disposable {
       );
     }
 
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     const oc = this.opencode.get(session.backendKey);
     if (oc) {
       return await oc.client.listSkills(folder.uri.fsPath);
@@ -441,7 +482,7 @@ export class BackendManager implements vscode.Disposable {
       );
     }
 
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     const oc = this.opencode.get(session.backendKey);
     if (oc) {
       return await oc.client.fuzzyFileSearch({
@@ -469,7 +510,7 @@ export class BackendManager implements vscode.Disposable {
       );
     }
 
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     const oc = this.opencode.get(session.backendKey);
     if (oc) {
       const cached = this.modelsByBackendKey.get(session.backendKey);
@@ -490,16 +531,17 @@ export class BackendManager implements vscode.Disposable {
     return models;
   }
 
-  public async listThreadsForWorkspaceFolder(
+  public async listThreadsForWorkspaceFolderAndBackendId(
     folder: vscode.WorkspaceFolder,
+    backendId: BackendId,
     opts?: {
       cursor?: string | null;
       limit?: number | null;
       modelProviders?: string[] | null;
     },
   ): Promise<{ data: Thread[]; nextCursor: string | null }> {
-    await this.startForWorkspaceFolder(folder);
-    const backendKey = folder.uri.toString();
+    const backendKey = makeBackendInstanceKey(folder.uri.toString(), backendId);
+    await this.startForBackendId(folder, backendId);
     const oc = this.opencode.get(backendKey);
     if (oc) {
       const sessions = await oc.client.listSessions();
@@ -539,8 +581,18 @@ export class BackendManager implements vscode.Disposable {
   public async pickSession(
     folder: vscode.WorkspaceFolder,
   ): Promise<Session | null> {
-    const backendKey = folder.uri.toString();
-    return this.sessions.pick(backendKey);
+    const workspaceFolderUri = folder.uri.toString();
+    const sessions = this.sessions.listByWorkspaceFolderUri(workspaceFolderUri);
+    if (sessions.length === 0) return null;
+    const picked = await vscode.window.showQuickPick(
+      sessions.map((s) => ({
+        label: s.title,
+        description: `${s.backendId}  ${s.threadId}`,
+        session: s,
+      })),
+      { title: "Codex UI: Select a session" },
+    );
+    return picked?.session ?? null;
   }
 
   public async resumeSession(session: Session): Promise<ThreadResumeResponse> {
@@ -551,7 +603,7 @@ export class BackendManager implements vscode.Disposable {
       );
     }
 
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     const oc = this.opencode.get(session.backendKey);
     if (oc) {
       const thread = await this.buildThreadFromOpencodeSession(session.threadId, oc.client);
@@ -599,7 +651,7 @@ export class BackendManager implements vscode.Disposable {
       );
     }
 
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     const oc = this.opencode.get(session.backendKey);
     if (oc) {
       // Clear per-thread caches so the UI can rehydrate from the refreshed thread state.
@@ -653,7 +705,7 @@ export class BackendManager implements vscode.Disposable {
       );
     }
 
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     const proc = this.processes.get(session.backendKey);
     if (!proc)
       throw new Error("Backend is not running for this workspace folder");
@@ -668,7 +720,7 @@ export class BackendManager implements vscode.Disposable {
         `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
       );
     }
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     if (this.opencode.get(session.backendKey)) {
       throw new Error("Accounts are not supported when running opencode backend.");
     }
@@ -688,7 +740,7 @@ export class BackendManager implements vscode.Disposable {
         `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
       );
     }
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     if (this.opencode.get(session.backendKey)) {
       throw new Error("Accounts are not supported when running opencode backend.");
     }
@@ -705,7 +757,7 @@ export class BackendManager implements vscode.Disposable {
         `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
       );
     }
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     if (this.opencode.get(session.backendKey)) {
       throw new Error("Accounts are not supported when running opencode backend.");
     }
@@ -725,7 +777,7 @@ export class BackendManager implements vscode.Disposable {
         `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
       );
     }
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     if (this.opencode.get(session.backendKey)) {
       throw new Error("Accounts are not supported when running opencode backend.");
     }
@@ -742,7 +794,7 @@ export class BackendManager implements vscode.Disposable {
         `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
       );
     }
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     if (this.opencode.get(session.backendKey)) {
       throw new Error("Accounts are not supported when running opencode backend.");
     }
@@ -761,7 +813,7 @@ export class BackendManager implements vscode.Disposable {
         `WorkspaceFolder not found for session: ${session.workspaceFolderUri}`,
       );
     }
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     if (this.opencode.get(session.backendKey)) {
       throw new Error("Accounts are not supported when running opencode backend.");
     }
@@ -850,7 +902,7 @@ export class BackendManager implements vscode.Disposable {
     }
 
     // Backend can terminate unexpectedly; ensure it is started before sending.
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
 
     const oc = this.opencode.get(session.backendKey);
     if (oc) {
@@ -870,10 +922,17 @@ export class BackendManager implements vscode.Disposable {
         params: { threadId: session.threadId, turn: { id: turnId } },
       });
 
-      const model =
-        modelSettings?.provider && modelSettings?.model
-          ? { providerID: modelSettings.provider, modelID: modelSettings.model }
-          : undefined;
+      const model = (() => {
+        if (modelSettings?.provider && modelSettings?.model) {
+          return { providerID: modelSettings.provider, modelID: modelSettings.model };
+        }
+        const raw = String(modelSettings?.model ?? "").trim();
+        const idx = raw.indexOf(":");
+        if (idx > 0 && idx < raw.length - 1) {
+          return { providerID: raw.slice(0, idx), modelID: raw.slice(idx + 1) };
+        }
+        return undefined;
+      })();
       const parts: Array<Record<string, unknown>> = [{ type: "text", text: trimmed }];
 
       this.output.appendLine(`\n>> (${session.title}) ${trimmed}`);
@@ -894,6 +953,21 @@ export class BackendManager implements vscode.Disposable {
         this.streamState.set(session.threadId, { activeTurnId: null });
         oc.activeTurnIdBySession.delete(session.threadId);
         throw err;
+      }
+
+      const msgParts = Array.isArray((msg as any).parts) ? ((msg as any).parts as any[]) : [];
+      for (let i = 0; i < msgParts.length; i += 1) {
+        const p = msgParts[i];
+        if (!p || typeof p !== "object") continue;
+        if ((p as any).type === "text") continue;
+        this.emitNotification(session.backendKey, session, {
+          method: "item/completed",
+          params: {
+            threadId: session.threadId,
+            turnId,
+            item: opencodePartToThreadItem(p as any, `${msg.info.id}:part:${String(i)}`),
+          },
+        });
       }
 
       const assistantText = extractOpencodeText(msg);
@@ -973,7 +1047,7 @@ export class BackendManager implements vscode.Disposable {
       );
     }
 
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     const oc = this.opencode.get(session.backendKey);
     if (oc) {
       await oc.client.abort(session.threadId);
@@ -1005,7 +1079,7 @@ export class BackendManager implements vscode.Disposable {
       );
     }
 
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     const oc = this.opencode.get(session.backendKey);
     if (oc) {
       // Clear per-thread caches so the UI can rehydrate from the updated thread state.
@@ -1060,7 +1134,7 @@ export class BackendManager implements vscode.Disposable {
       );
     }
 
-    await this.startForWorkspaceFolder(folder);
+    await this.startForBackendId(folder, session.backendId);
     const oc = this.opencode.get(session.backendKey);
     if (oc) {
       throw new Error(
@@ -1109,6 +1183,7 @@ export class BackendManager implements vscode.Disposable {
     raw: OpencodeEvent,
     messageRoleById: Map<string, "user" | "assistant">,
     activeTurnIdBySession: Map<string, string>,
+    partItemIdByKey: Map<string, string>,
     client: OpencodeHttpClient,
   ): void {
     const evt = (raw as any)?.payload ? ((raw as any).payload as any) : (raw as any);
@@ -1125,7 +1200,7 @@ export class BackendManager implements vscode.Disposable {
         messageRoleById.set(messageID, role);
       }
       if (sessionID && role === "assistant" && messageID) {
-        const session = this.sessions.getByThreadId(sessionID);
+        const session = this.sessions.getByThreadId(backendKey, sessionID);
         if (!session) return;
         const turnId = activeTurnIdBySession.get(sessionID) ?? "";
         this.emitNotification(backendKey, session, {
@@ -1146,16 +1221,72 @@ export class BackendManager implements vscode.Disposable {
       const sessionID = typeof part?.sessionID === "string" ? (part.sessionID as string) : null;
       const messageID = typeof part?.messageID === "string" ? (part.messageID as string) : null;
       const partType = typeof part?.type === "string" ? (part.type as string) : null;
-      if (!delta || !sessionID || !messageID) return;
+      if (!sessionID || !messageID || !partType) return;
       const role = messageRoleById.get(messageID) ?? null;
       if (role !== "assistant") return;
-      if (partType !== "text") return;
-      const session = this.sessions.getByThreadId(sessionID);
+      const session = this.sessions.getByThreadId(backendKey, sessionID);
       if (!session) return;
       const turnId = activeTurnIdBySession.get(sessionID) ?? "";
+
+      if (partType === "text") {
+        if (!delta) return;
+        this.emitNotification(backendKey, session, {
+          method: "item/agentMessage/delta",
+          params: { threadId: sessionID, turnId, itemId: messageID, delta },
+        });
+        return;
+      }
+
+      const partKey = (() => {
+        const index = typeof part?.index === "number" ? String(part.index) : "";
+        return `${sessionID}:${messageID}:${partType}:${index}`;
+      })();
+      const itemId =
+        partItemIdByKey.get(partKey) ??
+        (() => {
+          const id = `${messageID}:stream:${partType}:${String(partItemIdByKey.size)}`;
+          partItemIdByKey.set(partKey, id);
+          if (partType === "reasoning") {
+            this.emitNotification(backendKey, session, {
+              method: "item/started",
+              params: {
+                threadId: sessionID,
+                turnId,
+                item: { type: "reasoning", id, summary: [], content: [""] },
+              },
+            });
+          } else {
+            this.emitNotification(backendKey, session, {
+              method: "item/started",
+              params: {
+                threadId: sessionID,
+                turnId,
+                item: {
+                  type: "mcpToolCall",
+                  id,
+                  server: "opencode",
+                  tool: partType,
+                  status: "inProgress",
+                  result: null,
+                  error: null,
+                },
+              },
+            });
+          }
+          return id;
+        })();
+
+      if (!delta) return;
+      if (partType === "reasoning") {
+        this.emitNotification(backendKey, session, {
+          method: "item/reasoning/textDelta",
+          params: { threadId: sessionID, turnId, itemId, contentIndex: 0, delta },
+        });
+        return;
+      }
       this.emitNotification(backendKey, session, {
-        method: "item/agentMessage/delta",
-        params: { threadId: sessionID, turnId, itemId: messageID, delta },
+        method: "item/mcpToolCall/progress",
+        params: { threadId: sessionID, turnId, itemId, message: delta },
       });
       return;
     }
@@ -1164,7 +1295,7 @@ export class BackendManager implements vscode.Disposable {
       const sessionID = typeof properties?.sessionID === "string" ? (properties.sessionID as string) : null;
       const diff = Array.isArray(properties?.diff) ? (properties.diff as OpencodeFileDiff[]) : null;
       if (!sessionID || !diff) return;
-      const session = this.sessions.getByThreadId(sessionID);
+      const session = this.sessions.getByThreadId(backendKey, sessionID);
       if (!session) return;
       const turnId = activeTurnIdBySession.get(sessionID) ?? "";
       const formatted = client.formatFileDiffs(diff);
@@ -1174,6 +1305,12 @@ export class BackendManager implements vscode.Disposable {
       });
       return;
     }
+
+    // Debug: log unknown opencode event types so we can add structured handling later.
+    // Keep this in output channel (not UI) to avoid surprising user-facing behavior.
+    this.output.appendLine(
+      `[opencode] Unhandled event: type=${type} keys=${Object.keys(properties ?? {}).join(",")}`,
+    );
   }
 
   private threadFromOpencodeSession(s: OpencodeSessionInfo): Thread {
@@ -1258,7 +1395,7 @@ export class BackendManager implements vscode.Disposable {
     n: AnyServerNotification,
   ): void {
     const session =
-      "params" in n ? this.sessionFromParams((n as any).params) : null;
+      "params" in n ? this.sessionFromParams(backendKey, (n as any).params) : null;
     this.onServerEvent?.(backendKey, session, n);
 
     const p = (n as any).params as any;
@@ -1280,7 +1417,7 @@ export class BackendManager implements vscode.Disposable {
       );
       this.streamState.set(p.threadId, { activeTurnId: null });
 
-      const session = this.sessions.getByThreadId(p.threadId);
+      const session = this.sessions.getByThreadId(backendKey, p.threadId);
       if (session) {
         this.onTurnCompleted?.(session, p.turn.status, p.turn.id);
       }
@@ -1288,7 +1425,7 @@ export class BackendManager implements vscode.Disposable {
     }
 
     if (n.method === "turn/diff/updated") {
-      const session = this.sessions.getByThreadId(p.threadId);
+      const session = this.sessions.getByThreadId(backendKey, p.threadId);
       if (!session) return;
       this.latestDiffByThreadId.set(p.threadId, p.diff);
       this.onDiffUpdated?.(session, p.diff, p.turnId);
@@ -1296,7 +1433,7 @@ export class BackendManager implements vscode.Disposable {
     }
 
     if (n.method === "turn/plan/updated") {
-      const session = this.sessions.getByThreadId(p.threadId);
+      const session = this.sessions.getByThreadId(backendKey, p.threadId);
       if (!session) return;
       const plan = p.plan as Array<{ status: string; step: string }>;
       const steps = plan
@@ -1308,7 +1445,7 @@ export class BackendManager implements vscode.Disposable {
     }
 
     if (n.method === "item/started") {
-      const session = this.sessions.getByThreadId(p.threadId);
+      const session = this.sessions.getByThreadId(backendKey, p.threadId);
       if (!session) return;
       const item = p.item;
       this.upsertItem(p.threadId, item);
@@ -1326,7 +1463,7 @@ export class BackendManager implements vscode.Disposable {
     }
 
     if (n.method === "item/completed") {
-      const session = this.sessions.getByThreadId(p.threadId);
+      const session = this.sessions.getByThreadId(backendKey, p.threadId);
       if (!session) return;
       const item = p.item;
       this.upsertItem(p.threadId, item);
@@ -1344,7 +1481,7 @@ export class BackendManager implements vscode.Disposable {
     }
 
     if (n.method === "item/commandExecution/outputDelta") {
-      const session = this.sessions.getByThreadId(p.threadId);
+      const session = this.sessions.getByThreadId(backendKey, p.threadId);
       if (!session) return;
       this.onTrace?.(session, {
         kind: "tool",
@@ -1356,7 +1493,7 @@ export class BackendManager implements vscode.Disposable {
     }
 
     if (n.method === "item/fileChange/outputDelta") {
-      const session = this.sessions.getByThreadId(p.threadId);
+      const session = this.sessions.getByThreadId(backendKey, p.threadId);
       if (!session) return;
       this.onTrace?.(session, {
         kind: "tool",
@@ -1368,7 +1505,7 @@ export class BackendManager implements vscode.Disposable {
     }
 
     if (n.method === "item/mcpToolCall/progress") {
-      const session = this.sessions.getByThreadId(p.threadId);
+      const session = this.sessions.getByThreadId(backendKey, p.threadId);
       if (!session) return;
       this.onTrace?.(session, {
         kind: "tool",
@@ -1380,7 +1517,7 @@ export class BackendManager implements vscode.Disposable {
     }
 
     if (n.method === "item/reasoning/summaryTextDelta") {
-      const session = this.sessions.getByThreadId(p.threadId);
+      const session = this.sessions.getByThreadId(backendKey, p.threadId);
       if (!session) return;
       this.onTrace?.(session, {
         kind: "reasoning",
@@ -1392,7 +1529,7 @@ export class BackendManager implements vscode.Disposable {
     }
 
     if (n.method === "item/reasoning/textDelta") {
-      const session = this.sessions.getByThreadId(p.threadId);
+      const session = this.sessions.getByThreadId(backendKey, p.threadId);
       if (!session) return;
       this.onTrace?.(session, {
         kind: "reasoning",
@@ -1404,7 +1541,7 @@ export class BackendManager implements vscode.Disposable {
     }
   }
 
-  private sessionFromParams(params: unknown): Session | null {
+  private sessionFromParams(backendKey: string, params: unknown): Session | null {
     if (typeof params !== "object" || params === null) return null;
     const o = params as Record<string, unknown>;
     const threadId =
@@ -1423,11 +1560,11 @@ export class BackendManager implements vscode.Disposable {
         (typeof msg["threadId"] === "string"
           ? (msg["threadId"] as string)
           : null);
-      if (msgThreadId) return this.sessions.getByThreadId(msgThreadId);
+      if (msgThreadId) return this.sessions.getByThreadId(backendKey, msgThreadId);
     }
 
     if (typeof threadId !== "string") return null;
-    return this.sessions.getByThreadId(threadId);
+    return this.sessions.getByThreadId(backendKey, threadId);
   }
 
   public dispose(): void {
@@ -1441,9 +1578,10 @@ export class BackendManager implements vscode.Disposable {
   }
 
   private async handleApprovalRequest(
+    backendKey: string,
     req: V2ApprovalRequest,
   ): Promise<ApprovalDecision> {
-    const session = this.sessions.getByThreadId(req.params.threadId);
+    const session = this.sessions.getByThreadId(backendKey, req.params.threadId);
     if (!session) {
       throw new Error(
         `Session not found for approval request: threadId=${req.params.threadId}`,
@@ -1456,9 +1594,10 @@ export class BackendManager implements vscode.Disposable {
   }
 
   private async handleAskUserQuestionRequest(
+    backendKey: string,
     req: V2AskUserQuestionRequest,
   ): Promise<AskUserQuestionResponse> {
-    const session = this.sessions.getByThreadId(req.params.threadId);
+    const session = this.sessions.getByThreadId(backendKey, req.params.threadId);
     if (!session) {
       throw new Error(
         `Session not found for ask-question request: threadId=${req.params.threadId}`,
@@ -1496,6 +1635,41 @@ function extractOpencodeText(msg: OpencodeMessageWithParts): string {
   return out.join("");
 }
 
+function opencodePartToThreadItem(
+  part: Record<string, unknown>,
+  itemId: string,
+): ThreadItem {
+  const type = String(part.type ?? "part");
+  if (type === "reasoning") {
+    const summaryRaw = typeof (part as any).summary === "string" ? String((part as any).summary) : "";
+    const contentRaw = typeof (part as any).text === "string" ? String((part as any).text) : "";
+    return {
+      type: "reasoning",
+      id: itemId,
+      summary: summaryRaw ? [summaryRaw] : [],
+      content: contentRaw ? [contentRaw] : [],
+    } as any;
+  }
+
+  return {
+    type: "mcpToolCall",
+    id: itemId,
+    server: "opencode",
+    tool: type,
+    status: "completed",
+    result: {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(part, null, 2),
+          text_elements: [],
+        },
+      ],
+    },
+    error: null,
+  } as any;
+}
+
 function buildTurnsFromOpencodeMessages(messages: OpencodeMessageWithParts[]): Turn[] {
   const out: Turn[] = [];
   let current: { id: string; items: ThreadItem[] } | null = null;
@@ -1515,10 +1689,19 @@ function buildTurnsFromOpencodeMessages(messages: OpencodeMessageWithParts[]): T
     const role = (m as any)?.info?.role;
     const messageID = typeof (m as any)?.info?.id === "string" ? (m as any).info.id : "";
     if (!messageID) continue;
+    const parts = Array.isArray((m as any).parts) ? ((m as any).parts as any[]) : [];
     if (role === "user") {
       pushCurrent();
       const userText = extractOpencodeText(m);
       current = { id: `turn:${messageID}`, items: [] };
+      for (let i = 0; i < parts.length; i += 1) {
+        const p = parts[i];
+        if (!p || typeof p !== "object") continue;
+        if ((p as any).type === "text") continue;
+        current.items.push(
+          opencodePartToThreadItem(p as any, `${messageID}:part:${String(i)}`),
+        );
+      }
       current.items.push({
         type: "userMessage",
         id: messageID,
@@ -1530,7 +1713,19 @@ function buildTurnsFromOpencodeMessages(messages: OpencodeMessageWithParts[]): T
       if (!current) {
         current = { id: `turn:${messageID}`, items: [] };
       }
-      current.items.push({ type: "agentMessage", id: messageID, text: extractOpencodeText(m) } as any);
+      for (let i = 0; i < parts.length; i += 1) {
+        const p = parts[i];
+        if (!p || typeof p !== "object") continue;
+        if ((p as any).type === "text") continue;
+        current.items.push(
+          opencodePartToThreadItem(p as any, `${messageID}:part:${String(i)}`),
+        );
+      }
+      current.items.push({
+        type: "agentMessage",
+        id: messageID,
+        text: extractOpencodeText(m),
+      } as any);
       continue;
     }
   }

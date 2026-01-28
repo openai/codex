@@ -23,8 +23,12 @@ import type { Thread } from "./generated/v2/Thread";
 import type { ThreadItem } from "./generated/v2/ThreadItem";
 import type { ThreadTokenUsage } from "./generated/v2/ThreadTokenUsage";
 import type { Turn } from "./generated/v2/Turn";
-import type { Session } from "./sessions";
+import type { BackendId, Session } from "./sessions";
 import { SessionStore } from "./sessions";
+import {
+  makeBackendInstanceKey,
+  parseBackendInstanceKey,
+} from "./backend/backend_instance_key";
 import {
   ChatViewProvider,
   getSessionModelState,
@@ -367,10 +371,6 @@ const WORKSPACE_COLOR_PALETTE = [
 ] as const;
 let workspaceColorOverrides: Record<string, number> = {};
 const mcpStatusByBackendKey = new Map<string, Map<string, string>>();
-const cliVariantByBackendKey = new Map<
-  string,
-  "unknown" | "codex" | "codez"
->();
 const defaultTitleRe = /^(.*)\s+\([0-9a-f]{8}\)$/i;
 type UiImageInput = { name: string; url: string };
 type BackendImageInput =
@@ -455,6 +455,25 @@ export function activate(context: vscode.ExtensionContext): void {
   sessions = new SessionStore();
   loadSessions(context, sessions);
   for (const s of sessions.listAll()) ensureRuntime(s.id);
+  const legacySessions = readPersistedSessionsV1(context);
+  if (legacySessions.length > 0 && sessions.listAll().length === 0) {
+    const prompted = context.workspaceState.get<boolean>(
+      SESSIONS_V1_MIGRATION_PROMPTED_KEY,
+    );
+    if (!prompted) {
+      void context.workspaceState.update(SESSIONS_V1_MIGRATION_PROMPTED_KEY, true);
+      void vscode.window
+        .showInformationMessage(
+          "保存済みセッションの形式が更新されました。移行コマンドを実行すると、旧形式（v1）のセッションを codex/codez/opencode のいずれかに割り当てて復元できます。",
+          "移行する",
+        )
+        .then((picked) => {
+          if (picked === "移行する") {
+            void vscode.commands.executeCommand("codez.migrateSessionsV1");
+          }
+        });
+    }
+  }
   loadHiddenTabSessions(context);
   workspaceColorOverrides = loadWorkspaceColorOverrides(context);
   refreshCustomPromptsFromDisk();
@@ -674,23 +693,9 @@ export function activate(context: vscode.ExtensionContext): void {
           );
           return;
         }
-        const cfg = vscode.workspace.getConfiguration("codez", folder.uri);
-        const backendKind = cfg.get<string>("backend.kind") ?? "app-server";
-        if (backendKind !== "opencode" && !isMineSelectedForBackendKey(session.backendKey)) {
+        if (session.backendId !== "codez" && session.backendId !== "opencode") {
           void vscode.window.showInformationMessage(
-            "Rewind は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
-          );
-          return;
-        }
-
-        try {
-          await ensureBackendMatchesConfiguredCli(folder, "codezFeature");
-        } catch (err) {
-          outputChannel?.appendLine(
-            `[rewind] Backend configuration check failed: ${String(err)}`,
-          );
-          void vscode.window.showErrorMessage(
-            "Backend configuration check failed. See Codex UI output channel.",
+            "Rewind は codez または opencode セッションでのみ対応です。",
           );
           return;
         }
@@ -842,66 +847,6 @@ export function activate(context: vscode.ExtensionContext): void {
       await backendManager.opencodeSetProviderApiKey(session, args);
       return {};
     },
-    async (folder, { kind, restartMode }) => {
-      if (!backendManager) throw new Error("backendManager is not initialized");
-
-      const cfg = vscode.workspace.getConfiguration("codez", folder.uri);
-      await cfg.update(
-        "backend.kind",
-        kind,
-        vscode.ConfigurationTarget.WorkspaceFolder,
-      );
-
-      if (restartMode === "restartAll" || restartMode === "forceRestartAll") {
-        const folders = vscode.workspace.workspaceFolders ?? [];
-        for (const f of folders) {
-          await backendManager.restartForWorkspaceFolder(f);
-        }
-      }
-    },
-    async ({ variant, restartMode }) => {
-      if (!backendManager) throw new Error("backendManager is not initialized");
-      if (!outputChannel) throw new Error("outputChannel is not initialized");
-
-      const cfg = vscode.workspace.getConfiguration("codez");
-      const codezCmd =
-        cfg.get<string>("cli.commands.codez") ??
-        cfg.get<string>("cli.commands.mine") ??
-        "codez";
-
-      const next = normalizeCliVariant(variant);
-      if (next === "codez") {
-        const codezProbe = await probeCliVersion(codezCmd);
-        const codezDetected =
-          codezProbe.ok && codezProbe.version.includes("-codez.");
-        if (!codezDetected) {
-          throw new Error(
-            codezProbe.ok
-              ? `codez not detected (found: ${codezProbe.version})`
-              : `codez not detected (${codezProbe.error})`,
-          );
-        }
-      }
-
-      await cfg.update("cli.variant", next, vscode.ConfigurationTarget.Global);
-
-      const folders = vscode.workspace.workspaceFolders ?? [];
-      if (restartMode === "restartAll") {
-        for (const f of folders) {
-          await ensureBackendMatchesConfiguredCli(f, "newSession", false);
-        }
-      } else if (restartMode === "forceRestartAll") {
-        for (const f of folders) {
-          await backendManager.restartForWorkspaceFolder(f);
-          if (next !== "auto") {
-            cliVariantByBackendKey.set(
-              f.uri.toString(),
-              next === "codez" ? "codez" : "codex",
-            );
-          }
-        }
-      }
-    },
     async (sessionId, query, cancellationToken) => {
       if (!backendManager) throw new Error("backendManager is not initialized");
       if (!sessions) throw new Error("sessions is not initialized");
@@ -922,7 +867,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!folder)
         throw new Error(`WorkspaceFolder not found for session: ${sessionId}`);
 
-      if (!isMineSelectedForBackendKey(session.backendKey)) return [];
+      if (session.backendId !== "codez") return [];
 
       const { agents } = await listAgentsFromDisk(folder.uri.fsPath);
       return agents
@@ -1021,11 +966,33 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("codez.startBackend", async () => {
       if (!backendManager) throw new Error("backendManager is not initialized");
+      const bm = backendManager;
 
       const folder = await pickWorkspaceFolder();
       if (!folder) return;
 
-      await backendManager.startForWorkspaceFolder(folder);
+      const backendIds: BackendId[] = ["codez", "codex", "opencode"];
+      const picked = await vscode.window.showQuickPick(
+        backendIds.map((backendId) => {
+          const running = bm.getRunningCommandForBackendId(folder, backendId);
+          return {
+            label: backendId,
+            description: running ? `running (${running})` : "",
+            picked: !running,
+            backendId,
+          };
+        }),
+        {
+          title: "バックエンドを起動",
+          placeHolder: "起動するバックエンドを選択してください（複数選択可）",
+          canPickMany: true,
+        },
+      );
+      if (!picked || picked.length === 0) return;
+
+      for (const it of picked) {
+        await bm.startForBackendId(folder, it.backendId);
+      }
     }),
   );
 
@@ -1187,9 +1154,11 @@ export function activate(context: vscode.ExtensionContext): void {
           (await pickWorkspaceFolder());
         if (!folder) return;
 
-        await ensureBackendMatchesConfiguredCli(folder, "newSession");
+        const backendId = await pickBackendIdForNewSession(folder);
+        if (!backendId) return;
         const session = await backendManager.newSession(
           folder,
+          backendId,
           getSessionModelState(null),
         );
         setActiveSession(session.id);
@@ -1197,6 +1166,115 @@ export function activate(context: vscode.ExtensionContext): void {
         await showCodezViewContainer();
       },
     ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codez.migrateSessionsV1", async () => {
+      if (!extensionContext) throw new Error("extensionContext is not set");
+      if (!sessions) throw new Error("sessions is not initialized");
+
+      const legacy = readPersistedSessionsV1(extensionContext);
+      if (legacy.length === 0) {
+        void vscode.window.showInformationMessage(
+          "移行対象の v1 セッションが見つかりませんでした。",
+        );
+        return;
+      }
+
+      const byWorkspaceFolder = new Map<string, PersistedSessionV1[]>();
+      for (const s of legacy) {
+        const list = byWorkspaceFolder.get(s.workspaceFolderUri) ?? [];
+        byWorkspaceFolder.set(s.workspaceFolderUri, [...list, s]);
+      }
+
+      const migrated: PersistedSessionV2[] = [];
+      const skippedFolders: string[] = [];
+      for (const [workspaceFolderUri, list] of byWorkspaceFolder.entries()) {
+        let folderLabel = workspaceFolderUri;
+        try {
+          folderLabel = vscode.Uri.parse(workspaceFolderUri).fsPath || folderLabel;
+        } catch {
+          // Keep original label.
+        }
+        const backendChoices: BackendId[] = ["codez", "codex", "opencode"];
+        const items: Array<vscode.QuickPickItem & { backendId: BackendId | null }> =
+          [
+            ...backendChoices.map((backendId) => ({
+              label: backendId,
+              description: "",
+              backendId,
+            })),
+            { label: "(このフォルダはスキップ)", description: "", backendId: null },
+          ];
+        const picked = await vscode.window.showQuickPick(items,
+          {
+            title: `セッション移行: ${folderLabel}`,
+            placeHolder: "このフォルダの旧セッションをどのバックエンド群に割り当てますか？",
+          },
+        );
+        if (!picked || !picked.backendId) {
+          skippedFolders.push(folderLabel);
+          continue;
+        }
+
+        const backendId = picked.backendId;
+        const backendKey = makeBackendInstanceKey(workspaceFolderUri, backendId);
+        for (const s of list) {
+          migrated.push({
+            id: s.id,
+            backendKey,
+            backendId,
+            workspaceFolderUri: s.workspaceFolderUri,
+            title: s.title,
+            threadId: s.threadId,
+            customTitle: s.customTitle ?? false,
+          });
+        }
+      }
+
+      const existing = sessions
+        .listAll()
+        .map<PersistedSessionV2>(toPersistedSessionV2);
+      const existingIds = new Set(existing.map((s) => s.id));
+      const dedupedMigrated: PersistedSessionV2[] = [];
+      let skipped = 0;
+      for (const s of migrated) {
+        if (existingIds.has(s.id)) {
+          skipped += 1;
+          continue;
+        }
+        existingIds.add(s.id);
+        dedupedMigrated.push(s);
+      }
+
+      if (dedupedMigrated.length === 0) {
+        void vscode.window.showInformationMessage(
+          skipped > 0
+            ? "移行対象がすべて既存セッションと重複していたため、追加の移行は行いませんでした。"
+            : "移行対象がありませんでした。",
+        );
+        return;
+      }
+
+      const combined = [...existing, ...dedupedMigrated];
+      await extensionContext.workspaceState.update(SESSIONS_V2_KEY, combined);
+      if (skippedFolders.length === 0) {
+        await extensionContext.workspaceState.update(SESSIONS_V1_KEY, undefined);
+      }
+
+      sessions.reset();
+      loadSessions(extensionContext, sessions);
+      for (const s of sessions.listAll()) ensureRuntime(s.id);
+      sessionTree?.refresh();
+      chatView?.refresh();
+
+      const skippedText =
+        skippedFolders.length > 0 ? `（スキップ: ${skippedFolders.length}フォルダ）` : "";
+      const dedupeText = skipped > 0 ? `（重複でスキップ: ${skipped}件）` : "";
+      void vscode.window.showInformationMessage(
+        `移行完了: ${dedupedMigrated.length}件${skippedText}${dedupeText}`,
+      );
+    }),
   );
 
   context.subscriptions.push(
@@ -1208,7 +1286,8 @@ export function activate(context: vscode.ExtensionContext): void {
       const folder = await pickWorkspaceFolder();
       if (!folder) return;
 
-      await ensureBackendMatchesConfiguredCli(folder, "newSession");
+      const backendId = await pickBackendIdForNewSession(folder);
+      if (!backendId) return;
       const wantedCwd = normalizeFsPathForCompare(folder.uri.fsPath);
 
       let cursor: string | null = null;
@@ -1217,11 +1296,15 @@ export function activate(context: vscode.ExtensionContext): void {
       for (;;) {
         let res: { data: Thread[]; nextCursor: string | null };
         try {
-          res = await backendManager.listThreadsForWorkspaceFolder(folder, {
+          res = await backendManager.listThreadsForWorkspaceFolderAndBackendId(
+            folder,
+            backendId,
+            {
             cursor,
             limit: 50,
             modelProviders: null,
-          });
+            },
+          );
         } catch (err) {
           output.appendLine(`[resume] Failed to list threads: ${String(err)}`);
           void vscode.window.showErrorMessage("Failed to list history.");
@@ -1272,7 +1355,8 @@ export function activate(context: vscode.ExtensionContext): void {
         const thread = (picked as any).thread as Thread;
         const session: Session = {
           id: crypto.randomUUID(),
-          backendKey: folder.uri.toString(),
+          backendId,
+          backendKey: makeBackendInstanceKey(folder.uri.toString(), backendId),
           workspaceFolderUri: folder.uri.toString(),
           title: normalizeSessionTitle(thread.preview || "Resumed"),
           threadId: thread.id,
@@ -1294,6 +1378,89 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
     }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "codez.reopenSessionInBackend",
+      async (args?: unknown) => {
+        if (!backendManager)
+          throw new Error("backendManager is not initialized");
+        if (!sessions) throw new Error("sessions is not initialized");
+        if (!extensionContext) throw new Error("extensionContext is not set");
+
+        if (typeof args !== "object" || args === null) return;
+        const anyArgs = args as Record<string, unknown>;
+        const sessionId = anyArgs["sessionId"];
+        const backendId = anyArgs["backendId"];
+        if (typeof sessionId !== "string" || !sessionId) return;
+        if (
+          backendId !== "codex" &&
+          backendId !== "codez" &&
+          backendId !== "opencode"
+        )
+          return;
+
+        const src = sessions.getById(sessionId);
+        if (!src) return;
+
+        if (
+          src.backendId === "opencode" ||
+          backendId === "opencode" ||
+          (src.backendId !== "codex" && src.backendId !== "codez") ||
+          (backendId !== "codex" && backendId !== "codez")
+        ) {
+          void vscode.window.showErrorMessage(
+            "このスレッドは opencode と相互に互換がないため、codex/codez ↔ opencode の開き直しはできません。",
+          );
+          return;
+        }
+
+        const backendKey = makeBackendInstanceKey(src.workspaceFolderUri, backendId);
+        const existing = sessions.getByThreadId(backendKey, src.threadId);
+        if (existing) {
+          setActiveSession(existing.id);
+          await showCodezViewContainer();
+          return;
+        }
+
+        const title = src.customTitle
+          ? src.title
+          : normalizeSessionTitle(`${src.title} (${backendId})`);
+        const session: Session = {
+          id: crypto.randomUUID(),
+          backendId,
+          backendKey,
+          workspaceFolderUri: src.workspaceFolderUri,
+          title,
+          customTitle: true,
+          threadId: src.threadId,
+        };
+
+        sessions.add(session.backendKey, session);
+        saveSessions(extensionContext, sessions);
+        ensureRuntime(session.id);
+        sessionTree?.refresh();
+
+        try {
+          const resumed = await backendManager.resumeSession(session);
+          void ensureModelsFetched(session);
+          hydrateRuntimeFromThread(session.id, resumed.thread);
+          setActiveSession(session.id);
+          refreshCustomPromptsFromDisk();
+          await showCodezViewContainer();
+        } catch (err) {
+          output.appendLine(`[resume] Failed to reopen thread: ${String(err)}`);
+          sessions.remove(session.id);
+          saveSessions(extensionContext, sessions);
+          sessionTree?.refresh();
+          chatView?.refresh();
+          void vscode.window.showErrorMessage(
+            `Failed to reopen thread in ${backendId}: ${String(err)}`,
+          );
+        }
+      },
+    ),
   );
 
   context.subscriptions.push(
@@ -1356,13 +1523,13 @@ export function activate(context: vscode.ExtensionContext): void {
         : null;
       if (!session) return;
 
-      if (!isMineSelectedForBackendKey(session.backendKey)) {
+      if (session.backendId !== "codez") {
         void vscode.window.showInformationMessage(
-          "Reload は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
+          "Reload は codez セッションのみ対応です。",
         );
         chatView?.toast(
           "info",
-          "Reload は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
+          "Reload は codez セッションのみ対応です。",
         );
         return;
       }
@@ -1374,18 +1541,6 @@ export function activate(context: vscode.ExtensionContext): void {
         );
         return;
       }
-      try {
-        await ensureBackendMatchesConfiguredCli(folder, "codezFeature");
-      } catch (err) {
-        output.appendLine(
-          `[session] Reload backend configuration check failed: ${String(err)}`,
-        );
-        void vscode.window.showErrorMessage(
-          "Backend configuration check failed. See Codex UI output channel.",
-        );
-        return;
-      }
-
       const rt = ensureRuntime(session.id);
       if (rt.sending) {
         void vscode.window.showErrorMessage(
@@ -1711,9 +1866,9 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
-      if (cliVariantForBackendKey(session.backendKey) !== "codez") {
+      if (session.backendId !== "codez") {
         void vscode.window.showInformationMessage(
-          "アカウントの作成/切り替えは codez 選択時のみ対応です。Settings (⚙) の CLI から codez を選択し、必要ならバックエンドを再起動してください。",
+          "アカウントの作成/切り替えは codez セッションのみ対応です。",
         );
         return;
       }
@@ -1877,9 +2032,9 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
 
-        if (!isMineSelectedForBackendKey(session.backendKey)) {
+        if (session.backendId !== "codez") {
           void vscode.window.showInformationMessage(
-            "Agents are available only when running codez. Click Settings (⚙) and select codez, then restart the backend.",
+            "Agents は codez セッションでのみ利用できます。",
           );
           return;
         }
@@ -1888,17 +2043,6 @@ export function activate(context: vscode.ExtensionContext): void {
         if (errors.length > 0) {
           output.appendLine(`[agents] cwd=${folder.uri.fsPath}`);
           for (const e of errors) output.appendLine(`[agents] ${e}`);
-        }
-
-        try {
-          // Ensure the backend is configured as codez (purely for UX; listing is from disk).
-          await ensureBackendMatchesConfiguredCli(folder, "agents");
-        } catch (err) {
-          output.appendLine(
-            `[agents] Backend configuration check failed: ${String(err)}`,
-          );
-          void vscode.window.showErrorMessage("Failed to list agents.");
-          return;
         }
 
         if (agents.length === 0) {
@@ -1927,108 +2071,6 @@ export function activate(context: vscode.ExtensionContext): void {
         chatView?.insertIntoInput(`@${picked.agent.name} `);
       },
     ),
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand("codez.selectCliVariant", async () => {
-      if (!backendManager) throw new Error("backendManager is not initialized");
-
-      // Global default: do not prompt for a directory. The selected CLI becomes the default
-      // for subsequent sessions/backends, and `New` will use it (auto-restarting if needed).
-      const cfg = vscode.workspace.getConfiguration("codez");
-      const codezCmd =
-        cfg.get<string>("cli.commands.codez") ??
-        cfg.get<string>("cli.commands.mine") ??
-        "codez";
-      const codexCmd =
-        cfg.get<string>("cli.commands.codex") ??
-        cfg.get<string>("cli.commands.upstream") ??
-        "codex";
-      const current = normalizeCliVariant(
-        cfg.get<string>("cli.variant") ?? "auto",
-      );
-
-      const codezProbe = await probeCliVersion(codezCmd);
-      const codezDetected =
-        codezProbe.ok && codezProbe.version.includes("-codez.");
-
-      const items: Array<{
-        label: string;
-        detail: string;
-        variant: "auto" | "codex" | "codez";
-        disabledReason?: string;
-      }> = [
-        {
-          label: "Auto",
-          detail: "Use codez.backend.command (existing behavior)",
-          variant: "auto",
-        },
-        {
-          label: "codex",
-          detail: `Command: ${codexCmd}`,
-          variant: "codex",
-        },
-        {
-          label: "codez",
-          detail: codezDetected
-            ? `Command: ${codezCmd} (${codezProbe.version})`
-            : codezProbe.ok
-              ? `Command: ${codezCmd} (detected: ${codezProbe.version}, not a codez build)`
-              : `Command: ${codezCmd} (not detected)`,
-          variant: "codez",
-          disabledReason: codezDetected ? undefined : "codez not detected",
-        },
-      ];
-
-      const picked = await vscode.window.showQuickPick(
-        items.map((it) => ({
-          label: it.label + (it.variant === current ? " (current)" : ""),
-          detail: it.detail,
-          it,
-        })),
-        { title: "Codex UI: Select CLI" },
-      );
-      if (!picked) return;
-
-      if (picked.it.variant === "codez" && picked.it.disabledReason) {
-        void vscode.window.showErrorMessage(picked.it.disabledReason);
-        return;
-      }
-
-      await cfg.update(
-        "cli.variant",
-        picked.it.variant,
-        vscode.ConfigurationTarget.Global,
-      );
-
-      const restart = await vscode.window.showInformationMessage(
-        "CLI setting updated. Restart running backends now to apply?",
-        "Restart all",
-        "Force restart all",
-        "Later",
-      );
-      if (restart === "Restart all") {
-        const folders = vscode.workspace.workspaceFolders ?? [];
-        for (const f of folders) {
-          await ensureBackendMatchesConfiguredCli(f, "newSession");
-        }
-      } else if (restart === "Force restart all") {
-        const folders = vscode.workspace.workspaceFolders ?? [];
-        for (const f of folders) {
-          await backendManager.restartForWorkspaceFolder(f);
-          if (picked.it.variant !== "auto") {
-            cliVariantByBackendKey.set(
-              f.uri.toString(),
-              picked.it.variant === "codez" ? "codez" : "codex",
-            );
-          }
-        }
-      } else {
-        void vscode.window.showInformationMessage(
-          "Change will take effect the next time the backend starts.",
-        );
-      }
-    }),
   );
 
   context.subscriptions.push(
@@ -2181,9 +2223,18 @@ export function activate(context: vscode.ExtensionContext): void {
         } else {
           const folder = await pickWorkspaceFolder();
           if (!folder) return;
-          session =
-            (await backendManager.pickSession(folder)) ??
-            (await backendManager.newSession(folder, getSessionModelState(null)));
+          const picked = await backendManager.pickSession(folder);
+          if (picked) {
+            session = picked;
+          } else {
+            const backendId = await pickBackendIdForNewSession(folder);
+            if (!backendId) return;
+            session = await backendManager.newSession(
+              folder,
+              backendId,
+              getSessionModelState(null),
+            );
+          }
         }
 
         setActiveSession(session.id);
@@ -2422,7 +2473,9 @@ function handleBackendTerminated(
 
   const folderLabel = (() => {
     try {
-      return vscode.Uri.parse(backendKey).fsPath;
+      const parsed = parseBackendInstanceKey(backendKey);
+      const fsPath = vscode.Uri.parse(parsed.workspaceFolderUri).fsPath;
+      return `${fsPath} (${parsed.backendId})`;
     } catch {
       return backendKey;
     }
@@ -2720,6 +2773,24 @@ async function sendUserText(session: Session, text: string): Promise<void> {
   await sendUserInput(session, text, [], getSessionModelState(session.id));
 }
 
+async function pickBackendIdForNewSession(
+  _folder: vscode.WorkspaceFolder,
+): Promise<BackendId | null> {
+  const backendChoices: BackendId[] = ["codez", "codex", "opencode"];
+  const picked = await vscode.window.showQuickPick(
+    backendChoices.map((backendId) => ({
+      label: backendId,
+      description: "",
+      backendId,
+    })),
+    {
+      title: "バックエンドを選択",
+      placeHolder: "このセッションをどのバックエンドで作成しますか？",
+    },
+  );
+  return picked?.backendId ?? null;
+}
+
 async function sendUserInput(
   session: Session,
   text: string,
@@ -2921,9 +2992,7 @@ async function handleSlashCommand(
       return true;
     }
 
-    const cfg = vscode.workspace.getConfiguration("codez", folder.uri);
-    const backendKind = cfg.get<string>("backend.kind") ?? "app-server";
-    if (backendKind === "opencode") {
+    if (session.backendId === "opencode") {
       upsertBlock(session.id, {
         id: newLocalId("mcpUnsupported"),
         type: "info",
@@ -3051,12 +3120,12 @@ async function handleSlashCommand(
       return true;
     }
 
-    if (!isMineSelectedForBackendKey(session.backendKey)) {
+    if (session.backendId !== "codez") {
       upsertBlock(session.id, {
         id: newLocalId("compactUnsupported"),
         type: "info",
         title: "Compact (codez only)",
-        text: "/compact は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
+        text: "/compact は codez セッションのみ対応です。",
       });
       chatView?.refresh();
       schedulePersistRuntime(session.id);
@@ -3064,36 +3133,6 @@ async function handleSlashCommand(
     }
 
     if (!backendManager) throw new Error("backendManager is not initialized");
-    {
-      const folder = resolveWorkspaceFolderForSession(session);
-      if (!folder) {
-        upsertBlock(session.id, {
-          id: newLocalId("compactNoFolder"),
-          type: "error",
-          title: "Compact failed",
-          text: "このセッションに紐づく workspace folder が見つかりません。",
-        });
-        chatView?.refresh();
-        schedulePersistRuntime(session.id);
-        return true;
-      }
-      try {
-        await ensureBackendMatchesConfiguredCli(folder, "codezFeature");
-      } catch (err) {
-        outputChannel?.appendLine(
-          `[compact] Backend configuration check failed: ${String(err)}`,
-        );
-        upsertBlock(session.id, {
-          id: newLocalId("compactConfigError"),
-          type: "error",
-          title: "Compact failed",
-          text: "バックエンド設定の確認に失敗しました。Output Channel (Codex UI) を確認してください。",
-        });
-        chatView?.refresh();
-        schedulePersistRuntime(session.id);
-        return true;
-      }
-    }
 
     const rt = ensureRuntime(session.id);
     if (rt.compactInFlight) {
@@ -3361,7 +3400,7 @@ async function handleSlashCommand(
         return "- /prompts:" + p.name + hint;
       })
       .join("\n");
-    const mineSelected = isMineSelectedForBackendKey(session.backendKey);
+    const mineSelected = session.backendId === "codez";
     upsertBlock(session.id, {
       id: newLocalId("help"),
       type: "system",
@@ -3835,47 +3874,11 @@ function resolveCodexHome(): string {
   return path.join(os.homedir(), ".codex");
 }
 
-function inferCliVariantFromCliVersion(
-  cliVersion: string | null,
-): "unknown" | "codex" | "codez" {
-  if (!cliVersion) return "unknown";
-  return cliVersion.includes("-codez.") ? "codez" : "codex";
-}
-
-function cliVariantForBackendKey(
-  backendKey: string,
-): "unknown" | "codex" | "codez" {
-  const detected = cliVariantByBackendKey.get(backendKey) ?? "unknown";
-  if (detected !== "unknown") return detected;
-
-  // No detected runtime variant yet (e.g. backend not started). Use config as a hint.
-  const folderUri = vscode.Uri.parse(backendKey);
-  const cfg = vscode.workspace.getConfiguration("codez", folderUri);
-  const raw = cfg.get<string>("cli.variant") ?? "auto";
-  const normalized =
-    raw === "mine" ? "codez" : raw === "upstream" ? "codex" : raw;
-  if (normalized === "codez") return "codez";
-  if (normalized === "codex") return "codex";
-  return "unknown";
-}
-
-function selectedCliVariantForBackendKey(
-  backendKey: string,
-): "auto" | "codex" | "codez" {
-  try {
-    const folderUri = vscode.Uri.parse(backendKey);
-    const cfg = vscode.workspace.getConfiguration("codez", folderUri);
-    return normalizeCliVariant(cfg.get<string>("cli.variant") ?? "auto");
-  } catch {
-    return "auto";
-  }
-}
-
 function isMineSelectedForBackendKey(backendKey: string): boolean {
-  return selectedCliVariantForBackendKey(backendKey) === "codez";
+  return parseBackendInstanceKey(backendKey).backendId === "codez";
 }
 
-function backendKeyForCwd(cwd: string | null): string | null {
+function workspaceFolderUriForCwd(cwd: string | null): string | null {
   if (!cwd) return null;
   const folders = vscode.workspace.workspaceFolders ?? [];
   const target = path.resolve(cwd);
@@ -3887,113 +3890,13 @@ function backendKeyForCwd(cwd: string | null): string | null {
   return null;
 }
 
-function normalizeCliVariant(
-  raw: string | null,
-): "auto" | "codex" | "codez" {
-  const v = (raw ?? "auto").trim();
-  if (v === "mine") return "codez";
-  if (v === "upstream") return "codex";
-  if (v === "codex" || v === "codez" || v === "auto") return v;
-  return "auto";
-}
-
-function desiredCliCommandFromConfig(cfg: vscode.WorkspaceConfiguration): {
-  variant: "auto" | "codex" | "codez";
-  command: string | null;
-} {
-  const variant = normalizeCliVariant(cfg.get<string>("cli.variant") ?? "auto");
-  const codexCmd =
-    cfg.get<string>("cli.commands.codex") ??
-    cfg.get<string>("cli.commands.upstream") ??
-    "codex";
-  const codezCmd =
-    cfg.get<string>("cli.commands.codez") ??
-    cfg.get<string>("cli.commands.mine") ??
-    "codez";
-  const backendCmd = cfg.get<string>("backend.command") ?? null;
-
-  if (variant === "codex") return { variant, command: codexCmd };
-  if (variant === "codez") return { variant, command: codezCmd };
-  return { variant, command: backendCmd };
-}
-
-async function ensureBackendMatchesConfiguredCli(
-  folder: vscode.WorkspaceFolder,
-  reason: "newSession" | "agents" | "codezFeature",
-  notifyUser = true,
-): Promise<void> {
-  if (!backendManager) throw new Error("backendManager is not initialized");
-  if (!outputChannel) throw new Error("outputChannel is not initialized");
-
-  const cfg = vscode.workspace.getConfiguration("codez", folder.uri);
-  const backendKind = cfg.get<string>("backend.kind") ?? "app-server";
-  if (backendKind === "opencode") {
-    // opencode backend is not controlled by cli.variant.
-    return;
-  }
-  const desired = desiredCliCommandFromConfig(cfg);
-  if (desired.variant === "auto" || !desired.command) return;
-
-  const running = backendManager.getRunningCommand(folder);
-  if (!running) {
-    cliVariantByBackendKey.set(
-      folder.uri.toString(),
-      desired.variant === "codez" ? "codez" : "codex",
-    );
-    return;
-  }
-  if (running === desired.command) return;
-
-  outputChannel.appendLine(
-    `[cli] Restarting backend to match cli.variant=${desired.variant} (reason=${reason}) running=${running} desired=${desired.command}`,
-  );
-  await backendManager.restartForWorkspaceFolder(folder);
-  cliVariantByBackendKey.set(
-    folder.uri.toString(),
-    desired.variant === "codez" ? "codez" : "codex",
-  );
-  if (notifyUser) {
-    void vscode.window.showInformationMessage(
-      `Backend restarted to use ${desired.variant}.`,
-    );
-  }
-}
-
-async function probeCliVersion(
-  command: string,
-): Promise<{ ok: true; version: string } | { ok: false; error: string }> {
-  return await new Promise((resolve) => {
-    let stdout = "";
-    let stderr = "";
-    const child = spawn(command, ["--version"], {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
-    });
-    child.stdout?.on("data", (buf) => {
-      stdout += String(buf);
-    });
-    child.stderr?.on("data", (buf) => {
-      stderr += String(buf);
-    });
-    child.on("error", (err) => {
-      resolve({ ok: false, error: String((err as Error).message ?? err) });
-    });
-    child.on("close", (code) => {
-      const out = (stdout || stderr || "").trim();
-      if (code !== 0) {
-        resolve({
-          ok: false,
-          error: out || `exit code ${String(code)}`,
-        });
-        return;
-      }
-      if (!out) {
-        resolve({ ok: false, error: "empty version output" });
-        return;
-      }
-      resolve({ ok: true, version: out.split(/\r?\n/)[0] ?? out });
-    });
-  });
+function backendKeyForCwdAndBackendId(
+  cwd: string | null,
+  backendId: BackendId,
+): string | null {
+  const workspaceFolderUri = workspaceFolderUriForCwd(cwd);
+  if (!workspaceFolderUri) return null;
+  return makeBackendInstanceKey(workspaceFolderUri, backendId);
 }
 
 // Agents are read from disk only when running codez.
@@ -4147,17 +4050,8 @@ function buildChatState(): ChatViewState {
     source: p.source,
   }));
   const capsForBackendKey = (backendKey: string | null) => {
-    if (!backendKey)
-      return {
-        agents: false,
-        selectedCliVariant: "auto" as const,
-        detectedCliVariant: "unknown" as const,
-      };
-    const detectedCliVariant = cliVariantForBackendKey(backendKey);
     return {
-      agents: isMineSelectedForBackendKey(backendKey),
-      selectedCliVariant: selectedCliVariantForBackendKey(backendKey),
-      detectedCliVariant,
+      agents: backendKey ? isMineSelectedForBackendKey(backendKey) : false,
     };
   };
   if (!sessions)
@@ -4525,12 +4419,13 @@ function applyServerNotification(
     }
     case "item/mcpToolCall/progress": {
       const id = (n as any).params.itemId as string;
+      const server = String((n as any).params.server ?? "");
       const block = getOrCreateBlock(rt, id, () => ({
         id,
         type: "mcp",
-        title: "MCP Tool",
+        title: server === "opencode" ? "OpenCode Tool" : "MCP Tool",
         status: "inProgress",
-        server: "",
+        server,
         tool: "",
         detail: "",
       }));
@@ -4774,7 +4669,7 @@ function applyItemLifecycle(
       const block = getOrCreateBlock(rt, item.id, () => ({
         id: item.id,
         type: "mcp",
-        title: "MCP Tool",
+        title: item.server === "opencode" ? "OpenCode Tool" : "MCP Tool",
         status: item.status,
         server: item.server,
         tool: item.tool,
@@ -5423,14 +5318,12 @@ function applyGlobalNotification(
       if (cliVersion) lines.push(`CLI version: \`${cliVersion}\``);
       if (originUrl) lines.push(`Git origin: ${originUrl}`);
 
-      const effectiveBackendKey = backendKeyForCwd(cwd) ?? backendKey;
-      if (effectiveBackendKey) {
-        if (isMineSelectedForBackendKey(effectiveBackendKey)) {
-          const mcpLine = formatMcpStatusSummary(effectiveBackendKey);
-          if (mcpLine) lines.push(mcpLine);
-        }
-        const next = inferCliVariantFromCliVersion(cliVersion);
-        cliVariantByBackendKey.set(effectiveBackendKey, next);
+      const backendId = parseBackendInstanceKey(backendKey).backendId;
+      const effectiveBackendKey =
+        backendKeyForCwdAndBackendId(cwd, backendId) ?? backendKey;
+      if (isMineSelectedForBackendKey(effectiveBackendKey)) {
+        const mcpLine = formatMcpStatusSummary(effectiveBackendKey);
+        if (mcpLine) lines.push(mcpLine);
       }
 
       // De-dupe: `New` creates a new thread and emits `thread/started` again, but for the same cwd we only
@@ -5452,11 +5345,7 @@ function applyGlobalNotification(
         text: lines.join("\n") || "(no details)",
       });
 
-      if (
-        cwd &&
-        effectiveBackendKey &&
-        isMineSelectedForBackendKey(effectiveBackendKey)
-      ) {
+      if (cwd && isMineSelectedForBackendKey(effectiveBackendKey)) {
         void refreshMcpConfiguredServersForBackend(effectiveBackendKey);
       }
 
@@ -5581,7 +5470,8 @@ function applyGlobalNotification(
         typeof (p as any).reasoningEffort === "string"
           ? ((p as any).reasoningEffort as string)
           : null;
-      const session = threadId && sessions ? sessions.getByThreadId(threadId) : null;
+      const session =
+        threadId && sessions ? sessions.getByThreadId(backendKey, threadId) : null;
       if (session && model) {
         setSessionModelState(session.id, { model, provider: null, reasoning });
       }
@@ -5708,7 +5598,9 @@ function updateThreadStartedBlocks(): void {
     const cwd = b.id.startsWith(cwdPrefix)
       ? b.id.slice(cwdPrefix.length)
       : null;
-    const backendKey = cwd ? backendKeyForCwd(cwd) : null;
+    const backendKey = cwd
+      ? backendKeyForCwdAndBackendId(cwd, "codez")
+      : null;
     const summary = backendKey ? formatMcpStatusSummary(backendKey) : null;
     const lines = b.text
       .split("\n")
@@ -6229,24 +6121,24 @@ function updatePendingApprovalsFromItem(
   }
 }
 
-const SESSIONS_KEY = "codez.sessions.v1";
-type PersistedSession = Pick<
+const SESSIONS_V1_KEY = "codez.sessions.v1";
+const SESSIONS_V2_KEY = "codez.sessions.v2";
+const SESSIONS_V1_MIGRATION_PROMPTED_KEY = "codez.sessions.v1.migrationPrompted.v1";
+type PersistedSessionV1 = Pick<
   Session,
-  | "id"
-  | "backendKey"
-  | "workspaceFolderUri"
-  | "title"
-  | "threadId"
-  | "customTitle"
+  "id" | "backendKey" | "workspaceFolderUri" | "title" | "threadId" | "customTitle"
+>;
+type PersistedSessionV2 = Pick<
+  Session,
+  "id" | "backendKey" | "backendId" | "workspaceFolderUri" | "title" | "threadId" | "customTitle"
 >;
 
-function loadSessions(
+function readPersistedSessionsV1(
   context: vscode.ExtensionContext,
-  store: SessionStore,
-): void {
-  const raw = context.workspaceState.get<unknown>(SESSIONS_KEY);
-  if (!Array.isArray(raw)) return;
-
+): PersistedSessionV1[] {
+  const raw = context.workspaceState.get<unknown>(SESSIONS_V1_KEY);
+  if (!Array.isArray(raw)) return [];
+  const out: PersistedSessionV1[] = [];
   for (const item of raw) {
     if (typeof item !== "object" || item === null) continue;
     const o = item as Record<string, unknown>;
@@ -6256,10 +6148,51 @@ function loadSessions(
     const title = o["title"];
     const customTitle = o["customTitle"];
     const threadId = o["threadId"];
+    if (
+      typeof id !== "string" ||
+      typeof backendKey !== "string" ||
+      typeof workspaceFolderUri !== "string" ||
+      typeof title !== "string" ||
+      typeof threadId !== "string"
+    ) {
+      continue;
+    }
+    out.push({
+      id,
+      backendKey,
+      workspaceFolderUri,
+      title,
+      threadId,
+      customTitle: typeof customTitle === "boolean" ? customTitle : false,
+    });
+  }
+  return out;
+}
+
+function loadSessions(
+  context: vscode.ExtensionContext,
+  store: SessionStore,
+): void {
+  const raw = context.workspaceState.get<unknown>(SESSIONS_V2_KEY);
+  if (!Array.isArray(raw)) return;
+
+  for (const item of raw) {
+    if (typeof item !== "object" || item === null) continue;
+    const o = item as Record<string, unknown>;
+    const id = o["id"];
+    const backendKey = o["backendKey"];
+    const backendId = o["backendId"];
+    const workspaceFolderUri = o["workspaceFolderUri"];
+    const title = o["title"];
+    const customTitle = o["customTitle"];
+    const threadId = o["threadId"];
 
     if (
       typeof id !== "string" ||
       typeof backendKey !== "string" ||
+      (backendId !== "codex" &&
+        backendId !== "codez" &&
+        backendId !== "opencode") ||
       typeof workspaceFolderUri !== "string" ||
       typeof title !== "string" ||
       typeof threadId !== "string"
@@ -6270,6 +6203,7 @@ function loadSessions(
     store.add(backendKey, {
       id,
       backendKey,
+      backendId,
       workspaceFolderUri,
       title,
       customTitle: typeof customTitle === "boolean" ? customTitle : false,
@@ -6282,14 +6216,30 @@ function saveSessions(
   context: vscode.ExtensionContext,
   store: SessionStore,
 ): void {
-  const sessions = store.listAll().map<PersistedSession>(toPersistedSession);
-  void context.workspaceState.update(SESSIONS_KEY, sessions);
+  const sessions = store.listAll().map<PersistedSessionV2>(toPersistedSessionV2);
+  void context.workspaceState.update(SESSIONS_V2_KEY, sessions);
 }
 
-function toPersistedSession(session: Session): PersistedSession {
-  const { id, backendKey, workspaceFolderUri, title, customTitle, threadId } =
+function toPersistedSessionV2(session: Session): PersistedSessionV2 {
+  const {
+    id,
+    backendKey,
+    backendId,
+    workspaceFolderUri,
+    title,
+    customTitle,
+    threadId,
+  } =
     session;
-  return { id, backendKey, workspaceFolderUri, title, customTitle, threadId };
+  return {
+    id,
+    backendKey,
+    backendId,
+    workspaceFolderUri,
+    title,
+    customTitle,
+    threadId,
+  };
 }
 
 function schedulePersistRuntime(sessionId: string): void {

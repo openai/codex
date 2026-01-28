@@ -151,15 +151,35 @@ export class OpencodeHttpClient {
     for (const p of providers) {
       const providerID = String(p.id ?? "");
       const providerName = String(p.name ?? providerID);
-      const models = Array.isArray((p as any).models) ? ((p as any).models as any[]) : [];
-      for (const m of models) {
-        const modelID = String(m.id ?? "");
-        const modelName = String(m.name ?? modelID);
-        if (!providerID || !modelID) continue;
+      const rawModels = (p as any).models as unknown;
+      const modelEntries: Array<{ id: string; name: string }> = [];
+      if (Array.isArray(rawModels)) {
+        for (const m of rawModels as any[]) {
+          const modelID = String(m?.id ?? "");
+          const modelName = String(m?.name ?? modelID);
+          if (!modelID) continue;
+          modelEntries.push({ id: modelID, name: modelName });
+        }
+      } else if (typeof rawModels === "object" && rawModels !== null) {
+        for (const [modelID, meta] of Object.entries(rawModels as Record<string, unknown>)) {
+          const modelName =
+            typeof (meta as any)?.name === "string" && String((meta as any).name).trim()
+              ? String((meta as any).name).trim()
+              : modelID;
+          if (!modelID) continue;
+          modelEntries.push({ id: modelID, name: modelName });
+        }
+      }
+
+      for (const m of modelEntries) {
+        if (!providerID || !m.id) continue;
+        const key = `${providerID}:${m.id}`;
         out.push({
-          id: `${providerID}:${modelID}`,
-          model: modelID,
-          displayName: `${providerName} / ${modelName}`,
+          id: key,
+          // For opencode, the model selection UI only carries a single string.
+          // Encode `providerID:modelID` so we can recover both on send.
+          model: key,
+          displayName: `${providerName} / ${m.name}`,
           description: "",
           supportedReasoningEfforts: [],
           defaultReasoningEffort: "none",

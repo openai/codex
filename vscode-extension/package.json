@@ -1,6 +1,6 @@
 {
   "name": "codex-ui-vscode-extension",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "displayName": "Codex UI",
   "publisher": "harukary7518",
   "description": "Use Codex CLI (app-server) inside VS Code: sessions, chat, tools, diffs.",
@@ -43,8 +43,8 @@
     "onCommand:codez._dev.askUserQuestionDemo",
     "onCommand:codez.showSkills",
     "onCommand:codez.showAgents",
-    "onCommand:codez.selectCliVariant",
     "onCommand:codez.resumeFromHistory",
+    "onCommand:codez.migrateSessionsV1",
     "onCommand:codez.switchAccount",
     "onView:codez.chatView",
     "onView:codez.sessionsView"
@@ -53,7 +53,7 @@
     "commands": [
       {
         "command": "codez.startBackend",
-        "title": "Codex UI: Start Backend (app-server)"
+        "title": "Codex UI: Start Backend(s)"
       },
       {
         "command": "codez.newSession",
@@ -140,12 +140,12 @@
         "title": "Codex UI: Agents (codez)"
       },
       {
-        "command": "codez.selectCliVariant",
-        "title": "Codex UI: Select CLI (codex / codez)"
-      },
-      {
         "command": "codez.resumeFromHistory",
         "title": "Codex UI: Resume from History"
+      },
+      {
+        "command": "codez.migrateSessionsV1",
+        "title": "Codex UI: Migrate Sessions (v1 -> v2)"
       },
       {
         "command": "codez.switchAccount",
@@ -193,25 +193,6 @@
     "configuration": {
       "title": "Codex UI",
       "properties": {
-        "codez.backend.kind": {
-          "type": "string",
-          "enum": [
-            "app-server",
-            "opencode"
-          ],
-          "default": "app-server",
-          "description": "Backend type. app-server=spawn codex/codez app-server (JSON-RPC). opencode=spawn opencode serve and talk to its HTTP API."
-        },
-        "codez.cli.variant": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "codex",
-            "codez"
-          ],
-          "default": "auto",
-          "description": "Which Codex CLI to run. auto=use codez.backend.command; codex=use codez.cli.commands.codex; codez=use codez.cli.commands.codez."
-        },
         "codez.cli.commands.codex": {
           "type": "string",
           "default": "codex",
@@ -232,11 +213,6 @@
           "default": "codez",
           "description": "DEPRECATED: use codez.cli.commands.codez"
         },
-        "codez.backend.command": {
-          "type": "string",
-          "default": "codex",
-          "description": "Backend CLI command to spawn (e.g. codex)."
-        },
         "codez.backend.args": {
           "type": "array",
           "items": {
@@ -250,7 +226,7 @@
         "codez.opencode.command": {
           "type": "string",
           "default": "opencode",
-          "description": "CLI command for opencode (used when codez.backend.kind=opencode)."
+          "description": "CLI command for opencode (used when starting the opencode backend)."
         },
         "codez.opencode.args": {
           "type": "array",
@@ -260,7 +236,7 @@
           "default": [
             "serve"
           ],
-          "description": "Arguments passed to the opencode command (used when codez.backend.kind=opencode). The extension will append --hostname/--port as needed."
+          "description": "Arguments passed to the opencode command (used when starting the opencode backend). The extension will append --hostname/--port as needed."
         },
         "codez.debug.logRpcPayloads": {
           "type": "boolean",

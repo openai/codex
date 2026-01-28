@@ -1,8 +1,11 @@
 import * as vscode from "vscode";
 
+export type BackendId = "codex" | "codez" | "opencode";
+
 export type Session = {
   id: string;
   backendKey: string;
+  backendId: BackendId;
   workspaceFolderUri: string;
   title: string;
   customTitle?: boolean;
@@ -12,10 +15,24 @@ export type Session = {
 export class SessionStore {
   private readonly sessionsByBackendKey = new Map<string, Session[]>();
   private readonly sessionsById = new Map<string, Session>();
-  private readonly sessionsByThreadId = new Map<string, Session>();
+  private readonly sessionsByThreadKey = new Map<string, Session>();
+
+  private threadKey(backendKey: string, threadId: string): string {
+    return `${backendKey}::${threadId}`;
+  }
 
   public list(backendKey: string): Session[] {
     return this.sessionsByBackendKey.get(backendKey) ?? [];
+  }
+
+  public listByWorkspaceFolderUri(workspaceFolderUri: string): Session[] {
+    const out: Session[] = [];
+    for (const sessions of this.sessionsByBackendKey.values()) {
+      for (const s of sessions) {
+        if (s.workspaceFolderUri === workspaceFolderUri) out.push(s);
+      }
+    }
+    return out;
   }
 
   public listAll(): Session[] {
@@ -25,19 +42,25 @@ export class SessionStore {
     return out;
   }
 
+  public reset(): void {
+    this.sessionsByBackendKey.clear();
+    this.sessionsById.clear();
+    this.sessionsByThreadKey.clear();
+  }
+
   public getById(sessionId: string): Session | null {
     return this.sessionsById.get(sessionId) ?? null;
   }
 
-  public getByThreadId(threadId: string): Session | null {
-    return this.sessionsByThreadId.get(threadId) ?? null;
+  public getByThreadId(backendKey: string, threadId: string): Session | null {
+    return this.sessionsByThreadKey.get(this.threadKey(backendKey, threadId)) ?? null;
   }
 
   public add(backendKey: string, session: Session): void {
     const list = this.sessionsByBackendKey.get(backendKey) ?? [];
     this.sessionsByBackendKey.set(backendKey, [...list, session]);
     this.sessionsById.set(session.id, session);
-    this.sessionsByThreadId.set(session.threadId, session);
+    this.sessionsByThreadKey.set(this.threadKey(backendKey, session.threadId), session);
   }
 
   public rename(sessionId: string, title: string): Session | null {
@@ -67,7 +90,7 @@ export class SessionStore {
     if (!session) return null;
 
     this.sessionsById.delete(sessionId);
-    this.sessionsByThreadId.delete(session.threadId);
+    this.sessionsByThreadKey.delete(this.threadKey(session.backendKey, session.threadId));
 
     const list = this.sessionsByBackendKey.get(session.backendKey) ?? [];
     const next = list.filter((s) => s.id !== sessionId);

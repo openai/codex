@@ -4,12 +4,20 @@
 
 ## Unreleased
 
+## 0.2.2
+
+- 修正: opencode backend のモデル一覧が欠けることがある問題を修正（provider の models 形式差に対応）
+- 追加: opencode backend のメッセージ parts を履歴に反映（reasoning/tool 相当は raw JSON を表示）
+- 変更: セッション作成時に backend（codex/codez/opencode）を選択できるようにし、同一 workspace で複数 backend を常駐可能に
+- 追加: 旧セッション形式（v1）を新形式（v2）へ移行するコマンド `codez.migrateSessionsV1`
 - 改善: 承認（approval）カードに「実行予定コマンド（`$ ...`）」と `cwd` を表示（item が未到着でも request params から表示）
 - 追加: `/compact`（`thread/compact`）で手動 compaction を起動できるように復活
-- 改善: codez 限定機能を codex 選択時に実行しようとした場合、エラーではなく「Settings (⚙) で codez に切り替えると使える」旨を案内表示する
-- 修正: `account/list` / `account/switch`（複数アカウント切替）は codez 限定のため、codex バックエンドでは呼ばず Settings で案内表示する
-- 追加: opencode server（`opencode serve`）をバックエンドとして起動・接続できる設定（`codez.backend.kind=opencode`）
-- 改善: Settings のバックエンド選択を「codex / codez / opencode」の単一UIに統合（Backend/CLIの分離を廃止）
+- 改善: codez 限定機能を codex/opencode セッションで実行しようとした場合、エラーではなく「codez セッションのみ対応」旨を案内表示する
+- 修正: `account/list` / `account/switch`（複数アカウント切替）は codez セッションのみ対応のため、codex/opencode セッションでは呼ばず案内表示する
+- 追加: opencode server（`opencode serve`）をバックエンドとして起動・接続できる設定（`codez.opencode.*`）
+- 修正: Settings をアクティブセッションの backendId ベースで分岐し、opencode セッションで Accounts 等が破綻することがある問題を修正
+- 変更: Settings から `Workspace defaults` を削除（backend は New/Start Backend で明示選択）
+- 追加: Settings から同一スレッドを codex↔codez で開き直せる導線（opencode への引き継ぎは不可）
 - 改善: Settings の見た目/操作性を改善（行間、hover/focus、ボタン配色、Backend操作行のレイアウト）
 - 追加: `/mcp` でセッションごとの MCP server 一覧をカード表示（起動時と同様の状態アイコン）
 

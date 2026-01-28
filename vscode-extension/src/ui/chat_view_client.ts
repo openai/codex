@@ -21,6 +21,7 @@ type Session = {
   title: string;
   customTitle?: boolean;
   workspaceFolderUri: string;
+  backendId?: "codex" | "codez" | "opencode";
 };
 type ModelState = {
   model: string | null;
@@ -119,8 +120,6 @@ type ChatViewState = {
   globalBlocks?: ChatBlock[];
   capabilities?: {
     agents: boolean;
-    selectedCliVariant: "auto" | "codex" | "codez";
-    detectedCliVariant: "unknown" | "codex" | "codez";
   };
   workspaceColorOverrides?: Record<string, number>;
   sessions: Session[];
@@ -1286,11 +1285,9 @@ function main(): void {
 
   let settingsOpen = false;
   let settingsBusy = false;
-  let settingsSelectedCliVariant: "auto" | "codex" | "codez" = "auto";
-  let settingsRestartMode: "later" | "restartAll" | "forceRestartAll" = "later";
-  let settingsBackendKind: "app-server" | "opencode" = "app-server";
-  let settingsCurrentBackendProfile: "codex" | "codez" | "opencode" = "codex";
-  let settingsSelectedBackendProfile: "codex" | "codez" | "opencode" = "codex";
+  let settingsLastActiveSessionId: string | null = null;
+  // Active session backend (tab-scoped).
+  let settingsSessionBackendId: "codex" | "codez" | "opencode" | null = null;
   let settingsActiveAccount: string | null = null;
   let settingsSelectedAccount: string | null = null;
   let settingsAuthAccount: { type: string; [key: string]: unknown } | null =
@@ -1328,6 +1325,7 @@ function main(): void {
   const openSettings = async (): Promise<void> => {
     if (settingsOpen) return;
     settingsOpen = true;
+    settingsLastActiveSessionId = state.activeSession?.id ?? null;
     settingsOverlayEl.style.display = "flex";
     settingsOverlayEl.setAttribute("aria-hidden", "false");
     settingsBodyEl.textContent = "Loading…";
@@ -1391,176 +1389,89 @@ function main(): void {
   const renderSettings = (): void => {
     settingsBodyEl.textContent = "";
 
-    const sectionBackend = document.createElement("div");
-    sectionBackend.className = "settingsSection";
-    const backendTitle = document.createElement("div");
-    backendTitle.className = "settingsSectionTitle";
-    backendTitle.textContent = "Backend";
-    sectionBackend.appendChild(backendTitle);
+    const sectionSession = document.createElement("div");
+    sectionSession.className = "settingsSection";
+    const sessionTitle = document.createElement("div");
+    sessionTitle.className = "settingsSectionTitle";
+    sessionTitle.textContent = "Session";
+    sectionSession.appendChild(sessionTitle);
 
-    const backendRow = document.createElement("div");
-    backendRow.className = "settingsRow";
-    const backendLabel = document.createElement("div");
-    if (!state.activeSession) {
-      backendLabel.textContent =
+    const sessionRow = document.createElement("div");
+    sessionRow.className = "settingsRow";
+    const sessionLabel = document.createElement("div");
+    if (!state.activeSession || !settingsSessionBackendId) {
+      sessionLabel.textContent =
         "No active session. Create or select a session first.";
     } else {
-      const detected = state.capabilities?.detectedCliVariant ?? "unknown";
-      const selected = state.capabilities?.selectedCliVariant ?? "auto";
-      backendLabel.textContent =
-        settingsBackendKind === "opencode"
-          ? "Current: opencode"
-          : selected === "auto"
-            ? `Current: ${settingsCurrentBackendProfile} (auto; detected: ${detected})`
-            : `Current: ${settingsCurrentBackendProfile}`;
+      sessionLabel.textContent = `Backend: ${settingsSessionBackendId}`;
     }
-    backendRow.appendChild(backendLabel);
-    sectionBackend.appendChild(backendRow);
+    sessionRow.appendChild(sessionLabel);
+    sectionSession.appendChild(sessionRow);
 
-    const mkBackendRadio = (
-      profile: "codex" | "codez" | "opencode",
-      label: string,
-    ): HTMLLabelElement => {
-      const wrap = document.createElement("label");
-      wrap.style.display = "inline-flex";
-      wrap.style.gap = "8px";
-      wrap.style.alignItems = "center";
-      const radio = document.createElement("input");
-      radio.type = "radio";
-      radio.name = "backendKind";
-      radio.value = profile;
-      radio.checked = settingsSelectedBackendProfile === profile;
-      radio.disabled = settingsBusy || !state.activeSession;
-      radio.addEventListener("change", () => {
-        settingsSelectedBackendProfile = profile;
-        renderSettings();
-      });
-      const span = document.createElement("span");
-      span.textContent = label;
-      wrap.appendChild(radio);
-      wrap.appendChild(span);
-      return wrap;
-    };
+    if (state.activeSession && settingsSessionBackendId) {
+      const help = document.createElement("div");
+      help.className = "settingsHelp";
+      help.textContent =
+        settingsSessionBackendId === "opencode"
+          ? "opencode の履歴は codex/codez と互換がないため、このセッションを codex/codez へ引き継ぐことはできません。"
+          : "codex と codez は履歴形式が互換のため、このスレッドは codex/codez のどちらでも開き直せます（opencode へは引き継げません）。";
+      sectionSession.appendChild(help);
 
-    const controlsRow = document.createElement("div");
-    controlsRow.className = "settingsRow";
-    controlsRow.appendChild(mkBackendRadio("codex", "codex"));
-    controlsRow.appendChild(mkBackendRadio("codez", "codez"));
-    controlsRow.appendChild(mkBackendRadio("opencode", "opencode"));
+      const actions = document.createElement("div");
+      actions.className = "settingsRow split";
+      const left = document.createElement("div");
+      left.className = "settingsBtnGroup";
+      const right = document.createElement("div");
+      right.className = "settingsBtnGroup";
 
-    const restartSelect = document.createElement("select");
-    restartSelect.className = "settingsSelect";
-    restartSelect.disabled = settingsBusy || !state.activeSession;
-    const restartOptions: Array<{
-      value: typeof settingsRestartMode;
-      label: string;
-    }> = [
-      { value: "later", label: "Restart: later" },
-      { value: "restartAll", label: "Restart: all" },
-      { value: "forceRestartAll", label: "Restart: force all" },
-    ];
-    for (const opt of restartOptions) {
-      const o = document.createElement("option");
-      o.value = opt.value;
-      o.textContent = opt.label;
-      if (opt.value === settingsRestartMode) o.selected = true;
-      restartSelect.appendChild(o);
-    }
-    restartSelect.addEventListener("change", () => {
-      const v = restartSelect.value as typeof settingsRestartMode;
-      settingsRestartMode =
-        v === "restartAll" || v === "forceRestartAll" ? v : "later";
-      renderSettings();
-    });
-    controlsRow.appendChild(restartSelect);
-
-    const applyBackendBtn = document.createElement("button");
-    applyBackendBtn.className = "settingsBtn primary";
-    applyBackendBtn.textContent = "Apply Backend";
-    applyBackendBtn.disabled =
-      settingsBusy ||
-      !state.activeSession ||
-      (settingsSelectedBackendProfile === settingsCurrentBackendProfile &&
-        settingsRestartMode === "later");
-    applyBackendBtn.addEventListener("click", async () => {
-      if (settingsBusy || !state.activeSession) return;
-      settingsBusy = true;
-      renderSettings();
-      try {
-        if (settingsSelectedBackendProfile === "opencode") {
-          const res = await settingsRequest("setBackendKind", {
-            kind: "opencode",
-            restartMode: settingsRestartMode,
+      if (settingsSessionBackendId === "codex") {
+        const btn = document.createElement("button");
+        btn.className = "settingsBtn";
+        btn.textContent = "Open in codez";
+        btn.disabled = settingsBusy;
+        btn.addEventListener("click", async () => {
+          if (!state.activeSession) return;
+          settingsBusy = true;
+          renderSettings();
+          const res = await settingsRequest("reopenSessionInBackend", {
+            sessionId: state.activeSession.id,
+            backendId: "codez",
           });
-          if (!res.ok) {
-            showToast("error", res.error);
-            renderSettings();
-            return;
-          }
-          showToast(
-            "success",
-            settingsRestartMode === "later"
-              ? "Backend setting updated (restart required)."
-              : "Backend setting updated.",
-            3000,
-          );
-          await loadSettings();
-          return;
-        }
-
-        const resKind = await settingsRequest("setBackendKind", {
-          kind: "app-server",
-          restartMode: "later",
-        });
-        if (!resKind.ok) {
-          showToast("error", resKind.error);
+          settingsBusy = false;
+          if (!res.ok) showToast("error", res.error);
           renderSettings();
-          return;
-        }
-
-        const resCli = await settingsRequest("setCliVariant", {
-          variant: settingsSelectedBackendProfile,
-          restartMode: settingsRestartMode,
         });
-        if (!resCli.ok) {
-          showToast("error", resCli.error);
+        left.appendChild(btn);
+      } else if (settingsSessionBackendId === "codez") {
+        const btn = document.createElement("button");
+        btn.className = "settingsBtn";
+        btn.textContent = "Open in codex";
+        btn.disabled = settingsBusy;
+        btn.addEventListener("click", async () => {
+          if (!state.activeSession) return;
+          settingsBusy = true;
           renderSettings();
-          return;
-        }
-
-        showToast(
-          "success",
-          settingsRestartMode === "later"
-            ? "Backend setting updated (restart required)."
-            : "Backend setting updated.",
-          3000,
-        );
-        await loadSettings();
-      } finally {
-        settingsBusy = false;
+          const res = await settingsRequest("reopenSessionInBackend", {
+            sessionId: state.activeSession.id,
+            backendId: "codex",
+          });
+          settingsBusy = false;
+          if (!res.ok) showToast("error", res.error);
+          renderSettings();
+        });
+        left.appendChild(btn);
       }
-    });
-    controlsRow.appendChild(applyBackendBtn);
-    sectionBackend.appendChild(controlsRow);
 
-    const backendHelp = document.createElement("div");
-    backendHelp.className = "settingsHelp";
-    backendHelp.textContent =
-      "codex/codez use the built-in JSON-RPC backend.\nopencode starts and connects to the local opencode server for this workspace folder.\nNote: codex/codez selection updates a global setting (CLI variant).";
-    sectionBackend.appendChild(backendHelp);
+      const newBtn = document.createElement("button");
+      newBtn.className = "settingsBtn primary";
+      newBtn.textContent = "New session…";
+      newBtn.disabled = settingsBusy;
+      newBtn.addEventListener("click", () => vscode.postMessage({ type: "newSession" }));
+      right.appendChild(newBtn);
 
-    if (settingsBackendKind !== "opencode") {
-      const cliRow = document.createElement("div");
-      cliRow.className = "settingsRow";
-      const cliLabel = document.createElement("div");
-      const detected = state.capabilities?.detectedCliVariant ?? "unknown";
-      const selected = state.capabilities?.selectedCliVariant ?? "auto";
-      cliLabel.textContent =
-        selected === "auto"
-          ? `CLI variant: auto (detected: ${detected})`
-          : `CLI variant: ${selected}`;
-      cliRow.appendChild(cliLabel);
-      sectionBackend.appendChild(cliRow);
+      actions.appendChild(left);
+      actions.appendChild(right);
+      sectionSession.appendChild(actions);
     }
 
     const sectionAcct = document.createElement("div");
@@ -1579,8 +1490,7 @@ function main(): void {
       const acctRow = document.createElement("div");
       acctRow.className = "settingsRow";
       const activeText = document.createElement("div");
-      const detected = state.capabilities?.detectedCliVariant ?? "unknown";
-      const accountsSwitchSupported = detected === "codez";
+      const accountsSwitchSupported = settingsSessionBackendId === "codez";
       if (accountsSwitchSupported) {
         activeText.textContent = settingsActiveAccount
           ? `Active: ${settingsActiveAccount}`
@@ -1609,7 +1519,7 @@ function main(): void {
         const msg = document.createElement("div");
         msg.className = "settingsHelp";
         msg.textContent =
-          "アカウントの作成/切り替えは codez 選択時のみ対応です。\nSettings (⚙) の CLI から codez を選択し、必要ならバックエンドを再起動してください。";
+          "アカウントの作成/切り替えは codez セッションのみ対応です。";
         sectionAcct.appendChild(msg);
       }
 
@@ -1911,12 +1821,12 @@ function main(): void {
       sectionAcct.appendChild(sectionLogin);
     }
 
-    settingsBodyEl.appendChild(sectionBackend);
-    if (settingsBackendKind !== "opencode") {
+    settingsBodyEl.appendChild(sectionSession);
+    if (settingsSessionBackendId !== "opencode") {
       settingsBodyEl.appendChild(sectionAcct);
     }
 
-    if (settingsBackendKind === "opencode") {
+    if (settingsSessionBackendId === "opencode") {
       const sectionProv = document.createElement("div");
       sectionProv.className = "settingsSection";
       const title = document.createElement("div");
@@ -2211,8 +2121,13 @@ function main(): void {
       return;
     }
     const data = res.data as any;
-    settingsBackendKind =
-      data?.backendKind === "opencode" ? "opencode" : "app-server";
+    settingsSessionBackendId =
+      data?.sessionBackendId === "codex" ||
+      data?.sessionBackendId === "codez" ||
+      data?.sessionBackendId === "opencode"
+        ? data.sessionBackendId
+        : (state.activeSession?.backendId ?? null);
+
     const accounts = data?.accounts ?? null;
     const activeAccount =
       typeof accounts?.activeAccount === "string" ? accounts.activeAccount : null;
@@ -2242,24 +2157,12 @@ function main(): void {
         ? settingsSelectedAccount
         : settingsActiveAccount ??
           (settingsAccounts.length > 0 ? settingsAccounts[0]!.name : null);
-    settingsSelectedCliVariant = state.capabilities?.selectedCliVariant ?? "auto";
 
-    const detected = state.capabilities?.detectedCliVariant ?? "unknown";
-    const isCodezEffective =
-      settingsSelectedCliVariant === "codez" ||
-      (settingsSelectedCliVariant === "auto" && detected === "codez");
-    settingsCurrentBackendProfile =
-      settingsBackendKind === "opencode"
-        ? "opencode"
-        : isCodezEffective
-          ? "codez"
-          : "codex";
-    settingsSelectedBackendProfile = settingsCurrentBackendProfile;
-
-    if (settingsBackendKind === "opencode") {
+    if (settingsSessionBackendId === "opencode") {
       const opencode = data?.opencode ?? null;
       if (opencode) applyOpencodeProviderLoad(opencode);
     }
+    settingsLastActiveSessionId = state.activeSession?.id ?? null;
     renderSettings();
   };
 
@@ -2515,16 +2418,10 @@ function main(): void {
   ];
 
   function buildSlashSuggestions(): SuggestItem[] {
-    const caps = state.capabilities ?? {
-      agents: false,
-      selectedCliVariant: "auto" as const,
-      detectedCliVariant: "unknown" as const,
-    };
+    const agents = state.capabilities?.agents ?? false;
     const base =
-      caps.selectedCliVariant === "codez"
-        ? baseSlashSuggestions
-        : ([] as const);
-    const ui = caps.agents
+      state.activeSession?.backendId === "codez" ? baseSlashSuggestions : ([] as const);
+    const ui = agents
       ? uiSlashSuggestions
       : uiSlashSuggestions.filter((s) => s.label !== "/agents");
     const reserved = new Set(
@@ -3205,14 +3102,10 @@ function main(): void {
     if (atTok) {
       const query = atTok.token.slice(1);
       let items: SuggestItem[] = [...atSuggestions];
-      const caps = state.capabilities ?? {
-        agents: false,
-        selectedCliVariant: "auto" as const,
-        detectedCliVariant: "unknown" as const,
-      };
+      const agents = state.capabilities?.agents ?? false;
 
       if (query.length > 0 || atTok.token === "@") {
-        if (caps.agents) {
+        if (agents) {
           if (agentIndex && agentIndexForSessionId === state.activeSession.id) {
             const q = query.toLowerCase();
             const rankedNames = agentIndex
@@ -3615,23 +3508,16 @@ function main(): void {
     if (statusBtn) statusBtn.disabled = !s.activeSession || s.sending;
     resumeBtn.disabled = s.sending;
     attachBtn.disabled = !s.activeSession;
-    const variant = s.capabilities?.selectedCliVariant ?? "auto";
+    const backendId = s.activeSession?.backendId ?? null;
     reloadBtn.disabled =
-      !s.activeSession || s.sending || s.reloading;
+      !s.activeSession || s.sending || s.reloading || backendId !== "codez";
     reloadBtn.title =
-      variant === "codez"
+      backendId === "codez"
         ? "Reload session (re-read config.toml, agents, etc.)"
-        : "Reload session (codez only — select codez in Settings)";
+        : "Reload session (codez sessions only)";
     settingsBtn.disabled = false;
-    settingsBtn.title =
-      variant === "codez"
-        ? "CLI: codez (Settings)"
-        : variant === "codex"
-          ? "CLI: codex (Settings)"
-          : variant === "auto"
-            ? "CLI: auto (Settings)"
-            : "Settings";
-    if (variant !== "codez" && rewindTurnIndex !== null) setEditMode(null);
+    settingsBtn.title = backendId ? `Settings (session backend: ${backendId})` : "Settings";
+    if (backendId !== "codez" && rewindTurnIndex !== null) setEditMode(null);
     // Keep input enabled so the user can draft messages even before selecting a session,
     // but do not override ask_user_question which intentionally locks the composer.
     // Sending is still guarded by sendBtn.disabled and sendCurrentInput().
@@ -4135,7 +4021,8 @@ function main(): void {
         );
 
         if (block.type === "user") {
-          const variant = state.capabilities?.selectedCliVariant ?? "auto";
+          const backendId = state.activeSession?.backendId ?? null;
+          const canEdit = backendId === "codez" || backendId === "opencode";
           userTurnIndex += 1;
           div.dataset.turnIndex = String(userTurnIndex);
 
@@ -4183,15 +4070,13 @@ function main(): void {
           editBtn.textContent = "Edit";
           editBtn.disabled = Boolean(state.sending);
           editBtn.title =
-            variant === "codez"
-              ? "Edit this turn (rewind)"
-              : "Edit (codez only — select codez in Settings)";
+            canEdit ? "Edit this turn (rewind)" : "Edit (codez/opencode sessions only)";
           editBtn.addEventListener("click", () => {
             if (state.sending) return;
-            if (variant !== "codez") {
+            if (!canEdit) {
               showToast(
                 "info",
-                "Edit/Rewind は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
+                "Edit/Rewind は codez または opencode セッションのみ対応です。",
               );
               return;
             }
@@ -4424,11 +4309,12 @@ function main(): void {
 
       if (block.type === "mcp") {
         const id = "mcp:" + block.id;
+        const isOpenCode = block.server === "opencode";
         const det = ensureDetails(
           id,
-          "tool mcp",
+          isOpenCode ? "tool opencode" : "tool mcp",
           false,
-          block.title || "MCP",
+          block.title || (isOpenCode ? "OpenCode" : "MCP"),
           id,
         );
         const meta = ensureMeta(det, "meta");
@@ -4540,11 +4426,12 @@ function main(): void {
   }
 
   function setEditMode(next: number | null, presetText?: string): void {
-    const variant = state.capabilities?.selectedCliVariant ?? "auto";
-    if (next !== null && variant !== "codez") {
+    const backendId = state.activeSession?.backendId ?? null;
+    const canEdit = backendId === "codez" || backendId === "opencode";
+    if (next !== null && !canEdit) {
       showToast(
         "info",
-        "Edit/Rewind は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
+        "Edit/Rewind は codez または opencode セッションのみ対応です。",
       );
       return;
     }
@@ -4578,7 +4465,8 @@ function main(): void {
   function sendCurrentInput(): void {
     if (!state.activeSession) return;
     if (state.sending) return;
-    const variant = state.capabilities?.selectedCliVariant ?? "auto";
+    const backendId = state.activeSession.backendId;
+    const canEdit = backendId === "codez" || backendId === "opencode";
     const text = inputEl.value;
     const trimmed = text.trim();
     if (!trimmed && pendingImages.length === 0) return;
@@ -4588,7 +4476,7 @@ function main(): void {
         text,
         images: pendingImages.map((img) => ({ name: img.name, url: img.url })),
         rewind:
-          variant === "codez" && rewindTurnIndex !== null
+          canEdit && rewindTurnIndex !== null
             ? { turnIndex: rewindTurnIndex }
             : null,
       });
@@ -4599,7 +4487,7 @@ function main(): void {
         type: "send",
         text,
         rewind:
-          variant === "codez" && rewindTurnIndex !== null
+          canEdit && rewindTurnIndex !== null
             ? { turnIndex: rewindTurnIndex }
             : null,
       });
@@ -4754,11 +4642,11 @@ function main(): void {
     state.reloading
       ? undefined
       : (() => {
-          const variant = state.capabilities?.selectedCliVariant ?? "auto";
-          if (variant !== "codez") {
+          const backendId = state.activeSession?.backendId ?? null;
+          if (backendId !== "codez") {
             showToast(
               "info",
-              "Reload は codez 選択時のみ対応です。Settings (⚙) から codez を選択し、必要ならバックエンドを再起動してください。",
+              "Reload は codez セッションのみ対応です。",
             );
             return;
           }
@@ -5097,6 +4985,14 @@ function main(): void {
       pendingControlState = state;
       pendingControlSeq = seq;
       scheduleControlRender();
+
+      if (settingsOpen) {
+        const activeIdNow = state.activeSession?.id ?? null;
+        if (activeIdNow !== settingsLastActiveSessionId) {
+          settingsLastActiveSessionId = activeIdNow;
+          void loadSettings();
+        }
+      }
       return;
     }
     if (anyMsg.type === "blocksReset") {

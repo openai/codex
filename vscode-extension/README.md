@@ -12,8 +12,11 @@ This extension:
 
 This extension **does not bundle Codex CLI**.
 
-- Install Codex CLI separately and make sure `codex` is available in your `PATH`.
-- Or set the full path via settings (`codez.backend.command`).
+- Install the CLI(s) you want to use and make sure they are available in your `PATH`:
+  - `codex` (for the `codex` backend)
+  - `codez` (for the `codez` backend)
+  - `opencode` (optional, for the `opencode` backend)
+- Or set the full path via settings (`codez.cli.commands.codex`, `codez.cli.commands.codez`, `codez.opencode.command`).
 
 ## Usage
 
@@ -26,19 +29,20 @@ This extension **does not bundle Codex CLI**.
 
 ### Settings
 
-- `codez.backend.command`
+- `codez.cli.commands.codex`
   - Default: `codex`
   - If `codex` is not in your `PATH`, set an absolute path.
+- `codez.cli.commands.codez`
+  - Default: `codez`
+  - If `codez` is not in your `PATH`, set an absolute path.
 - `codez.backend.args`
   - Default: `["app-server"]`
-- `codez.backend.kind`
-  - Default: `app-server`
-  - `app-server`: spawn Codex CLI (`codex app-server`) via JSON-RPC (existing behavior)
-  - `opencode`: spawn `opencode serve` and talk to its HTTP API
+  - Arguments passed to the `codex` / `codez` backend command.
 - `codez.opencode.command`
   - Default: `opencode`
 - `codez.opencode.args`
   - Default: `["serve"]`
+  - Arguments passed to the `opencode` backend command.
 
 ## Development
 
