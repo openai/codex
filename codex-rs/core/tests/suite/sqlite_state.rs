@@ -1,15 +1,23 @@
-use std::fs;
 use anyhow::Result;
 use codex_core::features::Feature;
-use codex_core::state_db;
 use codex_state::STATE_DB_FILENAME;
+use core_test_support::load_sse_fixture_with_id;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::{
+    EventMsg, RolloutItem, RolloutLine, SessionMeta, SessionMetaLine, SessionSource,
+    UserMessageEvent,
+};
 use pretty_assertions::assert_eq;
+use std::fs;
 use tokio::time::Duration;
 use uuid::Uuid;
-use codex_protocol::protocol::{EventMsg, RolloutItem, RolloutLine, SessionMeta, SessionMetaLine, SessionSource, UserMessageEvent};
-use codex_protocol::ThreadId;
+
+fn sse_completed(id: &str) -> String {
+    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_thread_is_recorded_in_state_db() -> Result<()> {
@@ -30,7 +38,7 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 
-    let db = codex_state::StateDb::open(&db_path).await?;
+    let db = test.codex.state_db().expect("state db enabled");
 
     let mut metadata = None;
     for _ in 0..100 {
@@ -120,7 +128,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 
-    let db = codex_state::StateDb::open(&db_path).await?;
+    let db = test.codex.state_db().expect("state db enabled");
 
     let mut metadata = None;
     for _ in 0..40 {
@@ -132,15 +140,57 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
     }
 
     let metadata = metadata.expect("backfilled thread should exist in state db");
-    let expected = state_db::extract_metadata_from_rollout(
-        &rollout_path,
-        default_provider.as_str(),
-        None,
-    )
-    .await?
-    .metadata;
+    assert_eq!(metadata.id, thread_id);
+    assert_eq!(metadata.rollout_path, rollout_path);
+    assert_eq!(metadata.model_provider, default_provider);
+    assert!(metadata.has_user_event);
 
-    assert_eq!(metadata, expected);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_messages_persist_in_state_db() -> Result<()> {
+    let server = start_mock_server().await;
+    mount_sse_sequence(
+        &server,
+        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.features.enable(Feature::Sqlite);
+    });
+    let test = builder.build(&server).await?;
+
+    let db_path = test.config.codex_home.join(STATE_DB_FILENAME);
+    for _ in 0..100 {
+        if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    test.submit_turn("hello from sqlite").await?;
+    test.submit_turn("another message").await?;
+
+    let db = test.codex.state_db().expect("state db enabled");
+    let thread_id = test.session_configured.session_id;
+
+    let mut metadata = None;
+    for _ in 0..100 {
+        metadata = db.get_thread(thread_id).await?;
+        if metadata
+            .as_ref()
+            .map(|entry| entry.has_user_event)
+            .unwrap_or(false)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let metadata = metadata.expect("thread should exist in state db");
+    assert!(metadata.has_user_event);
 
     Ok(())
 }
