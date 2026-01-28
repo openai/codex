@@ -267,19 +267,19 @@ impl RequestUserInputOverlay {
         let option_rows = self.option_rows();
 
         if self.has_options() {
-            let mut options_ui_state = self
+            let mut options_state = self
                 .current_answer()
-                .map(|answer| answer.options_ui_state)
+                .map(|answer| answer.options_state)
                 .unwrap_or_default();
             if sections.options_area.height > 0 {
                 // Ensure the selected option is visible in the scroll window.
-                options_ui_state
+                options_state
                     .ensure_visible(option_rows.len(), sections.options_area.height as usize);
                 render_rows(
                     sections.options_area,
                     buf,
                     &option_rows,
-                    &options_ui_state,
+                    &options_state,
                     option_rows.len().max(1),
                     "No options",
                 );

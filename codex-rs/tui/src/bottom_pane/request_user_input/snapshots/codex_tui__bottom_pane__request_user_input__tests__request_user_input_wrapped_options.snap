@@ -3,7 +3,7 @@ source: tui/src/bottom_pane/request_user_input/mod.rs
 expression: "render_snapshot(&overlay, area)"
 ---
                                                                                                               
-  Question 1/1                                                                                                
+  Question 1/1 (1 unanswered)                                                                                 
   Choose the next step for this task.                                                                         
                                                                                                               
   › 1. Discuss a code change  Walk through a plan, then implement it together with careful checks.            

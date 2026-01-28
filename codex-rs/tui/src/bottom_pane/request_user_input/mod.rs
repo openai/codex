@@ -92,10 +92,8 @@ impl ComposerDraft {
 }
 
 struct AnswerState {
-    // Committed selection for the question (may be None when unanswered).
-    committed_option_idx: Option<usize>,
     // Scrollable cursor state for option navigation/highlight.
-    options_ui_state: ScrollState,
+    options_state: ScrollState,
     // Per-question notes draft.
     draft: ComposerDraft,
     // Whether the answer for this question has been explicitly submitted.
@@ -233,11 +231,8 @@ impl RequestUserInputOverlay {
         if !self.has_options() {
             return None;
         }
-        self.current_answer().and_then(|answer| {
-            answer
-                .committed_option_idx
-                .or(answer.options_ui_state.selected_idx)
-        })
+        self.current_answer()
+            .and_then(|answer| answer.options_state.selected_idx)
     }
 
     fn notes_has_content(&self, idx: usize) -> bool {
@@ -282,7 +277,7 @@ impl RequestUserInputOverlay {
             .map(|(question, options)| {
                 let selected_idx = self
                     .current_answer()
-                    .and_then(|answer| answer.options_ui_state.selected_idx);
+                    .and_then(|answer| answer.options_state.selected_idx);
                 let mut rows = options
                     .iter()
                     .enumerate()
@@ -328,7 +323,7 @@ impl RequestUserInputOverlay {
 
         let mut state = self
             .current_answer()
-            .map(|answer| answer.options_ui_state)
+            .map(|answer| answer.options_state)
             .unwrap_or_default();
         if state.selected_idx.is_none() {
             state.selected_idx = Some(0);
@@ -349,7 +344,7 @@ impl RequestUserInputOverlay {
 
         let mut state = self
             .current_answer()
-            .map(|answer| answer.options_ui_state)
+            .map(|answer| answer.options_state)
             .unwrap_or_default();
         if state.selected_idx.is_none() {
             state.selected_idx = Some(0);
@@ -552,15 +547,14 @@ impl RequestUserInputOverlay {
                     .options
                     .as_ref()
                     .is_some_and(|options| !options.is_empty());
-                let mut options_ui_state = ScrollState::new();
+                let mut options_state = ScrollState::new();
                 if has_options {
-                    options_ui_state.selected_idx = Some(0);
+                    options_state.selected_idx = Some(0);
                 }
                 AnswerState {
-                    committed_option_idx: None,
-                    options_ui_state,
+                    options_state,
                     draft: ComposerDraft::default(),
-                    answer_committed: has_options,
+                    answer_committed: false,
                     notes_visible: !has_options,
                 }
             })
@@ -643,8 +637,7 @@ impl RequestUserInputOverlay {
         }
         let options_len = self.options_len();
         let updated = if let Some(answer) = self.current_answer_mut() {
-            answer.options_ui_state.clamp_selection(options_len);
-            answer.committed_option_idx = answer.options_ui_state.selected_idx;
+            answer.options_state.clamp_selection(options_len);
             answer.answer_committed = committed;
             true
         } else {
@@ -661,8 +654,7 @@ impl RequestUserInputOverlay {
             return;
         }
         if let Some(answer) = self.current_answer_mut() {
-            answer.committed_option_idx = None;
-            answer.options_ui_state.reset();
+            answer.options_state.reset();
             answer.draft = ComposerDraft::default();
             answer.answer_committed = false;
             answer.notes_visible = false;
@@ -705,11 +697,12 @@ impl RequestUserInputOverlay {
             let answer_state = &self.answers[idx];
             let options = question.options.as_ref();
             // For option questions we may still produce no selection.
-            let selected_idx = if options.is_some_and(|opts| !opts.is_empty()) {
-                answer_state.committed_option_idx
-            } else {
-                None
-            };
+            let selected_idx =
+                if options.is_some_and(|opts| !opts.is_empty()) && answer_state.answer_committed {
+                    answer_state.options_state.selected_idx
+                } else {
+                    None
+                };
             // Notes are appended as extra answers. For freeform questions, only submit when
             // the user explicitly committed the draft.
             let notes = if answer_state.answer_committed {
@@ -822,7 +815,7 @@ impl RequestUserInputOverlay {
             .as_ref()
             .is_some_and(|options| !options.is_empty());
         if has_options {
-            answer.committed_option_idx.is_some() && answer.answer_committed
+            answer.options_state.selected_idx.is_some() && answer.answer_committed
         } else {
             answer.answer_committed
         }
@@ -895,8 +888,7 @@ impl RequestUserInputOverlay {
                 {
                     let options_len = self.options_len();
                     if let Some(answer) = self.current_answer_mut() {
-                        answer.options_ui_state.clamp_selection(options_len);
-                        answer.committed_option_idx = answer.options_ui_state.selected_idx;
+                        answer.options_state.clamp_selection(options_len);
                     }
                 }
                 if self.has_options() {
@@ -1027,7 +1019,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 match key_event.code {
                     KeyCode::Up | KeyCode::Char('k') => {
                         let moved = if let Some(answer) = self.current_answer_mut() {
-                            answer.options_ui_state.move_up_wrap(options_len);
+                            answer.options_state.move_up_wrap(options_len);
                             answer.answer_committed = false;
                             true
                         } else {
@@ -1039,7 +1031,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
                         let moved = if let Some(answer) = self.current_answer_mut() {
-                            answer.options_ui_state.move_down_wrap(options_len);
+                            answer.options_state.move_down_wrap(options_len);
                             answer.answer_committed = false;
                             true
                         } else {
@@ -1065,15 +1057,13 @@ impl BottomPaneView for RequestUserInputOverlay {
                         let has_selection = self.selected_option_index().is_some();
                         if has_selection {
                             self.select_current_option(true);
-                        } else if let Some(answer) = self.current_answer_mut() {
-                            answer.answer_committed = true;
                         }
                         self.go_next_or_submit();
                     }
                     KeyCode::Char(ch) => {
                         if let Some(option_idx) = self.option_index_for_digit(ch) {
                             if let Some(answer) = self.current_answer_mut() {
-                                answer.options_ui_state.selected_idx = Some(option_idx);
+                                answer.options_state.selected_idx = Some(option_idx);
                             }
                             self.select_current_option(true);
                             self.go_next_or_submit();
@@ -1125,7 +1115,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                     match key_event.code {
                         KeyCode::Up => {
                             let moved = if let Some(answer) = self.current_answer_mut() {
-                                answer.options_ui_state.move_up_wrap(options_len);
+                                answer.options_state.move_up_wrap(options_len);
                                 answer.answer_committed = false;
                                 true
                             } else {
@@ -1137,7 +1127,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                         }
                         KeyCode::Down => {
                             let moved = if let Some(answer) = self.current_answer_mut() {
-                                answer.options_ui_state.move_down_wrap(options_len);
+                                answer.options_state.move_down_wrap(options_len);
                                 answer.answer_committed = false;
                                 true
                             } else {
@@ -1452,8 +1442,8 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
         assert_eq!(overlay.current_index(), 1);
         let first_answer = &overlay.answers[0];
-        assert_eq!(first_answer.committed_option_idx, Some(0));
-        assert_eq!(first_answer.options_ui_state.selected_idx, Some(0));
+        assert!(first_answer.answer_committed);
+        assert_eq!(first_answer.options_state.selected_idx, Some(0));
         assert!(rx.try_recv().is_err());
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -1497,15 +1487,15 @@ mod tests {
             false,
         );
         let answer = overlay.current_answer().expect("answer missing");
-        assert_eq!(answer.options_ui_state.selected_idx, Some(0));
+        assert_eq!(answer.options_state.selected_idx, Some(0));
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('j')));
         let answer = overlay.current_answer().expect("answer missing");
-        assert_eq!(answer.options_ui_state.selected_idx, Some(1));
+        assert_eq!(answer.options_state.selected_idx, Some(1));
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('k')));
         let answer = overlay.current_answer().expect("answer missing");
-        assert_eq!(answer.options_ui_state.selected_idx, Some(0));
+        assert_eq!(answer.options_state.selected_idx, Some(0));
     }
 
     #[test]
@@ -1569,8 +1559,7 @@ mod tests {
             false,
         );
         let answer = overlay.current_answer_mut().expect("answer missing");
-        answer.options_ui_state.selected_idx = Some(1);
-        answer.committed_option_idx = Some(1);
+        answer.options_state.selected_idx = Some(1);
 
         assert_eq!(overlay.notes_ui_visible(), false);
         overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
@@ -1598,9 +1587,7 @@ mod tests {
         assert!(matches!(overlay.focus, Focus::Notes));
         overlay.move_question(true);
 
-        let answer = overlay.current_answer().expect("answer missing");
         assert!(matches!(overlay.focus, Focus::Options));
-        assert_eq!(answer.committed_option_idx, None);
         assert_eq!(overlay.notes_ui_visible(), false);
     }
 
@@ -1628,10 +1615,8 @@ mod tests {
 
         overlay.move_question(true);
 
-        let answer = overlay.current_answer().expect("answer missing");
         assert!(matches!(overlay.focus, Focus::Options));
         assert_eq!(overlay.notes_ui_visible(), false);
-        assert_eq!(answer.committed_option_idx, None);
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
         assert!(overlay.confirm_unanswered_active());
@@ -1701,8 +1686,7 @@ mod tests {
             false,
         );
         let answer = overlay.current_answer_mut().expect("answer missing");
-        answer.options_ui_state.selected_idx = Some(0);
-        answer.committed_option_idx = Some(0);
+        answer.options_state.selected_idx = Some(0);
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
@@ -1726,8 +1710,7 @@ mod tests {
             false,
         );
         let answer = overlay.current_answer_mut().expect("answer missing");
-        answer.options_ui_state.selected_idx = Some(0);
-        answer.committed_option_idx = Some(0);
+        answer.options_state.selected_idx = Some(0);
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('a')));
@@ -1752,14 +1735,12 @@ mod tests {
             false,
         );
         let answer = overlay.current_answer_mut().expect("answer missing");
-        answer.options_ui_state.selected_idx = Some(1);
-        answer.committed_option_idx = Some(1);
+        answer.options_state.selected_idx = Some(1);
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Backspace));
 
         let answer = overlay.current_answer().expect("answer missing");
-        assert_eq!(answer.committed_option_idx, None);
-        assert_eq!(answer.options_ui_state.selected_idx, None);
+        assert_eq!(answer.options_state.selected_idx, None);
         assert_eq!(overlay.notes_ui_visible(), false);
         assert!(rx.try_recv().is_err());
     }
@@ -1775,8 +1756,7 @@ mod tests {
             false,
         );
         let answer = overlay.current_answer_mut().expect("answer missing");
-        answer.options_ui_state.selected_idx = Some(0);
-        answer.committed_option_idx = Some(0);
+        answer.options_state.selected_idx = Some(0);
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
         assert!(matches!(overlay.focus, Focus::Notes));
@@ -1787,7 +1767,7 @@ mod tests {
         let answer = overlay.current_answer().expect("answer missing");
         assert!(matches!(overlay.focus, Focus::Options));
         assert_eq!(overlay.notes_ui_visible(), false);
-        assert_eq!(answer.committed_option_idx, Some(0));
+        assert_eq!(answer.options_state.selected_idx, Some(0));
         assert!(rx.try_recv().is_err());
     }
 
@@ -1802,8 +1782,7 @@ mod tests {
             false,
         );
         let answer = overlay.current_answer_mut().expect("answer missing");
-        answer.options_ui_state.selected_idx = Some(0);
-        answer.committed_option_idx = Some(0);
+        answer.options_state.selected_idx = Some(0);
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
         overlay
@@ -1817,7 +1796,7 @@ mod tests {
         assert_eq!(overlay.notes_ui_visible(), false);
         assert_eq!(overlay.composer.current_text_with_pending(), "");
         assert_eq!(answer.draft.text, "");
-        assert_eq!(answer.committed_option_idx, Some(0));
+        assert_eq!(answer.options_state.selected_idx, Some(0));
         assert!(rx.try_recv().is_err());
     }
 
@@ -1846,7 +1825,7 @@ mod tests {
             false,
         );
         let answer = overlay.current_answer_mut().expect("answer missing");
-        answer.options_ui_state.selected_idx = Some(0);
+        answer.options_state.selected_idx = Some(0);
 
         assert_eq!(overlay.unanswered_count(), 1);
     }
@@ -2004,7 +1983,7 @@ mod tests {
 
         {
             let answer = overlay.current_answer_mut().expect("answer missing");
-            answer.options_ui_state.selected_idx = Some(1);
+            answer.options_state.selected_idx = Some(1);
         }
         overlay.select_current_option(false);
         overlay
@@ -2061,7 +2040,8 @@ mod tests {
 
         assert_eq!(overlay.current_index(), 1);
         let answer = overlay.answers.first().expect("answer missing");
-        assert_eq!(answer.committed_option_idx, Some(1));
+        assert_eq!(answer.options_state.selected_idx, Some(1));
+        assert!(answer.answer_committed);
     }
 
     #[test]
@@ -2089,8 +2069,7 @@ mod tests {
         let other_idx = overlay.options_len().saturating_sub(1);
         {
             let answer = overlay.current_answer_mut().expect("answer missing");
-            answer.options_ui_state.selected_idx = Some(other_idx);
-            answer.committed_option_idx = Some(other_idx);
+            answer.options_state.selected_idx = Some(other_idx);
         }
         overlay
             .composer
@@ -2206,8 +2185,7 @@ mod tests {
         );
         {
             let answer = overlay.current_answer_mut().expect("answer missing");
-            answer.options_ui_state.selected_idx = Some(0);
-            answer.committed_option_idx = Some(0);
+            answer.options_state.selected_idx = Some(0);
         }
         overlay.handle_key_event(KeyEvent::from(KeyCode::Tab));
 
@@ -2309,8 +2287,7 @@ mod tests {
             false,
         );
         let answer = overlay.current_answer_mut().expect("answer missing");
-        answer.options_ui_state.selected_idx = Some(0);
-        answer.committed_option_idx = Some(0);
+        answer.options_state.selected_idx = Some(0);
 
         let width = 36u16;
         let lines = overlay.footer_tip_lines(width);
@@ -2346,8 +2323,7 @@ mod tests {
 
         {
             let answer = overlay.current_answer_mut().expect("answer missing");
-            answer.options_ui_state.selected_idx = Some(0);
-            answer.committed_option_idx = Some(0);
+            answer.options_state.selected_idx = Some(0);
         }
 
         let width = 110u16;
@@ -2381,8 +2357,7 @@ mod tests {
             false,
         );
         let answer = overlay.current_answer_mut().expect("answer missing");
-        answer.options_ui_state.selected_idx = Some(1);
-        answer.committed_option_idx = Some(1);
+        answer.options_state.selected_idx = Some(1);
 
         let width = 52u16;
         let height = overlay.desired_height(width);
@@ -2435,8 +2410,7 @@ mod tests {
         );
         {
             let answer = overlay.current_answer_mut().expect("answer missing");
-            answer.options_ui_state.selected_idx = Some(3);
-            answer.committed_option_idx = Some(3);
+            answer.options_state.selected_idx = Some(3);
         }
         let area = Rect::new(0, 0, 120, 12);
         insta::assert_snapshot!(
@@ -2487,8 +2461,7 @@ mod tests {
         );
         {
             let answer = overlay.current_answer_mut().expect("answer missing");
-            answer.options_ui_state.selected_idx = Some(3);
-            answer.committed_option_idx = Some(3);
+            answer.options_state.selected_idx = Some(3);
         }
         let area = Rect::new(0, 0, 80, 10);
         insta::assert_snapshot!(
@@ -2607,7 +2580,7 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Down));
 
         let answer = overlay.current_answer().expect("answer missing");
-        assert_eq!(answer.committed_option_idx, Some(0));
-        assert_eq!(answer.options_ui_state.selected_idx, Some(1));
+        assert_eq!(answer.options_state.selected_idx, Some(1));
+        assert!(!answer.answer_committed);
     }
 }

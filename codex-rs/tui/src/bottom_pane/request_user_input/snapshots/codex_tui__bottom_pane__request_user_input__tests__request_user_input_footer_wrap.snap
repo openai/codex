@@ -3,7 +3,7 @@ source: tui/src/bottom_pane/request_user_input/mod.rs
 expression: "render_snapshot(&overlay, area)"
 ---
                                                     
-  Question 1/2 (1 unanswered)                       
+  Question 1/2 (2 unanswered)                       
   Choose an option.                                 
                                                     
     1. Option 1  First choice.                      
