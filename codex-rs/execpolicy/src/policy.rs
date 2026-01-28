@@ -31,7 +31,7 @@ impl Policy {
         &self.rules_by_program
     }
 
-    pub fn allow_prefixes(&self) -> Vec<Vec<String>> {
+    pub fn get_allowed_prefixes(&self) -> Vec<Vec<String>> {
         let mut prefixes = Vec::new();
 
         for (_program, rules) in self.rules_by_program.iter_all() {

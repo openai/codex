@@ -397,7 +397,7 @@ fn render_command_prefix(prefix: &[String]) -> String {
 }
 
 fn format_allow_prefixes(exec_policy: &Policy) -> Option<String> {
-    let prefixes = exec_policy.allow_prefixes();
+    let prefixes = exec_policy.get_allowed_prefixes();
     let lines = render_command_prefix_list(prefixes)?;
     Some(format!("Approved command prefixes:\n{lines}"))
 }
