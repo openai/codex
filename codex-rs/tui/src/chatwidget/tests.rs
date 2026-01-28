@@ -1749,10 +1749,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
 
     let images = chat.bottom_pane.take_recent_submission_images();
-    assert!(
-        images.is_empty(),
-        "attachments are not preserved in history recall"
-    );
+    assert_eq!(vec![PathBuf::from("/tmp/preview.png")], images);
 }
 
 #[tokio::test]

@@ -27,10 +27,12 @@ use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
+use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
 use codex_protocol::protocol::SkillErrorInfo as CoreSkillErrorInfo;
 use codex_protocol::protocol::SkillInterface as CoreSkillInterface;
 use codex_protocol::protocol::SkillMetadata as CoreSkillMetadata;
 use codex_protocol::protocol::SkillScope as CoreSkillScope;
+use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
@@ -1395,11 +1397,14 @@ pub struct SkillMetadata {
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    /// Legacy short_description from SKILL.md. Prefer SKILL.toml interface.short_description.
+    /// Legacy short_description from SKILL.md. Prefer SKILL.json interface.short_description.
     pub short_description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub interface: Option<SkillInterface>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dependencies: Option<SkillDependencies>,
     pub path: PathBuf,
     pub scope: SkillScope,
     pub enabled: bool,
@@ -1421,6 +1426,35 @@ pub struct SkillInterface {
     pub brand_color: Option<String>,
     #[ts(optional)]
     pub default_prompt: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillDependencies {
+    pub tools: Vec<SkillToolDependency>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillToolDependency {
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub r#type: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub transport: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -1462,6 +1496,7 @@ impl From<CoreSkillMetadata> for SkillMetadata {
             description: value.description,
             short_description: value.short_description,
             interface: value.interface.map(SkillInterface::from),
+            dependencies: value.dependencies.map(SkillDependencies::from),
             path: value.path,
             scope: value.scope.into(),
             enabled: true,
@@ -1478,6 +1513,31 @@ impl From<CoreSkillInterface> for SkillInterface {
             default_prompt: value.default_prompt,
             icon_small: value.icon_small,
             icon_large: value.icon_large,
+        }
+    }
+}
+
+impl From<CoreSkillDependencies> for SkillDependencies {
+    fn from(value: CoreSkillDependencies) -> Self {
+        Self {
+            tools: value
+                .tools
+                .into_iter()
+                .map(SkillToolDependency::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<CoreSkillToolDependency> for SkillToolDependency {
+    fn from(value: CoreSkillToolDependency) -> Self {
+        Self {
+            r#type: value.r#type,
+            value: value.value,
+            description: value.description,
+            transport: value.transport,
+            command: value.command,
+            url: value.url,
         }
     }
 }

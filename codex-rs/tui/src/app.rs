@@ -1632,10 +1632,27 @@ impl App {
                                 }
                             }
                             Err(err) => {
+                                let mut code_tag: Option<String> = None;
+                                let mut message_tag: Option<String> = None;
+                                if let Some((code, message)) =
+                                    codex_core::windows_sandbox::elevated_setup_failure_details(
+                                        &err,
+                                    )
+                                {
+                                    code_tag = Some(code);
+                                    message_tag = Some(message);
+                                }
+                                let mut tags: Vec<(&str, &str)> = Vec::new();
+                                if let Some(code) = code_tag.as_deref() {
+                                    tags.push(("code", code));
+                                }
+                                if let Some(message) = message_tag.as_deref() {
+                                    tags.push(("message", message));
+                                }
                                 otel_manager.counter(
                                     "codex.windows_sandbox.elevated_setup_failure",
                                     1,
-                                    &[],
+                                    &tags,
                                 );
                                 tracing::error!(
                                     error = %err,
@@ -2268,8 +2285,9 @@ impl App {
             Err(external_editor::EditorError::MissingEditor) => {
                 self.chat_widget
                     .add_to_history(history_cell::new_error_event(
-                        "Cannot open external editor: set $VISUAL or $EDITOR".to_string(),
-                    ));
+                    "Cannot open external editor: set $VISUAL or $EDITOR before starting Codex."
+                        .to_string(),
+                ));
                 self.reset_external_editor_state(tui);
                 return;
             }

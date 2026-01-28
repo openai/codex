@@ -306,8 +306,8 @@ pub struct Config {
     /// model info's default preference.
     pub include_apply_patch_tool: bool,
 
-    /// Explicit or feature-derived web search mode. Defaults to cached.
-    pub web_search_mode: WebSearchMode,
+    /// Explicit or feature-derived web search mode.
+    pub web_search_mode: Option<WebSearchMode>,
 
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
@@ -1203,27 +1203,36 @@ pub fn resolve_oss_provider(
     }
 }
 
-/// Resolve the web search mode from explicit config, feature flags, and sandbox policy.
-/// Live search is auto-enabled when sandbox policy is `DangerFullAccess`
+/// Resolve the web search mode from explicit config and feature flags.
 fn resolve_web_search_mode(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
     features: &Features,
-    sandbox_policy: &SandboxPolicy,
-) -> WebSearchMode {
+) -> Option<WebSearchMode> {
     if let Some(mode) = config_profile.web_search.or(config_toml.web_search) {
-        return mode;
+        return Some(mode);
     }
     if features.enabled(Feature::WebSearchCached) {
-        return WebSearchMode::Cached;
+        return Some(WebSearchMode::Cached);
     }
     if features.enabled(Feature::WebSearchRequest) {
-        return WebSearchMode::Live;
+        return Some(WebSearchMode::Live);
+    }
+    None
+}
+
+pub(crate) fn resolve_web_search_mode_for_turn(
+    explicit_mode: Option<WebSearchMode>,
+    sandbox_policy: &SandboxPolicy,
+) -> WebSearchMode {
+    if let Some(mode) = explicit_mode {
+        return mode;
     }
     if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
-        return WebSearchMode::Live;
+        WebSearchMode::Live
+    } else {
+        WebSearchMode::Cached
     }
-    WebSearchMode::Cached
 }
 
 impl Config {
@@ -1347,8 +1356,7 @@ impl Config {
                     AskForApproval::default()
                 }
             });
-        let web_search_mode =
-            resolve_web_search_mode(&cfg, &config_profile, &features, &sandbox_policy);
+        let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features);
         // TODO(dylan): We should be able to leverage ConfigLayerStack so that
         // we can reliably check this at every config level.
         let did_user_set_custom_approval_policy_or_sandbox_mode = approval_policy_override
@@ -2271,15 +2279,12 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn web_search_mode_defaults_to_cached_if_unset() {
+    fn web_search_mode_defaults_to_none_if_unset() {
         let cfg = ConfigToml::default();
         let profile = ConfigProfile::default();
         let features = Features::with_defaults();
 
-        assert_eq!(
-            resolve_web_search_mode(&cfg, &profile, &features, &SandboxPolicy::ReadOnly),
-            WebSearchMode::Cached
-        );
+        assert_eq!(resolve_web_search_mode(&cfg, &profile, &features), None);
     }
 
     #[test]
@@ -2293,8 +2298,8 @@ trust_level = "trusted"
         features.enable(Feature::WebSearchCached);
 
         assert_eq!(
-            resolve_web_search_mode(&cfg, &profile, &features, &SandboxPolicy::ReadOnly),
-            WebSearchMode::Live
+            resolve_web_search_mode(&cfg, &profile, &features),
+            Some(WebSearchMode::Live)
         );
     }
 
@@ -2309,48 +2314,33 @@ trust_level = "trusted"
         features.enable(Feature::WebSearchRequest);
 
         assert_eq!(
-            resolve_web_search_mode(&cfg, &profile, &features, &SandboxPolicy::ReadOnly),
-            WebSearchMode::Disabled
+            resolve_web_search_mode(&cfg, &profile, &features),
+            Some(WebSearchMode::Disabled)
         );
     }
 
     #[test]
-    fn danger_full_access_defaults_web_search_live_when_unset() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
-        let cfg = ConfigToml {
-            sandbox_mode: Some(SandboxMode::DangerFullAccess),
-            ..Default::default()
-        };
+    fn web_search_mode_for_turn_defaults_to_cached_when_unset() {
+        let mode = resolve_web_search_mode_for_turn(None, &SandboxPolicy::ReadOnly);
 
-        let config = Config::load_from_base_config_with_overrides(
-            cfg,
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )?;
-
-        assert_eq!(config.web_search_mode, WebSearchMode::Live);
-
-        Ok(())
+        assert_eq!(mode, WebSearchMode::Cached);
     }
 
     #[test]
-    fn explicit_web_search_mode_wins_in_danger_full_access() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
-        let cfg = ConfigToml {
-            sandbox_mode: Some(SandboxMode::DangerFullAccess),
-            web_search: Some(WebSearchMode::Cached),
-            ..Default::default()
-        };
+    fn web_search_mode_for_turn_defaults_to_live_for_danger_full_access() {
+        let mode = resolve_web_search_mode_for_turn(None, &SandboxPolicy::DangerFullAccess);
 
-        let config = Config::load_from_base_config_with_overrides(
-            cfg,
-            ConfigOverrides::default(),
-            codex_home.path().to_path_buf(),
-        )?;
+        assert_eq!(mode, WebSearchMode::Live);
+    }
 
-        assert_eq!(config.web_search_mode, WebSearchMode::Cached);
+    #[test]
+    fn web_search_mode_for_turn_prefers_explicit_value() {
+        let mode = resolve_web_search_mode_for_turn(
+            Some(WebSearchMode::Cached),
+            &SandboxPolicy::DangerFullAccess,
+        );
 
-        Ok(())
+        assert_eq!(mode, WebSearchMode::Cached);
     }
 
     #[test]
@@ -3786,7 +3776,7 @@ model_verbosity = "high"
                 forced_chatgpt_workspace_id: None,
                 forced_login_method: None,
                 include_apply_patch_tool: false,
-                web_search_mode: WebSearchMode::Cached,
+                web_search_mode: None,
                 use_experimental_unified_exec_tool: false,
                 ghost_snapshot: GhostSnapshotConfig::default(),
                 features: Features::with_defaults(),
@@ -3869,7 +3859,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -3967,7 +3957,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),
@@ -4051,7 +4041,7 @@ model_verbosity = "high"
             forced_chatgpt_workspace_id: None,
             forced_login_method: None,
             include_apply_patch_tool: false,
-            web_search_mode: WebSearchMode::Cached,
+            web_search_mode: None,
             use_experimental_unified_exec_tool: false,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults(),

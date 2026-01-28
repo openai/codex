@@ -4543,6 +4543,22 @@ fn skills_to_info(
                         default_prompt: interface.default_prompt,
                     }
                 }),
+                dependencies: skill.dependencies.clone().map(|dependencies| {
+                    codex_app_server_protocol::SkillDependencies {
+                        tools: dependencies
+                            .tools
+                            .into_iter()
+                            .map(|tool| codex_app_server_protocol::SkillToolDependency {
+                                r#type: tool.r#type,
+                                value: tool.value,
+                                description: tool.description,
+                                transport: tool.transport,
+                                command: tool.command,
+                                url: tool.url,
+                            })
+                            .collect(),
+                    }
+                }),
                 path: skill.path.clone(),
                 scope: skill.scope.into(),
                 enabled,
