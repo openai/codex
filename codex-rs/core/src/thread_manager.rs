@@ -231,12 +231,8 @@ impl ThreadManager {
         config: Config,
         rollout_path: PathBuf,
     ) -> CodexResult<NewThread> {
-        self.resume_thread_from_rollout(
-            config,
-            rollout_path,
-            Arc::clone(&self.state.auth_manager),
-        )
-        .await
+        self.resume_thread_from_rollout(config, rollout_path, Arc::clone(&self.state.auth_manager))
+            .await
     }
 
     pub async fn resume_thread_with_history(

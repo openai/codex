@@ -429,8 +429,14 @@ mod tests {
         let parsed: CodexToolCallParam = serde_json::from_value(payload).expect("payload parses");
         assert_eq!(parsed.prompt, "hello");
         assert_eq!(parsed.model.as_deref(), Some("gpt-5.2"));
-        assert_eq!(parsed.sandbox, Some(CodexToolCallSandboxMode::WorkspaceWrite));
-        assert_eq!(parsed.approval_policy, Some(CodexToolCallApprovalPolicy::Untrusted));
+        assert_eq!(
+            parsed.sandbox,
+            Some(CodexToolCallSandboxMode::WorkspaceWrite)
+        );
+        assert_eq!(
+            parsed.approval_policy,
+            Some(CodexToolCallApprovalPolicy::Untrusted)
+        );
         assert!(parsed.resume_path.is_none());
     }
 }

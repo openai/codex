@@ -349,19 +349,34 @@ impl MessageProcessor {
     async fn handle_tool_call_codex(&self, id: RequestId, arguments: Option<serde_json::Value>) {
         let (initial_prompt, config, resume_path): (String, Config, Option<PathBuf>) =
             match arguments {
-            Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
-                Ok(tool_cfg) => match tool_cfg
-                    .into_config(self.codex_linux_sandbox_exe.clone())
-                    .await
-                {
-                    Ok(cfg) => cfg,
+                Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
+                    Ok(tool_cfg) => match tool_cfg
+                        .into_config(self.codex_linux_sandbox_exe.clone())
+                        .await
+                    {
+                        Ok(cfg) => cfg,
+                        Err(e) => {
+                            let result = CallToolResult {
+                                content: vec![ContentBlock::TextContent(TextContent {
+                                    r#type: "text".to_owned(),
+                                    text: format!(
+                                        "Failed to load Codex configuration from overrides: {e}"
+                                    ),
+                                    annotations: None,
+                                })],
+                                is_error: Some(true),
+                                structured_content: None,
+                            };
+                            self.send_response::<mcp_types::CallToolRequest>(id, result)
+                                .await;
+                            return;
+                        }
+                    },
                     Err(e) => {
                         let result = CallToolResult {
                             content: vec![ContentBlock::TextContent(TextContent {
                                 r#type: "text".to_owned(),
-                                text: format!(
-                                    "Failed to load Codex configuration from overrides: {e}"
-                                ),
+                                text: format!("Failed to parse configuration for Codex tool: {e}"),
                                 annotations: None,
                             })],
                             is_error: Some(true),
@@ -372,13 +387,15 @@ impl MessageProcessor {
                         return;
                     }
                 },
-                Err(e) => {
+                None => {
                     let result = CallToolResult {
                         content: vec![ContentBlock::TextContent(TextContent {
-                            r#type: "text".to_owned(),
-                            text: format!("Failed to parse configuration for Codex tool: {e}"),
-                            annotations: None,
-                        })],
+                        r#type: "text".to_string(),
+                        text:
+                            "Missing arguments for codex tool-call; the `prompt` field is required."
+                                .to_string(),
+                        annotations: None,
+                    })],
                         is_error: Some(true),
                         structured_content: None,
                     };
@@ -386,24 +403,7 @@ impl MessageProcessor {
                         .await;
                     return;
                 }
-            },
-            None => {
-                let result = CallToolResult {
-                    content: vec![ContentBlock::TextContent(TextContent {
-                        r#type: "text".to_string(),
-                        text:
-                            "Missing arguments for codex tool-call; the `prompt` field is required."
-                                .to_string(),
-                        annotations: None,
-                    })],
-                    is_error: Some(true),
-                    structured_content: None,
-                };
-                self.send_response::<mcp_types::CallToolRequest>(id, result)
-                    .await;
-                return;
-            }
-        };
+            };
 
         // Clone outgoing and server to move into async task.
         let outgoing = self.outgoing.clone();
