@@ -2135,7 +2135,7 @@ impl Session {
         let config = self.get_config().await;
         let mcp_servers = with_codex_apps_mcp(
             mcp_servers,
-            self.features.enabled(Feature::Connectors),
+            self.features.enabled(Feature::Apps),
             auth.as_ref(),
             config.as_ref(),
         );
@@ -3108,12 +3108,7 @@ pub(crate) async fn run_turn(
         || (HashMap::new(), HashMap::new()),
         |outcome| build_skill_name_counts(&outcome.skills, &outcome.disabled_paths),
     );
-    let connector_slug_counts = if turn_context
-        .client
-        .config()
-        .features
-        .enabled(Feature::Connectors)
-    {
+    let connector_slug_counts = if turn_context.client.config().features.enabled(Feature::Apps) {
         let mcp_tools = match sess
             .services
             .mcp_connection_manager
@@ -3406,12 +3401,7 @@ async fn run_sampling_request(
         .list_all_tools()
         .or_cancel(&cancellation_token)
         .await?;
-    let connectors_for_tools = if turn_context
-        .client
-        .config()
-        .features
-        .enabled(Feature::Connectors)
-    {
+    let connectors_for_tools = if turn_context.client.config().features.enabled(Feature::Apps) {
         let connectors = connectors::accessible_connectors_from_mcp_tools(&mcp_tools);
         Some(filter_connectors_for_input(
             connectors,

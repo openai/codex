@@ -39,7 +39,7 @@ struct DirectoryApp {
 const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    if !config.features.enabled(Feature::Connectors) {
+    if !config.features.enabled(Feature::Apps) {
         return Ok(Vec::new());
     }
     let (connectors_result, accessible_result) = tokio::join!(
@@ -53,7 +53,7 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    if !config.features.enabled(Feature::Connectors) {
+    if !config.features.enabled(Feature::Apps) {
         return Ok(Vec::new());
     }
     init_chatgpt_token_from_auth(&config.codex_home, config.cli_auth_credentials_store_mode)

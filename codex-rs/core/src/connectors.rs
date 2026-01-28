@@ -20,7 +20,7 @@ use crate::mcp_connection_manager::McpConnectionManager;
 pub async fn list_accessible_connectors_from_mcp_tools(
     config: &Config,
 ) -> anyhow::Result<Vec<AppInfo>> {
-    if !config.features.enabled(Feature::Connectors) {
+    if !config.features.enabled(Feature::Apps) {
         return Ok(Vec::new());
     }
 

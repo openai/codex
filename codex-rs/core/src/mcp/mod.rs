@@ -129,7 +129,7 @@ pub(crate) fn effective_mcp_servers(
 ) -> HashMap<String, McpServerConfig> {
     with_codex_apps_mcp(
         config.mcp_servers.get().clone(),
-        config.features.enabled(Feature::Connectors),
+        config.features.enabled(Feature::Apps),
         auth,
         config,
     )

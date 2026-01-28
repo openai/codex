@@ -144,6 +144,9 @@
             "apply_patch_freeform": {
               "type": "boolean"
             },
+            "apps": {
+              "type": "boolean"
+            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -1137,6 +1140,9 @@
       "description": "Centralized feature flags (new). Prefer this over individual toggles.",
       "properties": {
         "apply_patch_freeform": {
+          "type": "boolean"
+        },
+        "apps": {
           "type": "boolean"
         },
         "child_agents_md": {

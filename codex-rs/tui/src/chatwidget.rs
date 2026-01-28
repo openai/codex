@@ -2108,7 +2108,7 @@ impl ChatWidget {
 
         widget
             .bottom_pane
-            .set_connectors_enabled(widget.config.features.enabled(Feature::Connectors));
+            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
 
         widget
     }
@@ -5057,7 +5057,7 @@ impl ChatWidget {
     }
 
     fn connectors_enabled(&self) -> bool {
-        self.config.features.enabled(Feature::Connectors)
+        self.config.features.enabled(Feature::Apps)
     }
 
     fn connectors_for_mentions(&self) -> Option<&[connectors::AppInfo]> {
@@ -5138,7 +5138,7 @@ impl ChatWidget {
         if !self.connectors_enabled() {
             self.add_info_message(
                 "Apps are disabled.".to_string(),
-                Some("Enable the connectors feature to use $ or /apps.".to_string()),
+                Some("Enable the apps feature to use $ or /apps.".to_string()),
             );
             return;
         }
@@ -5190,7 +5190,7 @@ impl ChatWidget {
                 (
                     "Press Enter to view the app link.",
                     "App link unavailable.",
-                    "Open this app's connector page in your browser.",
+                    "Manage this app in your browser.",
                 )
             } else {
                 (

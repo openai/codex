@@ -3688,7 +3688,7 @@ impl CodexMessageProcessor {
             }
         };
 
-        if !config.features.enabled(Feature::Connectors) {
+        if !config.features.enabled(Feature::Apps) {
             self.outgoing
                 .send_response(
                     request_id,
