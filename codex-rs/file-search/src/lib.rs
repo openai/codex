@@ -517,6 +517,10 @@ fn matcher_worker(
                     }
                     WorkSignal::WalkComplete => {
                         walk_complete = true;
+                        if !will_notify {
+                            will_notify = true;
+                            next_notify = after(Duration::from_millis(0));
+                        }
                     }
                     WorkSignal::Shutdown => {
                         break;
