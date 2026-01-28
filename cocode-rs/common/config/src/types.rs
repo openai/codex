@@ -1,11 +1,12 @@
 //! Configuration types for multi-provider management.
 //!
 //! This module defines the types used to configure models and providers
-//! from JSON files. The configuration follows a layered approach:
+//! from JSON/TOML files. The configuration follows a layered approach:
 //!
 //! - `models.json`: Provider-independent model metadata
-//! - `providers.json`: Provider access configuration with optional model overrides
-//! - `profiles.json`: Named configuration bundles for quick switching
+//! - `providers.json` / `config.toml`: Provider configuration with model entries
+//!
+//! For resolved runtime types, see `ProviderInfo` in cocode_protocol.
 
 use cocode_protocol::Capability;
 use cocode_protocol::ModelInfo;
@@ -14,112 +15,136 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 
-/// Root structure for models.json file.
+// Re-export from protocol for backwards compatibility.
+pub use cocode_protocol::ProviderInfo;
+pub use cocode_protocol::ProviderType;
+pub use cocode_protocol::WireApi;
+
+/// Internal storage for model configurations.
+///
+/// **Important**: External config files use **array format**:
+/// ```json
+/// [{"slug": "gpt-5", "display_name": "GPT-5", ...}]
+/// ```
+///
+/// This struct is populated by `ConfigLoader` which deserializes the array
+/// and converts it to a HashMap keyed by `slug`.
+///
+/// Do NOT deserialize config files directly into this type.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelsFile {
-    /// Schema version for forward compatibility.
-    #[serde(default = "default_version")]
-    pub version: String,
-    /// Map of model ID to model configuration.
+    /// Map of model slug to model configuration.
     #[serde(default)]
     pub models: HashMap<String, ModelInfo>,
 }
 
-/// Root structure for providers.json file.
+impl ModelsFile {
+    /// Add models from a list, error on duplicate slug.
+    ///
+    /// Each model in the list is keyed by its `slug` field.
+    /// Returns an error if a model with the same slug already exists.
+    pub fn add_models(
+        &mut self,
+        models: Vec<ModelInfo>,
+        source: impl std::fmt::Display,
+    ) -> Result<(), crate::error::ConfigError> {
+        for model in models {
+            if self.models.contains_key(&model.slug) {
+                return Err(crate::error::ConfigError::config(
+                    source.to_string(),
+                    format!("duplicate model slug: {}", model.slug),
+                ));
+            }
+            self.models.insert(model.slug.clone(), model);
+        }
+        Ok(())
+    }
+}
+
+/// Internal storage for provider configurations.
+///
+/// **Important**: External config files use **array format**:
+/// ```json
+/// [{"name": "openai", "type": "openai", "base_url": "...", ...}]
+/// ```
+///
+/// This struct is populated by `ConfigLoader` which deserializes the array
+/// and converts it to a HashMap keyed by `name`.
+///
+/// Do NOT deserialize config files directly into this type.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProvidersFile {
-    /// Schema version for forward compatibility.
-    #[serde(default = "default_version")]
-    pub version: String,
-    /// Map of provider name to provider configuration.
+    /// Map of provider name (identifier) to provider configuration.
     #[serde(default)]
     pub providers: HashMap<String, ProviderConfig>,
 }
 
-/// Root structure for profiles.json file.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ProfilesFile {
-    /// Schema version for forward compatibility.
-    #[serde(default = "default_version")]
-    pub version: String,
-    /// Default profile to use when none is specified.
-    #[serde(default)]
-    pub default_profile: Option<String>,
-    /// Map of profile name to profile configuration.
-    #[serde(default)]
-    pub profiles: HashMap<String, ProfileConfig>,
-}
-
-/// Runtime state stored in active.json.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ActiveState {
-    /// Currently active provider name.
-    #[serde(default)]
-    pub provider: Option<String>,
-    /// Currently active model ID.
-    #[serde(default)]
-    pub model: Option<String>,
-    /// Currently active profile name.
-    #[serde(default)]
-    pub profile: Option<String>,
-    /// Runtime overrides for session config.
-    #[serde(default)]
-    pub session_overrides: Option<SessionConfigJson>,
-    /// Timestamp of last update.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_updated: Option<String>,
-}
-
-fn default_version() -> String {
-    "1.0".to_string()
-}
-
-/// Provider type enumeration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderType {
-    /// OpenAI API compatible.
-    Openai,
-    /// Anthropic Claude API.
-    Anthropic,
-    /// Google Gemini API.
-    Gemini,
-    /// Volcengine Ark API.
-    Volcengine,
-    /// Z.AI / ZhipuAI API.
-    Zai,
-    /// Generic OpenAI-compatible API.
-    OpenaiCompat,
-}
-
-impl Default for ProviderType {
-    fn default() -> Self {
-        Self::Openai
-    }
-}
-
-impl std::fmt::Display for ProviderType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Openai => write!(f, "openai"),
-            Self::Anthropic => write!(f, "anthropic"),
-            Self::Gemini => write!(f, "gemini"),
-            Self::Volcengine => write!(f, "volcengine"),
-            Self::Zai => write!(f, "zai"),
-            Self::OpenaiCompat => write!(f, "openai_compat"),
+impl ProvidersFile {
+    /// Add providers from a list, error on duplicate name.
+    ///
+    /// Each provider in the list is keyed by its `name` field.
+    /// Returns an error if a provider with the same name already exists.
+    pub fn add_providers(
+        &mut self,
+        providers: Vec<ProviderConfig>,
+        source: impl std::fmt::Display,
+    ) -> Result<(), crate::error::ConfigError> {
+        for provider in providers {
+            if self.providers.contains_key(&provider.name) {
+                return Err(crate::error::ConfigError::config(
+                    source.to_string(),
+                    format!("duplicate provider name: {}", provider.name),
+                ));
+            }
+            self.providers.insert(provider.name.clone(), provider);
         }
+        Ok(())
     }
 }
 
-/// Provider configuration from JSON.
+fn default_timeout() -> i64 {
+    600
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Provider configuration from JSON/TOML.
+///
+/// Example TOML:
+/// ```toml
+/// [providers.openai]
+/// name = "OpenAI"
+/// type = "openai"
+/// base_url = "https://api.openai.com/v1"
+/// env_key = "OPENAI_API_KEY"
+/// streaming = true
+/// wire_api = "responses"
+///
+/// [[providers.openai.models]]
+/// slug = "gpt-5"
+///
+/// [[providers.openai.models]]
+/// slug = "gpt-4o"
+/// timeout_secs = 120
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
-    /// Human-readable provider name.
+    /// Provider identifier (used as map key, e.g., "openai", "anthropic").
     pub name: String,
 
     /// Provider type for selecting the implementation.
     #[serde(rename = "type")]
     pub provider_type: ProviderType,
+
+    /// Base URL for API endpoint.
+    pub base_url: String,
+
+    /// Request timeout in seconds (default: 600).
+    /// Note: Can be overridden per-model via ModelInfo.timeout_secs.
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: i64,
 
     /// Environment variable name for API key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -129,146 +154,128 @@ pub struct ProviderConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
 
-    /// Base URL override.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_url: Option<String>,
+    /// Enable streaming mode (default: true).
+    #[serde(default = "default_true")]
+    pub streaming: bool,
 
-    /// Default model for this provider.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_model: Option<String>,
-
-    /// Request timeout in seconds.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_secs: Option<i64>,
-
-    /// Organization ID (for providers that support it).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub organization_id: Option<String>,
-
-    /// Model configurations specific to this provider.
+    /// Wire protocol (responses or chat, default: responses).
     #[serde(default)]
-    pub models: HashMap<String, ProviderModelConfig>,
+    pub wire_api: WireApi,
+
+    /// Provider-level overrides (apply to all models in this provider).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub overrides: HashMap<String, serde_json::Value>,
+
+    /// Models this provider serves.
+    #[serde(default)]
+    pub models: Vec<ProviderModelEntry>,
 
     /// Extra provider-specific configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra: Option<serde_json::Value>,
 }
 
-impl Default for ProviderConfig {
-    fn default() -> Self {
+impl ProviderConfig {
+    /// Validate required fields.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.is_empty() {
+            return Err("provider name is required".to_string());
+        }
+        if self.base_url.is_empty() {
+            return Err("provider base_url is required".to_string());
+        }
+        Ok(())
+    }
+
+    /// Convert to domain type (partial, without resolved API key or models).
+    ///
+    /// Use `ConfigResolver::resolve_provider()` to get a fully resolved `ProviderInfo`.
+    pub fn to_provider_info(&self) -> cocode_protocol::ProviderInfo {
+        cocode_protocol::ProviderInfo::new(&self.name, self.provider_type, &self.base_url)
+            .with_timeout(self.timeout_secs)
+            .with_streaming(self.streaming)
+            .with_wire_api(self.wire_api)
+    }
+
+    /// Find a model entry by slug.
+    pub fn find_model(&self, slug: &str) -> Option<&ProviderModelEntry> {
+        self.models.iter().find(|m| m.model_info.slug == slug)
+    }
+
+    /// List all model slugs in this provider.
+    pub fn list_model_slugs(&self) -> Vec<&str> {
+        self.models
+            .iter()
+            .map(|m| m.model_info.slug.as_str())
+            .collect()
+    }
+}
+
+/// Per-model configuration within a provider.
+///
+/// Uses `#[serde(flatten)]` to allow inline ModelInfo fields in config files.
+///
+/// Example TOML:
+/// ```toml
+/// [[providers.volcengine.models]]
+/// slug = "deepseek-r1"
+/// model_id = "ep-20250101-xxxxx"  # API endpoint ID
+/// timeout_secs = 300
+/// max_output_tokens = 16384
+/// thinking_budget = 32000
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProviderModelEntry {
+    /// Model info (slug required, other fields optional for overrides).
+    #[serde(flatten)]
+    pub model_info: ModelInfo,
+
+    /// API model name if different from slug (e.g., "ep-xxx" endpoint ID).
+    /// In config files, can use `model_id` or `model_alias`.
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "model_id")]
+    pub model_alias: Option<String>,
+
+    /// Model-specific overrides (for future extensibility).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub overrides: HashMap<String, serde_json::Value>,
+}
+
+impl ProviderModelEntry {
+    /// Create a new entry with just a slug.
+    pub fn new(slug: impl Into<String>) -> Self {
         Self {
-            name: String::new(),
-            provider_type: ProviderType::default(),
-            env_key: None,
-            api_key: None,
-            base_url: None,
-            default_model: None,
-            timeout_secs: None,
-            organization_id: None,
-            models: HashMap::new(),
-            extra: None,
+            model_info: ModelInfo {
+                slug: slug.into(),
+                ..Default::default()
+            },
+            model_alias: None,
+            overrides: HashMap::new(),
         }
     }
-}
 
-/// Model config within a provider (with override capability).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ProviderModelConfig {
-    /// Model ID alias (e.g., "ep-xxx" -> "deepseek-r1").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_id: Option<String>,
-
-    /// Override model info for this provider-model combination.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_info_override: Option<ModelInfo>,
-}
-
-/// Profile for quick provider/model switching.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProfileConfig {
-    /// Provider name to use.
-    pub provider: String,
-    /// Model ID to use.
-    pub model: String,
-    /// Session configuration for this profile.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_config: Option<SessionConfigJson>,
-}
-
-/// Thinking configuration in JSON format.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ThinkingConfigJson {
-    /// Thinking budget in tokens.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget: Option<i32>,
-
-    /// Whether to enable thinking summaries.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include_summary: Option<bool>,
-}
-
-/// Session configuration in JSON format.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SessionConfigJson {
-    /// Sampling temperature.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f64>,
-
-    /// Maximum tokens to generate.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<i32>,
-
-    /// Top-p nucleus sampling.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f64>,
-
-    /// Thinking budget in tokens (shorthand for thinking_config.budget).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking_budget: Option<i32>,
-
-    /// Reasoning effort level.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<ReasoningEffort>,
-
-    /// Full thinking configuration.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking_config: Option<ThinkingConfigJson>,
-}
-
-impl SessionConfigJson {
-    /// Create a new empty session config.
-    pub fn new() -> Self {
-        Self::default()
+    /// Create a new entry with a slug and alias.
+    pub fn with_alias(slug: impl Into<String>, alias: impl Into<String>) -> Self {
+        Self {
+            model_info: ModelInfo {
+                slug: slug.into(),
+                ..Default::default()
+            },
+            model_alias: Some(alias.into()),
+            overrides: HashMap::new(),
+        }
     }
 
-    /// Set the temperature.
-    pub fn with_temperature(mut self, t: f64) -> Self {
-        self.temperature = Some(t);
-        self
+    /// Get the slug (model identifier).
+    pub fn slug(&self) -> &str {
+        &self.model_info.slug
     }
 
-    /// Set the max tokens.
-    pub fn with_max_tokens(mut self, n: i32) -> Self {
-        self.max_tokens = Some(n);
-        self
-    }
-
-    /// Set the top-p.
-    pub fn with_top_p(mut self, p: f64) -> Self {
-        self.top_p = Some(p);
-        self
-    }
-
-    /// Set the thinking budget.
-    pub fn with_thinking_budget(mut self, budget: i32) -> Self {
-        self.thinking_budget = Some(budget);
-        self
-    }
-
-    /// Set the reasoning effort.
-    pub fn with_reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
-        self.reasoning_effort = Some(effort);
-        self
+    /// Get the API model name (alias if set and non-empty, otherwise slug).
+    pub fn api_model_name(&self) -> &str {
+        self.model_alias
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&self.model_info.slug)
     }
 }
 
@@ -287,8 +294,14 @@ pub struct ResolvedModelInfo {
     pub context_window: i64,
     /// Maximum output tokens.
     pub max_output_tokens: i64,
+    /// Request timeout in seconds.
+    pub timeout_secs: i64,
     /// Capabilities this model supports.
     pub capabilities: Vec<Capability>,
+    /// Sampling temperature.
+    pub temperature: Option<f32>,
+    /// Top-p nucleus sampling.
+    pub top_p: Option<f32>,
     /// Token limit before auto-compaction triggers.
     pub auto_compact_token_limit: Option<i64>,
     /// Effective context window as percentage.
@@ -299,6 +312,8 @@ pub struct ResolvedModelInfo {
     pub supported_reasoning_levels: Option<Vec<ReasoningEffort>>,
     /// Default thinking budget in tokens.
     pub thinking_budget_default: Option<i32>,
+    /// Whether to include thoughts in response.
+    pub include_thoughts: Option<bool>,
     /// Base system instructions for this model.
     pub base_instructions: Option<String>,
 }
@@ -320,26 +335,8 @@ impl ResolvedModelInfo {
     }
 }
 
-/// Resolved provider config ready for use.
-#[derive(Debug, Clone)]
-pub struct ResolvedProviderConfig {
-    /// Provider name.
-    pub name: String,
-    /// Provider type.
-    pub provider_type: ProviderType,
-    /// API key (resolved from env or config).
-    pub api_key: String,
-    /// Base URL.
-    pub base_url: Option<String>,
-    /// Default model.
-    pub default_model: Option<String>,
-    /// Request timeout in seconds.
-    pub timeout_secs: i64,
-    /// Organization ID.
-    pub organization_id: Option<String>,
-    /// Extra provider-specific configuration.
-    pub extra: Option<serde_json::Value>,
-}
+// Note: `ResolvedProviderConfig` is replaced by `ProviderInfo` from cocode_protocol.
+// Use `ConfigResolver::resolve_provider()` to get a fully resolved `ProviderInfo`.
 
 /// Summary of a provider for listing.
 #[derive(Debug, Clone, Serialize)]
@@ -411,83 +408,137 @@ mod tests {
     }
 
     #[test]
-    fn test_models_file_serde() {
-        let json = r#"{
-            "version": "1.0",
-            "models": {
-                "gpt-4o": {
-                    "display_name": "GPT-4o",
-                    "context_window": 128000,
-                    "max_output_tokens": 16384,
-                    "capabilities": ["text_generation", "streaming", "vision"]
-                }
+    fn test_models_file_from_vec() {
+        // External config files use Vec format (array of models).
+        // This tests the real config file format and add_models() method.
+        let json = r#"[
+            {
+                "slug": "gpt-4o",
+                "display_name": "GPT-4o",
+                "context_window": 128000,
+                "max_output_tokens": 16384,
+                "capabilities": ["text_generation", "streaming", "vision"]
             }
-        }"#;
+        ]"#;
 
-        let file: ModelsFile = serde_json::from_str(json).expect("deserialize");
-        assert_eq!(file.version, "1.0");
+        let models: Vec<ModelInfo> = serde_json::from_str(json).expect("deserialize");
+        let mut file = ModelsFile::default();
+        file.add_models(models, "test.json").expect("add models");
+
         assert!(file.models.contains_key("gpt-4o"));
-
         let model = file.models.get("gpt-4o").expect("model exists");
         assert_eq!(model.display_name, Some("GPT-4o".to_string()));
         assert_eq!(model.context_window, Some(128000));
     }
 
     #[test]
-    fn test_providers_file_serde() {
-        let json = r#"{
-            "version": "1.0",
-            "providers": {
-                "openai": {
-                    "name": "OpenAI",
-                    "type": "openai",
-                    "env_key": "OPENAI_API_KEY",
-                    "base_url": "https://api.openai.com/v1",
-                    "models": {}
-                }
+    fn test_providers_file_from_vec() {
+        // External config files use Vec format (array of providers).
+        // This tests the real config file format and add_providers() method.
+        let json = r#"[
+            {
+                "name": "openai",
+                "type": "openai",
+                "env_key": "OPENAI_API_KEY",
+                "base_url": "https://api.openai.com/v1",
+                "models": []
             }
-        }"#;
+        ]"#;
 
-        let file: ProvidersFile = serde_json::from_str(json).expect("deserialize");
-        assert_eq!(file.version, "1.0");
+        let providers: Vec<ProviderConfig> = serde_json::from_str(json).expect("deserialize");
+        let mut file = ProvidersFile::default();
+        file.add_providers(providers, "test.json")
+            .expect("add providers");
 
         let provider = file.providers.get("openai").expect("provider exists");
-        assert_eq!(provider.name, "OpenAI");
+        assert_eq!(provider.name, "openai");
         assert_eq!(provider.provider_type, ProviderType::Openai);
     }
 
     #[test]
-    fn test_profile_config_serde() {
+    fn test_provider_model_entry_serde() {
         let json = r#"{
-            "provider": "anthropic",
-            "model": "claude-sonnet-4-20250514",
-            "session_config": {
-                "temperature": 0.3,
-                "thinking_budget": 10000
-            }
+            "slug": "deepseek-r1",
+            "model_id": "ep-20250101-xxxxx",
+            "timeout_secs": 300,
+            "max_output_tokens": 16384,
+            "thinking_budget": 32000
         }"#;
 
-        let profile: ProfileConfig = serde_json::from_str(json).expect("deserialize");
-        assert_eq!(profile.provider, "anthropic");
-        assert_eq!(profile.model, "claude-sonnet-4-20250514");
-
-        let session = profile.session_config.expect("session config exists");
-        assert_eq!(session.temperature, Some(0.3));
-        assert_eq!(session.thinking_budget, Some(10000));
+        let entry: ProviderModelEntry = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(entry.slug(), "deepseek-r1");
+        assert_eq!(entry.model_alias, Some("ep-20250101-xxxxx".to_string()));
+        assert_eq!(entry.model_info.timeout_secs, Some(300));
+        assert_eq!(entry.model_info.max_output_tokens, Some(16384));
+        assert_eq!(entry.model_info.thinking_budget, Some(32000));
     }
 
     #[test]
-    fn test_session_config_json_builder() {
-        let json_config = SessionConfigJson::new()
-            .with_temperature(0.7)
-            .with_max_tokens(4096)
-            .with_thinking_budget(5000)
-            .with_reasoning_effort(ReasoningEffort::Medium);
+    fn test_provider_model_entry_api_model_name() {
+        let entry1 = ProviderModelEntry::new("gpt-5");
+        assert_eq!(entry1.api_model_name(), "gpt-5");
 
-        assert_eq!(json_config.temperature, Some(0.7));
-        assert_eq!(json_config.max_tokens, Some(4096));
-        assert_eq!(json_config.thinking_budget, Some(5000));
-        assert_eq!(json_config.reasoning_effort, Some(ReasoningEffort::Medium));
+        let entry2 = ProviderModelEntry::with_alias("deepseek-r1", "ep-xxxxx");
+        assert_eq!(entry2.api_model_name(), "ep-xxxxx");
+    }
+
+    #[test]
+    fn test_provider_model_entry_empty_alias_falls_back() {
+        let entry = ProviderModelEntry {
+            model_info: ModelInfo {
+                slug: "test-model".to_string(),
+                ..Default::default()
+            },
+            model_alias: Some("".to_string()),
+            overrides: HashMap::new(),
+        };
+        // Empty alias should fall back to slug
+        assert_eq!(entry.api_model_name(), "test-model");
+    }
+
+    #[test]
+    fn test_wire_api_serde() {
+        let api1 = WireApi::Responses;
+        let json1 = serde_json::to_string(&api1).unwrap();
+        assert_eq!(json1, "\"responses\"");
+
+        let api2 = WireApi::Chat;
+        let json2 = serde_json::to_string(&api2).unwrap();
+        assert_eq!(json2, "\"chat\"");
+    }
+
+    #[test]
+    fn test_provider_config_with_overrides() {
+        let json = r#"{
+            "name": "Custom OpenAI",
+            "type": "openai",
+            "base_url": "https://api.openai.com/v1",
+            "env_key": "OPENAI_API_KEY",
+            "streaming": true,
+            "wire_api": "chat",
+            "overrides": {
+                "temperature": 0.7,
+                "max_output_tokens": 8192
+            },
+            "models": [
+                {"slug": "gpt-5"},
+                {"slug": "gpt-4o", "timeout_secs": 120}
+            ]
+        }"#;
+
+        let config: ProviderConfig = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(config.name, "Custom OpenAI");
+        assert!(config.streaming);
+        assert_eq!(config.wire_api, WireApi::Chat);
+        assert_eq!(config.overrides.len(), 2);
+        assert_eq!(config.models.len(), 2);
+
+        // Check model lookup
+        let gpt5 = config.find_model("gpt-5").expect("gpt-5 exists");
+        assert_eq!(gpt5.slug(), "gpt-5");
+
+        let gpt4o = config.find_model("gpt-4o").expect("gpt-4o exists");
+        assert_eq!(gpt4o.model_info.timeout_secs, Some(120));
     }
 
     #[test]
@@ -499,16 +550,20 @@ mod tests {
             provider: "test".to_string(),
             context_window: 4096,
             max_output_tokens: 1024,
+            timeout_secs: 600,
             capabilities: vec![
                 Capability::TextGeneration,
                 Capability::ReasoningSummaries,
                 Capability::ParallelToolCalls,
             ],
+            temperature: None,
+            top_p: None,
             auto_compact_token_limit: None,
             effective_context_window_percent: None,
             default_reasoning_effort: None,
             supported_reasoning_levels: None,
             thinking_budget_default: None,
+            include_thoughts: None,
             base_instructions: None,
         };
 

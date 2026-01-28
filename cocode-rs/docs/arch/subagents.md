@@ -6,8 +6,8 @@ The subagent system allows spawning child agents with different configurations, 
 
 **Key Design Points:**
 - Tool configuration uses `tools: Option<Vec<String>>` + `disallowed_tools: Option<Vec<String>>` (not ToolFilter)
-- **5 built-in agents**: Bash, general-purpose, Explore, Plan, claude-code-guide
-- Additional agents (statusline-setup, code-simplifier) come from settings/plugins
+- **6 built-in agents**: Bash, general-purpose, Explore, Plan, claude-code-guide, statusline-setup
+- Additional agents (code-simplifier, etc.) can come from settings/plugins
 - **Located in `core/subagent/`**, depends on `core/executor/` for base AgentExecutor
 - Subagent lifecycle has dedicated hooks (SubagentStart, SubagentStop)
 
@@ -146,7 +146,7 @@ pub enum ModelSelection {
 pub type SystemPromptFn = Arc<dyn Fn(&AgentPromptContext) -> String + Send + Sync>;
 ```
 
-### Built-in Agents (5 agents)
+### Built-in Agents (6 agents)
 
 ```rust
 /// Get all built-in agent definitions
@@ -157,6 +157,7 @@ pub fn builtin_agents() -> Vec<AgentDefinition> {
         explore_agent(),
         plan_agent(),
         claude_code_guide_agent(),
+        statusline_setup_agent(),
     ]
 }
 
@@ -357,6 +358,46 @@ Remember: This is a READ-ONLY task. Do not modify any files.
 // - Skipped entirely, or
 // - Replaced with a cocode-specific help agent
 // The agent is included here for documentation completeness with Claude Code v2.1.7.
+
+/// Statusline setup agent - configures custom status line
+pub fn statusline_setup_agent() -> AgentDefinition {
+    AgentDefinition {
+        agent_type: "statusline-setup".to_string(),
+        when_to_use: "Use this agent to configure the user's Claude Code status line setting.".to_string(),
+        tools: Some(vec!["Read".to_string(), "Edit".to_string()]),
+        disallowed_tools: None,
+        source: AgentSource::BuiltIn,
+        model: ModelSelection::Specific {
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
+        },
+        permission_mode: None,
+        fork_context: false,
+        color: Some("orange".to_string()),
+        critical_reminder: None,
+        system_prompt: Arc::new(|_| STATUSLINE_SETUP_PROMPT.to_string()),
+        skills: None,
+    }
+}
+
+const STATUSLINE_SETUP_PROMPT: &str = r#"
+You are the statusline-setup agent, specialized in configuring the user's status line setting.
+
+Your task is to help users customize their Claude Code status line by:
+1. Reading the current settings configuration
+2. Understanding what status line information the user wants
+3. Creating or modifying the statusLine command in their settings
+
+The statusLine setting accepts a shell command that outputs status text (newline-separated lines).
+The command is executed with a 5-second timeout and receives session context as JSON on stdin.
+
+Example settings.json:
+{
+  "statusLine": "echo 'Branch: '$(git branch --show-current)"
+}
+
+Remember: Only modify the statusLine setting. Do not change other configuration.
+"#;
 ```
 
 ### Three-Layer Tool Filtering (filterToolsByAllowDeny)
@@ -366,9 +407,10 @@ Remember: This is a READ-ONLY task. Do not modify any files.
 ```rust
 /// System-wide blocked tools for subagents
 const ALWAYS_EXCLUDED_TOOLS: &[&str] = &[
-    "Task",            // No recursive spawning (unless explicitly allowed)
-    "EnterPlanMode",   // Plan mode is main agent only
+    "Task",              // No recursive spawning (unless explicitly allowed)
+    "EnterPlanMode",     // Plan mode is main agent only
     "ExitPlanMode",
+    "AskUserQuestion",   // Subagents cannot prompt user directly
 ];
 
 /// Filter tools for subagent based on three layers
@@ -412,6 +454,39 @@ pub fn filter_tools_for_agent(
         .collect()
 }
 ```
+
+#### Layer 4: Async-Safe Tool Filtering
+
+For background/async agents, additional filtering ensures only safe tools are available:
+
+```rust
+/// Tools safe for async execution (no user interaction required)
+const ASYNC_SAFE_TOOLS: &[&str] = &[
+    "Read", "Edit", "Write", "Glob", "Grep", "Bash",
+    "WebFetch", "WebSearch", "NotebookEdit", "TaskOutput",
+    "KillShell", "LSP",
+];
+
+pub fn filter_tools_for_async_agent(
+    tools: Vec<Arc<dyn Tool>>,
+    agent_def: &AgentDefinition,
+    is_async: bool,
+) -> Vec<Arc<dyn Tool>> {
+    let mut filtered = filter_tools_for_agent(&tools, agent_def);
+
+    if is_async {
+        filtered.retain(|t| ASYNC_SAFE_TOOLS.contains(&t.name()));
+    }
+
+    filtered
+}
+```
+
+**Four-Layer Filtering Summary:**
+1. System-wide blocked: Task, EnterPlanMode, ExitPlanMode, AskUserQuestion
+2. Agent-specific deny-list: `disallowed_tools`
+3. Agent-specific allow-list: `tools`
+4. Async-safe filter: Only for `run_in_background=true` agents
 
 ## Complete Subagent Flow
 
@@ -964,6 +1039,34 @@ pub fn register_subagent_hooks(
     });
 }
 
+### Hook Exit Code Behavior
+
+Subagent hooks have specific exit code semantics:
+
+| Exit Code | SubagentStart Behavior | SubagentStop Behavior |
+|-----------|------------------------|----------------------|
+| 0 | stdout shown to subagent | output hidden |
+| 2 | stderr shown to user, continue | stderr shown to subagent, continue |
+| Other | stderr shown to user only | stderr shown to user only |
+
+```rust
+impl HookResult {
+    pub fn from_exit_code(code: i32, stdout: &str, stderr: &str) -> Self {
+        match code {
+            0 => HookResult::Continue {
+                inject_to_agent: Some(stdout.to_string())
+            },
+            2 => HookResult::Continue {
+                inject_to_agent: Some(stderr.to_string())
+            },
+            _ => HookResult::Continue {
+                inject_to_agent: None  // stderr shown to user via event
+            },
+        }
+    }
+}
+```
+
 impl SubagentManager {
     async fn spawn_with_hooks(
         &self,
@@ -1012,10 +1115,10 @@ pub struct AgentProgress {
 }
 
 impl AgentProgress {
-    /// Add activity to recent list (keeps last 10)
+    /// Add activity to recent list (keeps last 5, aligned with Claude Code)
     pub fn add_activity(&mut self, activity: String) {
         self.recent_activities.push(activity);
-        if self.recent_activities.len() > 10 {
+        if self.recent_activities.len() > 5 {
             self.recent_activities.remove(0);
         }
     }

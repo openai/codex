@@ -6,10 +6,8 @@ license.workspace = true
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
-strum = { workspace = true }
-
-[dev-dependencies]
 serde_json = { workspace = true }
+strum = { workspace = true }
 
 [lints]
 workspace = true

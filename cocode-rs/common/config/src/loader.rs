@@ -1,13 +1,21 @@
 //! Configuration file loading.
 //!
-//! This module handles loading configuration from JSON and TOML files in the config directory.
+//! This module handles loading configuration from JSON files in the config directory.
+//!
+//! # Multi-file Support
+//!
+//! Models and providers support loading from multiple files:
+//! - `*model.json` - Model definitions (e.g., `gpt_model.json`, `google_model.json`, `model.json`)
+//! - `*provider.json` - Provider configurations (e.g., `test_provider.json`, `provider.json`)
+//!
+//! Files are loaded in alphabetical order and merged. Duplicate slugs/names are an error.
 
 use crate::error::ConfigError;
-use crate::toml_config::ConfigToml;
-use crate::types::ActiveState;
+use crate::json_config::AppConfig;
 use crate::types::ModelsFile;
-use crate::types::ProfilesFile;
+use crate::types::ProviderConfig;
 use crate::types::ProvidersFile;
+use cocode_protocol::ModelInfo;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::debug;
@@ -16,14 +24,12 @@ use tracing::warn;
 /// Default configuration directory path.
 pub const DEFAULT_CONFIG_DIR: &str = ".cocode";
 
-/// Configuration file names (JSON).
-pub const MODELS_FILE: &str = "models.json";
-pub const PROVIDERS_FILE: &str = "providers.json";
-pub const PROFILES_FILE: &str = "profiles.json";
-pub const ACTIVE_FILE: &str = "active.json";
+/// Application configuration file name (JSON).
+pub const CONFIG_FILE: &str = "config.json";
 
-/// TOML configuration file name.
-pub const CONFIG_TOML_FILE: &str = "config.toml";
+/// Legacy constant for backwards compatibility.
+#[deprecated(since = "0.1.0", note = "Use CONFIG_FILE instead")]
+pub const CONFIG_TOML_FILE: &str = "config.json";
 
 /// Instruction file names.
 pub const AGENTS_MD_FILE: &str = "AGENTS.md";
@@ -92,12 +98,10 @@ pub fn log_dir() -> PathBuf {
 ///
 /// Looks for instruction files in the following order:
 /// 1. `AGENTS.md`
-/// 2. `CLAUDE.md`
-/// 3. `.cocode/AGENTS.md`
 ///
 /// Returns `None` if no instruction file is found or if the file is empty.
 pub fn load_instructions(project_dir: &Path) -> Option<String> {
-    let candidates = [AGENTS_MD_FILE, "CLAUDE.md", ".cocode/AGENTS.md"];
+    let candidates = [AGENTS_MD_FILE];
     for name in candidates {
         let path = project_dir.join(name);
         if let Ok(content) = std::fs::read_to_string(&path) {
@@ -155,64 +159,81 @@ impl ConfigLoader {
         Ok(())
     }
 
-    /// Load the models configuration file.
+    /// Find all config files matching a suffix pattern.
+    ///
+    /// Returns files matching `*{suffix}.json` in the config directory,
+    /// sorted alphabetically for deterministic merge order.
+    fn find_config_files(&self, suffix: &str) -> Vec<PathBuf> {
+        if !self.config_dir.exists() {
+            return Vec::new();
+        }
+
+        let pattern = format!("{suffix}.json");
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&self.config_dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.is_file()
+                    && path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|name| name.ends_with(&pattern))
+            })
+            .collect();
+
+        files.sort();
+        files
+    }
+
+    /// Load models from all `*model.json` files.
+    ///
+    /// Files are loaded in alphabetical order and merged.
+    /// Returns an error if duplicate model slugs are found across files.
     pub fn load_models(&self) -> Result<ModelsFile, ConfigError> {
-        let path = self.config_dir.join(MODELS_FILE);
-        self.load_json_file(&path)
+        let files = self.find_config_files("model");
+        if files.is_empty() {
+            debug!("No model config files found, using defaults");
+            return Ok(ModelsFile::default());
+        }
+
+        let mut merged = ModelsFile::default();
+        for path in files {
+            let list: Vec<ModelInfo> = self.load_json_file(&path)?;
+            debug!(path = %path.display(), count = list.len(), "Loaded model file");
+            merged.add_models(list, path.display())?;
+        }
+
+        Ok(merged)
     }
 
-    /// Load the providers configuration file.
+    /// Load providers from all `*provider.json` files.
+    ///
+    /// Files are loaded in alphabetical order and merged.
+    /// Returns an error if duplicate provider names are found across files.
     pub fn load_providers(&self) -> Result<ProvidersFile, ConfigError> {
-        let path = self.config_dir.join(PROVIDERS_FILE);
-        self.load_json_file(&path)
-    }
-
-    /// Load the profiles configuration file.
-    pub fn load_profiles(&self) -> Result<ProfilesFile, ConfigError> {
-        let path = self.config_dir.join(PROFILES_FILE);
-        self.load_json_file(&path)
-    }
-
-    /// Load the active state file.
-    pub fn load_active(&self) -> Result<ActiveState, ConfigError> {
-        let path = self.config_dir.join(ACTIVE_FILE);
-        self.load_json_file(&path)
-    }
-
-    /// Save the active state file.
-    pub fn save_active(&self, state: &ActiveState) -> Result<(), ConfigError> {
-        self.ensure_dir()?;
-        let path = self.config_dir.join(ACTIVE_FILE);
-        self.save_json_file(&path, state)
-    }
-
-    /// Load the TOML configuration file (config.toml).
-    pub fn load_config_toml(&self) -> Result<ConfigToml, ConfigError> {
-        let path = self.config_dir.join(CONFIG_TOML_FILE);
-        self.load_toml_file(&path)
-    }
-
-    /// Load a TOML file, returning default if it doesn't exist.
-    fn load_toml_file<T: serde::de::DeserializeOwned + Default>(
-        &self,
-        path: &Path,
-    ) -> Result<T, ConfigError> {
-        if !path.exists() {
-            debug!(path = %path.display(), "TOML file not found, using defaults");
-            return Ok(T::default());
+        let files = self.find_config_files("provider");
+        if files.is_empty() {
+            debug!("No provider config files found, using defaults");
+            return Ok(ProvidersFile::default());
         }
 
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| ConfigError::io(format!("Failed to read {}: {e}", path.display())))?;
-
-        // Handle empty files
-        if content.trim().is_empty() {
-            debug!(path = %path.display(), "TOML file is empty, using defaults");
-            return Ok(T::default());
+        let mut merged = ProvidersFile::default();
+        for path in files {
+            let list: Vec<ProviderConfig> = self.load_json_file(&path)?;
+            debug!(path = %path.display(), count = list.len(), "Loaded provider file");
+            merged.add_providers(list, path.display())?;
         }
 
-        toml::from_str(&content)
-            .map_err(|e| ConfigError::config(path.display().to_string(), e.to_string()))
+        Ok(merged)
+    }
+
+    /// Load the application configuration file (config.json).
+    pub fn load_config(&self) -> Result<AppConfig, ConfigError> {
+        let path = self.config_dir.join(CONFIG_FILE);
+        self.load_json_file(&path)
     }
 
     /// Load a JSON file, returning default if it doesn't exist.
@@ -238,55 +259,27 @@ impl ConfigLoader {
             .map_err(|e| ConfigError::config(path.display().to_string(), e.to_string()))
     }
 
-    /// Save a JSON file.
-    fn save_json_file<T: serde::Serialize>(
-        &self,
-        path: &Path,
-        value: &T,
-    ) -> Result<(), ConfigError> {
-        let content = serde_json::to_string_pretty(value)
-            .map_err(|e| ConfigError::config(path.display().to_string(), e.to_string()))?;
-
-        std::fs::write(path, content)
-            .map_err(|e| ConfigError::io(format!("Failed to write {}: {e}", path.display())))?;
-
-        debug!(path = %path.display(), "Saved config file");
-        Ok(())
-    }
-
     /// Load all configuration files at once.
     pub fn load_all(&self) -> Result<LoadedConfig, ConfigError> {
         let models = self.load_models().unwrap_or_else(|e| {
-            warn!(error = %e, "Failed to load models.json, using defaults");
+            warn!(error = %e, "Failed to load model files, using defaults");
             ModelsFile::default()
         });
 
         let providers = self.load_providers().unwrap_or_else(|e| {
-            warn!(error = %e, "Failed to load providers.json, using defaults");
+            warn!(error = %e, "Failed to load provider files, using defaults");
             ProvidersFile::default()
         });
 
-        let profiles = self.load_profiles().unwrap_or_else(|e| {
-            warn!(error = %e, "Failed to load profiles.json, using defaults");
-            ProfilesFile::default()
-        });
-
-        let active = self.load_active().unwrap_or_else(|e| {
-            debug!(error = %e, "Failed to load active.json, using defaults");
-            ActiveState::default()
-        });
-
-        let config_toml = self.load_config_toml().unwrap_or_else(|e| {
-            debug!(error = %e, "Failed to load config.toml, using defaults");
-            ConfigToml::default()
+        let config = self.load_config().unwrap_or_else(|e| {
+            debug!(error = %e, "Failed to load config.json, using defaults");
+            AppConfig::default()
         });
 
         Ok(LoadedConfig {
             models,
             providers,
-            profiles,
-            active,
-            config_toml,
+            config,
         })
     }
 }
@@ -300,16 +293,12 @@ impl Default for ConfigLoader {
 /// All loaded configuration data.
 #[derive(Debug, Clone, Default)]
 pub struct LoadedConfig {
-    /// Models configuration.
+    /// Models configuration (merged from all *model.json files).
     pub models: ModelsFile,
-    /// Providers configuration.
+    /// Providers configuration (merged from all *provider.json files).
     pub providers: ProvidersFile,
-    /// Profiles configuration.
-    pub profiles: ProfilesFile,
-    /// Active state.
-    pub active: ActiveState,
-    /// TOML configuration.
-    pub config_toml: ConfigToml,
+    /// Application configuration (from config.json).
+    pub config: AppConfig,
 }
 
 impl LoadedConfig {
@@ -358,113 +347,186 @@ mod tests {
     }
 
     #[test]
-    fn test_load_models_file() {
+    fn test_load_single_model_file() {
         let (temp_dir, loader) = create_temp_config();
 
-        let models_json = r#"{
-            "version": "1.0",
-            "models": {
-                "test-model": {
-                    "display_name": "Test Model",
-                    "context_window": 4096
-                }
+        // New list format for *model.json files
+        let models_json = r#"[
+            {
+                "slug": "test-model",
+                "display_name": "Test Model",
+                "context_window": 4096
             }
-        }"#;
+        ]"#;
 
-        let models_path = temp_dir.path().join(MODELS_FILE);
+        let models_path = temp_dir.path().join("model.json");
         std::fs::write(&models_path, models_json).unwrap();
 
         let models = loader.load_models().unwrap();
-        assert_eq!(models.version, "1.0");
         assert!(models.models.contains_key("test-model"));
+        assert_eq!(
+            models.models["test-model"].display_name,
+            Some("Test Model".to_string())
+        );
     }
 
     #[test]
-    fn test_load_providers_file() {
+    fn test_load_multiple_model_files() {
         let (temp_dir, loader) = create_temp_config();
 
-        let providers_json = r#"{
-            "version": "1.0",
-            "providers": {
-                "openai": {
-                    "name": "OpenAI",
-                    "type": "openai",
-                    "env_key": "OPENAI_API_KEY"
-                }
-            }
-        }"#;
+        // First file: gpt_model.json
+        let gpt_models = r#"[
+            {"slug": "gpt-5", "display_name": "GPT-5", "context_window": 128000},
+            {"slug": "gpt-5-mini", "display_name": "GPT-5 Mini", "context_window": 32000}
+        ]"#;
+        std::fs::write(temp_dir.path().join("gpt_model.json"), gpt_models).unwrap();
 
-        let providers_path = temp_dir.path().join(PROVIDERS_FILE);
+        // Second file: claude_model.json
+        let claude_models = r#"[
+            {"slug": "claude-opus", "display_name": "Claude Opus", "context_window": 200000}
+        ]"#;
+        std::fs::write(temp_dir.path().join("claude_model.json"), claude_models).unwrap();
+
+        let models = loader.load_models().unwrap();
+        assert_eq!(models.models.len(), 3);
+        assert!(models.models.contains_key("gpt-5"));
+        assert!(models.models.contains_key("gpt-5-mini"));
+        assert!(models.models.contains_key("claude-opus"));
+    }
+
+    #[test]
+    fn test_load_model_files_duplicate_error() {
+        let (temp_dir, loader) = create_temp_config();
+
+        // First file
+        let file1 = r#"[{"slug": "gpt-5", "display_name": "GPT-5"}]"#;
+        std::fs::write(temp_dir.path().join("a_model.json"), file1).unwrap();
+
+        // Second file with same slug
+        let file2 = r#"[{"slug": "gpt-5", "display_name": "GPT-5 Duplicate"}]"#;
+        std::fs::write(temp_dir.path().join("b_model.json"), file2).unwrap();
+
+        let result = loader.load_models();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConfigError::Config { .. }));
+        assert!(err.to_string().contains("duplicate model slug"));
+    }
+
+    #[test]
+    fn test_load_single_provider_file() {
+        let (temp_dir, loader) = create_temp_config();
+
+        // New list format for *provider.json files
+        let providers_json = r#"[
+            {
+                "name": "openai",
+                "type": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "env_key": "OPENAI_API_KEY",
+                "models": []
+            }
+        ]"#;
+
+        let providers_path = temp_dir.path().join("provider.json");
         std::fs::write(&providers_path, providers_json).unwrap();
 
         let providers = loader.load_providers().unwrap();
-        assert_eq!(providers.version, "1.0");
         assert!(providers.providers.contains_key("openai"));
     }
 
     #[test]
-    fn test_load_profiles_file() {
+    fn test_load_multiple_provider_files() {
         let (temp_dir, loader) = create_temp_config();
 
-        let profiles_json = r#"{
-            "version": "1.0",
-            "default_profile": "coding",
-            "profiles": {
-                "coding": {
-                    "provider": "anthropic",
-                    "model": "claude-3-opus"
-                }
-            }
-        }"#;
+        // First file
+        let file1 = r#"[
+            {"name": "openai", "type": "openai", "base_url": "https://api.openai.com/v1", "models": []}
+        ]"#;
+        std::fs::write(temp_dir.path().join("openai_provider.json"), file1).unwrap();
 
-        let profiles_path = temp_dir.path().join(PROFILES_FILE);
-        std::fs::write(&profiles_path, profiles_json).unwrap();
+        // Second file
+        let file2 = r#"[
+            {"name": "anthropic", "type": "anthropic", "base_url": "https://api.anthropic.com", "models": []}
+        ]"#;
+        std::fs::write(temp_dir.path().join("anthropic_provider.json"), file2).unwrap();
 
-        let profiles = loader.load_profiles().unwrap();
-        assert_eq!(profiles.default_profile, Some("coding".to_string()));
-        assert!(profiles.profiles.contains_key("coding"));
+        let providers = loader.load_providers().unwrap();
+        assert_eq!(providers.providers.len(), 2);
+        assert!(providers.providers.contains_key("openai"));
+        assert!(providers.providers.contains_key("anthropic"));
     }
 
     #[test]
-    fn test_save_and_load_active() {
-        let (_temp_dir, loader) = create_temp_config();
-        loader.ensure_dir().unwrap();
+    fn test_load_provider_files_duplicate_error() {
+        let (temp_dir, loader) = create_temp_config();
 
-        let state = ActiveState {
-            provider: Some("openai".to_string()),
-            model: Some("gpt-4o".to_string()),
-            profile: None,
-            session_overrides: None,
-            last_updated: None,
-        };
+        // First file
+        let file1 = r#"[{"name": "openai", "type": "openai", "base_url": "https://api.openai.com/v1", "models": []}]"#;
+        std::fs::write(temp_dir.path().join("a_provider.json"), file1).unwrap();
 
-        loader.save_active(&state).unwrap();
+        // Second file with same name
+        let file2 = r#"[{"name": "openai", "type": "openai", "base_url": "https://other.com/v1", "models": []}]"#;
+        std::fs::write(temp_dir.path().join("b_provider.json"), file2).unwrap();
 
-        let loaded = loader.load_active().unwrap();
-        assert_eq!(loaded.provider, Some("openai".to_string()));
-        assert_eq!(loaded.model, Some("gpt-4o".to_string()));
+        let result = loader.load_providers();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ConfigError::Config { .. }));
+        assert!(err.to_string().contains("duplicate provider name"));
+    }
+
+    #[test]
+    fn test_load_config_json() {
+        let (temp_dir, loader) = create_temp_config();
+
+        let config_json = r#"{
+            "models": {
+                "main": "openai/gpt-5"
+            },
+            "profile": "fast"
+        }"#;
+        std::fs::write(temp_dir.path().join(CONFIG_FILE), config_json).unwrap();
+
+        let config = loader.load_config().unwrap();
+        assert!(config.models.is_some());
+        let models = config.models.as_ref().unwrap();
+        assert_eq!(models.main.as_ref().unwrap().provider, "openai");
+        assert_eq!(models.main.as_ref().unwrap().model, "gpt-5");
+        assert_eq!(config.profile, Some("fast".to_string()));
     }
 
     #[test]
     fn test_load_all() {
         let (temp_dir, loader) = create_temp_config();
 
-        // Create minimal config files
-        let models_path = temp_dir.path().join(MODELS_FILE);
-        std::fs::write(&models_path, r#"{"version": "1.0", "models": {}}"#).unwrap();
+        // Create model file
+        let models = r#"[{"slug": "test-model", "display_name": "Test"}]"#;
+        std::fs::write(temp_dir.path().join("model.json"), models).unwrap();
 
-        let config = loader.load_all().unwrap();
-        assert_eq!(config.models.version, "1.0");
-        assert!(config.providers.providers.is_empty());
+        // Create provider file
+        let providers =
+            r#"[{"name": "test", "type": "openai", "base_url": "https://test.com", "models": []}]"#;
+        std::fs::write(temp_dir.path().join("provider.json"), providers).unwrap();
+
+        // Create config file
+        let config = r#"{"models": {"main": "test/test-model"}}"#;
+        std::fs::write(temp_dir.path().join(CONFIG_FILE), config).unwrap();
+
+        let loaded = loader.load_all().unwrap();
+        assert!(loaded.models.models.contains_key("test-model"));
+        assert!(loaded.providers.providers.contains_key("test"));
+        assert!(loaded.config.models.is_some());
     }
 
     #[test]
-    fn test_load_empty_file() {
+    fn test_load_empty_model_file() {
         let (temp_dir, loader) = create_temp_config();
 
-        let models_path = temp_dir.path().join(MODELS_FILE);
+        let models_path = temp_dir.path().join("model.json");
         std::fs::write(&models_path, "").unwrap();
 
+        // Empty file should return empty list (default)
         let models = loader.load_models().unwrap();
         assert!(models.models.is_empty());
     }
@@ -473,12 +535,46 @@ mod tests {
     fn test_load_invalid_json() {
         let (temp_dir, loader) = create_temp_config();
 
-        let models_path = temp_dir.path().join(MODELS_FILE);
+        let models_path = temp_dir.path().join("model.json");
         std::fs::write(&models_path, "{ invalid json }").unwrap();
 
         let result = loader.load_models();
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(matches!(err, ConfigError::Config { .. }));
+    }
+
+    #[test]
+    fn test_find_config_files_sorted() {
+        let (temp_dir, loader) = create_temp_config();
+
+        // Create files in non-alphabetical order
+        std::fs::write(temp_dir.path().join("z_model.json"), "[]").unwrap();
+        std::fs::write(temp_dir.path().join("a_model.json"), "[]").unwrap();
+        std::fs::write(temp_dir.path().join("m_model.json"), "[]").unwrap();
+
+        let files = loader.find_config_files("model");
+        assert_eq!(files.len(), 3);
+        assert!(files[0].ends_with("a_model.json"));
+        assert!(files[1].ends_with("m_model.json"));
+        assert!(files[2].ends_with("z_model.json"));
+    }
+
+    #[test]
+    fn test_find_config_files_excludes_non_matching() {
+        let (temp_dir, loader) = create_temp_config();
+
+        std::fs::write(temp_dir.path().join("model.json"), "[]").unwrap();
+        std::fs::write(temp_dir.path().join("provider.json"), "[]").unwrap();
+        std::fs::write(temp_dir.path().join("config.json"), "{}").unwrap();
+        std::fs::write(temp_dir.path().join("other.json"), "{}").unwrap();
+
+        let model_files = loader.find_config_files("model");
+        assert_eq!(model_files.len(), 1);
+        assert!(model_files[0].ends_with("model.json"));
+
+        let provider_files = loader.find_config_files("provider");
+        assert_eq!(provider_files.len(), 1);
+        assert!(provider_files[0].ends_with("provider.json"));
     }
 }

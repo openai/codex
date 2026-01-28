@@ -639,6 +639,212 @@ core/subagent → core/executor → core/loop
 
 ---
 
+## Delegate Mode (Team Execution)
+
+### Overview
+
+Delegate mode is a new execution pattern in Claude Code v2.1.7 that enables team-based task execution with multi-agent collaboration. Unlike Collab tools which require explicit coordination, delegate mode provides implicit team orchestration.
+
+### Core Concepts
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Delegate Mode Flow                           │
+│                                                                  │
+│  User Request                                                    │
+│       │                                                          │
+│       ▼                                                          │
+│  ┌─────────────┐                                                │
+│  │  Main Agent │  Enters delegate mode                          │
+│  │  (Leader)   │  Creates task list at task_list_path          │
+│  └──────┬──────┘                                                │
+│         │                                                        │
+│         ▼                                                        │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │                    Team Workers                              ││
+│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐        ││
+│  │  │Worker 1 │  │Worker 2 │  │Worker 3 │  │Worker N │        ││
+│  │  │(Explore)│  │(Plan)   │  │(Code)   │  │(Test)   │        ││
+│  │  └─────────┘  └─────────┘  └─────────┘  └─────────┘        ││
+│  │                                                              ││
+│  │  All workers see: collab_notification attachment             ││
+│  └─────────────────────────────────────────────────────────────┘│
+│         │                                                        │
+│         ▼                                                        │
+│  ┌─────────────┐                                                │
+│  │  Main Agent │  Receives delegate_mode_exit                   │
+│  │  Aggregates │  Combines worker results                       │
+│  └─────────────┘                                                │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Delegate Mode Attachments
+
+#### delegate_mode Attachment
+
+Injected when tool permission context mode is "delegate":
+
+```rust
+/// Delegate mode attachment
+#[derive(Debug, Clone)]
+pub struct DelegateModeAttachment {
+    /// Team name for this delegation
+    pub team_name: String,
+    /// Path to the task list file
+    pub task_list_path: PathBuf,
+}
+
+impl DelegateModeAttachment {
+    pub fn to_system_reminder(&self) -> String {
+        format!(r#"<system-reminder>
+Delegate mode is active for team "{}".
+
+Task list location: {}
+
+As a team member:
+- Check the task list for assigned work
+- Update task status as you progress
+- Coordinate with other team members via collab_notification
+
+Do NOT exit delegate mode until all tasks are complete.
+</system-reminder>"#,
+            self.team_name,
+            self.task_list_path.display()
+        )
+    }
+}
+```
+
+#### delegate_mode_exit Attachment
+
+Injected when exiting delegate mode:
+
+```rust
+/// Delegate mode exit attachment
+#[derive(Debug, Clone)]
+pub struct DelegateModeExitAttachment;
+
+impl DelegateModeExitAttachment {
+    pub fn to_system_reminder(&self) -> String {
+        "<system-reminder>
+Delegate mode has ended. All team tasks should be complete.
+Summarize the work done and any remaining items.
+</system-reminder>".to_string()
+    }
+}
+```
+
+#### collab_notification Attachment
+
+Enables team communication during delegate mode:
+
+```rust
+/// Collaboration notification attachment
+#[derive(Debug, Clone)]
+pub struct CollabNotificationAttachment {
+    /// Pending chat messages from team members
+    pub chats: Vec<CollabChat>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CollabChat {
+    /// Sender handle: "teammate" or "self"
+    pub handle: String,
+    /// Number of unread messages
+    pub unread_count: i32,
+}
+
+impl CollabNotificationAttachment {
+    pub fn to_system_reminder(&self) -> String {
+        if self.chats.is_empty() {
+            return String::new();
+        }
+
+        let chat_info: Vec<String> = self.chats
+            .iter()
+            .map(|c| format!("- {}: {} unread message(s)", c.handle, c.unread_count))
+            .collect();
+
+        format!("<system-reminder>
+Team collaboration notifications:
+{}
+
+Use collab tools to read and respond to messages.
+</system-reminder>",
+            chat_info.join("\n")
+        )
+    }
+}
+```
+
+### Relationship with Plan Mode
+
+Delegate mode and plan mode are complementary:
+
+| Aspect | Plan Mode | Delegate Mode |
+|--------|-----------|---------------|
+| Purpose | Individual planning | Team execution |
+| Entry | EnterPlanMode tool | Permission context |
+| Exit | ExitPlanMode tool | delegate_mode_exit |
+| Restrictions | Read-only except plan file | Team coordination required |
+| Attachments | plan_mode, verify_plan_reminder | delegate_mode, collab_notification |
+
+### Configuration
+
+```rust
+/// Delegate mode configuration
+pub struct DelegateModeConfig {
+    /// Maximum team workers
+    pub max_workers: i32,
+    /// Task list file format
+    pub task_format: TaskFormat,
+    /// Enable collab notifications
+    pub enable_notifications: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskFormat {
+    /// Markdown checklist format
+    #[default]
+    Markdown,
+    /// JSON task array
+    Json,
+}
+
+impl Default for DelegateModeConfig {
+    fn default() -> Self {
+        Self {
+            max_workers: 5,
+            task_format: TaskFormat::Markdown,
+            enable_notifications: true,
+        }
+    }
+}
+```
+
+### Events
+
+```rust
+pub enum LoopEvent {
+    // Delegate mode events
+    DelegateModeEntered {
+        team_name: String,
+        task_list_path: PathBuf,
+    },
+    DelegateModeExited {
+        completed_tasks: i32,
+        total_tasks: i32,
+    },
+    CollabMessageReceived {
+        from: String,
+        message: String,
+    },
+    // ...
+}
+```
+
+---
+
 ## Future: Workflow Engine
 
 The workflow engine builds on top of these primitives to support complex agent workflows:

@@ -4,6 +4,12 @@
 //! that are compiled into the binary. These serve as the lowest-priority
 //! layer in the configuration resolution.
 
+// Built-in prompt templates (embedded at compile time)
+const DEFAULT_PROMPT: &str = include_str!("../prompt_with_apply_patch_instructions.md");
+const GEMINI_PROMPT: &str = include_str!("../gemini_prompt.md");
+const GPT_5_2_PROMPT: &str = include_str!("../gpt_5_2_prompt.md");
+const GPT_5_2_CODEX_PROMPT: &str = include_str!("../gpt-5.2-codex_prompt.md");
+
 use crate::types::ProviderConfig;
 use crate::types::ProviderType;
 use cocode_protocol::Capability;
@@ -58,6 +64,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
         "gpt-5".to_string(),
         ModelInfo {
             display_name: Some("GPT-5".to_string()),
+            base_instructions: Some(DEFAULT_PROMPT.to_string()),
             context_window: Some(272000),
             max_output_tokens: Some(32000),
             capabilities: Some(vec![
@@ -85,6 +92,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
         "gpt-5.2".to_string(),
         ModelInfo {
             display_name: Some("GPT-5.2".to_string()),
+            base_instructions: Some(GPT_5_2_PROMPT.to_string()),
             context_window: Some(272000),
             max_output_tokens: Some(64000),
             capabilities: Some(vec![
@@ -116,6 +124,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
         ModelInfo {
             display_name: Some("GPT-5.2 Codex".to_string()),
             description: Some("GPT-5.2 optimized for coding tasks".to_string()),
+            base_instructions: Some(GPT_5_2_CODEX_PROMPT.to_string()),
             context_window: Some(272000),
             max_output_tokens: Some(64000),
             capabilities: Some(vec![
@@ -146,6 +155,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
         "gemini-3-pro".to_string(),
         ModelInfo {
             display_name: Some("Gemini 3 Pro".to_string()),
+            base_instructions: Some(GEMINI_PROMPT.to_string()),
             context_window: Some(300000),
             max_output_tokens: Some(32000),
             capabilities: Some(vec![
@@ -166,6 +176,7 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
         "gemini-3-flash".to_string(),
         ModelInfo {
             display_name: Some("Gemini 3 Flash".to_string()),
+            base_instructions: Some(GEMINI_PROMPT.to_string()),
             context_window: Some(300000),
             max_output_tokens: Some(16000),
             capabilities: Some(vec![
@@ -185,31 +196,41 @@ fn init_builtin_models() -> HashMap<String, ModelInfo> {
 }
 
 fn init_builtin_providers() -> HashMap<String, ProviderConfig> {
+    use crate::types::WireApi;
+
     let mut providers = HashMap::new();
 
     providers.insert(
         "openai".to_string(),
         ProviderConfig {
-            name: "OpenAI".to_string(),
+            name: "openai".to_string(),
             provider_type: ProviderType::Openai,
+            base_url: "https://api.openai.com/v1".to_string(),
+            timeout_secs: 600,
             env_key: Some("OPENAI_API_KEY".to_string()),
-            base_url: Some("https://api.openai.com/v1".to_string()),
-            default_model: Some("gpt-5".to_string()),
-            timeout_secs: Some(600),
-            ..Default::default()
+            api_key: None,
+            streaming: true,
+            wire_api: WireApi::Responses,
+            overrides: HashMap::new(),
+            models: Vec::new(),
+            extra: None,
         },
     );
 
     providers.insert(
         "gemini".to_string(),
         ProviderConfig {
-            name: "Google Gemini".to_string(),
+            name: "gemini".to_string(),
             provider_type: ProviderType::Gemini,
+            base_url: "https://generativelanguage.googleapis.com".to_string(),
+            timeout_secs: 600,
             env_key: Some("GOOGLE_API_KEY".to_string()),
-            base_url: Some("https://generativelanguage.googleapis.com".to_string()),
-            default_model: Some("gemini-3-flash".to_string()),
-            timeout_secs: Some(600),
-            ..Default::default()
+            api_key: None,
+            streaming: true,
+            wire_api: WireApi::Chat,
+            overrides: HashMap::new(),
+            models: Vec::new(),
+            extra: None,
         },
     );
 
@@ -246,10 +267,11 @@ mod tests {
         ensure_initialized();
 
         let openai = get_provider_defaults("openai").unwrap();
-        assert_eq!(openai.name, "OpenAI");
+        assert_eq!(openai.name, "openai");
         assert_eq!(openai.env_key, Some("OPENAI_API_KEY".to_string()));
 
         let gemini = get_provider_defaults("gemini").unwrap();
+        assert_eq!(gemini.name, "gemini");
         assert_eq!(gemini.provider_type, ProviderType::Gemini);
 
         let unknown = get_provider_defaults("unknown-provider");
@@ -343,5 +365,25 @@ mod tests {
         assert!(levels.contains(&ReasoningEffort::Medium));
         assert!(levels.contains(&ReasoningEffort::High));
         assert!(levels.contains(&ReasoningEffort::XHigh));
+    }
+
+    #[test]
+    fn test_builtin_models_have_instructions() {
+        ensure_initialized();
+
+        // All built-in models should have base_instructions
+        for slug in list_builtin_models() {
+            let model = get_model_defaults(slug).unwrap();
+            assert!(
+                model.base_instructions.is_some(),
+                "Model {slug} should have base_instructions"
+            );
+            // Verify instructions are non-empty
+            let instructions = model.base_instructions.as_ref().unwrap();
+            assert!(
+                !instructions.is_empty(),
+                "Model {slug} should have non-empty base_instructions"
+            );
+        }
     }
 }

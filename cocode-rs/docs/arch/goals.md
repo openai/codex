@@ -100,6 +100,74 @@ Design core to support multiple UI frontends without modification:
   - FrameRequester/FrameScheduler for efficient redraws
   - Clean separation: widget layer → app event bus → core
 
+### 8. Multi-Model Configuration
+
+Support multiple model types for different use cases:
+
+- **Main Model**: Primary chat model for user conversations
+- **Fast Model**: Lightweight model for subagents, hooks, optimizations
+  - Default: Same provider's smallest model (e.g., Haiku for Anthropic)
+  - Configurable per-provider (Haiku, GPT-4o-mini, Gemini Flash, etc.)
+  - Used for: Explore/Bash subagents, prompt hooks, path extraction
+- **VLM Model** (Future): Vision-capable model for image processing
+  - Separate configuration for multimodal tasks
+  - Falls back to main model if it supports vision
+
+**Configuration Schema:**
+
+```toml
+# ~/.cocode/config.toml
+[models]
+# Primary chat model (required)
+main = { provider = "anthropic", model = "claude-sonnet-4-20250514" }
+
+# Fast/small model for optimizations (optional)
+# If not configured, uses main model for all operations
+fast = { provider = "anthropic", model = "claude-haiku-4-5-20250514" }
+
+# Vision model for image processing (optional, future)
+# vlm = { provider = "google", model = "gemini-2.0-flash-exp" }
+```
+
+**Provider Options for Fast Model:**
+
+| Provider | Fast Model Example | Notes |
+|----------|-------------------|-------|
+| anthropic | `claude-haiku-4-5-20250514` | Default, lowest cost |
+| openai | `gpt-4o-mini` | Fast, affordable |
+| google | `gemini-2.0-flash-exp` | Very fast, multimodal |
+| volcengine | `doubao-lite-32k` | Fast Chinese model |
+| z-ai | `glm-4-flash` | Fast Chinese model |
+
+**Configuration Hierarchy (highest to lowest priority):**
+
+1. Environment variables (`COCODE_FAST_MODEL_PROVIDER`, `COCODE_FAST_MODEL`)
+2. Per-session override
+3. Config file (`~/.cocode/config.toml`)
+4. Provider defaults
+
+**Environment Variables:**
+
+```bash
+# Override fast model via environment
+COCODE_FAST_MODEL_PROVIDER=google
+COCODE_FAST_MODEL=gemini-2.0-flash-exp
+
+# Override vision model via environment (future)
+COCODE_VLM_PROVIDER=google
+COCODE_VLM_MODEL=gemini-2.0-flash-exp
+```
+
+**Use Cases:**
+
+| Use Case | Model Used | Purpose |
+|----------|------------|---------|
+| User conversation | Main | Primary chat |
+| Explore/Bash subagents | Fast | Quick task execution |
+| Prompt hooks | Fast | Custom prompt processing |
+| Bash output path extraction | Fast | Extract file paths for pre-reading |
+| Image processing (future) | VLM | Multimodal tasks |
+
 ## Architecture Principles for Extensibility
 
 | Principle | Implementation |

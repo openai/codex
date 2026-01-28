@@ -37,46 +37,57 @@ The agent loop is the core execution engine, modeled after Claude Code's `coreMe
 
 ## Complete Loop Flow
 
+Claude Code v2.1.7 uses an 18-step algorithm. This diagram shows the high-level flow:
+
 ```
 User Input
     │
     ▼
 ┌───────────────────────────────────────────────────────────────┐
-│                    coreMessageLoop                             │
+│                    coreMessageLoop (18 Steps)                  │
 │                                                                │
+│  SETUP PHASE (Steps 1-6)                                      │
+│  ─────────────────────────────────────────────────────────    │
 │  1. Signal stream_request_start                               │
-│  2. Message normalization (slice from last compact boundary)  │
-│  3. Micro-compaction (remove low-value tool results)          │
-│  4. Auto-compaction (summarize when approaching limit)        │
+│  2. Setup query tracking (chainId, depth for telemetry)       │
+│  3. Normalize messages (slice from compact boundary)          │
+│  4. Micro-compaction (PRE-API: clear old tool results)        │
+│  5. Auto-compaction threshold check (context_limit - 13K)     │
+│     ├─ Tier 1: Session Memory Compact (cached summary)        │
+│     └─ Tier 2: Full Compact (LLM-based fallback)              │
+│  6. Initialize state (tool executor, turn tracking)           │
 │                                                                │
+│  EXECUTION PHASE (Steps 7-10)                                 │
+│  ─────────────────────────────────────────────────────────    │
+│  7. Resolve model with permissions                            │
+│  8. Check blocking token limit                                │
 │  ┌────────────────────────────────────────────────────────┐   │
-│  │            API Streaming Loop (with fallback)           │   │
-│  │                                                         │   │
-│  │   Model.stream() ──► StreamEvent ──► emit to UI        │   │
-│  │         │                                               │   │
-│  │         ▼ (if overloaded)                              │   │
-│  │   tombstone_orphaned_messages()                        │   │
-│  │   switch_to_fallback_model()                           │   │
-│  │   retry API call                                       │   │
+│  │  9. API Streaming Loop (with retry, max 3 attempts)    │   │
+│  │     Model.stream() ──► SSE Events ──► emit to UI       │   │
+│  │           │                                             │   │
+│  │           ├─► content_block_delta → TextDelta          │   │
+│  │           ├─► content_block_stop → ToolCallComplete    │   │
+│  │           │         │                                   │   │
+│  │           │         ▼                                   │   │
+│  │           │   StreamingToolExecutor.add_tool()         │   │
+│  │           │   (Execute DURING streaming)               │   │
+│  │           │                                             │   │
+│  │           └─► (if overloaded) ModelFallbackError       │   │
+│  │               tombstone_orphaned_messages()            │   │
+│  │               switch_to_fallback_model()               │   │
 │  └────────────────────────────────────────────────────────┘   │
-│                         │                                      │
-│                         ▼ (tool_use blocks)                   │
-│  ┌────────────────────────────────────────────────────────┐   │
-│  │          StreamingToolExecutor                          │   │
-│  │                                                         │   │
-│  │   Execute tools DURING API streaming                    │   │
-│  │   - can_execute_tool() checks concurrency safety        │   │
-│  │   - Parallel for safe tools                             │   │
-│  │   - Sequential for unsafe tools                         │   │
-│  │   - Results returned as they complete                   │   │
-│  └────────────────────────────────────────────────────────┘   │
-│                         │                                      │
-│                         ▼                                      │
-│  5. Add tool results to context                               │
-│  6. Yield file_change_attachments, steering_attachments       │
-│  7. Run hooks (Stop hooks can prevent continuation)           │
-│  8. Check queued commands                                     │
-│  9. Recursive call for next turn (if stop_reason == tool_use) │
+│  10. Record API call info (telemetry)                         │
+│                                                                │
+│  POST-PROCESSING PHASE (Steps 11-18)                          │
+│  ─────────────────────────────────────────────────────────    │
+│  11. Check for tool calls                                     │
+│  12. Execute tool queue (parallel for safe, sequential)       │
+│  13. Handle abort after tool execution                        │
+│  14. Check for hook stop                                      │
+│  15. Update auto-compact tracking                             │
+│  16. Process queued commands and attachments                  │
+│  17. Check max turns limit                                    │
+│  18. Recursive call for next turn (if tool_use)              │
 │                                                                │
 └───────────────────────────────────────────────────────────────┘
             │
@@ -248,6 +259,8 @@ impl Default for LoopConfig {
 
 ### LoopEvent (Complete)
 
+Based on Claude Code v2.1.7 implementation, the event types include additional streaming and error events:
+
 ```rust
 pub enum LoopEvent {
     // Stream lifecycle
@@ -263,11 +276,15 @@ pub enum LoopEvent {
     ThinkingDelta { turn_id: String, delta: String },
     ToolCallDelta { call_id: String, delta: String },
 
+    // Raw SSE event passthrough (for debugging/logging)
+    StreamEvent { event: RawStreamEvent },
+
     // Tool execution
     ToolUseQueued { call_id: String, name: String, input: Value },
     ToolUseStarted { call_id: String, name: String },
     ToolProgress { call_id: String, progress: ToolProgress },
     ToolUseCompleted { call_id: String, output: ToolResultContent, is_error: bool },
+    ToolExecutionAborted { reason: AbortReason },
 
     // Permission
     ApprovalRequired { request: ApprovalRequest },
@@ -288,10 +305,19 @@ pub enum LoopEvent {
     CompactionStarted,
     CompactionCompleted { removed_messages: i32, summary_tokens: i32 },
     MicroCompactionApplied { removed_results: i32 },
+    SessionMemoryCompactApplied { saved_tokens: i32, summary_tokens: i32 },
 
     // Model fallback
     ModelFallbackStarted { from: String, to: String, reason: String },
     ModelFallbackCompleted,
+    /// Tombstone event when orphaned messages are invalidated during fallback
+    Tombstone { message: ConversationMessage },
+
+    // Retry events
+    Retry { attempt: i32, max_attempts: i32, delay_ms: i32 },
+
+    // API error events
+    ApiError { error: ApiError, retry_info: Option<RetryInfo> },
 
     // MCP events
     McpToolCallBegin { server: String, tool: String, call_id: String },
@@ -317,6 +343,33 @@ pub enum LoopEvent {
     Error { error: LoopError },
     Interrupted,
     MaxTurnsReached,
+}
+
+/// Raw stream event from SSE
+#[derive(Debug, Clone)]
+pub struct RawStreamEvent {
+    pub event_type: String,
+    pub data: Value,
+}
+
+/// Retry information for API errors
+#[derive(Debug, Clone)]
+pub struct RetryInfo {
+    pub attempt: i32,
+    pub max_attempts: i32,
+    pub delay_ms: i32,
+    pub retriable: bool,
+}
+
+/// Abort reasons for tool execution
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbortReason {
+    /// Model switched to non-streaming fallback
+    StreamingFallback,
+    /// A sibling tool call failed
+    SiblingError,
+    /// User interrupted
+    UserInterrupted,
 }
 ```
 
@@ -357,16 +410,36 @@ pub struct AgentLoop {
 
 The key innovation: tools execute DURING API streaming, not after.
 
+### Feature Flag and Configuration
+
+In Claude Code v2.1.7, streaming tool execution is controlled by:
+
+| Configuration | Value | Notes |
+|---------------|-------|-------|
+| Feature flag | `tengu_streaming_tool_execution2` | Must be enabled |
+| Max concurrency | 10 | Env: `CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY` |
+| Stall threshold | 30s | `STALL_THRESHOLD_MS = 30_000` |
+
+### Tool States
+
+Tools progress through these states:
+
+```
+queued → executing → completed → yielded
+```
+
+### Core Structure
+
 ```rust
 pub struct StreamingToolExecutor {
-    /// Queued tools waiting to execute
-    queued: VecDeque<QueuedTool>,
+    /// Tool queue indexed by call_id
+    tool_queue: HashMap<String, QueuedTool>,
 
-    /// Currently executing tools
-    executing: HashMap<String, JoinHandle<ToolExecutionResult>>,
+    /// Pending progress events (for streaming tools)
+    pending_progress: Vec<ToolProgress>,
 
-    /// Completed results
-    completed: Vec<ToolExecutionResult>,
+    /// Async queue for collecting results
+    result_queue: AsyncQueue<ToolExecutionResult>,
 
     /// Tool registry reference
     registry: Arc<ToolRegistry>,
@@ -374,18 +447,99 @@ pub struct StreamingToolExecutor {
     /// Execution context
     context: ToolContext,
 
-    /// Whether a non-safe tool is currently executing
-    unsafe_executing: bool,
+    /// Maximum concurrent executions (default: 10)
+    max_concurrency: i32,
+
+    /// Abort controller for cancellation
+    abort_controller: Option<AbortController>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolStatus {
+    Queued,
+    Executing,
+    Completed,
+    Yielded,
 }
 
 struct QueuedTool {
     call_id: String,
     name: String,
     input: Value,
+    status: ToolStatus,
     is_concurrency_safe: bool,
     queued_at: Instant,
+    /// Context modifier to apply (for sequential execution)
+    context_modifier: Option<ContextModifier>,
 }
+```
 
+### Abort Handling
+
+When tools are aborted, synthetic error messages are generated based on the abort reason:
+
+| Abort Reason | Synthetic Error Message |
+|--------------|------------------------|
+| `streaming_fallback` | `"Tool execution was aborted: model switched to non-streaming fallback"` |
+| `sibling_error` | `"Tool execution was aborted: a sibling tool call failed"` |
+| `user_interrupted` | `"Tool execution was aborted: user interrupted"` |
+
+```rust
+impl StreamingToolExecutor {
+    /// Abort all executing tools with given reason
+    pub fn abort_all(&mut self, reason: AbortReason) {
+        let error_message = match reason {
+            AbortReason::StreamingFallback =>
+                "Tool execution was aborted: model switched to non-streaming fallback",
+            AbortReason::SiblingError =>
+                "Tool execution was aborted: a sibling tool call failed",
+            AbortReason::UserInterrupted =>
+                "Tool execution was aborted: user interrupted",
+        };
+
+        // Signal abort to all executing tools
+        if let Some(controller) = &self.abort_controller {
+            controller.abort();
+        }
+
+        // Generate synthetic error results for executing tools
+        for (call_id, tool) in &self.tool_queue {
+            if tool.status == ToolStatus::Executing {
+                self.result_queue.push(ToolExecutionResult {
+                    tool_use_id: call_id.clone(),
+                    content: ToolResultContent::text(error_message),
+                    is_error: true,
+                });
+            }
+        }
+    }
+}
+```
+
+### Context Modifier Application
+
+Context modifiers are applied differently based on execution mode:
+
+```rust
+impl StreamingToolExecutor {
+    /// Apply context modifier for tool result
+    fn apply_context_modifier(&mut self, tool: &QueuedTool, result: &ToolExecutionResult) {
+        if let Some(modifier) = &tool.context_modifier {
+            if tool.is_concurrency_safe {
+                // Parallel execution: batch modifiers, apply after all complete
+                self.pending_modifiers.push(modifier.clone());
+            } else {
+                // Sequential execution: apply immediately
+                modifier.apply(&mut self.context);
+            }
+        }
+    }
+}
+```
+
+### Implementation
+
+```rust
 impl StreamingToolExecutor {
     /// Add tool from streaming response (called as tool_use blocks arrive)
     pub fn add_tool(&mut self, tool_use: ToolUseBlock, assistant_msg: &Message) {
@@ -394,12 +548,14 @@ impl StreamingToolExecutor {
             .map(|t| t.is_concurrency_safe(&tool_use.input))
             .unwrap_or(true); // Unknown tools complete immediately
 
-        self.queued.push_back(QueuedTool {
+        self.tool_queue.insert(tool_use.id.clone(), QueuedTool {
             call_id: tool_use.id,
             name: tool_use.name,
             input: tool_use.input,
+            status: ToolStatus::Queued,
             is_concurrency_safe: is_safe,
             queued_at: Instant::now(),
+            context_modifier: None,
         });
 
         // Try to execute immediately if possible
@@ -408,77 +564,226 @@ impl StreamingToolExecutor {
 
     /// Check if we can execute the next tool
     pub fn can_execute_tool(&self, is_safe: bool) -> bool {
-        if self.unsafe_executing {
+        // Count currently executing tools
+        let executing_count = self.tool_queue.values()
+            .filter(|t| t.status == ToolStatus::Executing)
+            .count() as i32;
+
+        if executing_count >= self.max_concurrency {
+            return false; // At max concurrency
+        }
+
+        // Check for unsafe tools blocking
+        let has_unsafe_executing = self.tool_queue.values()
+            .any(|t| t.status == ToolStatus::Executing && !t.is_concurrency_safe);
+
+        if has_unsafe_executing {
             return false; // Unsafe tool blocks all
         }
         if !is_safe {
             // Unsafe tool can only run when no other tools executing
-            return self.executing.is_empty();
+            return executing_count == 0;
         }
         true // Safe tools can run in parallel
     }
 
-    /// Get completed results (non-blocking)
-    pub fn get_completed_results(&mut self) -> Vec<ToolExecutionResult> {
-        std::mem::take(&mut self.completed)
+    /// Get completed results (non-blocking generator)
+    pub fn get_completed_results(&mut self) -> impl Iterator<Item = ToolExecutionResult> + '_ {
+        self.tool_queue.values_mut()
+            .filter(|t| t.status == ToolStatus::Completed)
+            .map(|t| {
+                t.status = ToolStatus::Yielded;
+                self.result_queue.pop()
+            })
+            .flatten()
     }
 
-    /// Drain remaining results (blocking, called after stream ends)
-    pub async fn drain_remaining(&mut self) -> Vec<ToolExecutionResult> {
-        // Wait for all executing tools
-        let handles: Vec<_> = self.executing.drain().collect();
-        for (call_id, handle) in handles {
-            match handle.await {
-                Ok(result) => self.completed.push(result),
-                Err(e) => self.completed.push(ToolExecutionResult::error(&call_id, e)),
+    /// Get remaining results (blocking async generator)
+    pub async fn get_remaining_results(&mut self) -> impl Stream<Item = ToolExecutionResult> + '_ {
+        async_stream::stream! {
+            // Wait for all queued and executing tools
+            while self.has_pending_tools() {
+                if let Some(result) = self.result_queue.pop_async().await {
+                    if let Some(tool) = self.tool_queue.get_mut(&result.tool_use_id) {
+                        tool.status = ToolStatus::Yielded;
+                    }
+                    yield result;
+                }
             }
         }
-        std::mem::take(&mut self.completed)
+    }
+
+    fn has_pending_tools(&self) -> bool {
+        self.tool_queue.values().any(|t|
+            t.status == ToolStatus::Queued || t.status == ToolStatus::Executing
+        )
     }
 
     fn try_execute_next(&mut self) {
-        while let Some(tool) = self.queued.front() {
-            if !self.can_execute_tool(tool.is_concurrency_safe) {
+        let queued_ids: Vec<_> = self.tool_queue.iter()
+            .filter(|(_, t)| t.status == ToolStatus::Queued)
+            .map(|(id, t)| (id.clone(), t.is_concurrency_safe))
+            .collect();
+
+        for (call_id, is_safe) in queued_ids {
+            if !self.can_execute_tool(is_safe) {
                 break;
             }
 
-            let tool = self.queued.pop_front().unwrap();
-            if !tool.is_concurrency_safe {
-                self.unsafe_executing = true;
+            if let Some(tool) = self.tool_queue.get_mut(&call_id) {
+                tool.status = ToolStatus::Executing;
+                self.spawn_execution(tool.clone());
             }
-
-            // Spawn execution task
-            let handle = self.spawn_execution(tool.clone());
-            self.executing.insert(tool.call_id.clone(), handle);
         }
     }
 
-    fn spawn_execution(&self, queued: QueuedTool) -> JoinHandle<ToolExecutionResult> {
+    fn spawn_execution(&self, queued: QueuedTool) {
         let registry = self.registry.clone();
         let context = self.context.clone();
+        let result_queue = self.result_queue.clone();
+        let abort_signal = self.abort_controller.as_ref().map(|c| c.signal());
 
         tokio::spawn(async move {
             let tool = registry.get(&queued.name);
-            match tool {
+            let result = match tool {
                 Some(t) => {
                     execute_single_tool(
                         t.as_ref(),
                         queued.input,
                         &context,
                         &queued.call_id,
+                        abort_signal,
                     ).await
                 }
                 None => ToolExecutionResult::error(
                     &queued.call_id,
                     format!("Tool not found: {}", queued.name),
                 ),
-            }
-        })
+            };
+            result_queue.push(result);
+        });
     }
 }
 ```
 
 ## Main Loop Algorithm
+
+The actual Claude Code v2.1.7 implementation uses an 18-step algorithm with comprehensive error handling and telemetry.
+
+### Full Algorithm (18 Steps)
+
+```
+┌────────────────────────────────────────────────────────────────────────────┐
+│                         coreMessageLoop (18 Steps)                          │
+├────────────────────────────────────────────────────────────────────────────┤
+│ STEP 1:  Signal stream_request_start event                                  │
+│ STEP 2:  Setup query tracking (chainId, depth) for telemetry               │
+│ STEP 3:  Normalize messages (slice from compact_boundary)                   │
+│ STEP 4:  Micro-compaction (PRE-API: clear old tool results, no LLM)        │
+│ STEP 5:  Auto-compaction (if threshold exceeded)                           │
+│ STEP 6:  Initialize state (streaming tool executor, abort controller)      │
+│ STEP 7:  Resolve model with permissions (check model access)               │
+│ STEP 8:  Check blocking token limit (context_limit - 13K)                  │
+│ STEP 9:  Main API streaming loop (with retry support, max 3 attempts)      │
+│ STEP 10: Record API call info (telemetry, usage tracking)                  │
+│ STEP 11: Check for tool calls (content_block_stop with tool_use)           │
+│ STEP 12: Execute tool queue (parallel/sequential via executor)             │
+│ STEP 13: Handle abort after tool execution (check sibling errors)          │
+│ STEP 14: Check for hook stop (PreToolResult, PostToolExecution hooks)      │
+│ STEP 15: Update auto-compact tracking (increment counters)                 │
+│ STEP 16: Process queued commands and attachments                           │
+│ STEP 17: Check max turns limit                                             │
+│ STEP 18: RECURSIVE CALL for next turn (if stop_reason == tool_use)         │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Query Tracking Structure
+
+```rust
+/// Query tracking for telemetry and debugging
+pub struct QueryTracking {
+    /// Unique chain identifier for the conversation thread
+    pub chain_id: String,
+    /// Depth in the conversation (increments with each recursive call)
+    pub depth: i32,
+    /// Parent query ID (for subagent tracking)
+    pub parent_query_id: Option<String>,
+}
+```
+
+### Auto-Compact Tracking
+
+```rust
+/// Tracking structure for auto-compaction decisions
+pub struct AutoCompactTracking {
+    /// Whether compaction has occurred in this session
+    pub compacted: bool,
+    /// Turn ID when last compaction occurred
+    pub turn_id: Option<String>,
+    /// Number of turns since last compaction
+    pub turn_counter: i32,
+}
+```
+
+### Output Token Recovery
+
+When the model hits `max_tokens` stop reason, Claude Code attempts recovery:
+
+```rust
+/// Maximum attempts for output token recovery
+pub const MAX_OUTPUT_TOKEN_RECOVERY: i32 = 3;
+
+impl AgentLoop {
+    /// Handle max_tokens stop reason with recovery attempts
+    async fn handle_max_tokens_recovery(
+        &mut self,
+        turn_id: &str,
+        attempt: i32,
+    ) -> Result<RecoveryAction, LoopError> {
+        if attempt >= MAX_OUTPUT_TOKEN_RECOVERY {
+            return Ok(RecoveryAction::Abort);
+        }
+
+        // Emit retry event
+        self.emit(LoopEvent::Retry {
+            attempt,
+            max_attempts: MAX_OUTPUT_TOKEN_RECOVERY,
+            delay_ms: 0,
+        }).await;
+
+        // Continue with next API call (model will resume)
+        Ok(RecoveryAction::Continue)
+    }
+}
+```
+
+### Model Fallback Error
+
+```rust
+/// Error type for triggering model fallback
+pub struct ModelFallbackError {
+    /// Original error that triggered fallback
+    pub original_error: Box<dyn std::error::Error + Send + Sync>,
+    /// Suggested fallback model
+    pub fallback_model: String,
+    /// Reason for fallback
+    pub reason: FallbackReason,
+}
+
+#[derive(Debug, Clone)]
+pub enum FallbackReason {
+    /// Model is overloaded
+    Overloaded,
+    /// Rate limited
+    RateLimited,
+    /// Context window exceeded
+    ContextExceeded,
+    /// Stream stalled
+    StreamStalled,
+}
+```
+
+### Implementation
 
 ```rust
 impl AgentLoop {
@@ -489,102 +794,197 @@ impl AgentLoop {
         // Add initial message to context
         self.context.add_message(initial_message);
 
-        loop {
-            // 1. Check turn limit
-            if let Some(max) = self.config.max_turns {
-                if self.turn_number >= max {
-                    self.emit(LoopEvent::MaxTurnsReached).await;
-                    return Ok(LoopResult::max_turns_reached());
-                }
+        // Initialize tracking
+        let mut query_tracking = QueryTracking::new();
+        let mut auto_compact_tracking = AutoCompactTracking::default();
+
+        self.core_message_loop(&mut query_tracking, &mut auto_compact_tracking).await
+    }
+
+    async fn core_message_loop(
+        &mut self,
+        query_tracking: &mut QueryTracking,
+        auto_compact_tracking: &mut AutoCompactTracking,
+    ) -> Result<LoopResult, LoopError> {
+        // STEP 1: Signal stream request start
+        self.emit(LoopEvent::StreamRequestStart).await;
+
+        // STEP 2: Setup query tracking
+        query_tracking.depth += 1;
+        let turn_id = uuid::Uuid::new_v4().to_string();
+
+        // STEP 3: Normalize messages (slice from compact boundary)
+        let messages = self.context.normalize_messages(auto_compact_tracking.turn_id.as_deref());
+
+        // STEP 4: Micro-compaction (PRE-API)
+        if self.config.enable_micro_compaction {
+            let removed = self.micro_compact();
+            if removed > 0 {
+                self.emit(LoopEvent::MicroCompactionApplied { removed_results: removed }).await;
             }
+        }
 
-            // 2. Check cancellation
-            if self.cancel.is_cancelled() {
-                self.emit(LoopEvent::Interrupted).await;
-                return Ok(LoopResult::interrupted());
-            }
+        // STEP 5: Auto-compaction (if threshold exceeded)
+        if self.should_compact() {
+            self.compact().await?;
+            auto_compact_tracking.compacted = true;
+            auto_compact_tracking.turn_id = Some(turn_id.clone());
+        }
 
-            // 3. Emit stream request start
-            self.emit(LoopEvent::StreamRequestStart).await;
+        // STEP 6: Initialize state
+        self.turn_number += 1;
+        self.tool_executor.reset();
+        self.emit(LoopEvent::TurnStarted {
+            turn_id: turn_id.clone(),
+            turn_number: self.turn_number,
+        }).await;
 
-            // 4. Check for micro-compaction
-            if self.config.enable_micro_compaction {
-                let removed = self.micro_compact();
-                if removed > 0 {
-                    self.emit(LoopEvent::MicroCompactionApplied { removed_results: removed }).await;
-                }
-            }
+        // STEP 7: Resolve model with permissions
+        let model = self.resolve_model_with_permissions().await?;
 
-            // 5. Check for auto-compaction
-            if self.should_compact() {
-                self.compact().await?;
-            }
+        // STEP 8: Check blocking token limit
+        let usage = self.context.estimate_tokens();
+        let blocking_limit = model.context_window() - 13000;
+        if usage >= blocking_limit {
+            return Err(LoopError::context_window_exceeded(usage, blocking_limit));
+        }
 
-            // 6. Generate turn ID
-            let turn_id = uuid::Uuid::new_v4().to_string();
-            self.turn_number += 1;
-            self.emit(LoopEvent::TurnStarted {
-                turn_id: turn_id.clone(),
-                turn_number: self.turn_number
-            }).await;
-
-            // 7. Build request
-            let request = self.build_request().await?;
-
-            // 8. Stream response with tool executor
-            let response = self.stream_with_tools(&turn_id, request).await?;
-
-            // 9. Emit stream request end
-            self.emit(LoopEvent::StreamRequestEnd { usage: response.usage.clone() }).await;
-
-            // 10. Add assistant message to context
-            let assistant_msg = ConversationMessage::from_response(response.clone());
-            self.context.add_message(assistant_msg);
-
-            // 11. Check stop reason
-            match response.finish_reason {
-                FinishReason::Stop => {
-                    self.emit(LoopEvent::TurnCompleted {
-                        turn_id,
-                        usage: response.usage
+        // STEP 9: Main API streaming loop (with retry)
+        let mut output_recovery_attempts = 0;
+        let response = loop {
+            match self.stream_with_tools(&turn_id, &model).await {
+                Ok(resp) => break resp,
+                Err(e) if e.is_retriable() => {
+                    output_recovery_attempts += 1;
+                    if output_recovery_attempts >= MAX_OUTPUT_TOKEN_RECOVERY {
+                        return Err(e);
+                    }
+                    self.emit(LoopEvent::Retry {
+                        attempt: output_recovery_attempts,
+                        max_attempts: MAX_OUTPUT_TOKEN_RECOVERY,
+                        delay_ms: 0,
                     }).await;
-                    return Ok(LoopResult::completed(response));
+                    continue;
                 }
-                FinishReason::ToolUse => {
-                    // 12. Get tool results from executor
-                    let results = self.tool_executor.drain_remaining().await;
-
-                    // 13. Add tool results to context
-                    let result_msg = ConversationMessage::tool_results(results);
-                    self.context.add_message(result_msg);
-
-                    // 14. Run hooks
-                    self.run_stop_hooks().await?;
-
-                    self.emit(LoopEvent::TurnCompleted {
-                        turn_id,
-                        usage: response.usage
-                    }).await;
-
-                    // Continue loop for next turn
+                Err(e) if e.is_model_fallback() => {
+                    return self.handle_model_fallback(e, query_tracking, auto_compact_tracking).await;
                 }
-                FinishReason::MaxTokens => {
-                    self.handle_max_tokens(&turn_id).await?;
-                }
-                _ => {
-                    return Err(LoopError::unexpected_finish_reason(response.finish_reason));
-                }
+                Err(e) => return Err(e),
             }
+        };
+
+        // STEP 10: Record API call info
+        self.record_api_call_info(&response, query_tracking).await;
+
+        // STEP 11: Check for tool calls
+        let has_tool_calls = response.content.iter()
+            .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
+
+        // STEP 12: Execute tool queue
+        if has_tool_calls {
+            let results = self.execute_tool_queue().await?;
+
+            // STEP 13: Handle abort after tool execution
+            if self.tool_executor.has_aborted() {
+                self.emit(LoopEvent::ToolExecutionAborted {
+                    reason: self.tool_executor.abort_reason(),
+                }).await;
+            }
+
+            // Add tool results to context
+            let result_msg = ConversationMessage::tool_results(results);
+            self.context.add_message(result_msg);
+        }
+
+        // Add assistant message to context
+        let assistant_msg = ConversationMessage::from_response(response.clone());
+        self.context.add_message(assistant_msg);
+
+        // STEP 14: Check for hook stop
+        if self.run_stop_hooks().await? {
+            return Ok(LoopResult::hook_stopped());
+        }
+
+        // STEP 15: Update auto-compact tracking
+        auto_compact_tracking.turn_counter += 1;
+
+        // STEP 16: Process queued commands and attachments
+        self.process_queued_commands().await?;
+
+        // STEP 17: Check max turns limit
+        if let Some(max) = self.config.max_turns {
+            if self.turn_number >= max {
+                self.emit(LoopEvent::MaxTurnsReached).await;
+                return Ok(LoopResult::max_turns_reached());
+            }
+        }
+
+        // Emit turn completed
+        self.emit(LoopEvent::TurnCompleted {
+            turn_id: turn_id.clone(),
+            usage: response.usage.clone(),
+        }).await;
+
+        // Check stop reason
+        match response.finish_reason {
+            FinishReason::Stop => {
+                self.emit(LoopEvent::StreamRequestEnd { usage: response.usage }).await;
+                Ok(LoopResult::completed(response))
+            }
+            FinishReason::ToolUse => {
+                // STEP 18: Recursive call for next turn
+                self.core_message_loop(query_tracking, auto_compact_tracking).await
+            }
+            FinishReason::MaxTokens => {
+                // Already handled in STEP 9 retry loop
+                Ok(LoopResult::completed(response))
+            }
+            _ => Err(LoopError::unexpected_finish_reason(response.finish_reason)),
         }
     }
 
+    /// Execute tool queue with parallel/sequential handling
+    async fn execute_tool_queue(&mut self) -> Result<Vec<ToolExecutionResult>, LoopError> {
+        let mut results = Vec::new();
+
+        // Collect completed results during streaming (non-blocking)
+        for result in self.tool_executor.get_completed_results() {
+            self.emit(LoopEvent::ToolUseCompleted {
+                call_id: result.tool_use_id.clone(),
+                output: result.content.clone(),
+                is_error: result.is_error,
+            }).await;
+            results.push(result);
+        }
+
+        // Wait for remaining results (blocking)
+        let mut remaining = self.tool_executor.get_remaining_results().await;
+        while let Some(result) = remaining.next().await {
+            self.emit(LoopEvent::ToolUseCompleted {
+                call_id: result.tool_use_id.clone(),
+                output: result.content.clone(),
+                is_error: result.is_error,
+            }).await;
+            results.push(result);
+        }
+
+        Ok(results)
+    }
+}
+```
+
+### Stream Processing with Tools
+
+```rust
+impl AgentLoop {
     /// Stream response while executing tools in parallel
     async fn stream_with_tools(
         &mut self,
         turn_id: &str,
-        request: ChatRequest,
+        model: &dyn Model,
     ) -> Result<GenerateResponse, LoopError> {
-        let mut stream = self.model.stream(request).await
+        let request = self.build_request().await?;
+        let mut stream = model.stream(request).await
             .map_err(|e| self.handle_llm_error(e))?;
 
         while let Some(event) = stream.next_event().await {
@@ -640,48 +1040,118 @@ impl AgentLoop {
 }
 ```
 
-## Micro-Compaction
+## Micro-Compaction (PRE-API Phase)
 
-Remove low-value tool results to save context space.
+Micro-compaction runs **before every API call** and removes old tool results without LLM involvement. This is separate from the threshold-triggered auto-compact.
+
+### Configuration Constants (v2.1.7)
+
+```rust
+pub const RECENT_TOOL_RESULTS_TO_KEEP: i32 = 3;  // Keep last 3 tool results
+pub const MIN_SAVINGS_THRESHOLD: i32 = 20000;    // Min 20K tokens to compact
+```
+
+### Implementation
 
 ```rust
 impl AgentLoop {
-    /// Remove tool results that provide little value
+    /// Micro-compact: Remove old tool results (no LLM call)
     fn micro_compact(&mut self) -> i32 {
-        let mut removed = 0;
-        for msg in self.context.messages_mut() {
-            if let Some(tool_results) = msg.tool_results_mut() {
-                for result in tool_results {
-                    if self.is_low_value_result(result) {
-                        result.content = ToolResultContent::Text("[Result compacted]".to_string());
-                        removed += 1;
-                    }
+        let mut compacted_ids: HashSet<String> = HashSet::new();
+        let tool_results = self.collect_tool_results();
+
+        // Keep last RECENT_TOOL_RESULTS_TO_KEEP results
+        let results_to_compact: Vec<_> = tool_results
+            .iter()
+            .rev()
+            .skip(RECENT_TOOL_RESULTS_TO_KEEP as usize)
+            .collect();
+
+        for result in results_to_compact {
+            if self.is_compactable_tool(&result.tool_name) {
+                // Persist to disk if large (for potential retrieval)
+                if result.token_count > 1000 {
+                    self.persist_tool_result(result);
                 }
+
+                // Clear the content
+                self.clear_tool_result(&result.call_id);
+                compacted_ids.insert(result.call_id.clone());
             }
         }
-        removed
+
+        // Verify savings meet threshold
+        let savings = self.calculate_token_savings(&compacted_ids);
+        if savings < MIN_SAVINGS_THRESHOLD {
+            self.revert_compaction(&compacted_ids);
+            return 0;
+        }
+
+        compacted_ids.len() as i32
     }
 
-    fn is_low_value_result(&self, result: &ToolResult) -> bool {
-        // Large Glob/Grep results that have been processed
-        // Empty Read results
-        // Redundant file contents
-        // ... implementation specific logic
-        false
+    fn is_compactable_tool(&self, name: &str) -> bool {
+        matches!(name, "Read" | "Bash" | "Grep" | "Glob" |
+                       "WebSearch" | "WebFetch" | "Edit" | "Write")
     }
+}
+```
+
+### Integration in Loop
+
+Micro-compact runs at the start of each turn, before the threshold check:
+
+```rust
+// In coreMessageLoop, step 3-4:
+// 3. Micro-compaction (remove low-value tool results)
+if self.config.enable_micro_compaction {
+    let removed = self.micro_compact();
+    if removed > 0 {
+        self.emit(LoopEvent::MicroCompactionApplied { removed_results: removed }).await;
+    }
+}
+
+// 4. Auto-compaction (only if threshold exceeded AFTER micro-compact)
+if self.should_compact() {
+    self.compact().await?;
 }
 ```
 
 ## Context Compaction
 
-When context exceeds threshold, summarize older messages.
+Claude Code v2.1.7 uses a **three-tier compaction system**. For comprehensive documentation, see [features.md - Context Compaction](./features.md#context-compaction).
+
+### Compaction Flow Summary
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  1. Micro-Compact (PRE-API, every turn)                     │
+│     - No LLM call, clears old tool results                  │
+│     - Keep last 3 results, min 20K savings                  │
+├─────────────────────────────────────────────────────────────┤
+│  2. Auto-Compact (when context_limit - 13K exceeded)        │
+│     ├─ Tier 1: Session Memory Compact (zero API cost)       │
+│     │  - Uses cached summary.md from background agent       │
+│     │  - Keeps messages after lastSummarizedId              │
+│     └─ Tier 2: Full Compact (LLM-based fallback)            │
+│        - Streaming summarization                            │
+│        - Context restoration (5 files, 50K budget)          │
+├─────────────────────────────────────────────────────────────┤
+│  Background: Session Memory Extraction Agent                 │
+│  - Trigger: 5K tokens + 10 tool calls                       │
+│  - Forked agent with Edit-only permission                   │
+│  - Updates ~/.claude/<session>/session-memory/summary.md    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Implementation
 
 ```rust
 impl AgentLoop {
     fn should_compact(&self) -> bool {
         let usage = self.context.estimate_tokens();
-        let max = self.model.context_window();
-        (usage as f32 / max as f32) > self.config.auto_compact_threshold
+        let threshold = self.model.context_window() - 13000;  // v2.1.7 offset
+        usage >= threshold
     }
 
     async fn compact(&mut self) -> Result<(), LoopError> {
@@ -691,16 +1161,19 @@ impl AgentLoop {
         // 2. Emit start event
         self.emit(LoopEvent::CompactionStarted).await;
 
-        // 3. Summarize older messages
+        // 3. Try Session Memory Compact first (Tier 1 - zero API cost)
+        if self.try_session_memory_compact().await? {
+            return Ok(());  // Success with cached summary
+        }
+
+        // 4. Fall through to Full Compact (Tier 2 - LLM-based)
         let summary = self.summarize_context().await?;
         let removed = self.context.compact(summary);
 
-        // 4. Restore session memory (recently read files)
-        if self.config.session_memory.enabled {
-            self.restore_session_memory().await?;
-        }
+        // 5. Restore context (files, todos, plans, tasks)
+        self.restore_context_after_compact().await?;
 
-        // 5. Emit completion event
+        // 6. Emit completion event
         self.emit(LoopEvent::CompactionCompleted {
             removed_messages: removed,
             summary_tokens: self.context.estimate_tokens(),
@@ -708,83 +1181,90 @@ impl AgentLoop {
 
         Ok(())
     }
+
+    /// Tier 1: Session Memory Compact (uses cached summary, zero API cost)
+    async fn try_session_memory_compact(&mut self) -> Result<bool, LoopError> {
+        let memory_dir = self.get_session_memory_path();
+        let summary_path = memory_dir.join("summary.md");
+        let metadata_path = memory_dir.join("metadata.json");
+
+        // Load cached summary and metadata
+        let summary = tokio::fs::read_to_string(&summary_path).await.ok();
+        let metadata: Option<SessionMemoryMetadata> = tokio::fs::read_to_string(&metadata_path)
+            .await
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok());
+
+        match (summary, metadata) {
+            (Some(summary), Some(metadata)) => {
+                // Calculate savings
+                let msgs_to_remove = self.context.messages_before_id(&metadata.last_summarized_id);
+                let tokens_to_save: i32 = msgs_to_remove.iter().map(|m| m.estimate_tokens()).sum();
+                let summary_tokens = estimate_tokens(&summary);
+
+                if tokens_to_save - summary_tokens >= 10000 {  // Min 10K savings
+                    // Apply session memory compact
+                    self.context.replace_messages_before_id(
+                        &metadata.last_summarized_id,
+                        ConversationMessage::summary(summary),
+                    );
+                    self.emit(LoopEvent::SessionMemoryCompactApplied {
+                        saved_tokens: tokens_to_save - summary_tokens,
+                        summary_tokens,
+                    }).await;
+                    return Ok(true);
+                }
+            }
+            _ => {}
+        }
+
+        Ok(false)  // Fall through to Tier 2
+    }
 }
 ```
 
-### Session Memory Restoration
+### Context Restoration (Tier 2 Only)
 
-After compaction, restore recently read files to preserve context:
+After Full Compact, restore critical context within budget limits:
 
 ```rust
+/// Context restoration configuration (v2.1.7 values)
+pub struct ContextRestorationConfig {
+    pub max_files: i32,              // 5
+    pub total_budget_tokens: i32,    // 50,000
+    pub per_file_limit_tokens: i32,  // 5,000
+}
+
 impl AgentLoop {
-    /// Restore recently read files after compaction
-    async fn restore_session_memory(&mut self) -> Result<(), LoopError> {
-        let config = &self.config.session_memory;
-        let budget = config.budget_tokens;
+    async fn restore_context_after_compact(&mut self) -> Result<(), LoopError> {
+        let config = &self.config.context_restoration;
 
-        // Get cached files from read file state
-        let read_state = self.context.read_file_state.read().await;
-        let mut files: Vec<_> = read_state.files.iter().collect();
+        // Get files from cache (respecting limits)
+        let files = self.file_cache.get_files_for_restoration(
+            config.max_files,
+            config.total_budget_tokens,
+        );
 
-        // Sort by restoration priority
-        match config.restoration_priority {
-            FileRestorationPriority::MostRecent => {
-                files.sort_by(|a, b| b.1.timestamp.cmp(&a.1.timestamp));
-            }
-            FileRestorationPriority::MostAccessed => {
-                files.sort_by(|a, b| b.1.access_count.cmp(&a.1.access_count));
-            }
-        }
+        // Also restore: todos, current plan, active skills, task summaries
+        let restoration = ContextRestoration {
+            files,
+            todos: self.get_active_todos().await.unwrap_or_default(),
+            plan: self.get_current_plan().await,
+            skills: self.get_active_skills(),
+            tasks: self.get_task_summaries(),
+        };
 
-        // Build session memory content within budget
-        let mut used_tokens = 0;
-        let mut memory_content = Vec::new();
-
-        for (path, info) in files {
-            let tokens = estimate_tokens(&info.content);
-            if used_tokens + tokens > budget {
-                break;
-            }
-
-            memory_content.push(SessionMemoryFile {
-                path: path.clone(),
-                content: info.content.clone(),
-                last_read: info.timestamp,
-            });
-            used_tokens += tokens;
-        }
-
-        // Add session memory as system attachment
-        if !memory_content.is_empty() {
-            self.context.add_session_memory(memory_content);
-        }
-
+        self.context.add_restoration_attachment(restoration);
         Ok(())
     }
 }
-
-/// Session memory state for file restoration
-#[derive(Debug, Clone)]
-pub struct SessionMemory {
-    pub files: HashMap<PathBuf, CachedFile>,
-    pub budget_tokens: i32,
-}
-
-#[derive(Debug, Clone)]
-pub struct CachedFile {
-    pub content: String,
-    pub tokens: i32,
-    pub last_read: SystemTime,
-    pub access_count: i32,
-}
-
-#[derive(Debug, Clone)]
-pub struct SessionMemoryFile {
-    pub path: PathBuf,
-    pub content: String,
-    pub last_read: SystemTime,
-}
 ```
+
+### Related Documentation
+
+- **Full details:** [features.md - Context Compaction](./features.md#context-compaction)
+- **Background agent:** [features.md - Background Extraction Agent](./features.md#background-extraction-agent-session-memory)
+- **Session Memory:** [features.md - Session Memory](./features.md#session-memory)
 
 ## Stream Stall Detection
 
@@ -1221,6 +1701,240 @@ async fn run_agent() -> Result<()> {
 }
 ```
 
+## Stream Event Processing
+
+Claude Code v2.1.7 processes Anthropic SSE (Server-Sent Events) with a content block aggregation state machine.
+
+### SSE Event Types (Anthropic Protocol)
+
+The actual SSE events from the Anthropic API differ from the simplified events used in documentation:
+
+| Documentation Event | Actual SSE Event Type | Delta Type |
+|---------------------|-----------------------|------------|
+| `TextDelta` | `content_block_delta` | `text_delta` |
+| `ThinkingDelta` | `content_block_delta` | `thinking_delta` |
+| `ToolCallStart` | `content_block_start` | type: `tool_use` |
+| `ToolCallComplete` | `content_block_stop` | - |
+| (JSON accumulation) | `content_block_delta` | `input_json_delta` |
+| (Signature) | `content_block_delta` | `signature_delta` |
+
+### Content Block Aggregation State Machine
+
+```
+                    ┌─────────────────────────────────────────────┐
+                    │           message_start                      │
+                    │  Initialize aggregation state                │
+                    └─────────────────────────────────────────────┘
+                                        │
+                                        ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│                        content_block_start                                 │
+│  - Create new ContentBlock based on type (text, tool_use, thinking)       │
+│  - Initialize accumulator for content                                      │
+└───────────────────────────────────────────────────────────────────────────┘
+                                        │
+                                        ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│                        content_block_delta (loop)                          │
+│  - text_delta: Append to text accumulator                                  │
+│  - thinking_delta: Append to thinking accumulator                          │
+│  - input_json_delta: Append to JSON string accumulator                     │
+│  - signature_delta: Append to signature (for tool verification)            │
+└───────────────────────────────────────────────────────────────────────────┘
+                                        │
+                                        ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│                        content_block_stop                                  │
+│  - Parse accumulated JSON for tool_use blocks                              │
+│  - YIELD ContentBlock (per-block, not per-message)                         │
+│  - For tool_use: Trigger StreamingToolExecutor.add_tool()                  │
+└───────────────────────────────────────────────────────────────────────────┘
+                                        │
+                                        ▼
+                    ┌─────────────────────────────────────────────┐
+                    │           message_stop                       │
+                    │  Finalize response, return GenerateResponse  │
+                    └─────────────────────────────────────────────┘
+```
+
+### Per-Block Yielding Strategy
+
+Claude Code yields content blocks on `content_block_stop`, not `message_stop`:
+
+```rust
+/// Aggregator for SSE content blocks
+pub struct ContentBlockAggregator {
+    /// Current block index being aggregated
+    current_index: i32,
+    /// Block type (text, tool_use, thinking)
+    block_type: ContentBlockType,
+    /// Accumulated text content
+    text_accumulator: String,
+    /// Accumulated JSON for tool inputs
+    json_accumulator: String,
+    /// Accumulated signature (for tool verification)
+    signature_accumulator: String,
+}
+
+impl ContentBlockAggregator {
+    /// Process SSE event and potentially yield completed block
+    pub fn process_event(&mut self, event: SseEvent) -> Option<ContentBlock> {
+        match event {
+            SseEvent::ContentBlockStart { index, content_block } => {
+                self.current_index = index;
+                self.block_type = content_block.block_type();
+                self.reset_accumulators();
+                None
+            }
+            SseEvent::ContentBlockDelta { index, delta } => {
+                assert_eq!(index, self.current_index);
+                match delta {
+                    Delta::TextDelta { text } => {
+                        self.text_accumulator.push_str(&text);
+                    }
+                    Delta::ThinkingDelta { thinking } => {
+                        self.text_accumulator.push_str(&thinking);
+                    }
+                    Delta::InputJsonDelta { partial_json } => {
+                        self.json_accumulator.push_str(&partial_json);
+                    }
+                    Delta::SignatureDelta { signature } => {
+                        self.signature_accumulator.push_str(&signature);
+                    }
+                }
+                None // Don't yield yet
+            }
+            SseEvent::ContentBlockStop { index } => {
+                assert_eq!(index, self.current_index);
+                // YIELD on block stop, not message stop
+                Some(self.finalize_block())
+            }
+            _ => None,
+        }
+    }
+
+    fn finalize_block(&self) -> ContentBlock {
+        match self.block_type {
+            ContentBlockType::Text => ContentBlock::Text {
+                text: self.text_accumulator.clone(),
+            },
+            ContentBlockType::ToolUse => ContentBlock::ToolUse {
+                id: String::new(), // Set from content_block_start
+                name: String::new(),
+                input: serde_json::from_str(&self.json_accumulator)
+                    .unwrap_or(Value::Null),
+            },
+            ContentBlockType::Thinking => ContentBlock::Thinking {
+                thinking: self.text_accumulator.clone(),
+                signature: self.signature_accumulator.clone(),
+            },
+        }
+    }
+}
+```
+
+### Stall Detection
+
+Stream stall detection uses a 30-second threshold:
+
+```rust
+/// Stall detection constants
+pub const STALL_THRESHOLD_MS: i32 = 30_000;  // 30 seconds
+
+impl StreamProcessor {
+    /// Process stream with stall detection
+    async fn process_with_stall_detection(
+        &mut self,
+        stream: impl Stream<Item = Result<SseEvent>>,
+    ) -> Result<GenerateResponse> {
+        let mut last_event_time = Instant::now();
+
+        pin_mut!(stream);
+        loop {
+            let timeout = Duration::from_millis(STALL_THRESHOLD_MS as u64);
+            let event = tokio::select! {
+                event = stream.next() => event,
+                _ = tokio::time::sleep_until((last_event_time + timeout).into()) => {
+                    return Err(StreamError::Stalled {
+                        timeout_ms: STALL_THRESHOLD_MS,
+                    });
+                }
+            };
+
+            match event {
+                Some(Ok(e)) => {
+                    last_event_time = Instant::now();
+                    if let Some(block) = self.aggregator.process_event(e) {
+                        self.yield_block(block).await?;
+                    }
+                }
+                Some(Err(e)) => return Err(e.into()),
+                None => break,
+            }
+        }
+
+        Ok(self.finalize_response())
+    }
+}
+```
+
+---
+
+## Comprehensive Constants Reference
+
+All configuration constants from Claude Code v2.1.7 implementation:
+
+### Core Loop Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `MAX_OUTPUT_TOKEN_RECOVERY` | 3 | Max retry attempts for output token exhaustion |
+| `BLOCKING_LIMIT_OFFSET` | 13000 | Offset from context limit for blocking check |
+| `WARNING_OFFSET` | 20000 (`c97`) | Offset for context warning threshold |
+| `ERROR_OFFSET` | 20000 (`p97`) | Offset for context error threshold |
+
+### Streaming Tool Executor Constants
+
+| Constant | Value | Environment Variable |
+|----------|-------|---------------------|
+| `MAX_TOOL_USE_CONCURRENCY` | 10 | `CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY` |
+| `STALL_THRESHOLD_MS` | 30000 | - |
+
+### Compaction Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `RECENT_TOOL_RESULTS_TO_KEEP` | 3 | Tool results kept after micro-compact |
+| `MIN_SAVINGS_THRESHOLD` | 20000 | Min tokens to save for compact |
+| `SESSION_MEMORY_MIN_SAVINGS` | 10000 | Min savings for session memory compact |
+| `CONTEXT_RESTORATION_MAX_FILES` | 5 | Files restored after full compact |
+| `CONTEXT_RESTORATION_BUDGET` | 50000 | Total token budget for restoration |
+| `CONTEXT_RESTORATION_PER_FILE` | 5000 | Per-file token limit |
+
+### Attachment Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `ATTACHMENT_TIMEOUT` | 1000 | Max ms for attachment generation |
+| `TURNS_BETWEEN_ATTACHMENTS` | 5 | Turns between plan mode attachments |
+| `FULL_REMINDER_EVERY_N_ATTACHMENTS` | 5 | Full reminder interval |
+| `PROGRESS_TURN_THRESHOLD` | 3 | Turns between task progress |
+
+### Session Memory Agent Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `TRIGGER_TOKEN_THRESHOLD` | 5000 | Min tokens before triggering |
+| `TRIGGER_TOOL_CALL_THRESHOLD` | 10 | Min tool calls before triggering |
+
+### Feature Flags
+
+| Flag | Description |
+|------|-------------|
+| `tengu_streaming_tool_execution2` | Enable streaming tool execution |
+
+---
+
 ## Key Patterns Summary
 
 | Pattern | Description |
@@ -1231,3 +1945,5 @@ async fn run_agent() -> Result<()> {
 | **Auto-compaction** | Summarize older messages when context approaches limit |
 | **Model Fallback** | Switch to fallback model on overload with orphan message handling |
 | **Event Streaming** | All state changes emit events for UI integration |
+| **Per-Block Yielding** | Content blocks yield on `content_block_stop`, enabling early tool execution |
+| **Stall Detection** | 30s threshold for stream stall with configurable recovery |

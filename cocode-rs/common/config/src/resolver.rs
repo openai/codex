@@ -5,21 +5,21 @@
 //! **Precedence (highest to lowest):**
 //! 1. Runtime overrides (API calls, `/model` command)
 //! 2. Environment variables (for secrets)
-//! 3. Provider-specific model override (`providers.json -> models -> model_info_override`)
-//! 4. User model config (`models.json`)
-//! 5. Built-in defaults (compiled into binary)
+//! 3. Model entry in provider config (flattened ModelInfo + overrides)
+//! 4. Provider-level overrides
+//! 5. User model config (`models.json`)
+//! 6. Built-in defaults (compiled into binary)
 
 use crate::builtin;
 use crate::error::ConfigError;
 use crate::types::ModelsFile;
-use crate::types::ProfileConfig;
-use crate::types::ProfilesFile;
 use crate::types::ProviderConfig;
 use crate::types::ProvidersFile;
 use crate::types::ResolvedModelInfo;
-use crate::types::ResolvedProviderConfig;
 use cocode_protocol::Capability;
 use cocode_protocol::ModelInfo;
+use cocode_protocol::ProviderInfo;
+use cocode_protocol::ProviderModel;
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
@@ -32,24 +32,16 @@ use tracing::warn;
 pub struct ConfigResolver {
     pub(crate) models: HashMap<String, ModelInfo>,
     pub(crate) providers: HashMap<String, ProviderConfig>,
-    pub(crate) profiles: HashMap<String, ProfileConfig>,
-    pub(crate) default_profile: Option<String>,
     /// Config directory for resolving relative paths (e.g., base_instructions_file).
     pub(crate) config_dir: Option<PathBuf>,
 }
 
 impl ConfigResolver {
     /// Create a new resolver from loaded configuration.
-    pub fn new(
-        models_file: ModelsFile,
-        providers_file: ProvidersFile,
-        profiles_file: ProfilesFile,
-    ) -> Self {
+    pub fn new(models_file: ModelsFile, providers_file: ProvidersFile) -> Self {
         Self {
             models: models_file.models,
             providers: providers_file.providers,
-            profiles: profiles_file.profiles,
-            default_profile: profiles_file.default_profile,
             config_dir: None,
         }
     }
@@ -58,14 +50,11 @@ impl ConfigResolver {
     pub fn with_config_dir(
         models_file: ModelsFile,
         providers_file: ProvidersFile,
-        profiles_file: ProfilesFile,
         config_dir: impl Into<PathBuf>,
     ) -> Self {
         Self {
             models: models_file.models,
             providers: providers_file.providers,
-            profiles: profiles_file.profiles,
-            default_profile: profiles_file.default_profile,
             config_dir: Some(config_dir.into()),
         }
     }
@@ -75,8 +64,6 @@ impl ConfigResolver {
         Self {
             models: HashMap::new(),
             providers: HashMap::new(),
-            profiles: HashMap::new(),
-            default_profile: None,
             config_dir: None,
         }
     }
@@ -88,17 +75,35 @@ impl ConfigResolver {
 
     /// Resolve model info by merging all configuration layers.
     ///
-    /// Merges in order (later overrides earlier):
+    /// Resolution order (later overrides earlier):
     /// 1. Built-in defaults
     /// 2. User model config (models.json)
-    /// 3. Provider-specific override (providers.json -> models -> model_info_override)
+    /// 3. Provider-level overrides (from provider config)
+    /// 4. Model entry config (flattened ModelInfo fields)
+    /// 5. Model entry overrides (HashMap for extensibility)
     pub fn resolve_model_info(
+        &self,
+        provider_name: &str,
+        model_id: &str,
+    ) -> Result<ResolvedModelInfo, ConfigError> {
+        // Get provider config, or use a default empty one
+        if let Some(provider_config) = self.providers.get(provider_name) {
+            self.resolve_model_info_internal(provider_config, model_id)
+        } else {
+            // No provider config, use defaults only
+            self.resolve_model_info_no_provider(provider_name, model_id)
+        }
+    }
+
+    /// Resolve model info without a provider config (fallback path).
+    fn resolve_model_info_no_provider(
         &self,
         provider_name: &str,
         model_id: &str,
     ) -> Result<ResolvedModelInfo, ConfigError> {
         // Start with built-in defaults
         let mut config = builtin::get_model_defaults(model_id).unwrap_or_default();
+        config.slug = model_id.to_string();
 
         // Layer 2: User model config from models.json
         if let Some(user_config) = self.models.get(model_id) {
@@ -106,34 +111,8 @@ impl ConfigResolver {
             debug!(model = model_id, "Applied user model config");
         }
 
-        // Check for model alias in provider config
-        let canonical_model_id = self.resolve_model_alias(provider_name, model_id);
-
-        // If alias resolved to different model, also apply its config
-        if canonical_model_id != model_id {
-            if let Some(alias_config) = self.models.get(&canonical_model_id) {
-                config.merge_from(alias_config);
-                debug!(
-                    model = model_id,
-                    canonical = canonical_model_id,
-                    "Applied canonical model config"
-                );
-            }
-        }
-
-        // Layer 3: Provider-specific override
-        if let Some(provider_config) = self.providers.get(provider_name) {
-            if let Some(model_config) = provider_config.models.get(model_id) {
-                if let Some(override_config) = &model_config.model_info_override {
-                    config.merge_from(override_config);
-                    debug!(
-                        provider = provider_name,
-                        model = model_id,
-                        "Applied provider model override"
-                    );
-                }
-            }
-        }
+        // Resolve timeout_secs: use model config or default
+        let timeout_secs = config.timeout_secs.unwrap_or(600);
 
         // Resolve base_instructions: file takes precedence over inline
         let base_instructions = self.resolve_base_instructions(&config);
@@ -146,14 +125,18 @@ impl ConfigResolver {
             provider: provider_name.to_string(),
             context_window: config.context_window.unwrap_or(4096),
             max_output_tokens: config.max_output_tokens.unwrap_or(4096),
+            timeout_secs,
             capabilities: config
                 .capabilities
                 .unwrap_or_else(|| vec![Capability::TextGeneration]),
+            temperature: config.temperature,
+            top_p: config.top_p,
             auto_compact_token_limit: config.auto_compact_token_limit,
             effective_context_window_percent: config.effective_context_window_percent,
             default_reasoning_effort: config.default_reasoning_effort,
             supported_reasoning_levels: config.supported_reasoning_levels,
             thinking_budget_default: config.thinking_budget,
+            include_thoughts: config.include_thoughts,
             base_instructions,
         })
     }
@@ -198,24 +181,24 @@ impl ConfigResolver {
         config.base_instructions.clone()
     }
 
-    /// Resolve a model alias to its canonical model ID.
+    /// Resolve a model alias to its API model name.
     ///
-    /// For example, "ep-20250109-xxxxx" might map to "deepseek-r1".
-    pub fn resolve_model_alias(&self, provider_name: &str, model_id: &str) -> String {
+    /// Returns the alias if set and non-empty, otherwise returns the slug.
+    /// For example, slug "deepseek-r1" might return "ep-20250109-xxxxx".
+    pub fn resolve_model_alias<'a>(&'a self, provider_name: &str, slug: &'a str) -> &'a str {
         self.providers
             .get(provider_name)
-            .and_then(|p| p.models.get(model_id))
-            .and_then(|m| m.model_id.clone())
-            .unwrap_or_else(|| model_id.to_string())
+            .and_then(|p| p.find_model(slug))
+            .map(|m| m.api_model_name())
+            .unwrap_or(slug)
     }
 
-    /// Resolve provider configuration.
+    /// Resolve provider configuration into a complete `ProviderInfo`.
     ///
-    /// Resolves API key from environment variables if `env_key` is set.
-    pub fn resolve_provider(
-        &self,
-        provider_name: &str,
-    ) -> Result<ResolvedProviderConfig, ConfigError> {
+    /// This resolves:
+    /// - API key from environment variables or config
+    /// - All models with their resolved `ModelInfo`
+    pub fn resolve_provider(&self, provider_name: &str) -> Result<ProviderInfo, ConfigError> {
         let provider_config = self
             .providers
             .get(provider_name)
@@ -233,15 +216,120 @@ impl ConfigResolver {
             ))
         })?;
 
-        Ok(ResolvedProviderConfig {
-            name: provider_config.name.clone(),
-            provider_type: provider_config.provider_type,
-            api_key,
-            base_url: provider_config.base_url.clone(),
-            default_model: provider_config.default_model.clone(),
-            timeout_secs: provider_config.timeout_secs.unwrap_or(600),
-            organization_id: provider_config.organization_id.clone(),
-            extra: provider_config.extra.clone(),
+        // Resolve all models for this provider
+        let mut models = HashMap::new();
+        for model_entry in &provider_config.models {
+            let slug = model_entry.slug();
+            // Build resolved ModelInfo
+            let model_info = self.resolve_model_info_for_provider(provider_config, slug);
+
+            // Create ProviderModel with model_alias preserved
+            let provider_model = if let Some(alias) = &model_entry.model_alias {
+                ProviderModel::with_alias(model_info, alias)
+            } else {
+                ProviderModel::new(model_info)
+            };
+            models.insert(slug.to_string(), provider_model);
+        }
+
+        let mut info = ProviderInfo::new(
+            &provider_config.name,
+            provider_config.provider_type,
+            &provider_config.base_url,
+        )
+        .with_api_key(api_key)
+        .with_timeout(provider_config.timeout_secs)
+        .with_streaming(provider_config.streaming)
+        .with_wire_api(provider_config.wire_api)
+        .with_models(models);
+
+        if let Some(extra) = &provider_config.extra {
+            info = info.with_extra(extra.clone());
+        }
+
+        Ok(info)
+    }
+
+    /// Resolve and merge model config layers, returning a `ModelInfo`.
+    ///
+    /// This is used when building `ProviderInfo.models` to store fully resolved configs.
+    fn resolve_model_info_for_provider(
+        &self,
+        provider_config: &ProviderConfig,
+        model_id: &str,
+    ) -> ModelInfo {
+        // Start with built-in defaults
+        let mut config = builtin::get_model_defaults(model_id).unwrap_or_default();
+        config.slug = model_id.to_string();
+
+        // Layer 2: User model config from models.json
+        if let Some(user_config) = self.models.get(model_id) {
+            config.merge_from(user_config);
+            debug!(model = model_id, "Applied user model config");
+        }
+
+        // Layer 3: Provider-level overrides (apply to all models in this provider)
+        if !provider_config.overrides.is_empty() {
+            config.apply_overrides(&provider_config.overrides);
+            debug!("Applied provider-level overrides");
+        }
+
+        // Layer 4 & 5: Model entry config and overrides
+        if let Some(model_entry) = provider_config.find_model(model_id) {
+            // Apply flattened ModelInfo fields
+            config.merge_from(&model_entry.model_info);
+            debug!(model = model_id, "Applied model entry config");
+
+            // Apply model-specific overrides
+            if !model_entry.overrides.is_empty() {
+                config.apply_overrides(&model_entry.overrides);
+                debug!(model = model_id, "Applied model-specific overrides");
+            }
+        }
+
+        // Resolve timeout_secs: use model config or fall back to provider default
+        if config.timeout_secs.is_none() {
+            config.timeout_secs = Some(provider_config.timeout_secs);
+        }
+
+        // Resolve base_instructions: file takes precedence over inline
+        if let Some(resolved_instructions) = self.resolve_base_instructions(&config) {
+            config.base_instructions = Some(resolved_instructions);
+            config.base_instructions_file = None; // Already resolved
+        }
+
+        config
+    }
+
+    /// Internal method to resolve model info given a provider config.
+    fn resolve_model_info_internal(
+        &self,
+        provider_config: &ProviderConfig,
+        model_id: &str,
+    ) -> Result<ResolvedModelInfo, ConfigError> {
+        let config = self.resolve_model_info_for_provider(provider_config, model_id);
+
+        // Convert to resolved model info
+        Ok(ResolvedModelInfo {
+            id: model_id.to_string(),
+            display_name: config.display_name.unwrap_or_else(|| model_id.to_string()),
+            description: config.description,
+            provider: provider_config.name.clone(),
+            context_window: config.context_window.unwrap_or(4096),
+            max_output_tokens: config.max_output_tokens.unwrap_or(4096),
+            timeout_secs: config.timeout_secs.unwrap_or(600),
+            capabilities: config
+                .capabilities
+                .unwrap_or_else(|| vec![Capability::TextGeneration]),
+            temperature: config.temperature,
+            top_p: config.top_p,
+            auto_compact_token_limit: config.auto_compact_token_limit,
+            effective_context_window_percent: config.effective_context_window_percent,
+            default_reasoning_effort: config.default_reasoning_effort,
+            supported_reasoning_levels: config.supported_reasoning_levels,
+            thinking_budget_default: config.thinking_budget,
+            include_thoughts: config.include_thoughts,
+            base_instructions: config.base_instructions,
         })
     }
 
@@ -261,26 +349,9 @@ impl ConfigResolver {
         config.api_key.clone()
     }
 
-    /// Resolve a profile configuration.
-    pub fn resolve_profile(&self, profile_name: &str) -> Result<&ProfileConfig, ConfigError> {
-        self.profiles
-            .get(profile_name)
-            .ok_or_else(|| ConfigError::profile_not_found(profile_name))
-    }
-
-    /// Get the default profile name.
-    pub fn default_profile(&self) -> Option<&str> {
-        self.default_profile.as_deref()
-    }
-
     /// Check if a provider is configured.
     pub fn has_provider(&self, name: &str) -> bool {
         self.providers.contains_key(name)
-    }
-
-    /// Check if a profile is configured.
-    pub fn has_profile(&self, name: &str) -> bool {
-        self.profiles.contains_key(name)
     }
 
     /// List all configured provider names.
@@ -288,16 +359,11 @@ impl ConfigResolver {
         self.providers.keys().map(String::as_str).collect()
     }
 
-    /// List all configured profile names.
-    pub fn list_profiles(&self) -> Vec<&str> {
-        self.profiles.keys().map(String::as_str).collect()
-    }
-
     /// List models configured for a provider.
     pub fn list_models(&self, provider_name: &str) -> Vec<&str> {
         self.providers
             .get(provider_name)
-            .map(|p| p.models.keys().map(String::as_str).collect())
+            .map(|p| p.list_model_slugs())
             .unwrap_or_default()
     }
 
@@ -315,14 +381,16 @@ impl ConfigResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ProviderModelConfig;
+    use crate::types::ProviderModelEntry;
     use crate::types::ProviderType;
+    use crate::types::WireApi;
 
     fn create_test_resolver() -> ConfigResolver {
         let mut models = HashMap::new();
         models.insert(
             "test-model".to_string(),
             ModelInfo {
+                slug: "test-model".to_string(),
                 display_name: Some("Test Model".to_string()),
                 context_window: Some(8192),
                 max_output_tokens: Some(2048),
@@ -333,31 +401,10 @@ mod tests {
         models.insert(
             "deepseek-r1".to_string(),
             ModelInfo {
+                slug: "deepseek-r1".to_string(),
                 display_name: Some("DeepSeek R1".to_string()),
                 context_window: Some(64000),
                 ..Default::default()
-            },
-        );
-
-        let mut provider_models = HashMap::new();
-        provider_models.insert(
-            "test-model".to_string(),
-            ProviderModelConfig {
-                model_id: None,
-                model_info_override: Some(ModelInfo {
-                    max_output_tokens: Some(4096), // Override
-                    ..Default::default()
-                }),
-            },
-        );
-        provider_models.insert(
-            "ep-12345".to_string(),
-            ProviderModelConfig {
-                model_id: Some("deepseek-r1".to_string()), // Alias
-                model_info_override: Some(ModelInfo {
-                    context_window: Some(32000), // Override for this provider
-                    ..Default::default()
-                }),
             },
         );
 
@@ -367,32 +414,40 @@ mod tests {
             ProviderConfig {
                 name: "Test Provider".to_string(),
                 provider_type: ProviderType::Openai,
+                base_url: "https://api.test.com".to_string(),
+                timeout_secs: 300,
                 env_key: Some("TEST_API_KEY".to_string()),
                 api_key: Some("fallback-key".to_string()),
-                base_url: Some("https://api.test.com".to_string()),
-                default_model: Some("test-model".to_string()),
-                timeout_secs: Some(300),
-                organization_id: None,
-                models: provider_models,
+                streaming: true,
+                wire_api: WireApi::Responses,
+                overrides: HashMap::new(),
+                models: vec![
+                    ProviderModelEntry {
+                        model_info: ModelInfo {
+                            slug: "test-model".to_string(),
+                            max_output_tokens: Some(4096), // Override
+                            ..Default::default()
+                        },
+                        model_alias: None,
+                        overrides: HashMap::new(),
+                    },
+                    ProviderModelEntry {
+                        model_info: ModelInfo {
+                            slug: "ep-12345".to_string(),
+                            context_window: Some(32000), // Override for this provider
+                            ..Default::default()
+                        },
+                        model_alias: Some("deepseek-r1".to_string()), // Alias
+                        overrides: HashMap::new(),
+                    },
+                ],
                 extra: None,
-            },
-        );
-
-        let mut profiles = HashMap::new();
-        profiles.insert(
-            "default".to_string(),
-            ProfileConfig {
-                provider: "test-provider".to_string(),
-                model: "test-model".to_string(),
-                session_config: None,
             },
         );
 
         ConfigResolver {
             models,
             providers,
-            profiles,
-            default_profile: Some("default".to_string()),
             config_dir: None,
         }
     }
@@ -407,7 +462,7 @@ mod tests {
         assert_eq!(info.id, "test-model");
         assert_eq!(info.display_name, "Test Model");
         assert_eq!(info.context_window, 8192);
-        // Provider override applied
+        // Provider model entry override applied
         assert_eq!(info.max_output_tokens, 4096);
     }
 
@@ -432,7 +487,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(info.id, "ep-12345");
-        // Provider override applied
+        // Model entry override applied
         assert_eq!(info.context_window, 32000);
     }
 
@@ -448,6 +503,8 @@ mod tests {
 
         let config = resolver.resolve_provider("test-provider").unwrap();
         assert_eq!(config.api_key, "env-api-key");
+        assert!(config.streaming);
+        assert_eq!(config.wire_api, WireApi::Responses);
 
         // Clean up
         // SAFETY: This is a test cleanup
@@ -485,20 +542,6 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_profile() {
-        let resolver = create_test_resolver();
-        let profile = resolver.resolve_profile("default").unwrap();
-        assert_eq!(profile.provider, "test-provider");
-        assert_eq!(profile.model, "test-model");
-    }
-
-    #[test]
-    fn test_default_profile() {
-        let resolver = create_test_resolver();
-        assert_eq!(resolver.default_profile(), Some("default"));
-    }
-
-    #[test]
     fn test_list_providers() {
         let resolver = create_test_resolver();
         let providers = resolver.list_providers();
@@ -517,7 +560,6 @@ mod tests {
     fn test_empty_resolver() {
         let resolver = ConfigResolver::empty();
         assert!(resolver.list_providers().is_empty());
-        assert!(resolver.list_profiles().is_empty());
     }
 
     #[test]
@@ -548,6 +590,7 @@ mod tests {
         models.insert(
             "test-model".to_string(),
             ModelInfo {
+                slug: "test-model".to_string(),
                 display_name: Some("Test Model".to_string()),
                 base_instructions_file: Some("instructions.md".to_string()),
                 ..Default::default()
@@ -557,8 +600,6 @@ mod tests {
         let resolver = ConfigResolver {
             models,
             providers: HashMap::new(),
-            profiles: HashMap::new(),
-            default_profile: None,
             config_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -584,6 +625,7 @@ mod tests {
         models.insert(
             "test-model".to_string(),
             ModelInfo {
+                slug: "test-model".to_string(),
                 display_name: Some("Test Model".to_string()),
                 base_instructions: Some("Inline instructions".to_string()),
                 base_instructions_file: Some("instructions.md".to_string()),
@@ -594,8 +636,6 @@ mod tests {
         let resolver = ConfigResolver {
             models,
             providers: HashMap::new(),
-            profiles: HashMap::new(),
-            default_profile: None,
             config_dir: Some(temp_dir.path().to_path_buf()),
         };
 
@@ -613,6 +653,7 @@ mod tests {
         models.insert(
             "test-model".to_string(),
             ModelInfo {
+                slug: "test-model".to_string(),
                 display_name: Some("Test Model".to_string()),
                 base_instructions: Some("Inline instructions".to_string()),
                 base_instructions_file: Some("nonexistent.md".to_string()),
@@ -623,8 +664,6 @@ mod tests {
         let resolver = ConfigResolver {
             models,
             providers: HashMap::new(),
-            profiles: HashMap::new(),
-            default_profile: None,
             config_dir: Some(PathBuf::from("/tmp")),
         };
 
@@ -637,5 +676,150 @@ mod tests {
             info.base_instructions,
             Some("Inline instructions".to_string())
         );
+    }
+
+    #[test]
+    fn test_provider_overrides_applied() {
+        let mut providers = HashMap::new();
+        let mut overrides = HashMap::new();
+        overrides.insert("temperature".to_string(), serde_json::json!(0.8));
+        overrides.insert("max_output_tokens".to_string(), serde_json::json!(8192));
+
+        providers.insert(
+            "test-provider".to_string(),
+            ProviderConfig {
+                name: "Test Provider".to_string(),
+                provider_type: ProviderType::Openai,
+                base_url: "https://api.test.com".to_string(),
+                timeout_secs: 300,
+                env_key: None,
+                api_key: Some("test-key".to_string()),
+                streaming: true,
+                wire_api: WireApi::Responses,
+                overrides,
+                models: vec![ProviderModelEntry::new("test-model")],
+                extra: None,
+            },
+        );
+
+        let resolver = ConfigResolver {
+            models: HashMap::new(),
+            providers,
+            config_dir: None,
+        };
+
+        let info = resolver
+            .resolve_model_info("test-provider", "test-model")
+            .unwrap();
+
+        assert_eq!(info.temperature, Some(0.8));
+        assert_eq!(info.max_output_tokens, 8192);
+    }
+
+    #[test]
+    fn test_model_entry_overrides_provider_overrides() {
+        let mut providers = HashMap::new();
+        let mut provider_overrides = HashMap::new();
+        provider_overrides.insert("temperature".to_string(), serde_json::json!(0.5));
+
+        let mut model_overrides = HashMap::new();
+        model_overrides.insert("temperature".to_string(), serde_json::json!(0.9));
+
+        providers.insert(
+            "test-provider".to_string(),
+            ProviderConfig {
+                name: "Test Provider".to_string(),
+                provider_type: ProviderType::Openai,
+                base_url: "https://api.test.com".to_string(),
+                timeout_secs: 300,
+                env_key: None,
+                api_key: Some("test-key".to_string()),
+                streaming: true,
+                wire_api: WireApi::Responses,
+                overrides: provider_overrides,
+                models: vec![ProviderModelEntry {
+                    model_info: ModelInfo {
+                        slug: "test-model".to_string(),
+                        ..Default::default()
+                    },
+                    model_alias: None,
+                    overrides: model_overrides,
+                }],
+                extra: None,
+            },
+        );
+
+        let resolver = ConfigResolver {
+            models: HashMap::new(),
+            providers,
+            config_dir: None,
+        };
+
+        let info = resolver
+            .resolve_model_info("test-provider", "test-model")
+            .unwrap();
+
+        // Model-level override should take precedence
+        assert_eq!(info.temperature, Some(0.9));
+    }
+
+    #[test]
+    fn test_resolve_provider_with_models() {
+        let resolver = create_test_resolver();
+
+        // Ensure env var is not set (use fallback key)
+        // SAFETY: This is a test cleanup
+        unsafe {
+            env::remove_var("TEST_API_KEY");
+        }
+
+        let provider_info = resolver.resolve_provider("test-provider").unwrap();
+
+        // Check provider fields
+        assert_eq!(provider_info.name, "Test Provider");
+        assert_eq!(provider_info.provider_type, ProviderType::Openai);
+        assert_eq!(provider_info.base_url, "https://api.test.com");
+        assert_eq!(provider_info.api_key, "fallback-key");
+        assert_eq!(provider_info.timeout_secs, 300);
+        assert!(provider_info.streaming);
+        assert_eq!(provider_info.wire_api, WireApi::Responses);
+        assert!(provider_info.has_api_key());
+
+        // Check models are populated
+        assert_eq!(provider_info.models.len(), 2);
+
+        // Check model slugs
+        let slugs = provider_info.model_slugs();
+        assert!(slugs.contains(&"test-model"));
+        assert!(slugs.contains(&"ep-12345"));
+
+        // Check get_model returns ProviderModel
+        let test_model = provider_info.get_model("test-model").unwrap();
+        assert_eq!(test_model.slug(), "test-model");
+        assert_eq!(test_model.info.display_name, Some("Test Model".to_string()));
+        assert_eq!(test_model.info.max_output_tokens, Some(4096)); // Override applied
+        assert!(test_model.model_alias.is_none()); // No alias for this model
+
+        // Check ep-12345 has model_alias
+        let ep_model = provider_info.get_model("ep-12345").unwrap();
+        assert_eq!(ep_model.slug(), "ep-12345");
+        assert_eq!(ep_model.model_alias, Some("deepseek-r1".to_string()));
+        assert_eq!(ep_model.api_model_name(), "deepseek-r1"); // Returns alias
+
+        // Check api_model_name helper on ProviderInfo
+        assert_eq!(
+            provider_info.api_model_name("test-model"),
+            Some("test-model")
+        ); // No alias
+        assert_eq!(
+            provider_info.api_model_name("ep-12345"),
+            Some("deepseek-r1")
+        ); // Has alias
+        assert_eq!(provider_info.api_model_name("nonexistent"), None);
+
+        // Check effective_timeout
+        assert_eq!(provider_info.effective_timeout("test-model"), 300); // Provider default (no model override)
+        assert_eq!(provider_info.effective_timeout("ep-12345"), 300); // Provider default
+        assert_eq!(provider_info.effective_timeout("nonexistent"), 300); // Provider default for unknown
     }
 }

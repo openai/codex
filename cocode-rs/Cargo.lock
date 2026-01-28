@@ -1667,7 +1667,6 @@ dependencies = [
  "snafu",
  "snafu-virtstack",
  "tempfile",
- "toml",
  "tracing",
 ]
 

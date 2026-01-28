@@ -765,17 +765,17 @@ Attachments are processed and inserted in this order:
 
 ## Configuration Constants
 
-| Constant | Value | Description |
-|----------|-------|-------------|
+| Constant | Value  | Description |
+|----------|--------|-------------|
 | `ATTACHMENT_TIMEOUT` | 1000ms | Max time for all attachment generation |
-| `TELEMETRY_SAMPLE_RATE` | 0.05 | 5% sampling for performance monitoring |
-| `TURNS_SINCE_TODO_WRITE` | 5 | Turns before showing todo reminder |
-| `TURNS_BETWEEN_TODO_REMINDERS` | 3 | Turns between todo reminders |
-| `PROGRESS_TURN_THRESHOLD` | 3 | Turns between task progress updates |
-| `FULL_REMINDER_EVERY_N_ATTACHMENTS` | 3 | Full plan mode reminder interval |
-| `MAX_FILE_CONTENT_SIZE` | 40000 | Max content size (40KB) |
-| `MAX_FILE_LINES` | 3000 | Max lines per file |
-| `MAX_IMPORT_DEPTH` | 5 | Max @import recursion depth |
+| `TELEMETRY_SAMPLE_RATE` | 0.05   | 5% sampling for performance monitoring |
+| `TURNS_SINCE_TODO_WRITE` | 5      | Turns before showing todo reminder |
+| `TURNS_BETWEEN_TODO_REMINDERS` | 3      | Turns between todo reminders |
+| `PROGRESS_TURN_THRESHOLD` | 3      | Turns between task progress updates |
+| `FULL_REMINDER_EVERY_N_ATTACHMENTS` | 5      | Full plan mode reminder interval |
+| `MAX_FILE_CONTENT_SIZE` | 40000  | Max content size (40KB) |
+| `MAX_FILE_LINES` | 3000   | Max lines per file |
+| `MAX_IMPORT_DEPTH` | 5      | Max @import recursion depth |
 
 ---
 

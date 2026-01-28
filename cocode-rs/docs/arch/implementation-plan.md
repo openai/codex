@@ -90,12 +90,55 @@ core/context/
 - `PermissionContext` - permission tracking
 - `PermissionMode` - default/plan/bypass
 
+#### 1.4 Create cocode-skill crate
+```
+core/skill/
+├── Cargo.toml
+└── src/
+    ├── lib.rs
+    ├── command.rs      # SkillPromptCommand
+    ├── source.rs       # SkillSource, LoadedFrom enums
+    ├── loader.rs       # Skill loading with fail-open semantics
+    ├── scanner.rs      # SkillScanner with symlink safety
+    ├── validator.rs    # Field validation
+    ├── outcome.rs      # SkillLoadOutcome (partial success)
+    ├── interface.rs    # SkillInterface (SKILL.toml metadata)
+    ├── bundled.rs      # Bundled skills with fingerprinting
+    └── bundled/        # Embedded bundled skills
+        └── ...
+```
+
+**Key types:**
+- `SkillPromptCommand` - unified skill representation
+- `SkillSource` - configuration source (Builtin, Bundled, User, Project, etc.)
+- `SkillLoadOutcome` - partial success with errors collection
+- `SkillScanner` - safe traversal with cycle detection
+- `SkillInterface` - optional UI metadata from SKILL.toml
+
+**Safety features (from codex-rs patterns):**
+- Field length limits (MAX_NAME_LEN, MAX_DESCRIPTION_LEN, etc.)
+- Traversal limits (MAX_SCAN_DEPTH, MAX_SKILLS_DIRS_PER_ROOT)
+- Symlink cycle detection via canonical path tracking
+- Fail-open error handling (one bad skill doesn't break others)
+
+**Bundled skills:**
+- Embedded at build time via `include_dir!`
+- Fingerprint-based update detection
+- Automatic installation to `~/.cocode/skills-bundled/`
+
+**Dependencies:**
+- `include_dir` - embed skill files at build time
+- `sha2` - fingerprint computation
+- `toml` - SKILL.toml parsing
+
 ### Verification
 ```bash
 cargo check -p cocode-message --manifest-path cocode-rs/Cargo.toml
 cargo check -p cocode-tools --manifest-path cocode-rs/Cargo.toml
 cargo check -p cocode-context --manifest-path cocode-rs/Cargo.toml
+cargo check -p cocode-skill --manifest-path cocode-rs/Cargo.toml
 cargo test -p cocode-message --manifest-path cocode-rs/Cargo.toml
+cargo test -p cocode-skill --manifest-path cocode-rs/Cargo.toml
 ```
 
 ## Phase 2: Core Loop
@@ -468,6 +511,11 @@ cocode-rs/tests/fixtures/
 - [ ] cocode-message compiles and tests pass
 - [ ] cocode-tools compiles and tests pass
 - [ ] cocode-context compiles and tests pass
+- [ ] cocode-skill compiles and tests pass
+- [ ] Skill validation (field lengths) works
+- [ ] Skill scanning (depth limits, symlink safety) works
+- [ ] Fail-open skill loading (SkillLoadOutcome) works
+- [ ] Bundled skills install with fingerprint detection
 - [ ] Integration with hyper-sdk verified
 
 ### Milestone 2: Core Loop Working
@@ -527,6 +575,11 @@ cocode-rs/tests/fixtures/
 - `serde` / `serde_json` - Serialization
 - `uuid` - Unique IDs
 - `async-trait` - Async traits
+
+### External (new for Phase 1)
+- `include_dir` - Embed bundled skills at build time
+- `sha2` - Fingerprint computation for bundled skills
+- `toml` - SKILL.toml parsing for interface metadata
 
 ### Internal (existing)
 - `hyper-sdk` - LLM provider abstraction

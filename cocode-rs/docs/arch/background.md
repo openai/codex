@@ -33,6 +33,30 @@ Background mode allows long-running tasks to execute without blocking the main a
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+### Task ID Format Conventions
+
+Task IDs follow a prefix convention for easy identification:
+
+| Task Type | ID Format | Example |
+|-----------|-----------|---------|
+| local_bash | `s` + short UUID | `s4d5e6f` |
+| local_agent | No prefix, full agent ID | `agent_abc123` |
+| remote_agent | `r` + session ID | `r1a2b3c` |
+
+```rust
+pub fn generate_task_id(task_type: TaskType) -> String {
+    match task_type {
+        TaskType::LocalBash => format!("s{}", short_uuid()),
+        TaskType::LocalAgent => format!("agent_{}", uuid::Uuid::new_v4()),
+        TaskType::RemoteAgent => format!("r{}", short_uuid()),
+    }
+}
+
+fn short_uuid() -> String {
+    uuid::Uuid::new_v4().to_string()[..7].to_string()
+}
+```
+
 ## Subagent Background Modes (local_agent)
 
 ### Two Background Patterns
@@ -123,7 +147,7 @@ pub fn aggregate_async_agent_execution(
         let mut all_messages = initial_messages;
         let mut token_count = 0;
         let mut tool_use_count = 0;
-        let mut recent_activities = VecDeque::with_capacity(10);
+        let mut recent_activities = VecDeque::with_capacity(5);
 
         let mut stream = message_generator;
 
@@ -142,7 +166,7 @@ pub fn aggregate_async_agent_execution(
                         Some(LoopEvent::ToolUseCompleted { call_id, .. }) => {
                             tool_use_count += 1;
                             recent_activities.push_back(format!("Tool: {call_id}"));
-                            if recent_activities.len() > 10 {
+                            if recent_activities.len() > 5 {  // Keep last 5 (aligned with Claude Code)
                                 recent_activities.pop_front();
                             }
                         }
@@ -352,7 +376,194 @@ pub async fn execute_background_command(
 
 ## Task State Management
 
-All background tasks share the same AppState tracking:
+All background tasks share the same AppState tracking.
+
+### Unified Tasks System (v2.1.7)
+
+Claude Code v2.1.7 introduces a unified tasks system that consolidates the previously separate `background_shells` and `async_agents` tracking into a single `unified_tasks` abstraction.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              Unified Tasks System (v2.1.7)                       │
+│                                                                  │
+│  Previous (separate tracking):                                   │
+│  ┌─────────────────┐  ┌─────────────────┐                       │
+│  │ background_shells│  │ async_agents    │                       │
+│  │ (Bash commands) │  │ (Subagents)     │                       │
+│  └─────────────────┘  └─────────────────┘                       │
+│                                                                  │
+│  Unified (v2.1.7):                                              │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │                    unified_tasks                             ││
+│  │  ┌───────────┐  ┌───────────┐  ┌───────────┐               ││
+│  │  │local_bash │  │local_agent│  │remote_agent│               ││
+│  │  └───────────┘  └───────────┘  └───────────┘               ││
+│  └─────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Unified Tasks Attachment
+
+The `unified_tasks` attachment replaces separate `background_shells` and `async_agents` attachments:
+
+```rust
+/// Unified tasks attachment for system reminders
+#[derive(Debug, Clone)]
+pub struct UnifiedTasksAttachment {
+    /// All background tasks (shells + agents)
+    pub tasks: Vec<UnifiedTask>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnifiedTask {
+    pub id: String,
+    pub task_type: TaskType,
+    pub status: TaskStatus,
+    pub description: String,
+    pub start_time: SystemTime,
+    /// Recent activities (last 5)
+    pub recent_activities: Vec<String>,
+}
+
+impl UnifiedTasksAttachment {
+    pub fn to_system_reminder(&self) -> String {
+        if self.tasks.is_empty() {
+            return String::new();
+        }
+
+        let task_lines: Vec<String> = self.tasks.iter().map(|t| {
+            format!("- [{}] {} ({}): {}",
+                t.id,
+                t.task_type.as_str(),
+                t.status.as_str(),
+                t.description
+            )
+        }).collect();
+
+        format!("<system-reminder>
+Background tasks:
+{}
+
+Use TaskOutput to check task results. Use TaskStop to terminate running tasks.
+</system-reminder>",
+            task_lines.join("\n")
+        )
+    }
+}
+```
+
+#### Attachment Generation
+
+```rust
+/// Generate unified tasks attachment
+pub async fn generate_unified_tasks(
+    ctx: &ToolContext,
+    conversation_history: &[ConversationMessage],
+) -> Option<UnifiedTasksAttachment> {
+    let app_state = (ctx.get_app_state)();
+
+    // Collect all tasks (shells + agents)
+    let tasks: Vec<UnifiedTask> = app_state.tasks
+        .values()
+        .filter(|t| t.status == TaskStatus::Running || t.status == TaskStatus::Pending)
+        .map(|t| UnifiedTask {
+            id: t.id.clone(),
+            task_type: t.task_type,
+            status: t.status,
+            description: t.description.clone(),
+            start_time: t.start_time,
+            recent_activities: t.progress
+                .as_ref()
+                .map(|p| p.recent_activities.clone())
+                .unwrap_or_default(),
+        })
+        .collect();
+
+    if tasks.is_empty() {
+        return None;
+    }
+
+    Some(UnifiedTasksAttachment { tasks })
+}
+```
+
+### Task Status Restoration After Compact
+
+When context is compacted, task statuses are restored via the unified tasks attachment:
+
+```rust
+/// Restore task context after compaction
+pub fn restore_task_context(
+    compact_result: &CompactResult,
+    app_state: &AppState,
+) -> Vec<ContentBlock> {
+    let mut restoration = Vec::new();
+
+    // Restore running tasks
+    let running_tasks: Vec<_> = app_state.tasks.values()
+        .filter(|t| t.status == TaskStatus::Running)
+        .collect();
+
+    if !running_tasks.is_empty() {
+        let task_summary = running_tasks.iter()
+            .map(|t| format!("- {}: {} ({})", t.id, t.description, t.task_type.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        restoration.push(ContentBlock::text(format!(
+            "## Running Background Tasks\n\n{}\n\n\
+             Use TaskOutput to check progress or results.",
+            task_summary
+        )));
+    }
+
+    restoration
+}
+```
+
+### Invoked Skills Tracking
+
+The unified tasks system also tracks invoked skills, sorted by recency:
+
+```rust
+/// Invoked skills tracking for context restoration
+#[derive(Debug, Clone)]
+pub struct InvokedSkillsAttachment {
+    /// Skills invoked in this session, sorted by recency
+    pub skills: Vec<InvokedSkill>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InvokedSkill {
+    /// Skill name (e.g., "commit", "review-pr")
+    pub name: String,
+    /// Skill file path
+    pub path: PathBuf,
+    /// Skill content preview (first N lines)
+    pub content_preview: String,
+    /// Last invocation timestamp
+    pub last_invoked: SystemTime,
+}
+
+/// Generate invoked skills attachment
+pub fn generate_invoked_skills(ctx: &ToolContext) -> Option<InvokedSkillsAttachment> {
+    let skills = ctx.get_invoked_skills();
+
+    if skills.is_empty() {
+        return None;
+    }
+
+    // Sort by recency (most recent first)
+    let mut sorted_skills: Vec<_> = skills.into_iter().collect();
+    sorted_skills.sort_by(|a, b| b.last_invoked.cmp(&a.last_invoked));
+
+    Some(InvokedSkillsAttachment {
+        skills: sorted_skills,
+    })
+}
+```
+
+### AppState Definition
 
 ```rust
 #[derive(Debug, Clone)]
@@ -365,6 +576,9 @@ pub struct AppState {
 
     /// Queued commands (from tools like AskUserQuestion)
     pub queued_commands: Vec<QueuedCommand>,
+
+    /// Invoked skills (for restoration after compact)
+    pub invoked_skills: Vec<InvokedSkill>,
 }
 
 #[derive(Debug, Clone)]

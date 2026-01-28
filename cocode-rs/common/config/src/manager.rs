@@ -4,21 +4,26 @@
 //! It handles loading, caching, and runtime switching of providers and models.
 
 use crate::builtin;
+use crate::config::Config;
+use crate::config::ConfigOverrides;
 use crate::error::ConfigError;
+use crate::json_config::AppConfig;
+use crate::json_config::LoggingConfig;
 use crate::loader::ConfigLoader;
+use crate::loader::load_instructions;
 use crate::resolver::ConfigResolver;
-use crate::toml_config::ConfigToml;
-use crate::toml_config::LoggingConfig;
-use crate::types::ActiveState;
 use crate::types::ModelSummary;
 use crate::types::ProviderConfig;
 use crate::types::ProviderSummary;
 use crate::types::ProviderType;
 use crate::types::ResolvedModelInfo;
-use crate::types::ResolvedProviderConfig;
-use crate::types::SessionConfigJson;
 use cocode_protocol::Features;
 use cocode_protocol::ModelInfo;
+use cocode_protocol::ProviderInfo;
+use cocode_protocol::SandboxMode;
+use cocode_protocol::model::ModelRole;
+use cocode_protocol::model::ModelSpec;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::RwLock;
@@ -30,12 +35,8 @@ use tracing::info;
 /// These take highest precedence in the layered resolution.
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeOverrides {
-    /// Override provider name.
-    pub model_provider: Option<String>,
-    /// Override model ID.
-    pub model: Option<String>,
-    /// Override profile name.
-    pub profile: Option<String>,
+    /// Override main model (format: "provider/model").
+    pub main: Option<ModelSpec>,
 }
 
 /// Configuration manager for multi-provider setup.
@@ -44,8 +45,7 @@ pub struct RuntimeOverrides {
 /// - Lazy loading from JSON and TOML files
 /// - Caching with manual reload
 /// - Runtime provider/model switching
-/// - Profile support for quick switching
-/// - Layered resolution: Runtime > TOML > Active JSON > Profile > Built-in
+/// - Layered resolution: Runtime > TOML > Built-in
 ///
 /// # Example
 ///
@@ -78,10 +78,8 @@ pub struct ConfigManager {
     loader: ConfigLoader,
     /// Cached resolver.
     resolver: RwLock<ConfigResolver>,
-    /// Current active state (from active.json).
-    active: RwLock<ActiveState>,
-    /// TOML configuration (from config.toml).
-    config_toml: RwLock<ConfigToml>,
+    /// Application configuration (from config.json).
+    config: RwLock<AppConfig>,
     /// Runtime overrides (highest precedence).
     runtime_overrides: RwLock<RuntimeOverrides>,
 }
@@ -109,15 +107,10 @@ impl ConfigManager {
         let config_path = loader.config_dir().to_path_buf();
         let loaded = loader.load_all()?;
 
-        let resolver = ConfigResolver::with_config_dir(
-            loaded.models,
-            loaded.providers,
-            loaded.profiles,
-            &config_path,
-        );
+        let resolver =
+            ConfigResolver::with_config_dir(loaded.models, loaded.providers, &config_path);
 
-        let active = loaded.active;
-        let config_toml = loaded.config_toml;
+        let config = loaded.config;
 
         debug!(
             path = %config_path.display(),
@@ -128,8 +121,7 @@ impl ConfigManager {
             config_path,
             loader,
             resolver: RwLock::new(resolver),
-            active: RwLock::new(active),
-            config_toml: RwLock::new(config_toml),
+            config: RwLock::new(config),
             runtime_overrides: RwLock::new(RuntimeOverrides::default()),
         })
     }
@@ -142,8 +134,7 @@ impl ConfigManager {
             config_path: PathBuf::new(),
             loader: ConfigLoader::from_path(""),
             resolver: RwLock::new(ConfigResolver::empty()),
-            active: RwLock::new(ActiveState::default()),
-            config_toml: RwLock::new(ConfigToml::default()),
+            config: RwLock::new(AppConfig::default()),
             runtime_overrides: RwLock::new(RuntimeOverrides::default()),
         }
     }
@@ -166,8 +157,13 @@ impl ConfigManager {
         resolver.resolve_model_info(provider, model)
     }
 
-    /// Resolve provider configuration.
-    pub fn resolve_provider(&self, provider: &str) -> Result<ResolvedProviderConfig, ConfigError> {
+    /// Resolve provider configuration into a complete `ProviderInfo`.
+    ///
+    /// The returned `ProviderInfo` contains:
+    /// - Resolved API key (from env or config)
+    /// - All connection settings (base_url, streaming, wire_api)
+    /// - Map of resolved models (slug -> ModelInfo)
+    pub fn resolve_provider(&self, provider: &str) -> Result<ProviderInfo, ConfigError> {
         let resolver = self
             .resolver
             .read()
@@ -179,41 +175,36 @@ impl ConfigManager {
     ///
     /// Resolution order (highest to lowest precedence):
     /// 1. Runtime overrides (set via `set_runtime_overrides()`)
-    /// 2. TOML config (`config.toml`)
-    /// 3. Active state (`active.json`)
-    /// 4. Default profile
-    /// 5. Built-in defaults ("openai", "gpt-5")
+    /// 2. JSON config with profile resolution (`config.json`)
+    /// 3. Built-in defaults ("openai", "gpt-5")
     pub fn current(&self) -> (String, String) {
-        // 1. Check runtime overrides first
-        let runtime = self.runtime_overrides.read().unwrap();
-        if let (Some(provider), Some(model)) = (&runtime.model_provider, &runtime.model) {
-            return (provider.clone(), model.clone());
-        }
-        drop(runtime);
+        self.current_for_role(ModelRole::Main)
+    }
 
-        // 2. Check TOML config
-        let toml = self.config_toml.read().unwrap();
-        if let (Some(provider), Some(model)) = (&toml.model_provider, &toml.model) {
-            return (provider.clone(), model.clone());
-        }
-        drop(toml);
-
-        // 3. Check active state (from active.json)
-        let active = self.active.read().unwrap();
-        if let (Some(provider), Some(model)) = (&active.provider, &active.model) {
-            return (provider.clone(), model.clone());
-        }
-        drop(active);
-
-        // 4. Try default profile
-        let resolver = self.resolver.read().unwrap();
-        if let Some(profile_name) = resolver.default_profile() {
-            if let Ok(profile) = resolver.resolve_profile(profile_name) {
-                return (profile.provider.clone(), profile.model.clone());
+    /// Get the current active provider and model for a specific role.
+    ///
+    /// Resolution order (highest to lowest precedence):
+    /// 1. Runtime overrides (for Main role only)
+    /// 2. JSON config with profile resolution (`config.json`)
+    /// 3. Built-in defaults ("openai", "gpt-5")
+    pub fn current_for_role(&self, role: ModelRole) -> (String, String) {
+        // 1. Check runtime overrides first (only for Main role)
+        if role == ModelRole::Main {
+            let runtime = self.runtime_overrides.read().unwrap();
+            if let Some(spec) = &runtime.main {
+                return (spec.provider.clone(), spec.model.clone());
             }
         }
 
-        // 5. Fallback to built-in default
+        // 2. Check JSON config (with profile resolution)
+        let config = self.config.read().unwrap();
+        let resolved = config.resolve();
+        if let Some(spec) = resolved.models.get(role) {
+            return (spec.provider.clone(), spec.model.clone());
+        }
+        drop(config);
+
+        // 3. Fallback to built-in default
         ("openai".to_string(), "gpt-5".to_string())
     }
 
@@ -230,28 +221,24 @@ impl ConfigManager {
         self.runtime_overrides.read().unwrap().clone()
     }
 
-    /// Get the TOML configuration.
-    pub fn config_toml(&self) -> ConfigToml {
-        self.config_toml.read().unwrap().clone()
+    /// Get the application configuration.
+    pub fn app_config(&self) -> AppConfig {
+        self.config.read().unwrap().clone()
     }
 
-    /// Get the logging configuration from TOML.
+    /// Get the logging configuration from config.json.
     ///
     /// Returns `None` if no logging section is configured.
     pub fn logging_config(&self) -> Option<LoggingConfig> {
-        self.config_toml.read().unwrap().logging.clone()
+        self.config.read().unwrap().logging.clone()
     }
 
     /// Get the current features configuration.
     ///
-    /// Combines default features with TOML overrides.
+    /// Combines default features with config overrides and profile overrides.
     pub fn features(&self) -> Features {
-        let toml = self.config_toml.read().unwrap();
-        if let Some(features_toml) = &toml.features {
-            features_toml.clone().into_features()
-        } else {
-            Features::with_defaults()
-        }
+        let config = self.config.read().unwrap();
+        config.resolve().features
     }
 
     /// Check if a specific feature is enabled.
@@ -261,14 +248,10 @@ impl ConfigManager {
         self.features().enabled(feature)
     }
 
-    /// Get the model max output tokens from TOML config.
-    pub fn model_max_output_tokens(&self) -> Option<i32> {
-        self.config_toml.read().unwrap().model_max_output_tokens
-    }
-
     /// Switch to a specific provider and model.
     ///
-    /// This updates the runtime state and persists it to `active.json`.
+    /// This updates the runtime overrides (in-memory only).
+    /// To persist, edit `config.toml` directly.
     pub fn switch(&self, provider: &str, model: &str) -> Result<(), ConfigError> {
         // Validate the provider/model combination
         let resolver = self
@@ -286,74 +269,37 @@ impl ConfigManager {
 
         drop(resolver);
 
-        // Update active state
+        // Update runtime overrides (in-memory)
         {
-            let mut active = self
-                .active
+            let mut runtime = self
+                .runtime_overrides
                 .write()
                 .map_err(|e| ConfigError::io(format!("Failed to acquire write lock: {e}")))?;
 
-            active.provider = Some(provider.to_string());
-            active.model = Some(model.to_string());
-            active.profile = None; // Clear profile when switching directly
-
-            // Persist to disk
-            self.loader.save_active(&active)?;
+            runtime.main = Some(ModelSpec::new(provider, model));
         }
 
         info!(provider = provider, model = model, "Switched to new model");
         Ok(())
     }
 
-    /// Switch to a named profile.
-    ///
-    /// This updates the runtime state and persists it to `active.json`.
-    pub fn switch_profile(&self, profile: &str) -> Result<(), ConfigError> {
-        let resolver = self
-            .resolver
-            .read()
-            .map_err(|e| ConfigError::io(format!("Failed to acquire read lock: {e}")))?;
-
-        let profile_config = resolver.resolve_profile(profile)?;
-        let provider = profile_config.provider.clone();
-        let model = profile_config.model.clone();
-        let session_config = profile_config.session_config.clone();
-
-        drop(resolver);
-
-        // Update active state
-        {
-            let mut active = self
-                .active
-                .write()
-                .map_err(|e| ConfigError::io(format!("Failed to acquire write lock: {e}")))?;
-
-            active.provider = Some(provider.clone());
-            active.model = Some(model.clone());
-            active.profile = Some(profile.to_string());
-            active.session_overrides = session_config;
-
-            // Persist to disk
-            self.loader.save_active(&active)?;
-        }
-
-        info!(
-            profile = profile,
-            provider = provider,
-            model = model,
-            "Switched to profile"
-        );
-        Ok(())
-    }
-
     /// Reload configuration from disk.
     ///
-    /// This reloads all configuration files (JSON and TOML) and updates the cached state.
+    /// This reloads all configuration files (JSON) and updates the cached state.
     /// Note: Runtime overrides are preserved across reloads.
+    ///
+    /// For empty managers (created via `empty()`), this is a no-op.
     pub fn reload(&self) -> Result<(), ConfigError> {
+        // Empty managers have no config files to reload
+        if self.config_path.as_os_str().is_empty() {
+            debug!("Skipping reload for empty manager (no config path)");
+            return Ok(());
+        }
+
         let loaded = self.loader.load_all()?;
 
-        let new_resolver = ConfigResolver::new(loaded.models, loaded.providers, loaded.profiles);
+        let new_resolver =
+            ConfigResolver::with_config_dir(loaded.models, loaded.providers, &self.config_path);
 
         {
             let mut resolver = self
@@ -364,19 +310,11 @@ impl ConfigManager {
         }
 
         {
-            let mut active = self
-                .active
+            let mut config = self
+                .config
                 .write()
                 .map_err(|e| ConfigError::io(format!("Failed to acquire write lock: {e}")))?;
-            *active = loaded.active;
-        }
-
-        {
-            let mut config_toml = self
-                .config_toml
-                .write()
-                .map_err(|e| ConfigError::io(format!("Failed to acquire write lock: {e}")))?;
-            *config_toml = loaded.config_toml;
+            *config = loaded.config;
         }
 
         info!("Reloaded configuration");
@@ -462,28 +400,6 @@ impl ConfigManager {
         summaries
     }
 
-    /// List all configured profiles.
-    pub fn list_profiles(&self) -> Vec<String> {
-        let resolver = self.resolver.read().unwrap();
-        resolver
-            .list_profiles()
-            .into_iter()
-            .map(String::from)
-            .collect()
-    }
-
-    /// Get the default profile name.
-    pub fn default_profile(&self) -> Option<String> {
-        let resolver = self.resolver.read().unwrap();
-        resolver.default_profile().map(String::from)
-    }
-
-    /// Get session config for current active state.
-    pub fn current_session_config(&self) -> Option<SessionConfigJson> {
-        let active = self.active.read().unwrap();
-        active.session_overrides.clone()
-    }
-
     /// Check if a provider is available (configured or built-in).
     pub fn has_provider(&self, name: &str) -> bool {
         let resolver = self.resolver.read().unwrap();
@@ -507,6 +423,115 @@ impl ConfigManager {
             .cloned()
             .or_else(|| builtin::get_model_defaults(id))
     }
+
+    /// Build a complete Config snapshot from current state.
+    ///
+    /// This method creates a complete runtime configuration snapshot that includes:
+    /// - All resolved model roles
+    /// - All available providers with resolved API keys
+    /// - Features from config with defaults applied
+    /// - Paths (cwd, cocode_home)
+    /// - User instructions from AGENTS.md
+    /// - Sandbox configuration
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use cocode_config::{ConfigManager, ConfigOverrides};
+    /// use cocode_protocol::model::ModelRole;
+    ///
+    /// # fn example() -> Result<(), cocode_config::error::ConfigError> {
+    /// let manager = ConfigManager::from_default()?;
+    /// let config = manager.build_config(ConfigOverrides::default())?;
+    ///
+    /// // Access main model
+    /// if let Some(main) = config.main_model_info() {
+    ///     println!("Main: {} ({})", main.display_name, main.context_window);
+    /// }
+    ///
+    /// // Access fast model (falls back to main if not configured)
+    /// if let Some(fast) = config.model_for_role(ModelRole::Fast) {
+    ///     println!("Fast: {}", fast.display_name);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn build_config(&self, overrides: ConfigOverrides) -> Result<Config, ConfigError> {
+        // Get resolved app config (with profile applied)
+        let app_config = self.config.read().unwrap();
+        let resolved = app_config.resolve();
+
+        // Merge model overrides
+        let mut models = resolved.models.clone();
+        if let Some(override_models) = &overrides.models {
+            models.merge(override_models);
+        }
+
+        // Resolve all configured roles -> ResolvedModelInfo
+        let mut resolved_models = HashMap::new();
+        for role in ModelRole::all() {
+            if let Some(spec) = models.get(*role) {
+                if let Ok(info) = self.resolve_model_info(&spec.provider, &spec.model) {
+                    resolved_models.insert(*role, info);
+                }
+            }
+        }
+
+        // Resolve all providers
+        let mut providers = HashMap::new();
+        for summary in self.list_providers() {
+            if let Ok(info) = self.resolve_provider(&summary.name) {
+                providers.insert(summary.name.clone(), info);
+            }
+        }
+
+        // Determine cwd
+        let cwd = overrides
+            .cwd
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+        // Load instructions from cwd
+        let user_instructions = overrides
+            .user_instructions
+            .or_else(|| load_instructions(&cwd));
+
+        // Apply feature overrides
+        let mut features = resolved.features.clone();
+        if !overrides.features.is_empty() {
+            features.apply_map(
+                &overrides
+                    .features
+                    .iter()
+                    .map(|(k, v)| (k.clone(), *v))
+                    .collect(),
+            );
+        }
+
+        // Build writable roots (default to cwd if WorkspaceWrite)
+        let sandbox_mode = overrides.sandbox_mode.unwrap_or_default();
+        let writable_roots = overrides.writable_roots.unwrap_or_else(|| {
+            if sandbox_mode == SandboxMode::WorkspaceWrite {
+                vec![cwd.clone()]
+            } else {
+                Vec::new()
+            }
+        });
+
+        Ok(Config {
+            models,
+            providers,
+            resolved_models,
+            cwd,
+            cocode_home: self.config_path.clone(),
+            user_instructions,
+            features,
+            logging: resolved.logging,
+            active_profile: app_config.profile.clone(),
+            ephemeral: overrides.ephemeral.unwrap_or(false),
+            sandbox_mode,
+            writable_roots,
+        })
+    }
 }
 
 /// Suggest default models based on provider type.
@@ -527,8 +552,7 @@ impl Clone for ConfigManager {
             config_path: self.config_path.clone(),
             loader: ConfigLoader::from_path(&self.config_path),
             resolver: RwLock::new(self.resolver.read().unwrap().clone()),
-            active: RwLock::new(self.active.read().unwrap().clone()),
-            config_toml: RwLock::new(self.config_toml.read().unwrap().clone()),
+            config: RwLock::new(self.config.read().unwrap().clone()),
             runtime_overrides: RwLock::new(self.runtime_overrides.read().unwrap().clone()),
         }
     }
@@ -537,47 +561,34 @@ impl Clone for ConfigManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::loader::CONFIG_FILE;
     use tempfile::TempDir;
 
     fn create_test_manager() -> (TempDir, ConfigManager) {
         let temp_dir = TempDir::new().unwrap();
 
-        // Create test config files
-        let providers_json = r#"{
-            "version": "1.0",
-            "providers": {
-                "test-openai": {
-                    "name": "Test OpenAI",
-                    "type": "openai",
-                    "api_key": "test-key",
-                    "default_model": "gpt-5",
-                    "models": {
-                        "gpt-5": {},
-                        "gpt-5-mini": {}
-                    }
-                }
+        // Create test config files (new list format for *provider.json)
+        let providers_json = r#"[
+            {
+                "name": "test-openai",
+                "type": "openai",
+                "base_url": "https://api.openai.com/v1",
+                "api_key": "test-key",
+                "models": [
+                    {"slug": "gpt-5"},
+                    {"slug": "gpt-5-mini"}
+                ]
             }
-        }"#;
-        std::fs::write(temp_dir.path().join("providers.json"), providers_json).unwrap();
+        ]"#;
+        std::fs::write(temp_dir.path().join("provider.json"), providers_json).unwrap();
 
-        let profiles_json = r#"{
-            "version": "1.0",
-            "default_profile": "default",
-            "profiles": {
-                "default": {
-                    "provider": "test-openai",
-                    "model": "gpt-5"
-                },
-                "fast": {
-                    "provider": "test-openai",
-                    "model": "gpt-5-mini",
-                    "session_config": {
-                        "temperature": 0.5
-                    }
-                }
+        // Create config.json
+        let config_json = r#"{
+            "models": {
+                "main": "test-openai/gpt-5"
             }
         }"#;
-        std::fs::write(temp_dir.path().join("profiles.json"), profiles_json).unwrap();
+        std::fs::write(temp_dir.path().join(CONFIG_FILE), config_json).unwrap();
 
         let manager = ConfigManager::from_path(temp_dir.path()).unwrap();
         (temp_dir, manager)
@@ -599,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn test_current_from_default_profile() {
+    fn test_current_from_config() {
         let (_temp, manager) = create_test_manager();
         let (provider, model) = manager.current();
         assert_eq!(provider, "test-openai");
@@ -614,28 +625,6 @@ mod tests {
         let (provider, model) = manager.current();
         assert_eq!(provider, "test-openai");
         assert_eq!(model, "gpt-5-mini");
-    }
-
-    #[test]
-    fn test_switch_profile() {
-        let (_temp, manager) = create_test_manager();
-
-        manager.switch_profile("fast").unwrap();
-        let (provider, model) = manager.current();
-        assert_eq!(provider, "test-openai");
-        assert_eq!(model, "gpt-5-mini");
-
-        // Should also have session config
-        let session = manager.current_session_config();
-        assert!(session.is_some());
-        assert_eq!(session.unwrap().temperature, Some(0.5));
-    }
-
-    #[test]
-    fn test_switch_nonexistent_profile() {
-        let (_temp, manager) = create_test_manager();
-        let result = manager.switch_profile("nonexistent");
-        assert!(result.is_err());
     }
 
     #[test]
@@ -668,34 +657,25 @@ mod tests {
     }
 
     #[test]
-    fn test_list_profiles() {
-        let (_temp, manager) = create_test_manager();
-
-        let profiles = manager.list_profiles();
-        assert!(profiles.contains(&"default".to_string()));
-        assert!(profiles.contains(&"fast".to_string()));
-    }
-
-    #[test]
     fn test_reload() {
         let (temp_dir, manager) = create_test_manager();
 
         // Modify config
-        let new_profiles = r#"{
-            "version": "1.0",
-            "default_profile": "new-default",
-            "profiles": {
-                "new-default": {
-                    "provider": "test-openai",
-                    "model": "gpt-5-mini"
-                }
+        let new_config_json = r#"{
+            "models": {
+                "main": "test-openai/gpt-5-mini"
             }
         }"#;
-        std::fs::write(temp_dir.path().join("profiles.json"), new_profiles).unwrap();
+        std::fs::write(temp_dir.path().join(CONFIG_FILE), new_config_json).unwrap();
 
         manager.reload().unwrap();
 
-        assert_eq!(manager.default_profile(), Some("new-default".to_string()));
+        // Reset runtime overrides to use JSON config
+        manager.set_runtime_overrides(RuntimeOverrides::default());
+
+        let (provider, model) = manager.current();
+        assert_eq!(provider, "test-openai");
+        assert_eq!(model, "gpt-5-mini");
     }
 
     #[test]
@@ -718,15 +698,165 @@ mod tests {
     }
 
     #[test]
-    fn test_persist_active_state() {
+    fn test_runtime_switch_is_in_memory() {
         let (temp_dir, manager) = create_test_manager();
 
         manager.switch("test-openai", "gpt-5-mini").unwrap();
-
-        // Create new manager and verify state persisted
-        let manager2 = ConfigManager::from_path(temp_dir.path()).unwrap();
-        let (provider, model) = manager2.current();
+        let (provider, model) = manager.current();
         assert_eq!(provider, "test-openai");
         assert_eq!(model, "gpt-5-mini");
+
+        // Create new manager - switch should NOT persist (in-memory only)
+        let manager2 = ConfigManager::from_path(temp_dir.path()).unwrap();
+        let (provider2, model2) = manager2.current();
+        // Should fall back to JSON config
+        assert_eq!(provider2, "test-openai");
+        assert_eq!(model2, "gpt-5"); // Default from config.json, not gpt-5-mini
+    }
+
+    // ==========================================================
+    // Tests for build_config
+    // ==========================================================
+
+    #[test]
+    fn test_build_config_basic() {
+        let (_temp, manager) = create_test_manager();
+
+        let config = manager.build_config(ConfigOverrides::default()).unwrap();
+
+        // Should have main model resolved
+        assert!(config.main_model_info().is_some());
+        let main = config.main_model_info().unwrap();
+        assert_eq!(main.id, "gpt-5");
+        assert_eq!(main.display_name, "GPT-5");
+
+        // Should have providers resolved
+        assert!(config.providers.contains_key("test-openai"));
+
+        // Should have default sandbox mode
+        assert_eq!(config.sandbox_mode, SandboxMode::default());
+        assert!(!config.ephemeral);
+    }
+
+    #[test]
+    fn test_build_config_with_overrides() {
+        let (_temp, manager) = create_test_manager();
+
+        let overrides = ConfigOverrides::new()
+            .with_cwd("/custom/path")
+            .with_sandbox_mode(SandboxMode::WorkspaceWrite)
+            .with_ephemeral(true);
+
+        let config = manager.build_config(overrides).unwrap();
+
+        assert_eq!(config.cwd, PathBuf::from("/custom/path"));
+        assert_eq!(config.sandbox_mode, SandboxMode::WorkspaceWrite);
+        assert!(config.ephemeral);
+
+        // Default writable root should be cwd for WorkspaceWrite
+        assert!(
+            config
+                .writable_roots
+                .contains(&PathBuf::from("/custom/path"))
+        );
+    }
+
+    #[test]
+    fn test_build_config_with_custom_writable_roots() {
+        let (_temp, manager) = create_test_manager();
+
+        let overrides = ConfigOverrides::new()
+            .with_sandbox_mode(SandboxMode::WorkspaceWrite)
+            .with_writable_roots(vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+
+        let config = manager.build_config(overrides).unwrap();
+
+        assert_eq!(config.writable_roots.len(), 2);
+        assert!(config.writable_roots.contains(&PathBuf::from("/a")));
+        assert!(config.writable_roots.contains(&PathBuf::from("/b")));
+    }
+
+    #[test]
+    fn test_build_config_role_fallback() {
+        let (_temp, manager) = create_test_manager();
+
+        let config = manager.build_config(ConfigOverrides::default()).unwrap();
+
+        // Fast role should fall back to main
+        let fast = config.model_for_role(ModelRole::Fast);
+        assert!(fast.is_some());
+        assert_eq!(fast.unwrap().id, "gpt-5"); // Falls back to main
+
+        // Vision role should also fall back to main
+        let vision = config.model_for_role(ModelRole::Vision);
+        assert!(vision.is_some());
+        assert_eq!(vision.unwrap().id, "gpt-5");
+    }
+
+    #[test]
+    fn test_build_config_empty_manager() {
+        let manager = ConfigManager::empty();
+        let config = manager.build_config(ConfigOverrides::default()).unwrap();
+
+        // Empty manager has no main model configured, so resolved_models is empty
+        assert!(config.main_model_info().is_none());
+        assert!(config.models.is_empty());
+    }
+
+    #[test]
+    fn test_build_config_with_user_instructions() {
+        let (_temp, manager) = create_test_manager();
+
+        let overrides =
+            ConfigOverrides::new().with_user_instructions("Custom instructions for testing");
+
+        let config = manager.build_config(overrides).unwrap();
+
+        assert_eq!(
+            config.user_instructions,
+            Some("Custom instructions for testing".to_string())
+        );
+    }
+
+    #[test]
+    fn test_build_config_feature_overrides() {
+        let (_temp, manager) = create_test_manager();
+
+        let overrides = ConfigOverrides::new().with_feature("subagent", true);
+
+        let config = manager.build_config(overrides).unwrap();
+
+        assert!(config.is_feature_enabled(cocode_protocol::Feature::Subagent));
+    }
+
+    #[test]
+    fn test_build_config_provider_for_role() {
+        let (_temp, manager) = create_test_manager();
+
+        let config = manager.build_config(ConfigOverrides::default()).unwrap();
+
+        // Main role should have provider
+        let provider = config.provider_for_role(ModelRole::Main);
+        assert!(provider.is_some());
+        assert_eq!(provider.unwrap().name, "test-openai");
+    }
+
+    #[test]
+    fn test_build_config_with_model_overrides() {
+        use cocode_protocol::model::ModelRoles;
+        use cocode_protocol::model::ModelSpec;
+
+        let (_temp_dir, manager) = create_test_manager();
+
+        // First create the model roles override
+        let mut models = ModelRoles::default();
+        models.set(ModelRole::Main, ModelSpec::new("test-openai", "gpt-5-mini"));
+        let overrides = ConfigOverrides::new().with_models(models);
+
+        let config = manager.build_config(overrides).unwrap();
+
+        // Main model should be the overridden one
+        let main = config.main_model().unwrap();
+        assert_eq!(main.model, "gpt-5-mini");
     }
 }
