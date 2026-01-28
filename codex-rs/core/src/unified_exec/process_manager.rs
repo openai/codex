@@ -483,7 +483,10 @@ impl UnifiedExecProcessManager {
         cwd: PathBuf,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
-        let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
+        let env = apply_unified_exec_env(create_env(
+            &context.turn.shell_environment_policy,
+            Some(context.session.conversation_id),
+        ));
         let features = context.session.features();
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(self);
