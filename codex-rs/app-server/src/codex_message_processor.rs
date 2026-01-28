@@ -169,6 +169,7 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_core::state_db::{self};
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
@@ -1609,6 +1610,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_archive(&mut self, request_id: RequestId, params: ThreadArchiveParams) {
+        // TODO(jif) mostly rewrite this using sqlite after phase 1
         let thread_id = match ThreadId::from_string(&params.thread_id) {
             Ok(id) => id,
             Err(err) => {
@@ -1658,6 +1660,7 @@ impl CodexMessageProcessor {
     }
 
     async fn thread_unarchive(&mut self, request_id: RequestId, params: ThreadUnarchiveParams) {
+        // TODO(jif) mostly rewrite this using sqlite after phase 1
         let thread_id = match ThreadId::from_string(&params.thread_id) {
             Ok(id) => id,
             Err(err) => {
@@ -1700,6 +1703,7 @@ impl CodexMessageProcessor {
 
         let rollout_path_display = archived_path.display().to_string();
         let fallback_provider = self.config.model_provider_id.clone();
+        let state_db_ctx = state_db::init_if_enabled(&self.config, None).await;
         let archived_folder = self
             .config
             .codex_home
@@ -1778,6 +1782,11 @@ impl CodexMessageProcessor {
                     message: format!("failed to unarchive thread: {err}"),
                     data: None,
                 })?;
+            if let Some(ctx) = state_db_ctx {
+                let _ = ctx
+                    .mark_unarchived(thread_id, restored_path.as_path())
+                    .await;
+            }
             let summary =
                 read_summary_from_rollout(restored_path.as_path(), fallback_provider.as_str())
                     .await
@@ -2507,7 +2516,6 @@ impl CodexMessageProcessor {
         };
 
         let fallback_provider = self.config.model_provider_id.as_str();
-
         match read_summary_from_rollout(&path, fallback_provider).await {
             Ok(summary) => {
                 let response = GetConversationSummaryResponse { summary };
@@ -3530,8 +3538,13 @@ impl CodexMessageProcessor {
             });
         }
 
+        let mut state_db_ctx = None;
+
         // If the thread is active, request shutdown and wait briefly.
         if let Some(conversation) = self.thread_manager.remove_thread(&thread_id).await {
+            if let Some(ctx) = conversation.state_db() {
+                state_db_ctx = Some(ctx);
+            }
             info!("thread {thread_id} was active; shutting down");
             // Request shutdown.
             match conversation.submit(Op::Shutdown).await {
@@ -3558,14 +3571,24 @@ impl CodexMessageProcessor {
             }
         }
 
+        if state_db_ctx.is_none() {
+            state_db_ctx = state_db::init_if_enabled(&self.config, None).await;
+        }
+
         // Move the rollout file to archived.
-        let result: std::io::Result<()> = async {
+        let result: std::io::Result<()> = async move {
             let archive_folder = self
                 .config
                 .codex_home
                 .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
             tokio::fs::create_dir_all(&archive_folder).await?;
-            tokio::fs::rename(&canonical_rollout_path, &archive_folder.join(&file_name)).await?;
+            let archived_path = archive_folder.join(&file_name);
+            tokio::fs::rename(&canonical_rollout_path, &archived_path).await?;
+            if let Some(ctx) = state_db_ctx {
+                let _ = ctx
+                    .mark_archived(thread_id, archived_path.as_path(), Utc::now())
+                    .await;
+            }
             Ok(())
         }
         .await;
