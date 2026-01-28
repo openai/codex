@@ -24,8 +24,6 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
-#[cfg(test)]
-use std::thread::JoinHandle;
 use std::time::Duration;
 use tokio::process::Command;
 
@@ -114,10 +112,6 @@ pub trait SessionReporter: Send + Sync + 'static {
 
 pub struct FileSearchSession {
     inner: Arc<SessionInner>,
-    #[cfg(test)]
-    walker_handle: Mutex<Option<JoinHandle<()>>>,
-    #[cfg(test)]
-    matcher_handle: Mutex<Option<JoinHandle<anyhow::Result<()>>>>,
 }
 
 impl FileSearchSession {
@@ -127,15 +121,6 @@ impl FileSearchSession {
             .inner
             .work_tx
             .send(WorkSignal::QueryUpdated(pattern_text.to_string()));
-    }
-
-    #[cfg(test)]
-    fn join(&self) -> anyhow::Result<()> {
-        let walker_handle = self.walker_handle.lock().unwrap().take().unwrap();
-        let matcher_handle = self.matcher_handle.lock().unwrap().take().unwrap();
-        walker_handle.join().unwrap();
-        let _ = matcher_handle.join().unwrap();
-        Ok(())
     }
 }
 
@@ -198,24 +183,12 @@ fn create_session_inner(
     });
 
     let matcher_inner = inner.clone();
-    let matcher_handle = thread::spawn(move || matcher_worker(matcher_inner, work_rx, nucleo));
+    thread::spawn(move || matcher_worker(matcher_inner, work_rx, nucleo));
 
     let walker_inner = inner.clone();
-    let walker_handle =
-        thread::spawn(move || walker_worker(walker_inner, override_matcher, injector));
-    #[cfg(not(test))]
-    {
-        let _ = walker_handle;
-        let _ = matcher_handle;
-    }
+    thread::spawn(move || walker_worker(walker_inner, override_matcher, injector));
 
-    Ok(FileSearchSession {
-        inner,
-        #[cfg(test)]
-        walker_handle: Mutex::new(Some(walker_handle)),
-        #[cfg(test)]
-        matcher_handle: Mutex::new(Some(matcher_handle)),
-    })
+    Ok(FileSearchSession { inner })
 }
 
 pub trait Reporter {
@@ -709,10 +682,6 @@ mod tests {
             }
             let (updates, _) = self.update_cv.wait_timeout(updates, timeout).unwrap();
             updates.len() >= min_len
-        }
-
-        fn complete_times(&self) -> Vec<Instant> {
-            self.complete_times.lock().unwrap().clone()
         }
 
         fn snapshot(&self) -> FileSearchSnapshot {
