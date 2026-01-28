@@ -31,6 +31,7 @@ pub(crate) struct PromptSuggestionsView {
     suggestion: Option<String>,
     origin: PromptSuggestionOrigin,
     context: PromptSuggestionContext,
+    history_depth_override: Option<u32>,
     enabled: bool,
     auto_run_enabled: bool,
     app_event_tx: AppEventSender,
@@ -42,6 +43,7 @@ impl PromptSuggestionsView {
         suggestion: Option<PromptSuggestionEvent>,
         enabled: bool,
         auto_run_enabled: bool,
+        history_depth_override: Option<u32>,
         app_event_tx: AppEventSender,
     ) -> Self {
         let (suggestion, origin, context) = match suggestion {
@@ -56,11 +58,37 @@ impl PromptSuggestionsView {
             suggestion,
             origin,
             context,
+            history_depth_override,
             enabled,
             auto_run_enabled,
             app_event_tx,
             complete: false,
         }
+    }
+
+    fn update_history_depth_override(&mut self, history_depth: Option<u32>) {
+        if self.history_depth_override == history_depth {
+            return;
+        }
+        self.history_depth_override = history_depth;
+        self.app_event_tx
+            .send(AppEvent::UpdatePromptSuggestionHistoryDepth(history_depth));
+    }
+
+    fn adjust_history_depth(&mut self, delta: i32) {
+        let current = self.history_depth_override.unwrap_or(0);
+        let updated = if delta >= 0 {
+            current.saturating_add(delta as u32)
+        } else {
+            current.saturating_sub(delta.unsigned_abs())
+        };
+        let next = (updated > 0).then_some(updated);
+        self.update_history_depth_override(next);
+    }
+
+    fn set_history_depth_digit(&mut self, digit: u32) {
+        let next = (digit > 0).then_some(digit);
+        self.update_history_depth_override(next);
     }
 
     fn suggestion_text(&self) -> Option<&str> {
@@ -134,9 +162,14 @@ impl PromptSuggestionsView {
             }
             PromptSuggestionContext::Unknown => "Unknown".to_string(),
         };
+        let next_context = match self.history_depth_override {
+            Some(depth) => format!("History (last {depth} user turns)"),
+            None => "Last assistant response".to_string(),
+        };
         vec![
             Line::from(vec!["Origin: ".dim(), origin.into()]),
             Line::from(vec!["Context: ".dim(), context.into()]),
+            Line::from(vec!["Next context: ".dim(), next_context.into()]),
         ]
     }
 
@@ -233,6 +266,33 @@ impl BottomPaneView for PromptSuggestionsView {
                 self.toggle_auto_run();
             }
             KeyEvent {
+                code: KeyCode::Char('+'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('='),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.adjust_history_depth(1);
+            }
+            KeyEvent {
+                code: KeyCode::Char('-'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.adjust_history_depth(-1);
+            }
+            KeyEvent {
+                code: KeyCode::Char(digit),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if digit.is_ascii_digit() => {
+                let value = digit.to_digit(10).unwrap_or(0);
+                self.set_history_depth_digit(value);
+            }
+            KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
                 self.on_ctrl_c();
@@ -310,6 +370,12 @@ fn prompt_suggestions_hint_line(enabled: bool, has_suggestion: bool) -> Line<'st
     spans.push(if enabled { " toggle / " } else { " enable / " }.into());
     spans.push(key_hint::plain(KeyCode::Char('a')).into());
     spans.push(" auto-run / ".into());
+    spans.push("0-9".dim().into());
+    spans.push(" depth / ".into());
+    spans.push(key_hint::plain(KeyCode::Char('+')).into());
+    spans.push(" / ".into());
+    spans.push(key_hint::plain(KeyCode::Char('-')).into());
+    spans.push(" adjust / ".into());
     spans.push(key_hint::plain(KeyCode::Esc).into());
     spans.push(" dismiss".into());
     Line::from(spans)

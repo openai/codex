@@ -385,6 +385,7 @@ pub(crate) struct ChatWidget {
     task_complete_pending: bool,
     last_completed_turn_id: Option<String>,
     latest_prompt_suggestion: Option<PromptSuggestionEvent>,
+    prompt_suggestion_history_depth: Option<u32>,
     background_terminals_state: Arc<Mutex<BackgroundTerminalsState>>,
     /// Tracks whether codex-core currently considers an agent turn to be in progress.
     ///
@@ -769,6 +770,11 @@ impl ChatWidget {
         debug!("auto-running prompt suggestion");
         self.submit_prompt_suggestion(suggestion.suggestion.clone());
         true
+    }
+
+    pub(crate) fn set_prompt_suggestion_history_depth(&mut self, history_depth: Option<u32>) {
+        self.prompt_suggestion_history_depth = history_depth;
+        self.request_redraw();
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -1644,6 +1650,7 @@ impl ChatWidget {
             task_complete_pending: false,
             last_completed_turn_id: None,
             latest_prompt_suggestion: None,
+            prompt_suggestion_history_depth: None,
             background_terminals_state: Arc::new(Mutex::new(BackgroundTerminalsState::new())),
             agent_turn_running: false,
             mcp_startup_status: None,
@@ -1745,6 +1752,7 @@ impl ChatWidget {
             task_complete_pending: false,
             last_completed_turn_id: None,
             latest_prompt_suggestion: None,
+            prompt_suggestion_history_depth: None,
             background_terminals_state: Arc::new(Mutex::new(BackgroundTerminalsState::new())),
             agent_turn_running: false,
             mcp_startup_status: None,
@@ -3241,6 +3249,7 @@ impl ChatWidget {
             suggestion,
             enabled,
             auto_run_enabled,
+            self.prompt_suggestion_history_depth,
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));

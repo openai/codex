@@ -219,10 +219,12 @@ enabled):
 - `Tab` prefills the suggestion into the textarea for editing.
 - `T` toggles prompt suggestions on or off.
 - `A` toggles auto-run mode.
+- `0-9` sets the history depth used for future suggestions (0 = last assistant only).
+- `+` / `-` increment or decrement the history depth.
 - `Esc` dismisses the pane.
 - The pane also shows metadata for each suggestion: its origin (LLM) and the context used to
-  generate it (last assistant response vs history depth); if metadata is missing it is shown as
-  `Unknown`.
+  generate it (last assistant response vs history depth), plus the next context setting derived
+  from the history depth override; if metadata is missing it is shown as `Unknown`.
 
 You can also open the pane manually with `/suggestions`. The pane shows the most recent suggestion
 when one is available; when auto-run is enabled, the pane does not auto-open but remains available

@@ -1515,6 +1515,26 @@ impl App {
             AppEvent::PrefillPromptSuggestion(text) => {
                 self.chat_widget.prefill_prompt_suggestion(text);
             }
+            AppEvent::UpdatePromptSuggestionHistoryDepth(history_depth) => {
+                self.chat_widget
+                    .set_prompt_suggestion_history_depth(history_depth);
+                self.chat_widget.submit_op(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    windows_sandbox_level: None,
+                    model: None,
+                    subagent_model: None,
+                    subagent_effort: None,
+                    effort: None,
+                    summary: None,
+                    max_output_tokens: None,
+                    history_depth: Some(history_depth.unwrap_or(0)),
+                    collaboration_mode: None,
+                    personality: None,
+                    disallowed_tools: None,
+                });
+            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);

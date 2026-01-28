@@ -94,6 +94,9 @@ pub(crate) enum AppEvent {
     /// Prefill the composer with a prompt suggestion for editing.
     PrefillPromptSuggestion(String),
 
+    /// Update the history depth used for prompt suggestions in this session.
+    UpdatePromptSuggestionHistoryDepth(Option<u32>),
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     StartCommitAnimation,

@@ -532,6 +532,10 @@ pub(crate) struct SessionConfiguration {
 }
 
 impl SessionConfiguration {
+    fn normalize_history_depth(history_depth: u32) -> Option<u32> {
+        (history_depth > 0).then_some(history_depth)
+    }
+
     fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         ThreadConfigSnapshot {
             model: self.collaboration_mode.model().to_string(),
@@ -572,7 +576,7 @@ impl SessionConfiguration {
             next_configuration.max_output_tokens = Some(max_output_tokens);
         }
         if let Some(history_depth) = updates.history_depth {
-            next_configuration.history_depth = Some(history_depth);
+            next_configuration.history_depth = Self::normalize_history_depth(history_depth);
         }
         if let Some(disallowed_tools) = updates.disallowed_tools.clone() {
             let mut updated_config = (*next_configuration.original_config_do_not_use).clone();
@@ -1217,7 +1221,8 @@ impl Session {
             turn_context.max_output_tokens = Some(max_output_tokens);
         }
         if let Some(history_depth) = overrides.history_depth {
-            turn_context.history_depth = Some(history_depth);
+            turn_context.history_depth =
+                SessionConfiguration::normalize_history_depth(history_depth);
         }
         Arc::new(turn_context)
     }
