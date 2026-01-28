@@ -175,11 +175,6 @@ jobs:
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS=" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
-          echo "CARGO_PROFILE_DEV_RUSTFLAGS=" >> "$GITHUB_ENV"
-          echo "CARGO_PROFILE_RELEASE_RUSTFLAGS=" >> "$GITHUB_ENV"
-          echo "CARGO_PROFILE_TEST_RUSTFLAGS=" >> "$GITHUB_ENV"
-          echo "CARGO_PROFILE_BENCH_RUSTFLAGS=" >> "$GITHUB_ENV"
-          echo "CARGO_PROFILE_CI_TEST_RUSTFLAGS=" >> "$GITHUB_ENV"
 
           sanitize_flags() {
             local input="$1"
@@ -199,9 +194,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          env | sort | rg -i 'rustflags|sanit|ubsan|cflags|cxxflags|rustc_wrapper|rustc_workspace_wrapper' || true
+          env | sort | grep -Ei 'rustflags|sanit|ubsan|cflags|cxxflags|rustc_wrapper|rustc_workspace_wrapper' || true
           if command -v ldconfig >/dev/null 2>&1; then
-            ldconfig -p | rg -i 'libubsan' || true
+            ldconfig -p | grep -Ei 'libubsan' || true
           fi
 
       - name: Cargo build
