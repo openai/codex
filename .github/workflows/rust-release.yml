@@ -20,15 +20,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Install UBSan runtime (Linux)
-        if: ${{ runner.os == 'Linux' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if command -v apt-get >/dev/null 2>&1; then
-            sudo apt-get update -y
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
-          fi
       - uses: dtolnay/rust-toolchain@1.92
       - name: Validate tag matches Cargo.toml version
         shell: bash
@@ -98,8 +89,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-      - name: Install UBSan runtime (Linux)
-        if: ${{ runner.os == 'Linux' }}
+      - name: Install UBSan runtime (musl)
+        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -199,16 +190,6 @@ jobs:
           cxxflags="$(sanitize_flags "${CXXFLAGS-}")"
           echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
           echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
-
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
-        name: Debug sanitizer inputs (musl)
-        shell: bash
-        run: |
-          set -euo pipefail
-          env | sort | grep -Ei 'rustflags|sanit|ubsan|cflags|cxxflags|rustc_wrapper|rustc_workspace_wrapper' || true
-          if command -v ldconfig >/dev/null 2>&1; then
-            ldconfig -p | grep -Ei 'libubsan' || true
-          fi
 
       - name: Cargo build
         shell: bash
