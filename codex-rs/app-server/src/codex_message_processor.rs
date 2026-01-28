@@ -1784,7 +1784,7 @@ impl CodexMessageProcessor {
                 })?;
             if let Some(ctx) = state_db_ctx {
                 let _ = ctx
-                    .mark_archived(thread_id, restored_path.as_path(), Utc::now())
+                    .mark_unarchived(thread_id, restored_path.as_path())
                     .await;
             }
             let summary =
@@ -3585,7 +3585,9 @@ impl CodexMessageProcessor {
             let archived_path = archive_folder.join(&file_name);
             tokio::fs::rename(&canonical_rollout_path, &archived_path).await?;
             if let Some(ctx) = state_db_ctx {
-                let _ = ctx.mark_archived(thread_id, rollout_path, Utc::now()).await;
+                let _ = ctx
+                    .mark_archived(thread_id, archived_path.as_path(), Utc::now())
+                    .await;
             }
             Ok(())
         }
