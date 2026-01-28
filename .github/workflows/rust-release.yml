@@ -20,6 +20,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Install UBSan runtime (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
+          fi
       - uses: dtolnay/rust-toolchain@1.92
 
       - name: Validate tag matches Cargo.toml version
@@ -90,6 +99,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+      - name: Install UBSan runtime (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
+          fi
       - uses: dtolnay/rust-toolchain@1.92
         with:
           targets: ${{ matrix.target }}
