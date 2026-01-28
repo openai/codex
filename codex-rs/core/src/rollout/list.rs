@@ -19,7 +19,9 @@ use uuid::Uuid;
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
 use crate::protocol::EventMsg;
+use crate::state_db;
 use codex_file_search as file_search;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
@@ -794,7 +796,7 @@ async fn collect_rollout_day_files(
     Ok(day_files)
 }
 
-fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uuid)> {
+pub(crate) fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uuid)> {
     // Expected: rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl
     let core = name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
 
@@ -1093,11 +1095,39 @@ async fn find_thread_path_by_id_str_in_subdir(
     )
     .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
-    Ok(results
+    let found = results
         .matches
         .into_iter()
         .next()
-        .map(|m| root.join(m.path)))
+        .map(|m| root.join(m.path));
+
+    // Checking if DB is at parity.
+    // TODO(jif): sqlite migration phase 1
+    let archived_only = match subdir {
+        SESSIONS_SUBDIR => Some(false),
+        ARCHIVED_SESSIONS_SUBDIR => Some(true),
+        _ => None,
+    };
+    let state_db_ctx = state_db::open_if_present(codex_home, "").await;
+    if let Some(state_db_ctx) = state_db_ctx.as_deref()
+        && let Ok(thread_id) = ThreadId::from_string(id_str)
+    {
+        let db_path = state_db::find_rollout_path_by_id(
+            Some(state_db_ctx),
+            thread_id,
+            archived_only,
+            "find_path_query",
+        )
+        .await;
+        let canonical_path = found.as_deref();
+        if db_path.as_deref() != canonical_path {
+            tracing::warn!(
+                "state db path mismatch for thread {thread_id:?}: canonical={canonical_path:?} db={db_path:?}"
+            );
+            state_db::record_discrepancy("find_thread_path_by_id_str_in_subdir", "path_mismatch");
+        }
+    }
+    Ok(found)
 }
 
 /// Locate a recorded thread rollout file by its UUID string using the existing
