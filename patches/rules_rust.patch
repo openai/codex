@@ -31,4 +31,21 @@ index a28ad50b7..af627fe50 100644
 +        make_link_flags = _make_link_flags_default_direct if use_direct_link_driver else _make_link_flags_default_indirect
  
      return (make_link_flags, get_lib_name)
+
+diff --git a/rust/toolchain.bzl b/rust/toolchain.bzl
+index 6ece0d2c8..641577d40 100644
+--- a/rust/toolchain.bzl
++++ b/rust/toolchain.bzl
+@@ -367,7 +367,8 @@ def _expand_flags(ctx, attr_name, targets, make_variables):
+         # can short-circuit if $ doesn't exist.
+         if "$" in flag:
+             # The ordering here matters. If we expand Make variables first, then
+             # "$(location //foo)" would have to be written as "$$(location //foo)",
+             # which is inconsistent with how Bazel builtin rules work.
+             flag = ctx.expand_location(flag, targets)
+-            flag = ctx.expand_make_variables(attr_name, flag, make_variables)
++            if "${pwd}" not in flag:
++                flag = ctx.expand_make_variables(attr_name, flag, make_variables)
+         expanded_flags.append(flag)
+     return expanded_flags
  
