@@ -22,6 +22,11 @@ use super::DESIRED_SPACERS_BETWEEN_SECTIONS;
 use super::RequestUserInputOverlay;
 use super::TIP_SEPARATOR;
 
+const MIN_OVERLAY_HEIGHT: usize = 8;
+const PROGRESS_ROW_HEIGHT: usize = 1;
+const SPACER_ROWS_WITH_NOTES: usize = 1;
+const SPACER_ROWS_NO_OPTIONS: usize = 0;
+
 impl Renderable for RequestUserInputOverlay {
     fn desired_height(&self, width: u16) -> u16 {
         if self.confirm_unanswered_active() {
@@ -43,14 +48,16 @@ impl Renderable for RequestUserInputOverlay {
         } else {
             0
         };
+        // When notes are visible, the composer already separates options from the footer.
+        // Without notes, we keep extra spacing so the footer hints don't crowd the options.
         let spacer_rows = if has_options {
             if notes_visible {
-                1
+                SPACER_ROWS_WITH_NOTES
             } else {
                 DESIRED_SPACERS_BETWEEN_SECTIONS as usize
             }
         } else {
-            0
+            SPACER_ROWS_NO_OPTIONS
         };
         let footer_height = self.footer_required_height(inner_width) as usize;
 
@@ -61,9 +68,9 @@ impl Renderable for RequestUserInputOverlay {
             .saturating_add(spacer_rows)
             .saturating_add(notes_height)
             .saturating_add(footer_height)
-            .saturating_add(1); // progress
+            .saturating_add(PROGRESS_ROW_HEIGHT); // progress
         height = height.saturating_add(menu_surface_padding_height() as usize);
-        height.max(8) as u16
+        height.max(MIN_OVERLAY_HEIGHT) as u16
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
