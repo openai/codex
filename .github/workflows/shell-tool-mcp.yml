@@ -341,15 +341,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          run_install: false
-
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Verify pnpm version
+        run: pnpm --version
 
       - name: Install JavaScript dependencies
         run: pnpm install --frozen-lockfile
@@ -436,11 +437,6 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          run_install: false
-
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -448,8 +444,11 @@ jobs:
           registry-url: https://registry.npmjs.org
           scope: "@openai"
 
-      - name: Update npm
-        run: npm install -g npm@latest
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Verify pnpm version
+        run: pnpm --version
 
       - name: Download npm tarball
         uses: actions/download-artifact@v7
