@@ -94,6 +94,13 @@ crate.annotation(
     ],
 )
 
+crate.annotation(
+    crate = "ncurses",
+    build_script_env = {
+        "NCURSES_RS_CFLAGS": "-I/usr/include -I/usr/include/ncursesw",
+    },
+)
+
 WINDOWS_IMPORT_LIB = """
 load("@rules_cc//cc:defs.bzl", "cc_import")
 
