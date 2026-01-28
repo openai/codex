@@ -19,6 +19,7 @@ use crate::protocol::NetworkAccess;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
+use codex_execpolicy::Policy;
 use codex_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
@@ -205,6 +206,8 @@ const APPROVAL_POLICY_ON_FAILURE: &str =
     include_str!("prompts/permissions/approval_policy/on_failure.md");
 const APPROVAL_POLICY_ON_REQUEST: &str =
     include_str!("prompts/permissions/approval_policy/on_request.md");
+const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
+    include_str!("prompts/permissions/approval_policy/on_request_rule.md");
 
 const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
     include_str!("prompts/permissions/sandbox_mode/danger_full_access.md");
@@ -217,12 +220,42 @@ impl DeveloperInstructions {
         Self { text: text.into() }
     }
 
+    pub fn from(
+        approval_policy: AskForApproval,
+        exec_policy: &Policy,
+        request_rule_enabled: bool,
+    ) -> DeveloperInstructions {
+        let text = match approval_policy {
+            AskForApproval::Never => APPROVAL_POLICY_NEVER.to_string(),
+            AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.to_string(),
+            AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.to_string(),
+            AskForApproval::OnRequest => {
+                if !request_rule_enabled {
+                    APPROVAL_POLICY_ON_REQUEST.to_string()
+                } else {
+                    let command_prefixes = format_allow_prefixes(exec_policy);
+                    match command_prefixes {
+                        Some(prefixes) => {
+                            format!("{APPROVAL_POLICY_ON_REQUEST_RULE}\n{prefixes}")
+                        }
+                        None => APPROVAL_POLICY_ON_REQUEST_RULE.to_string(),
+                    }
+                }
+            }
+        };
+
+        DeveloperInstructions::new(text)
+    }
+
     pub fn into_text(self) -> String {
         self.text
     }
 
     pub fn concat(self, other: impl Into<DeveloperInstructions>) -> Self {
         let mut text = self.text;
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
         text.push_str(&other.into().text);
         Self { text }
     }
@@ -237,6 +270,8 @@ impl DeveloperInstructions {
     pub fn from_policy(
         sandbox_policy: &SandboxPolicy,
         approval_policy: AskForApproval,
+        exec_policy: &Policy,
+        request_rule_enabled: bool,
         cwd: &Path,
     ) -> Self {
         let network_access = if sandbox_policy.has_full_network_access() {
@@ -259,6 +294,8 @@ impl DeveloperInstructions {
             sandbox_mode,
             network_access,
             approval_policy,
+            exec_policy,
+            request_rule_enabled,
             writable_roots,
         )
     }
@@ -281,6 +318,8 @@ impl DeveloperInstructions {
         sandbox_mode: SandboxMode,
         network_access: NetworkAccess,
         approval_policy: AskForApproval,
+        exec_policy: &Policy,
+        request_rule_enabled: bool,
         writable_roots: Option<Vec<WritableRoot>>,
     ) -> Self {
         let start_tag = DeveloperInstructions::new("<permissions instructions>");
@@ -290,7 +329,11 @@ impl DeveloperInstructions {
                 sandbox_mode,
                 network_access,
             ))
-            .concat(DeveloperInstructions::from(approval_policy))
+            .concat(DeveloperInstructions::from(
+                approval_policy,
+                exec_policy,
+                request_rule_enabled,
+            ))
             .concat(DeveloperInstructions::from_writable_roots(writable_roots))
             .concat(end_tag)
     }
@@ -328,6 +371,37 @@ impl DeveloperInstructions {
     }
 }
 
+pub fn render_command_prefix_list<I, P>(prefixes: I) -> Option<String>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<[String]>,
+{
+    let lines = prefixes
+        .into_iter()
+        .map(|prefix| format!("- {}", render_command_prefix(prefix.as_ref())))
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return None;
+    }
+
+    Some(lines.join("\n"))
+}
+
+fn render_command_prefix(prefix: &[String]) -> String {
+    let tokens = prefix
+        .iter()
+        .map(|token| serde_json::to_string(token).unwrap_or_else(|_| format!("{token:?}")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{tokens}]")
+}
+
+fn format_allow_prefixes(exec_policy: &Policy) -> Option<String> {
+    let prefixes = exec_policy.get_allowed_prefixes();
+    let lines = render_command_prefix_list(prefixes)?;
+    Some(format!("Approved command prefixes:\n{lines}"))
+}
+
 impl From<DeveloperInstructions> for ResponseItem {
     fn from(di: DeveloperInstructions) -> Self {
         ResponseItem::Message {
@@ -349,19 +423,6 @@ impl From<SandboxMode> for DeveloperInstructions {
         };
 
         DeveloperInstructions::sandbox_text(mode, network_access)
-    }
-}
-
-impl From<AskForApproval> for DeveloperInstructions {
-    fn from(mode: AskForApproval) -> Self {
-        let text = match mode {
-            AskForApproval::Never => APPROVAL_POLICY_NEVER.trim_end(),
-            AskForApproval::UnlessTrusted => APPROVAL_POLICY_UNLESS_TRUSTED.trim_end(),
-            AskForApproval::OnFailure => APPROVAL_POLICY_ON_FAILURE.trim_end(),
-            AskForApproval::OnRequest => APPROVAL_POLICY_ON_REQUEST.trim_end(),
-        };
-
-        DeveloperInstructions::new(text)
     }
 }
 
@@ -633,6 +694,10 @@ pub struct ShellToolCallParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub sandbox_permissions: Option<SandboxPermissions>,
+    /// Suggests a command prefix to persist for future sessions
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub prefix_rule: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -653,6 +718,9 @@ pub struct ShellCommandToolCallParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub sandbox_permissions: Option<SandboxPermissions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub prefix_rule: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub justification: Option<String>,
 }
@@ -836,6 +904,7 @@ mod tests {
     use crate::config_types::SandboxMode;
     use crate::protocol::AskForApproval;
     use anyhow::Result;
+    use codex_execpolicy::Policy;
     use mcp_types::ImageContent;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
@@ -844,15 +913,17 @@ mod tests {
 
     #[test]
     fn converts_sandbox_mode_into_developer_instructions() {
+        let workspace_write: DeveloperInstructions = SandboxMode::WorkspaceWrite.into();
         assert_eq!(
-            DeveloperInstructions::from(SandboxMode::WorkspaceWrite),
+            workspace_write,
             DeveloperInstructions::new(
                 "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `workspace-write`: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval. Network access is restricted."
             )
         );
 
+        let read_only: DeveloperInstructions = SandboxMode::ReadOnly.into();
         assert_eq!(
-            DeveloperInstructions::from(SandboxMode::ReadOnly),
+            read_only,
             DeveloperInstructions::new(
                 "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted."
             )
@@ -865,6 +936,8 @@ mod tests {
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
             AskForApproval::OnRequest,
+            &Policy::empty(),
+            false,
             None,
         );
 
@@ -891,11 +964,37 @@ mod tests {
         let instructions = DeveloperInstructions::from_policy(
             &policy,
             AskForApproval::UnlessTrusted,
+            &Policy::empty(),
+            false,
             &PathBuf::from("/tmp"),
         );
         let text = instructions.into_text();
         assert!(text.contains("Network access is enabled."));
         assert!(text.contains("`approval_policy` is `unless-trusted`"));
+    }
+
+    #[test]
+    fn includes_request_rule_instructions_when_enabled() {
+        let mut exec_policy = Policy::empty();
+        exec_policy
+            .add_prefix_rule(
+                &["git".to_string(), "pull".to_string()],
+                codex_execpolicy::Decision::Allow,
+            )
+            .expect("add rule");
+        let instructions = DeveloperInstructions::from_permissions_with_network(
+            SandboxMode::WorkspaceWrite,
+            NetworkAccess::Enabled,
+            AskForApproval::OnRequest,
+            &exec_policy,
+            true,
+            None,
+        );
+
+        let text = instructions.into_text();
+        assert!(text.contains("prefix_rule"));
+        assert!(text.contains("Approved command prefixes"));
+        assert!(text.contains(r#"["git", "pull"]"#));
     }
 
     #[test]
@@ -1126,6 +1225,7 @@ mod tests {
                 workdir: Some("/tmp".to_string()),
                 timeout_ms: Some(1000),
                 sandbox_permissions: None,
+                prefix_rule: None,
                 justification: None,
             },
             params

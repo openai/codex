@@ -1,10 +1,12 @@
 use crate::config::Config;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
+use crate::skills::model::SkillDependencies;
 use crate::skills::model::SkillError;
 use crate::skills::model::SkillInterface;
 use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
+use crate::skills::model::SkillToolDependency;
 use crate::skills::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::protocol::SkillScope;
@@ -38,6 +40,8 @@ struct SkillFrontmatterMetadata {
 struct SkillMetadataFile {
     #[serde(default)]
     interface: Option<Interface>,
+    #[serde(default)]
+    dependencies: Option<Dependencies>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -50,6 +54,23 @@ struct Interface {
     default_prompt: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct Dependencies {
+    #[serde(default)]
+    tools: Vec<DependencyTool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DependencyTool {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    value: Option<String>,
+    description: Option<String>,
+    transport: Option<String>,
+    command: Option<String>,
+    url: Option<String>,
+}
+
 const SKILLS_FILENAME: &str = "SKILL.md";
 const SKILLS_JSON_FILENAME: &str = "SKILL.json";
 const SKILLS_DIR_NAME: &str = "skills";
@@ -57,6 +78,12 @@ const MAX_NAME_LEN: usize = 64;
 const MAX_DESCRIPTION_LEN: usize = 1024;
 const MAX_SHORT_DESCRIPTION_LEN: usize = MAX_DESCRIPTION_LEN;
 const MAX_DEFAULT_PROMPT_LEN: usize = MAX_DESCRIPTION_LEN;
+const MAX_DEPENDENCY_TYPE_LEN: usize = MAX_NAME_LEN;
+const MAX_DEPENDENCY_TRANSPORT_LEN: usize = MAX_NAME_LEN;
+const MAX_DEPENDENCY_VALUE_LEN: usize = MAX_DESCRIPTION_LEN;
+const MAX_DEPENDENCY_DESCRIPTION_LEN: usize = MAX_DESCRIPTION_LEN;
+const MAX_DEPENDENCY_COMMAND_LEN: usize = MAX_DESCRIPTION_LEN;
+const MAX_DEPENDENCY_URL_LEN: usize = MAX_DESCRIPTION_LEN;
 // Traversal depth from the skills root.
 const MAX_SCAN_DEPTH: usize = 6;
 const MAX_SKILLS_DIRS_PER_ROOT: usize = 2000;
@@ -345,7 +372,7 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         .as_deref()
         .map(sanitize_single_line)
         .filter(|value| !value.is_empty());
-    let interface = load_skill_interface(path);
+    let (interface, dependencies) = load_skill_metadata(path);
 
     validate_len(&name, MAX_NAME_LEN, "name")?;
     validate_len(&description, MAX_DESCRIPTION_LEN, "description")?;
@@ -364,41 +391,54 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         description,
         short_description,
         interface,
+        dependencies,
         path: resolved_path,
         scope,
     })
 }
 
-fn load_skill_interface(skill_path: &Path) -> Option<SkillInterface> {
-    // Fail open: optional interface metadata should not block loading SKILL.md.
-    let skill_dir = skill_path.parent()?;
-    let interface_path = skill_dir.join(SKILLS_JSON_FILENAME);
-    if !interface_path.exists() {
-        return None;
+fn load_skill_metadata(skill_path: &Path) -> (Option<SkillInterface>, Option<SkillDependencies>) {
+    // Fail open: optional metadata should not block loading SKILL.md.
+    let Some(skill_dir) = skill_path.parent() else {
+        return (None, None);
+    };
+    let metadata_path = skill_dir.join(SKILLS_JSON_FILENAME);
+    if !metadata_path.exists() {
+        return (None, None);
     }
 
-    let contents = match fs::read_to_string(&interface_path) {
+    let contents = match fs::read_to_string(&metadata_path) {
         Ok(contents) => contents,
         Err(error) => {
             tracing::warn!(
-                "ignoring {path}: failed to read SKILL.json: {error}",
-                path = interface_path.display()
+                "ignoring {path}: failed to read {label}: {error}",
+                path = metadata_path.display(),
+                label = SKILLS_JSON_FILENAME
             );
-            return None;
+            return (None, None);
         }
     };
+
     let parsed: SkillMetadataFile = match serde_json::from_str(&contents) {
         Ok(parsed) => parsed,
         Err(error) => {
             tracing::warn!(
-                "ignoring {path}: invalid JSON: {error}",
-                path = interface_path.display()
+                "ignoring {path}: invalid {label}: {error}",
+                path = metadata_path.display(),
+                label = SKILLS_JSON_FILENAME
             );
-            return None;
+            return (None, None);
         }
     };
-    let interface = parsed.interface?;
 
+    (
+        resolve_interface(parsed.interface, skill_dir),
+        resolve_dependencies(parsed.dependencies),
+    )
+}
+
+fn resolve_interface(interface: Option<Interface>, skill_dir: &Path) -> Option<SkillInterface> {
+    let interface = interface?;
     let interface = SkillInterface {
         display_name: resolve_str(
             interface.display_name,
@@ -426,6 +466,58 @@ fn load_skill_interface(skill_path: &Path) -> Option<SkillInterface> {
         || interface.brand_color.is_some()
         || interface.default_prompt.is_some();
     if has_fields { Some(interface) } else { None }
+}
+
+fn resolve_dependencies(dependencies: Option<Dependencies>) -> Option<SkillDependencies> {
+    let dependencies = dependencies?;
+    let tools: Vec<SkillToolDependency> = dependencies
+        .tools
+        .into_iter()
+        .filter_map(resolve_dependency_tool)
+        .collect();
+    if tools.is_empty() {
+        None
+    } else {
+        Some(SkillDependencies { tools })
+    }
+}
+
+fn resolve_dependency_tool(tool: DependencyTool) -> Option<SkillToolDependency> {
+    let r#type = resolve_required_str(
+        tool.kind,
+        MAX_DEPENDENCY_TYPE_LEN,
+        "dependencies.tools.type",
+    )?;
+    let value = resolve_required_str(
+        tool.value,
+        MAX_DEPENDENCY_VALUE_LEN,
+        "dependencies.tools.value",
+    )?;
+    let description = resolve_str(
+        tool.description,
+        MAX_DEPENDENCY_DESCRIPTION_LEN,
+        "dependencies.tools.description",
+    );
+    let transport = resolve_str(
+        tool.transport,
+        MAX_DEPENDENCY_TRANSPORT_LEN,
+        "dependencies.tools.transport",
+    );
+    let command = resolve_str(
+        tool.command,
+        MAX_DEPENDENCY_COMMAND_LEN,
+        "dependencies.tools.command",
+    );
+    let url = resolve_str(tool.url, MAX_DEPENDENCY_URL_LEN, "dependencies.tools.url");
+
+    Some(SkillToolDependency {
+        r#type,
+        value,
+        description,
+        transport,
+        command,
+        url,
+    })
 }
 
 fn resolve_asset_path(
@@ -509,6 +601,18 @@ fn resolve_str(value: Option<String>, max_len: usize, field: &'static str) -> Op
         return None;
     }
     Some(value)
+}
+
+fn resolve_required_str(
+    value: Option<String>,
+    max_len: usize,
+    field: &'static str,
+) -> Option<String> {
+    let Some(value) = value else {
+        tracing::warn!("ignoring {field}: value is missing");
+        return None;
+    };
+    resolve_str(Some(value), max_len, field)
 }
 
 fn resolve_color_str(value: Option<String>, field: &'static str) -> Option<String> {
@@ -755,14 +859,118 @@ mod tests {
         path
     }
 
-    fn write_skill_interface_at(skill_dir: &Path, contents: &str) -> PathBuf {
-        let path = skill_dir.join(SKILLS_JSON_FILENAME);
+    fn write_skill_metadata_at(skill_dir: &Path, filename: &str, contents: &str) -> PathBuf {
+        let path = skill_dir.join(filename);
         fs::write(&path, contents).unwrap();
         path
     }
 
+    fn write_skill_interface_at(skill_dir: &Path, contents: &str) -> PathBuf {
+        write_skill_metadata_at(skill_dir, SKILLS_JSON_FILENAME, contents)
+    }
+
     #[tokio::test]
-    async fn loads_skill_interface_metadata_happy_path() {
+    async fn loads_skill_dependencies_metadata_from_json() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "dep-skill", "from json");
+        let skill_dir = skill_path.parent().expect("skill dir");
+
+        write_skill_metadata_at(
+            skill_dir,
+            SKILLS_JSON_FILENAME,
+            r#"
+{
+  "dependencies": {
+    "tools": [
+      {
+        "type": "env_var",
+        "value": "GITHUB_TOKEN",
+        "description": "GitHub API token with repo scopes"
+      },
+      {
+        "type": "mcp",
+        "value": "github",
+        "description": "GitHub MCP server",
+        "transport": "streamable_http",
+        "url": "https://example.com/mcp"
+      },
+      {
+        "type": "cli",
+        "value": "gh",
+        "description": "GitHub CLI"
+      },
+      {
+        "type": "mcp",
+        "value": "local-gh",
+        "description": "Local GH MCP server",
+        "transport": "stdio",
+        "command": "gh-mcp"
+      }
+    ]
+  }
+}
+"#,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(
+            outcome.skills,
+            vec![SkillMetadata {
+                name: "dep-skill".to_string(),
+                description: "from json".to_string(),
+                short_description: None,
+                interface: None,
+                dependencies: Some(SkillDependencies {
+                    tools: vec![
+                        SkillToolDependency {
+                            r#type: "env_var".to_string(),
+                            value: "GITHUB_TOKEN".to_string(),
+                            description: Some("GitHub API token with repo scopes".to_string()),
+                            transport: None,
+                            command: None,
+                            url: None,
+                        },
+                        SkillToolDependency {
+                            r#type: "mcp".to_string(),
+                            value: "github".to_string(),
+                            description: Some("GitHub MCP server".to_string()),
+                            transport: Some("streamable_http".to_string()),
+                            command: None,
+                            url: Some("https://example.com/mcp".to_string()),
+                        },
+                        SkillToolDependency {
+                            r#type: "cli".to_string(),
+                            value: "gh".to_string(),
+                            description: Some("GitHub CLI".to_string()),
+                            transport: None,
+                            command: None,
+                            url: None,
+                        },
+                        SkillToolDependency {
+                            r#type: "mcp".to_string(),
+                            value: "local-gh".to_string(),
+                            description: Some("Local GH MCP server".to_string()),
+                            transport: Some("stdio".to_string()),
+                            command: Some("gh-mcp".to_string()),
+                            url: None,
+                        },
+                    ],
+                }),
+                path: normalized(&skill_path),
+                scope: SkillScope::User,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn loads_skill_interface_metadata_from_json() {
         let codex_home = tempfile::tempdir().expect("tempdir");
         let skill_path = write_skill(&codex_home, "demo", "ui-skill", "from json");
         let skill_dir = skill_path.parent().expect("skill dir");
@@ -806,6 +1014,7 @@ mod tests {
                     brand_color: Some("#3B82F6".to_string()),
                     default_prompt: Some("default prompt".to_string()),
                 }),
+                dependencies: None,
                 path: normalized(skill_path.as_path()),
                 scope: SkillScope::User,
             }]
@@ -854,6 +1063,7 @@ mod tests {
                     brand_color: None,
                     default_prompt: None,
                 }),
+                dependencies: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -892,6 +1102,7 @@ mod tests {
                 description: "from json".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -943,6 +1154,7 @@ mod tests {
                     brand_color: None,
                     default_prompt: None,
                 }),
+                dependencies: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -982,6 +1194,7 @@ mod tests {
                 description: "from json".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1024,6 +1237,7 @@ mod tests {
                 description: "from link".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: normalized(&shared_skill_path),
                 scope: SkillScope::User,
             }]
@@ -1082,6 +1296,7 @@ mod tests {
                 description: "still loads".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1116,6 +1331,7 @@ mod tests {
                 description: "from link".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: normalized(&shared_skill_path),
                 scope: SkillScope::Admin,
             }]
@@ -1154,6 +1370,7 @@ mod tests {
                 description: "from link".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: normalized(&linked_skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -1215,6 +1432,7 @@ mod tests {
                 description: "loads".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: normalized(&within_depth_path),
                 scope: SkillScope::User,
             }]
@@ -1240,6 +1458,7 @@ mod tests {
                 description: "does things carefully".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1269,6 +1488,7 @@ mod tests {
                 description: "long description".to_string(),
                 short_description: Some("short summary".to_string()),
                 interface: None,
+                dependencies: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1379,6 +1599,7 @@ mod tests {
                 description: "from repo".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -1430,6 +1651,7 @@ mod tests {
                     description: "from nested".to_string(),
                     short_description: None,
                     interface: None,
+                    dependencies: None,
                     path: normalized(&nested_skill_path),
                     scope: SkillScope::Repo,
                 },
@@ -1438,6 +1660,7 @@ mod tests {
                     description: "from root".to_string(),
                     short_description: None,
                     interface: None,
+                    dependencies: None,
                     path: normalized(&root_skill_path),
                     scope: SkillScope::Repo,
                 },
@@ -1475,6 +1698,7 @@ mod tests {
                 description: "from cwd".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -1510,6 +1734,7 @@ mod tests {
                 description: "from repo".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -1549,6 +1774,7 @@ mod tests {
                     description: "from repo".to_string(),
                     short_description: None,
                     interface: None,
+                    dependencies: None,
                     path: normalized(&repo_skill_path),
                     scope: SkillScope::Repo,
                 },
@@ -1557,6 +1783,7 @@ mod tests {
                     description: "from user".to_string(),
                     short_description: None,
                     interface: None,
+                    dependencies: None,
                     path: normalized(&user_skill_path),
                     scope: SkillScope::User,
                 },
@@ -1619,6 +1846,7 @@ mod tests {
                     description: first_description.to_string(),
                     short_description: None,
                     interface: None,
+                    dependencies: None,
                     path: first_path,
                     scope: SkillScope::Repo,
                 },
@@ -1627,6 +1855,7 @@ mod tests {
                     description: second_description.to_string(),
                     short_description: None,
                     interface: None,
+                    dependencies: None,
                     path: second_path,
                     scope: SkillScope::Repo,
                 },
@@ -1696,6 +1925,7 @@ mod tests {
                 description: "from repo".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -1752,6 +1982,7 @@ mod tests {
                 description: "from system".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: normalized(&skill_path),
                 scope: SkillScope::System,
             }]

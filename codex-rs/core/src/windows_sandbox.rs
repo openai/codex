@@ -53,6 +53,19 @@ pub fn sandbox_setup_is_complete(_codex_home: &Path) -> bool {
 }
 
 #[cfg(target_os = "windows")]
+pub fn elevated_setup_failure_details(err: &anyhow::Error) -> Option<(String, String)> {
+    let failure = codex_windows_sandbox::extract_setup_failure(err)?;
+    let code = failure.code.as_str().to_string();
+    let message = codex_windows_sandbox::sanitize_setup_metric_tag_value(&failure.message);
+    Some((code, message))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn elevated_setup_failure_details(_err: &anyhow::Error) -> Option<(String, String)> {
+    None
+}
+
+#[cfg(target_os = "windows")]
 pub fn run_elevated_setup(
     policy: &SandboxPolicy,
     policy_cwd: &Path,

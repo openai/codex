@@ -15,6 +15,16 @@
 //! [`ChatComposer::handle_key_event_without_popup`]. After every handled key, we call
 //! [`ChatComposer::sync_popups`] so UI state follows the latest buffer/cursor.
 //!
+//! # History Navigation (↑/↓)
+//!
+//! The Up/Down history path is managed by [`ChatComposerHistory`]. It merges:
+//!
+//! - Persistent cross-session history (text-only; no element ranges or attachments).
+//! - Local in-session history (full text + text elements + local image paths).
+//!
+//! When recalling a local entry, the composer rehydrates text elements and image attachments.
+//! When recalling a persistent entry, only the text is restored.
+//!
 //! # Submission and Prompt Expansion
 //!
 //! On submit/queue paths, the composer:
@@ -89,6 +99,7 @@ use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
 use super::chat_composer_history::ChatComposerHistory;
+use super::chat_composer_history::HistoryEntry;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::command_popup::CommandPopupFlags;
@@ -232,7 +243,6 @@ impl ChatComposerConfig {
         }
     }
 }
-
 pub(crate) struct ChatComposer {
     textarea: TextArea,
     textarea_state: RefCell<TextAreaState>,
@@ -394,7 +404,6 @@ impl ChatComposer {
     pub fn set_personality_command_enabled(&mut self, enabled: bool) {
         self.personality_command_enabled = enabled;
     }
-
     /// Centralized feature gating keeps config checks out of call sites.
     fn popups_enabled(&self) -> bool {
         self.config.popups_enabled
@@ -462,11 +471,12 @@ impl ChatComposer {
         offset: usize,
         entry: Option<String>,
     ) -> bool {
-        let Some(text) = self.history.on_entry_response(log_id, offset, entry) else {
+        let Some(entry) = self.history.on_entry_response(log_id, offset, entry) else {
             return false;
         };
-        // Composer history (↑/↓) stores plain text only; no UI element ranges/attachments to restore here.
-        self.set_text_content(text, Vec::new(), Vec::new());
+        // Persistent ↑/↓ history is text-only (backwards-compatible and avoids persisting
+        // attachments), but local in-session ↑/↓ history can rehydrate elements and image paths.
+        self.set_text_content(entry.text, entry.text_elements, entry.local_image_paths);
         true
     }
 
@@ -643,6 +653,18 @@ impl ChatComposer {
         text
     }
 
+    pub(crate) fn pending_pastes(&self) -> Vec<(String, String)> {
+        self.pending_pastes.clone()
+    }
+
+    pub(crate) fn set_pending_pastes(&mut self, pending_pastes: Vec<(String, String)>) {
+        let text = self.textarea.text().to_string();
+        self.pending_pastes = pending_pastes
+            .into_iter()
+            .filter(|(placeholder, _)| text.contains(placeholder))
+            .collect();
+    }
+
     /// Override the footer hint items displayed beneath the composer. Passing
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
@@ -709,9 +731,19 @@ impl ChatComposer {
             return None;
         }
         let previous = self.current_text();
+        let text_elements = self.textarea.text_elements();
+        let local_image_paths = self
+            .attached_images
+            .iter()
+            .map(|img| img.path.clone())
+            .collect();
         self.set_text_content(String::new(), Vec::new(), Vec::new());
         self.history.reset_navigation();
-        self.history.record_local_submission(&previous);
+        self.history.record_local_submission(HistoryEntry {
+            text: previous.clone(),
+            text_elements,
+            local_image_paths,
+        });
         Some(previous)
     }
 
@@ -1411,7 +1443,7 @@ impl ChatComposer {
     }
 
     /// Expand large-paste placeholders using element ranges and rebuild other element spans.
-    fn expand_pending_pastes(
+    pub(crate) fn expand_pending_pastes(
         text: &str,
         mut elements: Vec<TextElement>,
         pending_pastes: &[(String, String)],
@@ -1794,8 +1826,17 @@ impl ChatComposer {
         if text.is_empty() && self.attached_images.is_empty() {
             return None;
         }
-        if !text.is_empty() {
-            self.history.record_local_submission(&text);
+        if !text.is_empty() || !self.attached_images.is_empty() {
+            let local_image_paths = self
+                .attached_images
+                .iter()
+                .map(|img| img.path.clone())
+                .collect();
+            self.history.record_local_submission(HistoryEntry {
+                text: text.clone(),
+                text_elements: text_elements.clone(),
+                local_image_paths,
+            });
         }
         self.pending_pastes.clear();
         Some((text, text_elements))
@@ -1991,15 +2032,19 @@ impl ChatComposer {
                     .history
                     .should_handle_navigation(self.textarea.text(), self.textarea.cursor())
                 {
-                    let replace_text = match key_event.code {
+                    let replace_entry = match key_event.code {
                         KeyCode::Up => self.history.navigate_up(&self.app_event_tx),
                         KeyCode::Down => self.history.navigate_down(&self.app_event_tx),
                         KeyCode::Char('p') => self.history.navigate_up(&self.app_event_tx),
                         KeyCode::Char('n') => self.history.navigate_down(&self.app_event_tx),
                         _ => unreachable!(),
                     };
-                    if let Some(text) = replace_text {
-                        self.set_text_content(text, Vec::new(), Vec::new());
+                    if let Some(entry) = replace_entry {
+                        self.set_text_content(
+                            entry.text,
+                            entry.text_elements,
+                            entry.local_image_paths,
+                        );
                         return (InputResult::None, true);
                     }
                 }
@@ -2259,14 +2304,27 @@ impl ChatComposer {
     }
 
     fn footer_props(&self) -> FooterProps {
+        let mode = self.footer_mode();
+        let is_wsl = {
+            #[cfg(target_os = "linux")]
+            {
+                mode == FooterMode::ShortcutOverlay && crate::clipboard_paste::is_probably_wsl()
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                false
+            }
+        };
+
         FooterProps {
-            mode: self.footer_mode(),
+            mode,
             esc_backtrack_hint: self.esc_backtrack_hint,
             use_shift_enter_hint: self.use_shift_enter_hint,
             is_task_running: self.is_task_running,
             quit_shortcut_key: self.quit_shortcut_key,
             steer_enabled: self.steer_enabled,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
+            is_wsl,
             context_window_percent: self.context_window_percent,
             context_window_used_tokens: self.context_window_used_tokens,
         }
@@ -2322,6 +2380,11 @@ impl ChatComposer {
         // When browsing input history (shell-style Up/Down recall), skip all popup
         // synchronization so nothing steals focus from continued history navigation.
         if browsing_history {
+            if self.current_file_query.is_some() {
+                self.app_event_tx
+                    .send(AppEvent::StartFileSearch(String::new()));
+                self.current_file_query = None;
+            }
             self.active_popup = ActivePopup::None;
             return;
         }
@@ -2332,12 +2395,22 @@ impl ChatComposer {
         self.sync_command_popup(allow_command_popup);
 
         if matches!(self.active_popup, ActivePopup::Command(_)) {
+            if self.current_file_query.is_some() {
+                self.app_event_tx
+                    .send(AppEvent::StartFileSearch(String::new()));
+                self.current_file_query = None;
+            }
             self.dismissed_file_popup_token = None;
             self.dismissed_skill_popup_token = None;
             return;
         }
 
         if let Some(token) = skill_token {
+            if self.current_file_query.is_some() {
+                self.app_event_tx
+                    .send(AppEvent::StartFileSearch(String::new()));
+                self.current_file_query = None;
+            }
             self.sync_skill_popup(token);
             return;
         }
@@ -2348,6 +2421,11 @@ impl ChatComposer {
             return;
         }
 
+        if self.current_file_query.is_some() {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(String::new()));
+            self.current_file_query = None;
+        }
         self.dismissed_file_popup_token = None;
         if matches!(
             self.active_popup,
@@ -2481,7 +2559,10 @@ impl ChatComposer {
             return;
         }
 
-        if !query.is_empty() {
+        if query.is_empty() {
+            self.app_event_tx
+                .send(AppEvent::StartFileSearch(String::new()));
+        } else {
             self.app_event_tx
                 .send(AppEvent::StartFileSearch(query.clone()));
         }
@@ -2505,7 +2586,11 @@ impl ChatComposer {
             }
         }
 
-        self.current_file_query = Some(query);
+        if query.is_empty() {
+            self.current_file_query = None;
+        } else {
+            self.current_file_query = Some(query);
+        }
         self.dismissed_file_popup_token = None;
     }
 
@@ -3257,7 +3342,7 @@ mod tests {
 
         assert_eq!(
             composer.history.navigate_up(&composer.app_event_tx),
-            Some("draft text".to_string())
+            Some(HistoryEntry::from_text("draft text".to_string()))
         );
     }
 
@@ -4708,6 +4793,37 @@ mod tests {
         }
         let imgs = composer.take_recent_submission_images();
         assert_eq!(vec![path], imgs);
+    }
+
+    #[test]
+    fn history_navigation_restores_image_attachments() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_steer_enabled(true);
+        let path = PathBuf::from("/tmp/image1.png");
+        composer.attach_image(path.clone());
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(result, InputResult::Submitted { .. }));
+
+        composer.set_text_content(String::new(), Vec::new(), Vec::new());
+
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+
+        let text = composer.current_text();
+        assert_eq!(text, "[Image #1]");
+        let text_elements = composer.text_elements();
+        assert_eq!(text_elements.len(), 1);
+        assert_eq!(text_elements[0].placeholder(&text), Some("[Image #1]"));
+        assert_eq!(composer.local_image_paths(), vec![path]);
     }
 
     #[test]

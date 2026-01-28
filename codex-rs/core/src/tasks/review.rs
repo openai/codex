@@ -86,7 +86,7 @@ async fn start_review_conversation(
     let mut sub_agent_config = config.as_ref().clone();
     // Carry over review-only feature restrictions so the delegate cannot
     // re-enable blocked tools (web search, view image).
-    sub_agent_config.web_search_mode = WebSearchMode::Disabled;
+    sub_agent_config.web_search_mode = Some(WebSearchMode::Disabled);
 
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
