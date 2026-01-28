@@ -502,6 +502,7 @@ async fn submit_turn(
             effort: None,
             summary: ReasoningSummary::Auto,
             collaboration_mode: None,
+            personality: None,
         })
         .await?;
 
@@ -1752,6 +1753,16 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
         })
         .await?;
     wait_for_completion(&test).await;
+
+    let developer_messages = first_results
+        .single_request()
+        .message_input_texts("developer");
+    assert!(
+        developer_messages
+            .iter()
+            .any(|message| message.contains(r#"["touch", "allow-prefix.txt"]"#)),
+        "expected developer message documenting saved rule, got: {developer_messages:?}"
+    );
 
     let policy_path = test.home.path().join("rules").join("default.rules");
     let policy_contents = fs::read_to_string(&policy_path)?;

@@ -1,0 +1,46 @@
+[package]
+name = "codex-network-proxy"
+edition = "2024"
+version = { workspace = true }
+license.workspace = true
+
+[[bin]]
+name = "codex-network-proxy"
+path = "src/main.rs"
+
+[lib]
+name = "codex_network_proxy"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+codex-app-server-protocol = { workspace = true }
+codex-core = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+globset = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt"] }
+url = { workspace = true }
+rama-core = { version = "=0.3.0-alpha.4" }
+rama-http = { version = "=0.3.0-alpha.4" }
+rama-http-backend = { version = "=0.3.0-alpha.4", features = ["tls"] }
+rama-net = { version = "=0.3.0-alpha.4", features = ["http", "tls"] }
+rama-socks5 = { version = "=0.3.0-alpha.4" }
+rama-tcp = { version = "=0.3.0-alpha.4", features = ["http"] }
+rama-tls-boring = { version = "=0.3.0-alpha.4", features = ["http"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+
+[target.'cfg(target_family = "unix")'.dependencies]
+rama-unix = { version = "=0.3.0-alpha.4" }

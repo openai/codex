@@ -4,6 +4,7 @@ use codex_core::protocol::COLLABORATION_MODE_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_completed;
@@ -22,11 +23,14 @@ fn sse_completed(id: &str) -> String {
 }
 
 fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMode {
-    CollaborationMode::Custom(Settings {
-        model: "gpt-5.1".to_string(),
-        reasoning_effort: None,
-        developer_instructions: instructions.map(str::to_string),
-    })
+    CollaborationMode {
+        mode: ModeKind::Custom,
+        settings: Settings {
+            model: "gpt-5.1".to_string(),
+            reasoning_effort: None,
+            developer_instructions: instructions.map(str::to_string),
+        },
+    }
 }
 
 fn developer_texts(input: &[Value]) -> Vec<String> {
@@ -100,10 +104,12 @@ async fn user_input_includes_collaboration_instructions_after_override() -> Resu
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             collaboration_mode: Some(collaboration_mode),
+            personality: None,
         })
         .await?;
 
@@ -151,6 +157,7 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
             summary: test.config.model_reasoning_summary,
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
+            personality: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -179,10 +186,12 @@ async fn override_then_user_turn_uses_updated_collaboration_instructions() -> Re
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             collaboration_mode: Some(collaboration_mode),
+            personality: None,
         })
         .await?;
 
@@ -200,6 +209,7 @@ async fn override_then_user_turn_uses_updated_collaboration_instructions() -> Re
             summary: test.config.model_reasoning_summary,
             collaboration_mode: None,
             final_output_json_schema: None,
+            personality: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -230,10 +240,12 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             collaboration_mode: Some(base_mode),
+            personality: None,
         })
         .await?;
 
@@ -251,6 +263,7 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             summary: test.config.model_reasoning_summary,
             collaboration_mode: Some(turn_mode),
             final_output_json_schema: None,
+            personality: None,
         })
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -282,10 +295,12 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(first_text))),
+            personality: None,
         })
         .await?;
 
@@ -305,10 +320,12 @@ async fn collaboration_mode_update_emits_new_instruction_message() -> Result<()>
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(second_text))),
+            personality: None,
         })
         .await?;
 
@@ -349,10 +366,12 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
+            personality: None,
         })
         .await?;
 
@@ -372,10 +391,12 @@ async fn collaboration_mode_update_noop_does_not_append() -> Result<()> {
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
+            personality: None,
         })
         .await?;
 
@@ -408,7 +429,11 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
 
     let mut builder = test_codex();
     let initial = builder.build(&server).await?;
-    let rollout_path = initial.session_configured.rollout_path.clone();
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
     let home = initial.home.clone();
 
     let collab_text = "resume instructions";
@@ -418,10 +443,12 @@ async fn resume_replays_collaboration_instructions() -> Result<()> {
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(collab_text))),
+            personality: None,
         })
         .await?;
 
@@ -472,10 +499,12 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
             cwd: None,
             approval_policy: None,
             sandbox_policy: None,
+            windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
             collaboration_mode: Some(collab_mode_with_instructions(Some(""))),
+            personality: None,
         })
         .await?;
 

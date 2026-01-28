@@ -7,7 +7,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 
 pub struct RequestUserInputHandler;
@@ -36,12 +36,14 @@ impl ToolHandler for RequestUserInputHandler {
             }
         };
 
-        let disallowed_mode = match session.collaboration_mode().await {
-            CollaborationMode::Execute(_) => Some("Execute"),
-            CollaborationMode::Custom(_) => Some("Custom"),
-            _ => None,
-        };
-        if let Some(mode_name) = disallowed_mode {
+        let mode = session.collaboration_mode().await.mode;
+        if !matches!(mode, ModeKind::Plan | ModeKind::PairProgramming) {
+            let mode_name = match mode {
+                ModeKind::Code => "Code",
+                ModeKind::Execute => "Execute",
+                ModeKind::Custom => "Custom",
+                ModeKind::Plan | ModeKind::PairProgramming => unreachable!(),
+            };
             return Err(FunctionCallError::RespondToModel(format!(
                 "request_user_input is unavailable in {mode_name} mode"
             )));

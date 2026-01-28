@@ -170,6 +170,7 @@ fn message_item(text: &str) -> ResponseItem {
         id: None,
         role: "user".into(),
         content: vec![ContentItem::InputText { text: text.into() }],
+        end_turn: None,
     }
 }
 

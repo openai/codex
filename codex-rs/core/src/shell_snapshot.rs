@@ -28,6 +28,7 @@ pub struct ShellSnapshot {
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 const SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 7); // 7 days retention.
 const SNAPSHOT_DIR: &str = "shell_snapshots";
+const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD"];
 
 impl ShellSnapshot {
     pub fn start_snapshotting(
@@ -74,7 +75,7 @@ impl ShellSnapshot {
         });
 
         // Make the new snapshot.
-        match write_shell_snapshot(shell.shell_type.clone(), &path).await {
+        let snapshot = match write_shell_snapshot(shell.shell_type.clone(), &path).await {
             Ok(path) => {
                 tracing::info!("Shell snapshot successfully created: {}", path.display());
                 Some(Self { path })
@@ -86,7 +87,16 @@ impl ShellSnapshot {
                 );
                 None
             }
+        };
+
+        if let Some(snapshot) = snapshot.as_ref()
+            && let Err(err) = validate_snapshot(shell, &snapshot.path).await
+        {
+            tracing::error!("Shell snapshot validation failed: {err:?}");
+            return None;
         }
+
+        snapshot
     }
 }
 
@@ -129,9 +139,9 @@ async fn write_shell_snapshot(shell_type: ShellType, output_path: &Path) -> Resu
 async fn capture_snapshot(shell: &Shell) -> Result<String> {
     let shell_type = shell.shell_type.clone();
     match shell_type {
-        ShellType::Zsh => run_shell_script(shell, zsh_snapshot_script()).await,
-        ShellType::Bash => run_shell_script(shell, bash_snapshot_script()).await,
-        ShellType::Sh => run_shell_script(shell, sh_snapshot_script()).await,
+        ShellType::Zsh => run_shell_script(shell, &zsh_snapshot_script()).await,
+        ShellType::Bash => run_shell_script(shell, &bash_snapshot_script()).await,
+        ShellType::Sh => run_shell_script(shell, &sh_snapshot_script()).await,
         ShellType::PowerShell => run_shell_script(shell, powershell_snapshot_script()).await,
         ShellType::Cmd => bail!("Shell snapshotting is not yet supported for {shell_type:?}"),
     }
@@ -146,16 +156,25 @@ fn strip_snapshot_preamble(snapshot: &str) -> Result<String> {
     Ok(snapshot[start..].to_string())
 }
 
-async fn run_shell_script(shell: &Shell, script: &str) -> Result<String> {
-    run_shell_script_with_timeout(shell, script, SNAPSHOT_TIMEOUT).await
+async fn validate_snapshot(shell: &Shell, snapshot_path: &Path) -> Result<()> {
+    let snapshot_path_display = snapshot_path.display();
+    let script = format!("set -e; . \"{snapshot_path_display}\"");
+    run_script_with_timeout(shell, &script, SNAPSHOT_TIMEOUT, false)
+        .await
+        .map(|_| ())
 }
 
-async fn run_shell_script_with_timeout(
+async fn run_shell_script(shell: &Shell, script: &str) -> Result<String> {
+    run_script_with_timeout(shell, script, SNAPSHOT_TIMEOUT, true).await
+}
+
+async fn run_script_with_timeout(
     shell: &Shell,
     script: &str,
     snapshot_timeout: Duration,
+    use_login_shell: bool,
 ) -> Result<String> {
-    let args = shell.derive_exec_args(script, true);
+    let args = shell.derive_exec_args(script, use_login_shell);
     let shell_name = shell.name();
 
     // Handler is kept as guard to control the drop. The `mut` pattern is required because .args()
@@ -184,8 +203,13 @@ async fn run_shell_script_with_timeout(
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn zsh_snapshot_script() -> &'static str {
-    r##"if [[ -n "$ZDOTDIR" ]]; then
+fn excluded_exports_regex() -> String {
+    EXCLUDED_EXPORT_VARS.join("|")
+}
+
+fn zsh_snapshot_script() -> String {
+    let excluded = excluded_exports_regex();
+    let script = r##"if [[ -n "$ZDOTDIR" ]]; then
   rc="$ZDOTDIR/.zshrc"
 else
   rc="$HOME/.zshrc"
@@ -205,14 +229,31 @@ alias_count=$(alias -L | wc -l | tr -d ' ')
 print "# aliases $alias_count"
 alias -L
 print ''
-export_count=$(export -p | wc -l | tr -d ' ')
+export_lines=$(export -p | awk '
+/^(export|declare -x|typeset -x) / {
+  line=$0
+  name=line
+  sub(/^(export|declare -x|typeset -x) /, "", name)
+  sub(/=.*/, "", name)
+  if (name ~ /^(EXCLUDED_EXPORTS)$/) {
+    next
+  }
+  if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+    print line
+  }
+}')
+export_count=$(printf '%s\n' "$export_lines" | sed '/^$/d' | wc -l | tr -d ' ')
 print "# exports $export_count"
-export -p
-"##
+if [[ -n "$export_lines" ]]; then
+  print -r -- "$export_lines"
+fi
+"##;
+    script.replace("EXCLUDED_EXPORTS", &excluded)
 }
 
-fn bash_snapshot_script() -> &'static str {
-    r##"if [ -z "$BASH_ENV" ] && [ -r "$HOME/.bashrc" ]; then
+fn bash_snapshot_script() -> String {
+    let excluded = excluded_exports_regex();
+    let script = r##"if [ -z "$BASH_ENV" ] && [ -r "$HOME/.bashrc" ]; then
   . "$HOME/.bashrc"
 fi
 echo '# Snapshot file'
@@ -232,14 +273,31 @@ alias_count=$(alias -p | wc -l | tr -d ' ')
 echo "# aliases $alias_count"
 alias -p
 echo ''
-export_count=$(export -p | wc -l | tr -d ' ')
+export_lines=$(export -p | awk '
+/^(export|declare -x|typeset -x) / {
+  line=$0
+  name=line
+  sub(/^(export|declare -x|typeset -x) /, "", name)
+  sub(/=.*/, "", name)
+  if (name ~ /^(EXCLUDED_EXPORTS)$/) {
+    next
+  }
+  if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+    print line
+  }
+}')
+export_count=$(printf '%s\n' "$export_lines" | sed '/^$/d' | wc -l | tr -d ' ')
 echo "# exports $export_count"
-export -p
-"##
+if [ -n "$export_lines" ]; then
+  printf '%s\n' "$export_lines"
+fi
+"##;
+    script.replace("EXCLUDED_EXPORTS", &excluded)
 }
 
-fn sh_snapshot_script() -> &'static str {
-    r##"if [ -n "$ENV" ] && [ -r "$ENV" ]; then
+fn sh_snapshot_script() -> String {
+    let excluded = excluded_exports_regex();
+    let script = r##"if [ -n "$ENV" ] && [ -r "$ENV" ]; then
   . "$ENV"
 fi
 echo '# Snapshot file'
@@ -272,18 +330,37 @@ else
   echo '# aliases 0'
 fi
 if export -p >/dev/null 2>&1; then
-  export_count=$(export -p | wc -l | tr -d ' ')
+  export_lines=$(export -p | awk '
+/^(export|declare -x|typeset -x) / {
+  line=$0
+  name=line
+  sub(/^(export|declare -x|typeset -x) /, "", name)
+  sub(/=.*/, "", name)
+  if (name ~ /^(EXCLUDED_EXPORTS)$/) {
+    next
+  }
+  if (name ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+    print line
+  }
+}')
+  export_count=$(printf '%s\n' "$export_lines" | sed '/^$/d' | wc -l | tr -d ' ')
   echo "# exports $export_count"
-  export -p
+  if [ -n "$export_lines" ]; then
+    printf '%s\n' "$export_lines"
+  fi
 else
-  export_count=$(env | wc -l | tr -d ' ')
+  export_count=$(env | sort | awk -F= '$1 ~ /^[A-Za-z_][A-Za-z0-9_]*$/ { count++ } END { print count }')
   echo "# exports $export_count"
   env | sort | while IFS='=' read -r key value; do
+    case "$key" in
+      ""|[0-9]*|*[!A-Za-z0-9_]*|EXCLUDED_EXPORTS) continue ;;
+    esac
     escaped=$(printf "%s" "$value" | sed "s/'/'\"'\"'/g")
     printf "export %s='%s'\n" "$key" "$escaped"
   done
 fi
-"##
+"##;
+    script.replace("EXCLUDED_EXPORTS", &excluded)
 }
 
 fn powershell_snapshot_script() -> &'static str {
@@ -387,8 +464,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
-    #[cfg(target_os = "linux")]
-    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::process::Command;
     #[cfg(target_os = "linux")]
     use std::process::Command as StdCommand;
 
@@ -428,6 +505,30 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn bash_snapshot_filters_invalid_exports() -> Result<()> {
+        let output = Command::new("/bin/bash")
+            .arg("-c")
+            .arg(bash_snapshot_script())
+            .env("BASH_ENV", "/dev/null")
+            .env("VALID_NAME", "ok")
+            .env("PWD", "/tmp/stale")
+            .env("NEXTEST_BIN_EXE_codex-write-config-schema", "/path/to/bin")
+            .env("BAD-NAME", "broken")
+            .output()?;
+
+        assert!(output.status.success());
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("VALID_NAME"));
+        assert!(!stdout.contains("PWD=/tmp/stale"));
+        assert!(!stdout.contains("NEXTEST_BIN_EXE_codex-write-config-schema"));
+        assert!(!stdout.contains("BAD-NAME"));
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
         let dir = tempdir()?;
@@ -459,27 +560,16 @@ mod tests {
         use tokio::time::sleep;
 
         let dir = tempdir()?;
-        let shell_path = dir.path().join("hanging-shell.sh");
         let pid_path = dir.path().join("pid");
-
-        let script = format!(
-            "#!/bin/sh\n\
-             echo $$ > {}\n\
-             sleep 30\n",
-            pid_path.display()
-        );
-        fs::write(&shell_path, script).await?;
-        let mut permissions = std::fs::metadata(&shell_path)?.permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&shell_path, permissions)?;
+        let script = format!("echo $$ > \"{}\"; sleep 30", pid_path.display());
 
         let shell = Shell {
             shell_type: ShellType::Sh,
-            shell_path,
+            shell_path: PathBuf::from("/bin/sh"),
             shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
         };
 
-        let err = run_shell_script_with_timeout(&shell, "ignored", Duration::from_millis(500))
+        let err = run_script_with_timeout(&shell, &script, Duration::from_secs(1), true)
             .await
             .expect_err("snapshot shell should time out");
         assert!(

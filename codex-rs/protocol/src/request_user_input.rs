@@ -16,6 +16,10 @@ pub struct RequestUserInputQuestion {
     pub id: String,
     pub header: String,
     pub question: String,
+    #[serde(rename = "isOther", default)]
+    #[schemars(rename = "isOther")]
+    #[ts(rename = "isOther")]
+    pub is_other: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<RequestUserInputQuestionOption>>,
 }
@@ -27,8 +31,7 @@ pub struct RequestUserInputArgs {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestUserInputAnswer {
-    pub selected: Vec<String>,
-    pub other: Option<String>,
+    pub answers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

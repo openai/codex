@@ -6,12 +6,10 @@ for Windows terminals.
 Primary implementations:
 
 - `codex-rs/tui/src/bottom_pane/chat_composer.rs`
-- `codex-rs/tui2/src/bottom_pane/chat_composer.rs`
 
 Paste-burst detector:
 
 - `codex-rs/tui/src/bottom_pane/paste_burst.rs`
-- `codex-rs/tui2/src/bottom_pane/paste_burst.rs`
 
 ## What problem is being solved?
 
@@ -50,6 +48,44 @@ The solution is to detect paste-like _bursts_ and buffer them into a single expl
   history navigation, etc).
 - After handling the key, `sync_popups()` runs so popup visibility/filters stay consistent with the
   latest text + cursor.
+
+### History navigation (↑/↓)
+
+Up/Down recall is handled by `ChatComposerHistory` and merges two sources:
+
+- **Persistent history** (cross-session, fetched from `~/.codex/history.jsonl`): text-only. It
+  does **not** carry text element ranges or local image attachments, so recalling one of these
+  entries only restores the text.
+- **Local history** (current session): stores the full submission payload, including text
+  elements and local image paths. Recalling a local entry rehydrates placeholders and attachments.
+
+This distinction keeps the on-disk history backward compatible and avoids persisting attachments,
+while still providing a richer recall experience for in-session edits.
+
+## Config gating for reuse
+
+`ChatComposer` now supports feature gating via `ChatComposerConfig`
+(`codex-rs/tui/src/bottom_pane/chat_composer.rs`). The default config preserves current chat
+behavior.
+
+Flags:
+
+- `popups_enabled`
+- `slash_commands_enabled`
+- `image_paste_enabled`
+
+Key effects when disabled:
+
+- When `popups_enabled` is `false`, `sync_popups()` forces `ActivePopup::None`.
+- When `slash_commands_enabled` is `false`, the composer does not treat `/...` input as commands.
+- When `slash_commands_enabled` is `false`, the composer does not expand custom prompts in
+  `prepare_submission_text`.
+- When `slash_commands_enabled` is `false`, slash-context paste-burst exceptions are disabled.
+- When `image_paste_enabled` is `false`, file-path paste image attachment is skipped.
+
+Built-in slash command availability is centralized in
+`codex-rs/tui/src/bottom_pane/slash_commands.rs` and reused by both the composer and the command
+popup so gating stays in sync.
 
 ## Submission flow (Enter/Tab)
 
@@ -217,12 +253,6 @@ Non-char input must not leak burst state across unrelated actions:
 The `PasteBurst` logic is currently exercised through `ChatComposer` integration tests.
 
 - `codex-rs/tui/src/bottom_pane/chat_composer.rs`
-  - `non_ascii_burst_handles_newline`
-  - `ascii_burst_treats_enter_as_newline`
-  - `question_mark_does_not_toggle_during_paste_burst`
-  - `burst_paste_fast_small_buffers_and_flushes_on_stop`
-  - `burst_paste_fast_large_inserts_placeholder_on_flush`
-- `codex-rs/tui2/src/bottom_pane/chat_composer.rs`
   - `non_ascii_burst_handles_newline`
   - `ascii_burst_treats_enter_as_newline`
   - `question_mark_does_not_toggle_during_paste_burst`
