@@ -44,7 +44,13 @@ const SELECT_OPTION_PLACEHOLDER: &str = "Select an option to add notes";
 pub(super) const TIP_SEPARATOR: &str = " | ";
 pub(super) const DESIRED_SPACERS_BETWEEN_SECTIONS: u16 = 2;
 const OTHER_OPTION_LABEL: &str = "None of the above";
-const OTHER_OPTION_DESCRIPTION: &str = "Add details in notes (tab)";
+const OTHER_OPTION_DESCRIPTION: &str = "Optionally, add details in notes (tab).";
+const UNANSWERED_CONFIRM_TITLE: &str = "Submit with unanswered questions?";
+const UNANSWERED_CONFIRM_GO_BACK: &str = "Go back";
+const UNANSWERED_CONFIRM_GO_BACK_DESC: &str = "Return to the first unanswered question.";
+const UNANSWERED_CONFIRM_SUBMIT: &str = "Proceed";
+const UNANSWERED_CONFIRM_SUBMIT_DESC_SINGULAR: &str = "question";
+const UNANSWERED_CONFIRM_SUBMIT_DESC_PLURAL: &str = "questions";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
@@ -79,8 +85,8 @@ struct AnswerState {
     options_ui_state: ScrollState,
     // Per-question notes draft.
     draft: ComposerDraft,
-    // Whether a freeform answer has been explicitly submitted.
-    freeform_committed: bool,
+    // Whether the answer for this question has been explicitly submitted.
+    answer_committed: bool,
     // Whether the notes UI has been explicitly opened for this question.
     notes_visible: bool,
 }
@@ -120,6 +126,8 @@ pub(crate) struct RequestUserInputOverlay {
     current_idx: usize,
     focus: Focus,
     done: bool,
+    pending_submission_draft: Option<ComposerDraft>,
+    confirm_unanswered: Option<ScrollState>,
 }
 
 impl RequestUserInputOverlay {
@@ -151,6 +159,8 @@ impl RequestUserInputOverlay {
             current_idx: 0,
             focus: Focus::Options,
             done: false,
+            pending_submission_draft: None,
+            confirm_unanswered: None,
         };
         overlay.reset_for_request();
         overlay.ensure_focus_available();
@@ -247,6 +257,10 @@ impl RequestUserInputOverlay {
 
     fn focus_is_notes(&self) -> bool {
         matches!(self.focus, Focus::Notes)
+    }
+
+    fn confirm_unanswered_active(&self) -> bool {
+        self.confirm_unanswered.is_some()
     }
 
     pub(super) fn option_rows(&self) -> Vec<GenericDisplayRow> {
@@ -347,11 +361,10 @@ impl RequestUserInputOverlay {
 
     fn save_current_draft(&mut self) {
         let draft = self.capture_composer_draft();
-        let has_options = self.has_options();
         let notes_empty = draft.text.trim().is_empty();
         if let Some(answer) = self.current_answer_mut() {
-            if !has_options && answer.freeform_committed && answer.draft != draft {
-                answer.freeform_committed = false;
+            if answer.answer_committed && answer.draft != draft {
+                answer.answer_committed = false;
             }
             answer.draft = draft;
             if !notes_empty {
@@ -392,6 +405,19 @@ impl RequestUserInputOverlay {
             .set_placeholder_text(self.notes_placeholder().to_string());
     }
 
+    fn clear_notes_draft(&mut self) {
+        if let Some(answer) = self.current_answer_mut() {
+            answer.draft = ComposerDraft::default();
+            answer.answer_committed = false;
+            answer.notes_visible = true;
+        }
+        self.pending_submission_draft = None;
+        self.composer
+            .set_text_content(String::new(), Vec::new(), Vec::new());
+        self.composer.move_cursor_to_end();
+        self.sync_composer_placeholder();
+    }
+
     fn footer_tips(&self) -> Vec<FooterTip> {
         let mut tips = Vec::new();
         let notes_visible = self.notes_ui_visible();
@@ -405,7 +431,15 @@ impl RequestUserInputOverlay {
         }
 
         let question_count = self.question_count();
-        tips.push(FooterTip::new("enter to submit answer"));
+        let is_last_question = self.current_index().saturating_add(1) >= question_count;
+        let enter_tip = if question_count == 1 {
+            FooterTip::highlighted("enter to submit answer")
+        } else if is_last_question {
+            FooterTip::highlighted("enter to submit all")
+        } else {
+            FooterTip::new("enter to submit answer")
+        };
+        tips.push(enter_tip);
         if question_count > 1 {
             tips.push(FooterTip::new("ctrl + n next"));
         }
@@ -496,7 +530,7 @@ impl RequestUserInputOverlay {
                     committed_option_idx: None,
                     options_ui_state,
                     draft: ComposerDraft::default(),
-                    freeform_committed: false,
+                    answer_committed: has_options,
                     notes_visible: !has_options,
                 }
             })
@@ -506,6 +540,8 @@ impl RequestUserInputOverlay {
         self.focus = Focus::Options;
         self.composer
             .set_text_content(String::new(), Vec::new(), Vec::new());
+        self.confirm_unanswered = None;
+        self.pending_submission_draft = None;
     }
 
     fn options_len_for_question(
@@ -560,6 +596,16 @@ impl RequestUserInputOverlay {
         self.ensure_focus_available();
     }
 
+    fn jump_to_question(&mut self, idx: usize) {
+        if idx >= self.question_count() {
+            return;
+        }
+        self.save_current_draft();
+        self.current_idx = idx;
+        self.restore_current_draft();
+        self.ensure_focus_available();
+    }
+
     /// Synchronize selection state to the currently focused option.
     fn select_current_option(&mut self) {
         if !self.has_options() {
@@ -569,6 +615,7 @@ impl RequestUserInputOverlay {
         let updated = if let Some(answer) = self.current_answer_mut() {
             answer.options_ui_state.clamp_selection(options_len);
             answer.committed_option_idx = answer.options_ui_state.selected_idx;
+            answer.answer_committed = false;
             true
         } else {
             false
@@ -583,15 +630,17 @@ impl RequestUserInputOverlay {
         if !self.has_options() {
             return;
         }
-        self.save_current_draft();
-        let notes_empty = self.composer.current_text_with_pending().trim().is_empty();
         if let Some(answer) = self.current_answer_mut() {
             answer.committed_option_idx = None;
             answer.options_ui_state.reset();
-            if notes_empty {
-                answer.notes_visible = false;
-            }
+            answer.draft = ComposerDraft::default();
+            answer.answer_committed = false;
+            answer.notes_visible = false;
         }
+        self.pending_submission_draft = None;
+        self.composer
+            .set_text_content(String::new(), Vec::new(), Vec::new());
+        self.composer.move_cursor_to_end();
         self.sync_composer_placeholder();
     }
 
@@ -606,7 +655,12 @@ impl RequestUserInputOverlay {
     /// Advance to next question, or submit when on the last one.
     fn go_next_or_submit(&mut self) {
         if self.current_index() + 1 >= self.question_count() {
-            self.submit_answers();
+            self.save_current_draft();
+            if self.unanswered_count() > 0 {
+                self.open_unanswered_confirmation();
+            } else {
+                self.submit_answers();
+            }
         } else {
             self.move_question(true);
         }
@@ -614,6 +668,7 @@ impl RequestUserInputOverlay {
 
     /// Build the response payload and dispatch it to the app.
     fn submit_answers(&mut self) {
+        self.confirm_unanswered = None;
         self.save_current_draft();
         let mut answers = HashMap::new();
         for (idx, question) in self.request.questions.iter().enumerate() {
@@ -627,9 +682,7 @@ impl RequestUserInputOverlay {
             };
             // Notes are appended as extra answers. For freeform questions, only submit when
             // the user explicitly committed the draft.
-            let notes = if options.is_some_and(|opts| !opts.is_empty())
-                || answer_state.freeform_committed
-            {
+            let notes = if answer_state.answer_committed {
                 answer_state.draft.text_with_pending().trim().to_string()
             } else {
                 String::new()
@@ -662,6 +715,71 @@ impl RequestUserInputOverlay {
         }
     }
 
+    fn open_unanswered_confirmation(&mut self) {
+        let mut state = ScrollState::new();
+        state.selected_idx = Some(0);
+        self.confirm_unanswered = Some(state);
+    }
+
+    fn close_unanswered_confirmation(&mut self) {
+        self.confirm_unanswered = None;
+    }
+
+    fn unanswered_question_count(&self) -> usize {
+        self.unanswered_count()
+    }
+
+    fn unanswered_submit_description(&self) -> String {
+        let count = self.unanswered_question_count();
+        let suffix = if count == 1 {
+            UNANSWERED_CONFIRM_SUBMIT_DESC_SINGULAR
+        } else {
+            UNANSWERED_CONFIRM_SUBMIT_DESC_PLURAL
+        };
+        format!("Submit with {count} unanswered {suffix}.")
+    }
+
+    fn first_unanswered_index(&self) -> Option<usize> {
+        let current_text = self.composer.current_text();
+        self.request
+            .questions
+            .iter()
+            .enumerate()
+            .find(|(idx, _)| !self.is_question_answered(*idx, &current_text))
+            .map(|(idx, _)| idx)
+    }
+
+    fn unanswered_confirmation_rows(&self) -> Vec<GenericDisplayRow> {
+        let selected = self
+            .confirm_unanswered
+            .as_ref()
+            .and_then(|state| state.selected_idx)
+            .unwrap_or(0);
+        let entries = [
+            (
+                UNANSWERED_CONFIRM_SUBMIT,
+                self.unanswered_submit_description(),
+            ),
+            (
+                UNANSWERED_CONFIRM_GO_BACK,
+                UNANSWERED_CONFIRM_GO_BACK_DESC.to_string(),
+            ),
+        ];
+        entries
+            .iter()
+            .enumerate()
+            .map(|(idx, (label, description))| {
+                let prefix = if idx == selected { '›' } else { ' ' };
+                let number = idx + 1;
+                GenericDisplayRow {
+                    name: format!("{prefix} {number}. {label}"),
+                    description: Some(description.clone()),
+                    ..Default::default()
+                }
+            })
+            .collect()
+    }
+
     fn is_question_answered(&self, idx: usize, _current_text: &str) -> bool {
         let Some(question) = self.request.questions.get(idx) else {
             return false;
@@ -674,9 +792,9 @@ impl RequestUserInputOverlay {
             .as_ref()
             .is_some_and(|options| !options.is_empty());
         if has_options {
-            answer.committed_option_idx.is_some()
+            answer.committed_option_idx.is_some() && answer.answer_committed
         } else {
-            answer.freeform_committed
+            answer.answer_committed
         }
     }
 
@@ -720,6 +838,17 @@ impl RequestUserInputOverlay {
         self.composer.set_footer_hint_override(Some(Vec::new()));
     }
 
+    fn apply_submission_draft(&mut self, draft: ComposerDraft) {
+        if let Some(answer) = self.current_answer_mut() {
+            answer.draft = draft.clone();
+        }
+        self.composer
+            .set_text_content(draft.text, draft.text_elements, draft.local_image_paths);
+        self.composer.set_pending_pastes(draft.pending_pastes);
+        self.composer.move_cursor_to_end();
+        self.composer.set_footer_hint_override(Some(Vec::new()));
+    }
+
     fn handle_composer_input_result(&mut self, result: InputResult) -> bool {
         match result {
             InputResult::Submitted {
@@ -740,23 +869,83 @@ impl RequestUserInputOverlay {
                         answer.committed_option_idx = answer.options_ui_state.selected_idx;
                     }
                 }
-                if !self.has_options()
-                    && let Some(answer) = self.current_answer_mut()
-                {
-                    answer.freeform_committed = !text.trim().is_empty();
+                if self.has_options() {
+                    if let Some(answer) = self.current_answer_mut() {
+                        answer.answer_committed = true;
+                    }
+                } else if let Some(answer) = self.current_answer_mut() {
+                    answer.answer_committed = !text.trim().is_empty();
                 }
-                self.apply_submission_to_draft(text, text_elements);
+                let draft_override = self.pending_submission_draft.take();
+                if let Some(draft) = draft_override {
+                    self.apply_submission_draft(draft);
+                } else {
+                    self.apply_submission_to_draft(text, text_elements);
+                }
                 self.go_next_or_submit();
                 true
             }
             _ => false,
         }
     }
+
+    fn handle_confirm_unanswered_key_event(&mut self, key_event: KeyEvent) {
+        if key_event.kind == KeyEventKind::Release {
+            return;
+        }
+        let Some(state) = self.confirm_unanswered.as_mut() else {
+            return;
+        };
+
+        match key_event.code {
+            KeyCode::Esc | KeyCode::Backspace => {
+                self.close_unanswered_confirmation();
+                if let Some(idx) = self.first_unanswered_index() {
+                    self.jump_to_question(idx);
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.move_up_wrap(2);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                state.move_down_wrap(2);
+            }
+            KeyCode::Enter => {
+                let selected = state.selected_idx.unwrap_or(0);
+                self.close_unanswered_confirmation();
+                if selected == 0 {
+                    self.submit_answers();
+                } else {
+                    if let Some(idx) = self.first_unanswered_index() {
+                        self.jump_to_question(idx);
+                    }
+                }
+            }
+            KeyCode::Char('1') | KeyCode::Char('2') => {
+                let idx = if matches!(key_event.code, KeyCode::Char('1')) {
+                    0
+                } else {
+                    1
+                };
+                state.selected_idx = Some(idx);
+            }
+            _ => {}
+        }
+    }
 }
 
 impl BottomPaneView for RequestUserInputOverlay {
+    fn prefer_esc_to_handle_key_event(&self) -> bool {
+        true
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if key_event.kind == KeyEventKind::Release {
+            return;
+        }
+
+        if self.confirm_unanswered_active() {
+            self.handle_confirm_unanswered_key_event(key_event);
             return;
         }
 
@@ -811,6 +1000,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                     KeyCode::Up | KeyCode::Char('k') => {
                         let moved = if let Some(answer) = self.current_answer_mut() {
                             answer.options_ui_state.move_up_wrap(options_len);
+                            answer.answer_committed = false;
                             true
                         } else {
                             false
@@ -822,6 +1012,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                     KeyCode::Down | KeyCode::Char('j') => {
                         let moved = if let Some(answer) = self.current_answer_mut() {
                             answer.options_ui_state.move_down_wrap(options_len);
+                            answer.answer_committed = false;
                             true
                         } else {
                             false
@@ -833,7 +1024,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                     KeyCode::Char(' ') => {
                         self.select_current_option();
                     }
-                    KeyCode::Backspace => {
+                    KeyCode::Backspace | KeyCode::Delete => {
                         self.clear_selection();
                     }
                     KeyCode::Tab => {
@@ -847,12 +1038,16 @@ impl BottomPaneView for RequestUserInputOverlay {
                         if has_selection {
                             self.select_current_option();
                         }
+                        if let Some(answer) = self.current_answer_mut() {
+                            answer.answer_committed = true;
+                        }
                         self.go_next_or_submit();
                     }
                     KeyCode::Char(ch) => {
                         if let Some(option_idx) = self.option_index_for_digit(ch) {
                             if let Some(answer) = self.current_answer_mut() {
                                 answer.options_ui_state.selected_idx = Some(option_idx);
+                                answer.answer_committed = true;
                             }
                             self.select_current_option();
                             self.go_next_or_submit();
@@ -866,6 +1061,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 if self.has_options() && matches!(key_event.code, KeyCode::Tab) {
                     if let Some(answer) = self.current_answer_mut() {
                         answer.draft = ComposerDraft::default();
+                        answer.answer_committed = false;
                         answer.notes_visible = false;
                     }
                     self.composer
@@ -887,8 +1083,15 @@ impl BottomPaneView for RequestUserInputOverlay {
                 }
                 if matches!(key_event.code, KeyCode::Enter) {
                     self.ensure_selected_for_notes();
+                    self.pending_submission_draft = Some(self.capture_composer_draft());
                     let (result, _) = self.composer.handle_key_event(key_event);
                     if !self.handle_composer_input_result(result) {
+                        self.pending_submission_draft = None;
+                        if self.has_options() {
+                            if let Some(answer) = self.current_answer_mut() {
+                                answer.answer_committed = true;
+                            }
+                        }
                         self.go_next_or_submit();
                     }
                     return;
@@ -899,6 +1102,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                         KeyCode::Up => {
                             let moved = if let Some(answer) = self.current_answer_mut() {
                                 answer.options_ui_state.move_up_wrap(options_len);
+                                answer.answer_committed = false;
                                 true
                             } else {
                                 false
@@ -910,6 +1114,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                         KeyCode::Down => {
                             let moved = if let Some(answer) = self.current_answer_mut() {
                                 answer.options_ui_state.move_down_wrap(options_len);
+                                answer.answer_committed = false;
                                 true
                             } else {
                                 false
@@ -923,13 +1128,41 @@ impl BottomPaneView for RequestUserInputOverlay {
                     return;
                 }
                 self.ensure_selected_for_notes();
+                if matches!(
+                    key_event.code,
+                    KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete
+                ) {
+                    if let Some(answer) = self.current_answer_mut() {
+                        answer.answer_committed = false;
+                    }
+                }
+                let before = self.capture_composer_draft();
                 let (result, _) = self.composer.handle_key_event(key_event);
-                self.handle_composer_input_result(result);
+                let submitted = self.handle_composer_input_result(result);
+                if !submitted {
+                    let after = self.capture_composer_draft();
+                    if before != after {
+                        if let Some(answer) = self.current_answer_mut() {
+                            answer.answer_committed = false;
+                        }
+                    }
+                }
             }
         }
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
+        if self.confirm_unanswered_active() {
+            self.close_unanswered_confirmation();
+            self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+            self.done = true;
+            return CancellationEvent::Handled;
+        }
+        if self.focus_is_notes() && !self.composer.current_text_with_pending().is_empty() {
+            self.clear_notes_draft();
+            return CancellationEvent::Handled;
+        }
+
         self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
         self.done = true;
         CancellationEvent::Handled
@@ -948,6 +1181,9 @@ impl BottomPaneView for RequestUserInputOverlay {
             self.focus = Focus::Notes;
         }
         self.ensure_selected_for_notes();
+        if let Some(answer) = self.current_answer_mut() {
+            answer.answer_committed = false;
+        }
         self.composer.handle_paste(pasted)
     }
 
@@ -1375,11 +1611,16 @@ mod tests {
         assert_eq!(answer.committed_option_idx, None);
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert!(overlay.confirm_unanswered_active());
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Char('1')));
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         let event = rx.try_recv().expect("expected AppEvent");
         let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
+        let answer = response.answers.get("q1").expect("answer missing");
+        assert_eq!(answer.answers, Vec::<String>::new());
         let answer = response.answers.get("q2").expect("answer missing");
         assert_eq!(answer.answers, vec!["Option 1".to_string()]);
     }
@@ -1612,7 +1853,7 @@ mod tests {
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
-        assert_eq!(overlay.answers[0].freeform_committed, true);
+        assert_eq!(overlay.answers[0].answer_committed, true);
         assert_eq!(overlay.unanswered_count(), 1);
     }
 
@@ -1635,7 +1876,7 @@ mod tests {
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
-        assert_eq!(overlay.answers[0].freeform_committed, false);
+        assert_eq!(overlay.answers[0].answer_committed, false);
         assert_eq!(overlay.unanswered_count(), 2);
     }
 
@@ -1707,7 +1948,7 @@ mod tests {
             .set_text_content("Committed".to_string(), Vec::new(), Vec::new());
         overlay.composer.move_cursor_to_end();
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
-        assert_eq!(overlay.answers[0].freeform_committed, true);
+        assert_eq!(overlay.answers[0].answer_committed, true);
 
         overlay.move_question(false);
         overlay
@@ -1715,7 +1956,7 @@ mod tests {
             .set_text_content("Edited".to_string(), Vec::new(), Vec::new());
         overlay.composer.move_cursor_to_end();
         overlay.move_question(true);
-        assert_eq!(overlay.answers[0].freeform_committed, false);
+        assert_eq!(overlay.answers[0].answer_committed, false);
 
         overlay.submit_answers();
 
@@ -1747,6 +1988,9 @@ mod tests {
             .composer
             .set_text_content("Notes for option 2".to_string(), Vec::new(), Vec::new());
         overlay.composer.move_cursor_to_end();
+        if let Some(answer) = overlay.current_answer_mut() {
+            answer.answer_committed = true;
+        }
 
         overlay.submit_answers();
 
@@ -1827,6 +2071,9 @@ mod tests {
             .composer
             .set_text_content("Custom answer".to_string(), Vec::new(), Vec::new());
         overlay.composer.move_cursor_to_end();
+        if let Some(answer) = overlay.current_answer_mut() {
+            answer.answer_committed = true;
+        }
 
         overlay.submit_answers();
 
@@ -1868,6 +2115,37 @@ mod tests {
         let draft = &overlay.answers[0].draft;
         assert_eq!(draft.pending_pastes.len(), 1);
         assert_eq!(draft.pending_pastes[0].1, large);
+        assert!(draft.text.contains(&draft.pending_pastes[0].0));
+        assert_eq!(draft.text_with_pending(), large);
+    }
+
+    #[test]
+    fn pending_paste_placeholder_survives_submission_and_back_navigation() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "First"),
+                    question_with_options("q2", "Second"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        let large = "x".repeat(1_200);
+        overlay.focus = Focus::Notes;
+        overlay.ensure_selected_for_notes();
+        overlay.composer.handle_paste(large.clone());
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+
+        let draft = &overlay.answers[0].draft;
+        assert_eq!(draft.pending_pastes.len(), 1);
         assert!(draft.text.contains(&draft.pending_pastes[0].0));
         assert_eq!(draft.text_with_pending(), large);
     }

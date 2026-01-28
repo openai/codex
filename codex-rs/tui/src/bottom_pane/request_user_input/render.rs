@@ -8,10 +8,14 @@ use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
+use crate::bottom_pane::popup_consts::standard_popup_hint_line;
+use crate::bottom_pane::scroll_state::ScrollState;
+use crate::bottom_pane::selection_popup_common::measure_rows_height;
 use crate::bottom_pane::selection_popup_common::menu_surface_inset;
 use crate::bottom_pane::selection_popup_common::menu_surface_padding_height;
 use crate::bottom_pane::selection_popup_common::render_menu_surface;
 use crate::bottom_pane::selection_popup_common::render_rows;
+use crate::bottom_pane::selection_popup_common::wrap_styled_line;
 use crate::render::renderable::Renderable;
 
 use super::DESIRED_SPACERS_BETWEEN_SECTIONS;
@@ -20,6 +24,9 @@ use super::TIP_SEPARATOR;
 
 impl Renderable for RequestUserInputOverlay {
     fn desired_height(&self, width: u16) -> u16 {
+        if self.confirm_unanswered_active() {
+            return self.confirm_unanswered_height(width);
+        }
         let outer = Rect::new(0, 0, width, u16::MAX);
         let inner = menu_surface_inset(outer);
         let inner_width = inner.width.max(1);
@@ -69,9 +76,133 @@ impl Renderable for RequestUserInputOverlay {
 }
 
 impl RequestUserInputOverlay {
+    fn confirm_unanswered_height(&self, width: u16) -> u16 {
+        let outer = Rect::new(0, 0, width, u16::MAX);
+        let inner = menu_surface_inset(outer);
+        let inner_width = inner.width.max(1);
+        let unanswered = self.unanswered_question_count();
+        let subtitle = format!(
+            "{unanswered} unanswered question{}",
+            if unanswered == 1 { "" } else { "s" }
+        );
+        let title_line = Line::from(super::UNANSWERED_CONFIRM_TITLE.bold());
+        let subtitle_line = Line::from(subtitle.dim());
+        let mut header_lines = wrap_styled_line(&title_line, inner_width);
+        let mut subtitle_lines = wrap_styled_line(&subtitle_line, inner_width);
+        header_lines.append(&mut subtitle_lines);
+
+        let rows = self.unanswered_confirmation_rows();
+        let default_state = ScrollState::new();
+        let state = self.confirm_unanswered.as_ref().unwrap_or(&default_state);
+        let rows_height = measure_rows_height(&rows, state, rows.len().max(1), inner_width.max(1));
+        let hint_line = standard_popup_hint_line();
+        let hint_lines = wrap_styled_line(&hint_line, inner_width);
+        let height = header_lines.len() as u16
+            + 1
+            + rows_height
+            + 1
+            + hint_lines.len() as u16
+            + menu_surface_padding_height();
+        height.max(8)
+    }
+
+    fn render_confirm_unanswered(&self, area: Rect, buf: &mut Buffer) {
+        let content_area = render_menu_surface(area, buf);
+        if content_area.width == 0 || content_area.height == 0 {
+            return;
+        }
+        let width = content_area.width.max(1);
+        let unanswered = self.unanswered_question_count();
+        let subtitle = format!(
+            "{unanswered} unanswered question{}",
+            if unanswered == 1 { "" } else { "s" }
+        );
+        let title_line = Line::from(super::UNANSWERED_CONFIRM_TITLE.bold());
+        let subtitle_line = Line::from(subtitle.dim());
+        let mut header_lines = wrap_styled_line(&title_line, width);
+        let mut subtitle_lines = wrap_styled_line(&subtitle_line, width);
+        header_lines.append(&mut subtitle_lines);
+
+        let mut cursor_y = content_area.y;
+        for line in header_lines {
+            if cursor_y >= content_area.y + content_area.height {
+                return;
+            }
+            Paragraph::new(line).render(
+                Rect {
+                    x: content_area.x,
+                    y: cursor_y,
+                    width: content_area.width,
+                    height: 1,
+                },
+                buf,
+            );
+            cursor_y = cursor_y.saturating_add(1);
+        }
+
+        if cursor_y < content_area.y + content_area.height {
+            cursor_y = cursor_y.saturating_add(1);
+        }
+
+        let remaining = content_area
+            .height
+            .saturating_sub(cursor_y.saturating_sub(content_area.y));
+        if remaining == 0 {
+            return;
+        }
+
+        let hint_line = standard_popup_hint_line();
+        let hint_lines = wrap_styled_line(&hint_line, width);
+        let hint_height = hint_lines.len() as u16;
+        let spacer_before_hint = u16::from(remaining > hint_height);
+        let rows_height = remaining.saturating_sub(hint_height + spacer_before_hint);
+
+        let rows_area = Rect {
+            x: content_area.x,
+            y: cursor_y,
+            width: content_area.width,
+            height: rows_height,
+        };
+        let rows = self.unanswered_confirmation_rows();
+        let default_state = ScrollState::new();
+        let state = self.confirm_unanswered.as_ref().unwrap_or(&default_state);
+        render_rows(
+            rows_area,
+            buf,
+            &rows,
+            state,
+            rows.len().max(1),
+            "No choices",
+        );
+
+        cursor_y = cursor_y.saturating_add(rows_height);
+        if spacer_before_hint > 0 {
+            cursor_y = cursor_y.saturating_add(1);
+        }
+        for (offset, line) in hint_lines.into_iter().enumerate() {
+            let y = cursor_y.saturating_add(offset as u16);
+            if y >= content_area.y + content_area.height {
+                break;
+            }
+            Paragraph::new(line).render(
+                Rect {
+                    x: content_area.x,
+                    y,
+                    width: content_area.width,
+                    height: 1,
+                },
+                buf,
+            );
+        }
+    }
+
     /// Render the full request-user-input overlay.
     pub(super) fn render_ui(&self, area: Rect, buf: &mut Buffer) {
         if area.width == 0 || area.height == 0 {
+            return;
+        }
+        if self.confirm_unanswered_active() {
+            self.render_confirm_unanswered(area, buf);
             return;
         }
         // Paint the same menu surface used by other bottom-pane overlays and
@@ -101,13 +232,20 @@ impl RequestUserInputOverlay {
 
         // Question prompt text.
         let question_y = sections.question_area.y;
+        let answered =
+            self.is_question_answered(self.current_index(), &self.composer.current_text());
         for (offset, line) in sections.question_lines.iter().enumerate() {
             if question_y.saturating_add(offset as u16)
                 >= sections.question_area.y + sections.question_area.height
             {
                 break;
             }
-            Paragraph::new(Line::from(line.clone()).cyan()).render(
+            let question_line = if answered {
+                Line::from(line.clone())
+            } else {
+                Line::from(line.clone()).cyan()
+            };
+            Paragraph::new(question_line).render(
                 Rect {
                     x: sections.question_area.x,
                     y: question_y.saturating_add(offset as u16),
@@ -189,6 +327,9 @@ impl RequestUserInputOverlay {
 
     /// Return the cursor position when editing notes, if visible.
     pub(super) fn cursor_pos_impl(&self, area: Rect) -> Option<(u16, u16)> {
+        if self.confirm_unanswered_active() {
+            return None;
+        }
         let has_options = self.has_options();
         let notes_visible = self.notes_ui_visible();
 
