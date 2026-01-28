@@ -139,6 +139,7 @@ use crate::protocol::RequestUserInputEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
+use crate::analytics_client::AnalyticsContext;
 use crate::protocol::SkillDependencies as ProtocolSkillDependencies;
 use crate::protocol::SkillErrorInfo;
 use crate::protocol::SkillInterface as ProtocolSkillInterface;
@@ -157,6 +158,7 @@ use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
+use codex_app_server_protocol::AuthMode;
 use crate::skills::SkillError;
 use crate::skills::SkillInjections;
 use crate::skills::SkillMetadata;
@@ -3179,10 +3181,28 @@ pub(crate) async fn run_turn(
     .await;
 
     let otel_manager = turn_context.client.get_otel_manager();
+    let auth = match turn_context.client.get_auth_manager() {
+        Some(auth_manager) => auth_manager.auth().await,
+        None => None,
+    };
+    let auth_mode = auth.as_ref().map(|auth| auth.mode);
+    let access_token = auth.as_ref().and_then(|auth| auth.get_token().ok());
+    let account_id = auth.as_ref().and_then(CodexAuth::get_account_id);
+    let config = sess.get_config().await;
+    let tracking = AnalyticsContext {
+        auth_mode,
+        access_token,
+        account_id,
+        chatgpt_base_url: config.chatgpt_base_url.clone(),
+        model_slug: turn_context.client.get_model(),
+        conversation_id: sess.conversation_id.to_string(),
+        session_source: turn_context.client.get_session_source(),
+        product_client_id: crate::default_client::originator().value,
+    };
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
-    } = build_skill_injections(&mentioned_skills, Some(&otel_manager)).await;
+    } = build_skill_injections(&mentioned_skills, Some(&otel_manager), Some(&tracking)).await;
 
     for message in skill_warnings {
         sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
