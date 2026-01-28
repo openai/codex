@@ -149,13 +149,15 @@ impl ModelsManager {
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
-        let local = model_info::find_model_info_for_slug(model);
         let remote = self
             .get_remote_models(config)
             .await
             .into_iter()
             .find(|m| m.slug == model);
-        let model = remote.unwrap_or(local);
+        let model = match remote {
+            Some(remote) => remote,
+            None => model_info::find_model_info_for_slug(model),
+        };
         model_info::with_config_overrides(model, config)
     }
 
