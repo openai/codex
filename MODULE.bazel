@@ -67,6 +67,11 @@ crate.from_cargo(
     cargo_toml = "//codex-rs:Cargo.toml",
     platform_triples = RUST_TRIPLES,
 )
+crate.annotation(
+    crate = "nucleo-matcher",
+    strip_prefix = "matcher",
+    version = "0.3.1",
+)
 
 bazel_dep(name = "openssl", version = "3.5.4.bcr.0")
 
