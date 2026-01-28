@@ -48,6 +48,7 @@ impl StateRuntime {
         default_provider: String,
         otel: Option<OtelManager>,
     ) -> anyhow::Result<Arc<Self>> {
+        tokio::fs::create_dir_all(&codex_home).await?;
         let state_path = codex_home.join(STATE_DB_FILENAME);
         let existed = tokio::fs::try_exists(&state_path).await.unwrap_or(false);
         let pool = match open_sqlite(&state_path).await {
@@ -167,60 +168,17 @@ SELECT
     git_branch,
     git_origin_url
 FROM threads
-WHERE 1 = 1
             "#,
         );
-        if archived_only {
-            builder.push(" AND archived = 1");
-        } else {
-            builder.push(" AND archived = 0");
-        }
-        builder.push(" AND has_user_event = 1");
-        if !allowed_sources.is_empty() {
-            builder.push(" AND source IN (");
-            let mut separated = builder.separated(", ");
-            for source in allowed_sources {
-                separated.push_bind(source);
-            }
-            separated.push_unseparated(")");
-        }
-        if let Some(model_providers) = model_providers
-            && !model_providers.is_empty()
-        {
-            builder.push(" AND model_provider IN (");
-            let mut separated = builder.separated(", ");
-            for provider in model_providers {
-                separated.push_bind(provider);
-            }
-            separated.push_unseparated(")");
-        }
-        if let Some(anchor) = anchor {
-            let anchor_ts = datetime_to_epoch_seconds(anchor.ts);
-            let column = match sort_key {
-                SortKey::CreatedAt => "created_at",
-                SortKey::UpdatedAt => "updated_at",
-            };
-            builder.push(" AND (");
-            builder.push(column);
-            builder.push(" < ");
-            builder.push_bind(anchor_ts);
-            builder.push(" OR (");
-            builder.push(column);
-            builder.push(" = ");
-            builder.push_bind(anchor_ts);
-            builder.push(" AND id < ");
-            builder.push_bind(anchor.id.to_string());
-            builder.push("))");
-        }
-        let order_column = match sort_key {
-            SortKey::CreatedAt => "created_at",
-            SortKey::UpdatedAt => "updated_at",
-        };
-        builder.push(" ORDER BY ");
-        builder.push(order_column);
-        builder.push(" DESC, id DESC");
-        builder.push(" LIMIT ");
-        builder.push_bind(limit as i64);
+        push_thread_filters(
+            &mut builder,
+            archived_only,
+            allowed_sources,
+            model_providers,
+            anchor,
+            sort_key,
+        );
+        push_thread_order_and_limit(&mut builder, sort_key, limit);
 
         let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         let mut items = rows
@@ -252,58 +210,16 @@ WHERE 1 = 1
         model_providers: Option<&[String]>,
         archived_only: bool,
     ) -> anyhow::Result<Vec<ThreadId>> {
-        let mut builder = QueryBuilder::<Sqlite>::new("SELECT id FROM threads WHERE 1 = 1");
-        if archived_only {
-            builder.push(" AND archived = 1");
-        } else {
-            builder.push(" AND archived = 0");
-        }
-        builder.push(" AND has_user_event = 1");
-        if !allowed_sources.is_empty() {
-            builder.push(" AND source IN (");
-            let mut separated = builder.separated(", ");
-            for source in allowed_sources {
-                separated.push_bind(source);
-            }
-            separated.push_unseparated(")");
-        }
-        if let Some(model_providers) = model_providers
-            && !model_providers.is_empty()
-        {
-            builder.push(" AND model_provider IN (");
-            let mut separated = builder.separated(", ");
-            for provider in model_providers {
-                separated.push_bind(provider);
-            }
-            separated.push_unseparated(")");
-        }
-        if let Some(anchor) = anchor {
-            let anchor_ts = datetime_to_epoch_seconds(anchor.ts);
-            let column = match sort_key {
-                SortKey::CreatedAt => "created_at",
-                SortKey::UpdatedAt => "updated_at",
-            };
-            builder.push(" AND (");
-            builder.push(column);
-            builder.push(" < ");
-            builder.push_bind(anchor_ts);
-            builder.push(" OR (");
-            builder.push(column);
-            builder.push(" = ");
-            builder.push_bind(anchor_ts);
-            builder.push(" AND id < ");
-            builder.push_bind(anchor.id.to_string());
-            builder.push("))");
-        }
-        let order_column = match sort_key {
-            SortKey::CreatedAt => "created_at",
-            SortKey::UpdatedAt => "updated_at",
-        };
-        builder.push(" ORDER BY ");
-        builder.push(order_column);
-        builder.push(" DESC, id DESC");
-        builder.push(" LIMIT ");
-        builder.push_bind(limit as i64);
+        let mut builder = QueryBuilder::<Sqlite>::new("SELECT id FROM threads");
+        push_thread_filters(
+            &mut builder,
+            archived_only,
+            allowed_sources,
+            model_providers,
+            anchor,
+            sort_key,
+        );
+        push_thread_order_and_limit(&mut builder, sort_key, limit);
 
         let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
         rows.into_iter()
@@ -469,4 +385,73 @@ async fn open_sqlite(path: &Path) -> anyhow::Result<SqlitePool> {
         .await?;
     MIGRATOR.run(&pool).await?;
     Ok(pool)
+}
+
+fn push_thread_filters<'a>(
+    builder: &mut QueryBuilder<'a, Sqlite>,
+    archived_only: bool,
+    allowed_sources: &'a [String],
+    model_providers: Option<&'a [String]>,
+    anchor: Option<&crate::Anchor>,
+    sort_key: SortKey,
+) {
+    builder.push(" WHERE 1 = 1");
+    if archived_only {
+        builder.push(" AND archived = 1");
+    } else {
+        builder.push(" AND archived = 0");
+    }
+    builder.push(" AND has_user_event = 1");
+    if !allowed_sources.is_empty() {
+        builder.push(" AND source IN (");
+        let mut separated = builder.separated(", ");
+        for source in allowed_sources {
+            separated.push_bind(source);
+        }
+        separated.push_unseparated(")");
+    }
+    if let Some(model_providers) = model_providers
+        && !model_providers.is_empty()
+    {
+        builder.push(" AND model_provider IN (");
+        let mut separated = builder.separated(", ");
+        for provider in model_providers {
+            separated.push_bind(provider);
+        }
+        separated.push_unseparated(")");
+    }
+    if let Some(anchor) = anchor {
+        let anchor_ts = datetime_to_epoch_seconds(anchor.ts);
+        let column = match sort_key {
+            SortKey::CreatedAt => "created_at",
+            SortKey::UpdatedAt => "updated_at",
+        };
+        builder.push(" AND (");
+        builder.push(column);
+        builder.push(" < ");
+        builder.push_bind(anchor_ts);
+        builder.push(" OR (");
+        builder.push(column);
+        builder.push(" = ");
+        builder.push_bind(anchor_ts);
+        builder.push(" AND id < ");
+        builder.push_bind(anchor.id.to_string());
+        builder.push("))");
+    }
+}
+
+fn push_thread_order_and_limit(
+    builder: &mut QueryBuilder<'_, Sqlite>,
+    sort_key: SortKey,
+    limit: usize,
+) {
+    let order_column = match sort_key {
+        SortKey::CreatedAt => "created_at",
+        SortKey::UpdatedAt => "updated_at",
+    };
+    builder.push(" ORDER BY ");
+    builder.push(order_column);
+    builder.push(" DESC, id DESC");
+    builder.push(" LIMIT ");
+    builder.push_bind(limit as i64);
 }
