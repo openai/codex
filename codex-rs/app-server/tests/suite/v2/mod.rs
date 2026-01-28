@@ -4,6 +4,7 @@ mod app_list;
 mod collaboration_mode_list;
 mod config_rpc;
 mod dynamic_tools;
+mod exec_run;
 mod initialize;
 mod model_list;
 mod output_schema;
