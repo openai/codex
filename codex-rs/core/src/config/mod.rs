@@ -1862,7 +1862,7 @@ persistence = "none"
             tui,
             Tui {
                 notifications: Notifications::Enabled(true),
-                notification_method: NotificationMethod::Bel,
+                notification_method: NotificationMethod::Auto,
                 animations: true,
                 show_tooltips: true,
                 experimental_mode: None,

@@ -477,6 +477,7 @@
     },
     "NotificationMethod": {
       "enum": [
+        "auto",
         "osc9",
         "bel"
       ],
@@ -996,8 +997,8 @@
               "$ref": "#/definitions/NotificationMethod"
             }
           ],
-          "default": "bel",
-          "description": "Notification method to use for unfocused terminal notifications. Defaults to `bel`."
+          "default": "auto",
+          "description": "Notification method to use for unfocused terminal notifications. Defaults to `auto`."
         },
         "notifications": {
           "allOf": [

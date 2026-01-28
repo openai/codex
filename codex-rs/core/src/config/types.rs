@@ -431,19 +431,21 @@ impl Default for Notifications {
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum NotificationMethod {
+    Auto,
     Osc9,
     Bel,
 }
 
 impl Default for NotificationMethod {
     fn default() -> Self {
-        Self::Bel
+        Self::Auto
     }
 }
 
 impl fmt::Display for NotificationMethod {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            NotificationMethod::Auto => write!(f, "auto"),
             NotificationMethod::Osc9 => write!(f, "osc9"),
             NotificationMethod::Bel => write!(f, "bel"),
         }
@@ -460,7 +462,7 @@ pub struct Tui {
     pub notifications: Notifications,
 
     /// Notification method to use for unfocused terminal notifications.
-    /// Defaults to `bel`.
+    /// Defaults to `auto`.
     #[serde(default)]
     pub notification_method: NotificationMethod,
 
