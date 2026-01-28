@@ -36,6 +36,7 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_state::log_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use cwd_prompt::CwdPromptAction;
 use cwd_prompt::CwdSelection;
@@ -351,10 +352,16 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
+    let log_db_layer = match codex_core::state_db::init_if_enabled(&config, None).await {
+        Some(db) => Some(log_db::start(db).with_filter(env_filter())),
+        None => None,
+    };
+
     let _ = tracing_subscriber::registry()
         .with(file_layer)
         .with(feedback_layer)
         .with(feedback_metadata_layer)
+        .with(log_db_layer)
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();

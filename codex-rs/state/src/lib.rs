@@ -5,11 +5,13 @@
 //! orchestration and rollout scanning live in `codex-core`.
 
 mod extract;
+pub mod log_db;
 mod migrations;
 mod model;
 mod paths;
 mod runtime;
 
+pub use model::LogEntry;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
 

@@ -12,6 +12,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_state::DB_METRIC_BACKFILL;
+pub use codex_state::LogEntry;
 use codex_state::STATE_DB_FILENAME;
 use codex_state::ThreadMetadataBuilder;
 use serde_json::Value;
