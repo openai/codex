@@ -60,10 +60,6 @@ impl RequestUserInputOverlay {
     }
 
     /// Layout calculation when options are present.
-    ///
-    /// Handles both tight layout (when space is constrained) and normal layout
-    /// (when there's sufficient space for all elements).
-    ///
     fn layout_with_options(
         &self,
         args: OptionsLayoutArgs,
@@ -72,62 +68,30 @@ impl RequestUserInputOverlay {
         let OptionsLayoutArgs {
             available_height,
             width,
-            question_height,
+            mut question_height,
             notes_pref_height,
             footer_pref,
             notes_visible,
         } = args;
-        let options_heights = OptionsHeights {
-            preferred: self.options_preferred_height(width),
-            full: self.options_required_height(width),
-        };
-        let min_options_height = 1u16;
-        let required = question_height.saturating_add(options_heights.preferred);
-
-        if required > available_height {
-            self.layout_with_options_tight(
+        let min_options_height = available_height.min(1);
+        let max_question_height = available_height.saturating_sub(min_options_height);
+        if question_height > max_question_height {
+            question_height = max_question_height;
+            question_lines.truncate(question_height as usize);
+        }
+        self.layout_with_options_normal(
+            OptionsNormalArgs {
                 available_height,
                 question_height,
-                min_options_height,
-                question_lines,
-            )
-        } else {
-            self.layout_with_options_normal(
-                OptionsNormalArgs {
-                    available_height,
-                    question_height,
-                    notes_pref_height,
-                    footer_pref,
-                    notes_visible,
-                },
-                options_heights,
-            )
-        }
-    }
-
-    /// Tight layout for options case: allocate question + options first and drop
-    /// everything else when space is constrained.
-    fn layout_with_options_tight(
-        &self,
-        available_height: u16,
-        question_height: u16,
-        min_options_height: u16,
-        question_lines: &mut Vec<String>,
-    ) -> LayoutPlan {
-        let max_question_height = available_height.saturating_sub(min_options_height);
-        let adjusted_question_height = question_height.min(max_question_height);
-        question_lines.truncate(adjusted_question_height as usize);
-        let options_height = available_height.saturating_sub(adjusted_question_height);
-
-        LayoutPlan {
-            question_height: adjusted_question_height,
-            progress_height: 0,
-            spacer_after_question: 0,
-            options_height,
-            spacer_after_options: 0,
-            notes_height: 0,
-            footer_lines: 0,
-        }
+                notes_pref_height,
+                footer_pref,
+                notes_visible,
+            },
+            OptionsHeights {
+                preferred: self.options_preferred_height(width),
+                full: self.options_required_height(width),
+            },
+        )
     }
 
     /// Normal layout for options case: allocate footer + progress first, and
@@ -144,8 +108,12 @@ impl RequestUserInputOverlay {
             footer_pref,
             notes_visible,
         } = args;
-        let min_options_height = 1u16;
-        let mut options_height = options.preferred.max(min_options_height);
+        let max_options_height = available_height.saturating_sub(question_height);
+        let min_options_height = max_options_height.min(1);
+        let mut options_height = options
+            .preferred
+            .min(max_options_height)
+            .max(min_options_height);
         let used = question_height.saturating_add(options_height);
         let mut remaining = available_height.saturating_sub(used);
 
