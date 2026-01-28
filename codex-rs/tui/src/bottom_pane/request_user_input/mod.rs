@@ -1083,10 +1083,8 @@ impl BottomPaneView for RequestUserInputOverlay {
                     let (result, _) = self.composer.handle_key_event(key_event);
                     if !self.handle_composer_input_result(result) {
                         self.pending_submission_draft = None;
-                        if self.has_options()
-                            && let Some(answer) = self.current_answer_mut()
-                        {
-                            answer.answer_committed = true;
+                        if self.has_options() {
+                            self.select_current_option(true);
                         }
                         self.go_next_or_submit();
                     }
@@ -1983,7 +1981,9 @@ mod tests {
             .composer
             .set_text_content("Notes for option 2".to_string(), Vec::new(), Vec::new());
         overlay.composer.move_cursor_to_end();
+        let draft = overlay.capture_composer_draft();
         if let Some(answer) = overlay.current_answer_mut() {
+            answer.draft = draft;
             answer.answer_committed = true;
         }
 
@@ -2066,7 +2066,9 @@ mod tests {
             .composer
             .set_text_content("Custom answer".to_string(), Vec::new(), Vec::new());
         overlay.composer.move_cursor_to_end();
+        let draft = overlay.capture_composer_draft();
         if let Some(answer) = overlay.current_answer_mut() {
+            answer.draft = draft;
             answer.answer_committed = true;
         }
 
