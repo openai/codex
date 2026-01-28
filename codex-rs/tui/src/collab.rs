@@ -1,9 +1,10 @@
 use crate::history_cell::PlainHistoryCell;
-use crate::render::adapter_ratatui::to_ratatui_line;
 use crate::render::line_utils::prefix_lines;
 use crate::render::model::RenderColor;
+use crate::render::model::RenderLine as Line;
 use crate::render::model::RenderLine;
 use crate::render::model::RenderStyle;
+use crate::render::model::RenderStylize;
 use crate::text_formatting::truncate_text;
 use codex_core::protocol::AgentStatus;
 use codex_core::protocol::CollabAgentInteractionEndEvent;
@@ -12,8 +13,6 @@ use codex_core::protocol::CollabCloseEndEvent;
 use codex_core::protocol::CollabWaitingBeginEvent;
 use codex_core::protocol::CollabWaitingEndEvent;
 use codex_protocol::ThreadId;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
 use std::collections::HashMap;
 
 const COLLAB_PROMPT_PREVIEW_GRAPHEMES: usize = 160;
@@ -164,10 +163,13 @@ fn collab_event(title: impl Into<String>, details: Vec<RenderLine>) -> PlainHist
         .cell("• ", style_dim())
         .cell(title, style_bold())
         .build();
-    let mut lines: Vec<Line<'static>> = vec![to_ratatui_line(&title_line)];
+    let mut lines: Vec<Line> = vec![title_line];
     if !details.is_empty() {
-        let detail_lines = details.iter().map(to_ratatui_line).collect::<Vec<_>>();
-        lines.extend(prefix_lines(detail_lines, "  └ ".dim(), "    ".into()));
+        lines.extend(prefix_lines(
+            details,
+            Line::from(vec!["  └ ".dim()]),
+            Line::from(vec!["    ".into()]),
+        ));
     }
     PlainHistoryCell::new(lines)
 }

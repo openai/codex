@@ -1,13 +1,12 @@
+use crate::render::model::RenderCell as Span;
+use crate::render::model::RenderLine as Line;
+use crate::render::model::RenderStylize;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Clear;
-use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
 use std::cell::RefCell;
@@ -131,8 +130,8 @@ impl Renderable for CustomPromptView {
             width: area.width,
             height: 1,
         };
-        let title_spans: Vec<Span<'static>> = vec![gutter(), self.title.clone().bold()];
-        Paragraph::new(Line::from(title_spans)).render(title_area, buf);
+        let title_spans: Vec<Span> = vec![gutter(), self.title.clone().bold()];
+        Line::from(title_spans).render(title_area, buf);
 
         // Optional context line
         let mut input_y = area.y.saturating_add(1);
@@ -143,8 +142,8 @@ impl Renderable for CustomPromptView {
                 width: area.width,
                 height: 1,
             };
-            let spans: Vec<Span<'static>> = vec![gutter(), context_label.clone().cyan()];
-            Paragraph::new(Line::from(spans)).render(context_area, buf);
+            let spans: Vec<Span> = vec![gutter(), context_label.clone().cyan()];
+            Line::from(spans).render(context_area, buf);
             input_y = input_y.saturating_add(1);
         }
 
@@ -157,7 +156,7 @@ impl Renderable for CustomPromptView {
         };
         if input_area.width >= 2 {
             for row in 0..input_area.height {
-                Paragraph::new(Line::from(vec![gutter()])).render(
+                Line::from(vec![gutter()]).render(
                     Rect {
                         x: input_area.x,
                         y: input_area.y.saturating_add(row),
@@ -188,8 +187,7 @@ impl Renderable for CustomPromptView {
                 let mut state = self.textarea_state.borrow_mut();
                 StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
                 if self.textarea.text().is_empty() {
-                    Paragraph::new(Line::from(self.placeholder.clone().dim()))
-                        .render(textarea_rect, buf);
+                    Line::from(self.placeholder.clone().dim()).render(textarea_rect, buf);
                 }
             }
         }
@@ -207,7 +205,7 @@ impl Renderable for CustomPromptView {
 
         let hint_y = hint_blank_y.saturating_add(1);
         if hint_y < area.y.saturating_add(area.height) {
-            Paragraph::new(standard_popup_hint_line()).render(
+            standard_popup_hint_line().render(
                 Rect {
                     x: area.x,
                     y: hint_y,
@@ -248,6 +246,6 @@ impl CustomPromptView {
     }
 }
 
-fn gutter() -> Span<'static> {
+fn gutter() -> Span {
     "▌ ".cyan()
 }

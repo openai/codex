@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use crate::render::model::RenderLine as Line;
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::DisableBracketedPaste;
@@ -31,7 +32,6 @@ use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::layout::Offset;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
 use tokio::sync::broadcast;
 use tokio_stream::Stream;
 
@@ -237,7 +237,7 @@ pub struct Tui {
     draw_tx: broadcast::Sender<()>,
     event_broker: Arc<EventBroker>,
     pub(crate) terminal: Terminal,
-    pending_history_lines: Vec<Line<'static>>,
+    pending_history_lines: Vec<Line>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     suspend_context: SuspendContext,
@@ -450,7 +450,7 @@ impl Tui {
         Ok(())
     }
 
-    pub fn insert_history_lines(&mut self, lines: Vec<Line<'static>>) {
+    pub fn insert_history_lines(&mut self, lines: Vec<Line>) {
         self.pending_history_lines.extend(lines);
         self.frame_requester().schedule_frame();
     }

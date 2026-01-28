@@ -2,10 +2,9 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
-use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
-use ratatui::text::Span;
+use crate::render::model::RenderCell as Span;
+use crate::render::model::RenderColor;
+use crate::render::model::RenderStyle;
 
 use crate::color::blend;
 use crate::terminal_palette::default_bg;
@@ -18,7 +17,7 @@ fn elapsed_since_start() -> Duration {
     start.elapsed()
 }
 
-pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
+pub(crate) fn shimmer_spans(text: &str) -> Vec<Span> {
     let chars: Vec<char> = text.chars().collect();
     if chars.is_empty() {
         return Vec::new();
@@ -35,7 +34,7 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
         .unwrap_or(false);
     let band_half_width = 5.0;
 
-    let mut spans: Vec<Span<'static>> = Vec::with_capacity(chars.len());
+    let mut spans: Vec<Span> = Vec::with_capacity(chars.len());
     let base_color = default_fg().unwrap_or((128, 128, 128));
     let highlight_color = default_bg().unwrap_or((255, 255, 255));
     for (i, ch) in chars.iter().enumerate() {
@@ -52,14 +51,10 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
         let style = if has_true_color {
             let highlight = t.clamp(0.0, 1.0);
             let (r, g, b) = blend(highlight_color, base_color, highlight * 0.9);
-            // Allow custom RGB colors, as the implementation is thoughtfully
-            // adjusting the level of the default foreground color.
-            #[allow(clippy::disallowed_methods)]
-            {
-                Style::default()
-                    .fg(Color::Rgb(r, g, b))
-                    .add_modifier(Modifier::BOLD)
-            }
+            RenderStyle::builder()
+                .fg(RenderColor::Rgb(r, g, b))
+                .bold()
+                .build()
         } else {
             color_for_level(t)
         };
@@ -68,13 +63,13 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     spans
 }
 
-fn color_for_level(intensity: f32) -> Style {
+fn color_for_level(intensity: f32) -> RenderStyle {
     // Tune fallback styling so the shimmer band reads even without RGB support.
     if intensity < 0.2 {
-        Style::default().add_modifier(Modifier::DIM)
+        RenderStyle::builder().dim().build()
     } else if intensity < 0.6 {
-        Style::default()
+        RenderStyle::default()
     } else {
-        Style::default().add_modifier(Modifier::BOLD)
+        RenderStyle::builder().bold().build()
     }
 }

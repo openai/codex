@@ -1,3 +1,5 @@
+use crate::render::model::RenderLine as Line;
+use crate::render::model::RenderStylize;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -5,8 +7,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 
@@ -42,7 +42,7 @@ pub(crate) struct ExperimentalFeaturesView {
     complete: bool,
     app_event_tx: AppEventSender,
     header: Box<dyn Renderable>,
-    footer_hint: Line<'static>,
+    footer_hint: Line,
 }
 
 impl ExperimentalFeaturesView {
@@ -345,7 +345,7 @@ impl Renderable for ExperimentalFeaturesView {
     }
 }
 
-fn experimental_popup_hint_line() -> Line<'static> {
+fn experimental_popup_hint_line() -> Line {
     Line::from(vec![
         key_hint::plain(KeyCode::Enter).into(),
         " toggle · ".into(),

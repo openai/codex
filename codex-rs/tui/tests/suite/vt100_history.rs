@@ -36,7 +36,7 @@ impl TestScenario {
     }
 
     fn run_insert(&mut self, lines: Vec<Line<'static>>) {
-        codex_tui::insert_history::insert_history_lines(&mut self.term, lines)
+        codex_tui::insert_history::insert_history_ratatui_lines(&mut self.term, lines)
             .expect("Failed to insert history lines in test");
     }
 }

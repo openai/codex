@@ -99,6 +99,7 @@ tokio-util = { workspace = true, features = ["time"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
+ncurses = "6.0"
 
 [target.'cfg(windows)'.dependencies]
 which = { workspace = true }

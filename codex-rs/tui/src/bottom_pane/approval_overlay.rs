@@ -13,7 +13,11 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::render::adapter_ratatui::to_ratatui_text;
 use crate::render::highlight::highlight_bash_to_lines;
+use crate::render::model::RenderCell as Span;
+use crate::render::model::RenderLine as Line;
+use crate::render::model::RenderStylize;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use codex_core::features::Feature;
@@ -30,9 +34,6 @@ use crossterm::event::KeyModifiers;
 use mcp_types::RequestId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 
@@ -344,7 +345,7 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 reason,
                 proposed_execpolicy_amendment,
             } => {
-                let mut header: Vec<Line<'static>> = Vec::new();
+                let mut header: Vec<Line> = Vec::new();
                 if let Some(reason) = reason {
                     header.push(Line::from(vec!["Reason: ".into(), reason.italic()]));
                     header.push(Line::from(""));
@@ -361,7 +362,9 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                         command,
                         proposed_execpolicy_amendment,
                     },
-                    header: Box::new(Paragraph::new(header).wrap(Wrap { trim: false })),
+                    header: Box::new(
+                        Paragraph::new(to_ratatui_text(&header)).wrap(Wrap { trim: false }),
+                    ),
                 }
             }
             ApprovalRequest::ApplyPatch {
@@ -375,8 +378,11 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                     && !reason.is_empty()
                 {
                     header.push(Box::new(
-                        Paragraph::new(Line::from_iter(["Reason: ".into(), reason.italic()]))
-                            .wrap(Wrap { trim: false }),
+                        Paragraph::new(to_ratatui_text(&[Line::from_iter([
+                            "Reason: ".into(),
+                            reason.italic(),
+                        ])]))
+                        .wrap(Wrap { trim: false }),
                     ));
                     header.push(Box::new(Line::from("")));
                 }
@@ -391,12 +397,12 @@ impl From<ApprovalRequest> for ApprovalRequestState {
                 request_id,
                 message,
             } => {
-                let header = Paragraph::new(vec![
+                let lines = vec![
                     Line::from(vec!["Server: ".into(), server_name.clone().bold()]),
                     Line::from(""),
                     Line::from(message),
-                ])
-                .wrap(Wrap { trim: false });
+                ];
+                let header = Paragraph::new(to_ratatui_text(&lines)).wrap(Wrap { trim: false });
                 Self {
                     variant: ApprovalVariant::McpElicitation {
                         server_name,
@@ -690,7 +696,7 @@ mod tests {
             .map(|line| {
                 line.spans
                     .iter()
-                    .map(|span| span.content.as_ref())
+                    .map(|span| span.content.as_str())
                     .collect::<String>()
             })
             .collect();

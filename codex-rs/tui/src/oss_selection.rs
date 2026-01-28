@@ -1,6 +1,14 @@
 use std::io;
 use std::sync::LazyLock;
 
+use crate::render::adapter_ratatui::to_ratatui_text;
+use crate::render::model::RenderAlignment;
+use crate::render::model::RenderCell as Span;
+use crate::render::model::RenderColor;
+use crate::render::model::RenderLine as Line;
+use crate::render::model::RenderStyle;
+use crate::render::model::RenderStylize;
+use crate::render::renderable::Renderable;
 use codex_core::DEFAULT_LMSTUDIO_PORT;
 use codex_core::DEFAULT_OLLAMA_PORT;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
@@ -20,18 +28,11 @@ use crossterm::terminal::enable_raw_mode;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Alignment;
 use ratatui::layout::Constraint;
 use ratatui::layout::Direction;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
-use ratatui::prelude::*;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
-use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
@@ -55,7 +56,7 @@ enum ProviderStatus {
 ///
 /// The `key` is matched case-insensitively.
 struct SelectOption {
-    label: Line<'static>,
+    label: Line,
     description: &'static str,
     key: KeyCode,
     provider_id: &'static str,
@@ -116,10 +117,7 @@ impl OssSelectionWidget<'_> {
         ];
 
         let mut contents: Vec<Line> = vec![
-            Line::from(vec![
-                "? ".fg(Color::Blue),
-                "Select an open-source provider".bold(),
-            ]),
+            Line::from(vec!["? ".blue(), "Select an open-source provider".bold()]),
             Line::from(""),
             Line::from("  Choose which local AI server to use for your session."),
             Line::from(""),
@@ -130,19 +128,21 @@ impl OssSelectionWidget<'_> {
             let (status_symbol, status_color) = get_status_symbol_and_color(&provider.status);
             contents.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(status_symbol, Style::default().fg(status_color)),
+                Span::styled(
+                    status_symbol,
+                    RenderStyle::builder().fg(status_color).build(),
+                ),
                 Span::raw(format!(" {} ", provider.name)),
             ]));
         }
         contents.push(Line::from(""));
-        contents.push(Line::from("  ● Running  ○ Not Running").add_modifier(Modifier::DIM));
+        contents.push(Line::from("  ● Running  ○ Not Running").dim());
 
         contents.push(Line::from(""));
-        contents.push(
-            Line::from("  Press Enter to select • Ctrl+C to exit").add_modifier(Modifier::DIM),
-        );
+        contents.push(Line::from("  Press Enter to select • Ctrl+C to exit").dim());
 
-        let confirmation_prompt = Paragraph::new(contents).wrap(Wrap { trim: false });
+        let confirmation_prompt =
+            Paragraph::new(to_ratatui_text(&contents)).wrap(Wrap { trim: false });
 
         Ok(Self {
             select_options: &OSS_SELECT_OPTIONS,
@@ -250,11 +250,17 @@ impl WidgetRef for &OssSelectionWidget<'_> {
             .enumerate()
             .map(|(idx, opt)| {
                 let style = if idx == self.selected_option {
-                    Style::new().bg(Color::Cyan).fg(Color::Black)
+                    RenderStyle::builder()
+                        .bg(RenderColor::Cyan)
+                        .fg(RenderColor::Rgb(0, 0, 0))
+                        .build()
                 } else {
-                    Style::new().bg(Color::DarkGray)
+                    RenderStyle::builder().bg(RenderColor::DarkGray).build()
                 };
-                opt.label.clone().alignment(Alignment::Center).style(style)
+                opt.label
+                    .clone()
+                    .alignment(RenderAlignment::Center)
+                    .style(style)
             })
             .collect();
 
@@ -281,16 +287,21 @@ impl WidgetRef for &OssSelectionWidget<'_> {
         }
 
         Line::from(self.select_options[self.selected_option].description)
-            .style(Style::new().italic().fg(Color::DarkGray))
+            .style(
+                RenderStyle::builder()
+                    .italic()
+                    .fg(RenderColor::DarkGray)
+                    .build(),
+            )
             .render(description_area.inner(Margin::new(1, 0)), buf);
     }
 }
 
-fn get_status_symbol_and_color(status: &ProviderStatus) -> (&'static str, Color) {
+fn get_status_symbol_and_color(status: &ProviderStatus) -> (&'static str, RenderColor) {
     match status {
-        ProviderStatus::Running => ("●", Color::Green),
-        ProviderStatus::NotRunning => ("○", Color::Red),
-        ProviderStatus::Unknown => ("?", Color::Yellow),
+        ProviderStatus::Running => ("●", RenderColor::Green),
+        ProviderStatus::NotRunning => ("○", RenderColor::Red),
+        ProviderStatus::Unknown => ("?", RenderColor::Yellow),
     }
 }
 

@@ -1,4 +1,4 @@
-use ratatui::text::Line;
+use crate::render::model::RenderLine as Line;
 
 use crate::markdown;
 
@@ -32,7 +32,7 @@ impl MarkdownStreamCollector {
     /// Render the full buffer and return only the newly completed logical lines
     /// since the last commit. When the buffer does not end with a newline, the
     /// final rendered line is considered incomplete and is not emitted.
-    pub fn commit_complete_lines(&mut self) -> Vec<Line<'static>> {
+    pub fn commit_complete_lines(&mut self) -> Vec<Line> {
         let source = self.buffer.clone();
         let last_newline_idx = source.rfind('\n');
         let source = if let Some(last_newline_idx) = last_newline_idx {
@@ -40,7 +40,7 @@ impl MarkdownStreamCollector {
         } else {
             return Vec::new();
         };
-        let mut rendered: Vec<Line<'static>> = Vec::new();
+        let mut rendered: Vec<Line> = Vec::new();
         markdown::append_markdown(&source, self.width, &mut rendered);
         let mut complete_line_count = rendered.len();
         if complete_line_count > 0
@@ -66,7 +66,7 @@ impl MarkdownStreamCollector {
     /// If the buffer does not end with a newline, a temporary one is appended
     /// for rendering. Optionally unwraps ```markdown language fences in
     /// non-test builds.
-    pub fn finalize_and_drain(&mut self) -> Vec<Line<'static>> {
+    pub fn finalize_and_drain(&mut self) -> Vec<Line> {
         let raw_buffer = self.buffer.clone();
         let mut source: String = raw_buffer.clone();
         if !source.ends_with('\n') {
@@ -81,7 +81,7 @@ impl MarkdownStreamCollector {
         );
         tracing::trace!("markdown finalize (raw source):\n---\n{source}\n---");
 
-        let mut rendered: Vec<Line<'static>> = Vec::new();
+        let mut rendered: Vec<Line> = Vec::new();
         markdown::append_markdown(&source, self.width, &mut rendered);
 
         let out = if self.committed_line_count >= rendered.len() {
@@ -97,10 +97,7 @@ impl MarkdownStreamCollector {
 }
 
 #[cfg(test)]
-pub(crate) fn simulate_stream_markdown_for_tests(
-    deltas: &[&str],
-    finalize: bool,
-) -> Vec<Line<'static>> {
+pub(crate) fn simulate_stream_markdown_for_tests(deltas: &[&str], finalize: bool) -> Vec<Line> {
     let mut collector = MarkdownStreamCollector::new(None);
     let mut out = Vec::new();
     for d in deltas {
@@ -118,7 +115,11 @@ pub(crate) fn simulate_stream_markdown_for_tests(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::Color;
+    use crate::render::model::RenderColor;
+
+    fn line_all_fg(line: &Line, color: RenderColor) -> bool {
+        line.spans.iter().all(|s| s.style.fg == Some(color))
+    }
 
     #[tokio::test]
     async fn no_commit_until_newline() {
@@ -144,11 +145,10 @@ mod tests {
         let out = super::simulate_stream_markdown_for_tests(&["> Hello\n"], true);
         assert_eq!(out.len(), 1);
         let l = &out[0];
-        assert_eq!(
-            l.style.fg,
-            Some(Color::Green),
+        assert!(
+            line_all_fg(l, RenderColor::Green),
             "expected blockquote line fg green, got {:?}",
-            l.style.fg
+            l.spans
         );
     }
 
@@ -171,16 +171,16 @@ mod tests {
             })
             .collect();
         assert_eq!(non_blank.len(), 2);
-        assert_eq!(non_blank[0].style.fg, Some(Color::Green));
-        assert_eq!(non_blank[1].style.fg, Some(Color::Green));
+        assert!(line_all_fg(&non_blank[0], RenderColor::Green));
+        assert!(line_all_fg(&non_blank[1], RenderColor::Green));
     }
 
     #[tokio::test]
     async fn e2e_stream_blockquote_with_list_items_is_green() {
         let out = super::simulate_stream_markdown_for_tests(&["> - item 1\n> - item 2\n"], true);
         assert_eq!(out.len(), 2);
-        assert_eq!(out[0].style.fg, Some(Color::Green));
-        assert_eq!(out[1].style.fg, Some(Color::Green));
+        assert!(line_all_fg(&out[0], RenderColor::Green));
+        assert!(line_all_fg(&out[1], RenderColor::Green));
     }
 
     #[tokio::test]
@@ -207,7 +207,7 @@ mod tests {
         let has_light_blue = line
             .spans
             .iter()
-            .any(|s| s.style.fg == Some(ratatui::style::Color::LightBlue));
+            .any(|s| s.style.fg == Some(RenderColor::LightBlue));
         assert!(
             has_light_blue,
             "expected an ordered-list marker span with light blue fg on: {line:?}"
@@ -239,12 +239,11 @@ mod tests {
             "expected wrapped blockquote to span multiple lines"
         );
         for (i, l) in non_blank.iter().enumerate() {
-            assert_eq!(
-                l.spans[0].style.fg,
-                Some(Color::Green),
+            assert!(
+                line_all_fg(l, RenderColor::Green),
                 "wrapped line {} should preserve green style, got {:?}",
                 i,
-                l.spans[0].style.fg
+                l.spans
             );
         }
     }
@@ -292,7 +291,7 @@ mod tests {
             "expected a blank separator then the heading line"
         );
 
-        let line_to_string = |l: &ratatui::text::Line<'_>| -> String {
+        let line_to_string = |l: &Line| -> String {
             l.spans
                 .iter()
                 .map(|s| s.content.clone())
@@ -353,7 +352,7 @@ mod tests {
         );
 
         // Sanity check raw markdown rendering for a simple line does not produce spurious extras.
-        let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
+        let mut rendered: Vec<Line> = Vec::new();
         crate::markdown::append_markdown("Hello.\n", None, &mut rendered);
         let rendered_strings: Vec<String> = rendered
             .iter()
@@ -372,7 +371,7 @@ mod tests {
         );
     }
 
-    fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
+    fn lines_to_plain_strings(lines: &[Line]) -> Vec<String> {
         lines
             .iter()
             .map(|l| {
@@ -413,7 +412,7 @@ mod tests {
         let streamed = simulate_stream_markdown_for_tests(&deltas, true);
         let streamed_str = lines_to_plain_strings(&streamed);
 
-        let mut rendered_all: Vec<ratatui::text::Line<'static>> = Vec::new();
+        let mut rendered_all: Vec<Line> = Vec::new();
         crate::markdown::append_markdown(input, None, &mut rendered_all);
         let rendered_all_str = lines_to_plain_strings(&rendered_all);
 
@@ -452,7 +451,7 @@ mod tests {
         let marker_span = &line.spans[0];
         assert_eq!(
             marker_span.style.fg,
-            Some(Color::LightBlue),
+            Some(RenderColor::LightBlue),
             "expected LightBlue 3rd-level ordered marker, got {:?}",
             marker_span.style.fg
         );
@@ -519,7 +518,7 @@ mod tests {
         let streamed_strs = lines_to_plain_strings(&streamed);
 
         let full: String = deltas.iter().copied().collect();
-        let mut rendered_all: Vec<ratatui::text::Line<'static>> = Vec::new();
+        let mut rendered_all: Vec<Line> = Vec::new();
         crate::markdown::append_markdown(&full, None, &mut rendered_all);
         let rendered_all_strs = lines_to_plain_strings(&rendered_all);
 
@@ -607,7 +606,7 @@ mod tests {
 
         // Compute a full render for diagnostics only.
         let full: String = deltas.iter().copied().collect();
-        let mut rendered_all: Vec<ratatui::text::Line<'static>> = Vec::new();
+        let mut rendered_all: Vec<Line> = Vec::new();
         crate::markdown::append_markdown(&full, None, &mut rendered_all);
 
         // Also assert exact expected plain strings for clarity.
@@ -634,7 +633,7 @@ mod tests {
         let streamed = simulate_stream_markdown_for_tests(deltas, true);
         let streamed_strs = lines_to_plain_strings(&streamed);
         let full: String = deltas.iter().copied().collect();
-        let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
+        let mut rendered: Vec<Line> = Vec::new();
         crate::markdown::append_markdown(&full, None, &mut rendered);
         let rendered_strs = lines_to_plain_strings(&rendered);
         assert_eq!(streamed_strs, rendered_strs, "full:\n---\n{full}\n---");

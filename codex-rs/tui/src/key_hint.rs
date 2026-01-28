@@ -1,10 +1,9 @@
+use crate::render::model::RenderCell as Span;
+use crate::render::model::RenderStyle;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
-use ratatui::style::Style;
-use ratatui::style::Stylize;
-use ratatui::text::Span;
 
 #[cfg(test)]
 const ALT_PREFIX: &str = "⌥ + ";
@@ -67,12 +66,12 @@ fn modifiers_to_string(modifiers: KeyModifiers) -> String {
     result
 }
 
-impl From<KeyBinding> for Span<'static> {
+impl From<KeyBinding> for Span {
     fn from(binding: KeyBinding) -> Self {
         (&binding).into()
     }
 }
-impl From<&KeyBinding> for Span<'static> {
+impl From<&KeyBinding> for Span {
     fn from(binding: &KeyBinding) -> Self {
         let KeyBinding { key, modifiers } = binding;
         let modifiers = modifiers_to_string(*modifiers);
@@ -91,8 +90,8 @@ impl From<&KeyBinding> for Span<'static> {
     }
 }
 
-fn key_hint_style() -> Style {
-    Style::default().dim()
+fn key_hint_style() -> RenderStyle {
+    RenderStyle::builder().dim().build()
 }
 
 pub(crate) fn has_ctrl_or_alt(mods: KeyModifiers) -> bool {

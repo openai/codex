@@ -36,15 +36,18 @@
 use crate::clipboard_paste::is_probably_wsl;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+use crate::render::adapter_ratatui::to_ratatui_span;
+use crate::render::adapter_ratatui::to_ratatui_text;
 use crate::render::line_utils::prefix_lines;
+use crate::render::model::RenderCell as Span;
+use crate::render::model::RenderLine as Line;
+use crate::render::model::RenderStylize;
+use crate::render::renderable::Renderable;
 use crate::status::format_tokens_compact;
 use crate::ui_consts::FOOTER_INDENT_COLS;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
@@ -98,7 +101,7 @@ impl CollaborationModeIndicator {
         }
     }
 
-    fn styled_span(self, show_cycle_hint: bool) -> Span<'static> {
+    fn styled_span(self, show_cycle_hint: bool) -> Span {
         let label = self.label(show_cycle_hint);
         match self {
             CollaborationModeIndicator::Plan => Span::from(label).magenta(),
@@ -188,13 +191,13 @@ pub(crate) fn footer_height(props: FooterProps) -> u16 {
 }
 
 /// Render a single precomputed footer line.
-pub(crate) fn render_footer_line(area: Rect, buf: &mut Buffer, line: Line<'static>) {
-    Paragraph::new(prefix_lines(
+pub(crate) fn render_footer_line(area: Rect, buf: &mut Buffer, line: Line) {
+    let lines = prefix_lines(
         vec![line],
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
-    ))
-    .render(area, buf);
+    );
+    Paragraph::new(to_ratatui_text(&lines)).render(area, buf);
 }
 
 /// Render footer content directly from `FooterProps`.
@@ -213,7 +216,7 @@ pub(crate) fn render_footer_from_props(
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
 ) {
-    Paragraph::new(prefix_lines(
+    let lines = prefix_lines(
         footer_from_props_lines(
             props,
             collaboration_mode_indicator,
@@ -223,8 +226,8 @@ pub(crate) fn render_footer_from_props(
         ),
         " ".repeat(FOOTER_INDENT_COLS).into(),
         " ".repeat(FOOTER_INDENT_COLS).into(),
-    ))
-    .render(area, buf);
+    );
+    Paragraph::new(to_ratatui_text(&lines)).render(area, buf);
 }
 
 pub(crate) fn left_fits(area: Rect, left_width: u16) -> bool {
@@ -249,7 +252,7 @@ struct LeftSideState {
 fn left_side_line(
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     state: LeftSideState,
-) -> Line<'static> {
+) -> Line {
     let mut line = Line::from("");
     match state.hint {
         SummaryHintKind::None => {}
@@ -279,7 +282,7 @@ fn left_side_line(
 
 pub(crate) enum SummaryLeft {
     Default,
-    Custom(Line<'static>),
+    Custom(Line),
     None,
 }
 
@@ -310,7 +313,7 @@ pub(crate) fn single_line_footer_layout(
         return (SummaryLeft::Default, true);
     }
 
-    let state_line = |state: LeftSideState| -> Line<'static> {
+    let state_line = |state: LeftSideState| -> Line {
         if state == default_state {
             default_line.clone()
         } else {
@@ -480,7 +483,7 @@ pub(crate) fn can_show_left_with_context(area: Rect, left_width: u16, context_wi
     left_extent <= context_x.saturating_sub(area.x)
 }
 
-pub(crate) fn render_context_right(area: Rect, buf: &mut Buffer, line: &Line<'static>) {
+pub(crate) fn render_context_right(area: Rect, buf: &mut Buffer, line: &Line) {
     if area.is_empty() {
         return;
     }
@@ -502,7 +505,8 @@ pub(crate) fn render_context_right(area: Rect, buf: &mut Buffer, line: &Line<'st
         }
         let remaining = max_x.saturating_sub(x);
         let draw_width = span_width.min(remaining);
-        buf.set_span(x, y, span, draw_width);
+        let rt_span = to_ratatui_span(span);
+        buf.set_span(x, y, &rt_span, draw_width);
         x = x.saturating_add(span_width);
     }
 }
@@ -537,7 +541,7 @@ fn footer_from_props_lines(
     show_cycle_hint: bool,
     show_shortcuts_hint: bool,
     show_queue_hint: bool,
-) -> Vec<Line<'static>> {
+) -> Vec<Line> {
     match props.mode {
         FooterMode::QuitShortcutReminder => {
             vec![quit_shortcut_reminder_line(props.quit_shortcut_key)]
@@ -608,7 +612,7 @@ pub(crate) fn footer_hint_items_width(items: &[(String, String)]) -> u16 {
     footer_hint_items_line(items).width() as u16
 }
 
-fn footer_hint_items_line(items: &[(String, String)]) -> Line<'static> {
+fn footer_hint_items_line(items: &[(String, String)]) -> Line {
     let mut spans = Vec::with_capacity(items.len() * 4);
     for (idx, (key, label)) in items.iter().enumerate() {
         spans.push(" ".into());
@@ -629,11 +633,11 @@ struct ShortcutsState {
     collaboration_modes_enabled: bool,
 }
 
-fn quit_shortcut_reminder_line(key: KeyBinding) -> Line<'static> {
+fn quit_shortcut_reminder_line(key: KeyBinding) -> Line {
     Line::from(vec![key.into(), " again to quit".into()]).dim()
 }
 
-fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
+fn esc_hint_line(esc_backtrack_hint: bool) -> Line {
     let esc = key_hint::plain(KeyCode::Esc);
     if esc_backtrack_hint {
         Line::from(vec![esc.into(), " again to edit previous message".into()]).dim()
@@ -648,7 +652,7 @@ fn esc_hint_line(esc_backtrack_hint: bool) -> Line<'static> {
     }
 }
 
-fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
+fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line> {
     let mut commands = Line::from("");
     let mut shell_commands = Line::from("");
     let mut newline = Line::from("");
@@ -699,7 +703,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     build_columns(ordered)
 }
 
-fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
+fn build_columns(entries: Vec<Line>) -> Vec<Line> {
     if entries.is_empty() {
         return Vec::new();
     }
@@ -734,7 +738,7 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
         .map(|chunk| {
             let mut line = Line::from("");
             for (col, entry) in chunk.iter().enumerate() {
-                line.extend(entry.spans.clone());
+                line.spans.extend(entry.spans.clone());
                 if col < COLUMNS - 1 {
                     let target_width = column_widths[col];
                     let padding = target_width.saturating_sub(entry.width()) + COLUMN_GAP;
@@ -746,7 +750,7 @@ fn build_columns(entries: Vec<Line<'static>>) -> Vec<Line<'static>> {
         .collect()
 }
 
-pub(crate) fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line<'static> {
+pub(crate) fn context_window_line(percent: Option<i64>, used_tokens: Option<i64>) -> Line {
     if let Some(percent) = percent {
         let percent = percent.clamp(0, 100);
         return Line::from(vec![Span::from(format!("{percent}% context left")).dim()]);
@@ -820,7 +824,7 @@ impl ShortcutDescriptor {
         self.bindings.iter().find(|binding| binding.matches(state))
     }
 
-    fn overlay_entry(&self, state: ShortcutsState) -> Option<Line<'static>> {
+    fn overlay_entry(&self, state: ShortcutsState) -> Option<Line> {
         let binding = self.binding_for(state)?;
         let mut line = Line::from(vec![self.prefix.into(), binding.key.into()]);
         match self.id {
@@ -828,7 +832,7 @@ impl ShortcutDescriptor {
                 if state.esc_backtrack_hint {
                     line.push_span(" again to edit previous message");
                 } else {
-                    line.extend(vec![
+                    line.spans.extend(vec![
                         " ".into(),
                         key_hint::plain(KeyCode::Esc).into(),
                         " to edit previous message".into(),

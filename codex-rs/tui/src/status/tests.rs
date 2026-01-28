@@ -1,6 +1,7 @@
 use super::new_status_output;
 use super::rate_limit_snapshot_display;
 use crate::history_cell::HistoryCell;
+use crate::render::model::RenderLine as Line;
 use chrono::Duration as ChronoDuration;
 use chrono::TimeZone;
 use chrono::Utc;
@@ -18,7 +19,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ReasoningEffort;
 use insta::assert_snapshot;
-use ratatui::prelude::*;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -48,13 +48,13 @@ fn token_info_for(model_slug: &str, config: &Config, usage: &TokenUsage) -> Toke
     }
 }
 
-fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
+fn render_lines(lines: &[Line]) -> Vec<String> {
     lines
         .iter()
         .map(|line| {
             line.spans
                 .iter()
-                .map(|span| span.content.as_ref())
+                .map(|span| span.content.as_str())
                 .collect::<String>()
         })
         .collect()

@@ -72,6 +72,10 @@
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::has_ctrl_or_alt;
+use crate::render::adapter_ratatui::to_ratatui_span;
+use crate::render::model::RenderCell as Span;
+use crate::render::model::RenderLine as Line;
+use crate::render::model::RenderStylize;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -81,9 +85,6 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
@@ -290,7 +291,7 @@ pub(crate) struct ChatComposer {
 
 #[derive(Clone, Debug)]
 struct FooterFlash {
-    line: Line<'static>,
+    line: Line,
     expires_at: Instant,
 }
 
@@ -679,7 +680,7 @@ impl ChatComposer {
     }
 
     #[cfg(test)]
-    pub(crate) fn show_footer_flash(&mut self, line: Line<'static>, duration: Duration) {
+    pub(crate) fn show_footer_flash(&mut self, line: Line, duration: Duration) {
         let expires_at = Instant::now()
             .checked_add(duration)
             .unwrap_or_else(Instant::now);
@@ -3001,10 +3002,11 @@ impl Renderable for ChatComposer {
             } else {
                 "›".dim()
             };
+            let prompt_span = to_ratatui_span(&prompt);
             buf.set_span(
                 textarea_rect.x - LIVE_PREFIX_COLS,
                 textarea_rect.y,
-                &prompt,
+                &prompt_span,
                 textarea_rect.width,
             );
         }
@@ -3022,8 +3024,7 @@ impl Renderable for ChatComposer {
             };
             if !textarea_rect.is_empty() {
                 let placeholder = Span::from(text).dim();
-                Line::from(vec![placeholder])
-                    .render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
+                Line::from(vec![placeholder]).render(textarea_rect.inner(Margin::new(0, 0)), buf);
             }
         }
     }
@@ -6031,7 +6032,12 @@ mod tests {
                 let message = cell
                     .display_lines(80)
                     .into_iter()
-                    .map(|line| line.to_string())
+                    .map(|line| {
+                        line.spans
+                            .iter()
+                            .map(|span| span.content.clone())
+                            .collect::<String>()
+                    })
                     .collect::<Vec<_>>()
                     .join("\n");
                 assert!(message.contains("expected key=value"));
@@ -6079,7 +6085,12 @@ mod tests {
                 let message = cell
                     .display_lines(80)
                     .into_iter()
-                    .map(|line| line.to_string())
+                    .map(|line| {
+                        line.spans
+                            .iter()
+                            .map(|span| span.content.as_str())
+                            .collect::<String>()
+                    })
                     .collect::<Vec<_>>()
                     .join("\n");
                 assert!(message.to_lowercase().contains("missing required args"));

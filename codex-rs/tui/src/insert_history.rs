@@ -19,14 +19,32 @@ use ratatui::layout::Size;
 use ratatui::prelude::Backend;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
-use ratatui::text::Line;
 use ratatui::text::Span;
+
+use crate::render::adapter_ratatui::from_ratatui_lines;
+use crate::render::adapter_ratatui::to_ratatui_lines;
+use crate::render::model::RenderLine;
+
+type RtSpan = Span<'static>;
+
+/// Insert `lines` above the viewport using the terminal's backend writer
+/// (avoids direct stdout references).
+pub fn insert_history_ratatui_lines<B>(
+    terminal: &mut crate::custom_terminal::Terminal<B>,
+    lines: Vec<ratatui::text::Line<'static>>,
+) -> io::Result<()>
+where
+    B: Backend + Write,
+{
+    let lines = from_ratatui_lines(&lines);
+    insert_history_lines(terminal, lines)
+}
 
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
 pub fn insert_history_lines<B>(
     terminal: &mut crate::custom_terminal::Terminal<B>,
-    lines: Vec<Line>,
+    lines: Vec<RenderLine>,
 ) -> io::Result<()>
 where
     B: Backend + Write,
@@ -41,6 +59,7 @@ where
     // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
     // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
     let wrapped = word_wrap_lines_borrowed(&lines, area.width.max(1) as usize);
+    let wrapped = to_ratatui_lines(&wrapped);
     let wrapped_lines = wrapped.len() as u16;
     let cursor_top = if area.bottom() < screen_size.height {
         // If the viewport is not at the bottom of the screen, scroll it down to make room.
@@ -110,7 +129,7 @@ where
         queue!(writer, Clear(ClearType::UntilNewLine))?;
         // Merge line-level style into each span so that ANSI colors reflect
         // line styles (e.g., blockquotes with green fg).
-        let merged_spans: Vec<Span> = line
+        let merged_spans: Vec<RtSpan> = line
             .spans
             .iter()
             .map(|s| Span {
@@ -243,7 +262,7 @@ impl ModifierDiff {
 
 fn write_spans<'a, I>(mut writer: &mut impl Write, content: I) -> io::Result<()>
 where
-    I: IntoIterator<Item = &'a Span<'a>>,
+    I: IntoIterator<Item = &'a RtSpan>,
 {
     let mut fg = Color::Reset;
     let mut bg = Color::Reset;
@@ -286,9 +305,11 @@ where
 mod tests {
     use super::*;
     use crate::markdown_render::render_markdown_text;
+    use crate::render::adapter_ratatui::from_ratatui_lines;
+    use crate::render::model::RenderCell;
+    use crate::render::model::RenderColor;
     use crate::test_backend::VT100Backend;
     use ratatui::layout::Rect;
-    use ratatui::style::Color;
 
     #[test]
     fn writes_bold_then_regular_spans() {
@@ -330,8 +351,7 @@ mod tests {
         term.set_viewport_area(viewport);
 
         // Build a blockquote-like line: apply line-level green style and prefix "> "
-        let mut line: Line<'static> = Line::from(vec!["> ".into(), "Hello world".into()]);
-        line = line.style(Color::Green);
+        let line = RenderLine::from(vec!["> ".into(), "Hello world".into()]).green();
         insert_history_lines(&mut term, vec![line])
             .expect("Failed to insert history lines in test");
 
@@ -365,11 +385,11 @@ mod tests {
         term.set_viewport_area(viewport);
 
         // Create a long blockquote with a distinct prefix and enough text to wrap.
-        let mut line: Line<'static> = Line::from(vec![
+        let line = RenderLine::from(vec![
             "> ".into(),
             "This is a long quoted line that should wrap".into(),
-        ]);
-        line = line.style(Color::Green);
+        ])
+        .green();
 
         insert_history_lines(&mut term, vec![line])
             .expect("Failed to insert history lines in test");
@@ -429,9 +449,9 @@ mod tests {
         term.set_viewport_area(viewport);
 
         // First span colored, rest plain.
-        let line: Line<'static> = Line::from(vec![
-            Span::styled("1. ", ratatui::style::Style::default().fg(Color::LightBlue)),
-            Span::raw("Hello world"),
+        let line = RenderLine::from(vec![
+            RenderCell::color("1. ", RenderColor::LightBlue),
+            RenderCell::raw("Hello world"),
         ]);
 
         insert_history_lines(&mut term, vec![line])
@@ -482,7 +502,7 @@ mod tests {
         // Markdown with five levels (ordered → unordered → ordered → unordered → unordered).
         let md = "1. First\n   - Second level\n     1. Third level (ordered)\n        - Fourth level (bullet)\n          - Fifth level to test indent consistency\n";
         let text = render_markdown_text(md);
-        let lines: Vec<Line<'static>> = text.lines.clone();
+        let lines: Vec<RenderLine> = from_ratatui_lines(&text.lines);
 
         let width: u16 = 60;
         let height: u16 = 12;

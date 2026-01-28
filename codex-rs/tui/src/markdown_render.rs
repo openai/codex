@@ -1,4 +1,9 @@
+use crate::render::adapter_ratatui::to_ratatui_text;
 use crate::render::line_utils::line_to_static;
+use crate::render::model::RenderCell as Span;
+use crate::render::model::RenderColor;
+use crate::render::model::RenderLine as Line;
+use crate::render::model::RenderStyle;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use pulldown_cmark::CodeBlockKind;
@@ -9,60 +14,58 @@ use pulldown_cmark::Options;
 use pulldown_cmark::Parser;
 use pulldown_cmark::Tag;
 use pulldown_cmark::TagEnd;
-use ratatui::style::Style;
-use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::text::Text;
 
 struct MarkdownStyles {
-    h1: Style,
-    h2: Style,
-    h3: Style,
-    h4: Style,
-    h5: Style,
-    h6: Style,
-    code: Style,
-    emphasis: Style,
-    strong: Style,
-    strikethrough: Style,
-    ordered_list_marker: Style,
-    unordered_list_marker: Style,
-    link: Style,
-    blockquote: Style,
+    h1: RenderStyle,
+    h2: RenderStyle,
+    h3: RenderStyle,
+    h4: RenderStyle,
+    h5: RenderStyle,
+    h6: RenderStyle,
+    code: RenderStyle,
+    emphasis: RenderStyle,
+    strong: RenderStyle,
+    strikethrough: RenderStyle,
+    ordered_list_marker: RenderStyle,
+    unordered_list_marker: RenderStyle,
+    link: RenderStyle,
+    blockquote: RenderStyle,
 }
 
 impl Default for MarkdownStyles {
     fn default() -> Self {
-        use ratatui::style::Stylize;
-
         Self {
-            h1: Style::new().bold().underlined(),
-            h2: Style::new().bold(),
-            h3: Style::new().bold().italic(),
-            h4: Style::new().italic(),
-            h5: Style::new().italic(),
-            h6: Style::new().italic(),
-            code: Style::new().cyan(),
-            emphasis: Style::new().italic(),
-            strong: Style::new().bold(),
-            strikethrough: Style::new().crossed_out(),
-            ordered_list_marker: Style::new().light_blue(),
-            unordered_list_marker: Style::new(),
-            link: Style::new().cyan().underlined(),
-            blockquote: Style::new().green(),
+            h1: RenderStyle::builder().bold().underline().build(),
+            h2: RenderStyle::builder().bold().build(),
+            h3: RenderStyle::builder().bold().italic().build(),
+            h4: RenderStyle::builder().italic().build(),
+            h5: RenderStyle::builder().italic().build(),
+            h6: RenderStyle::builder().italic().build(),
+            code: RenderStyle::builder().fg(RenderColor::Cyan).build(),
+            emphasis: RenderStyle::builder().italic().build(),
+            strong: RenderStyle::builder().bold().build(),
+            strikethrough: RenderStyle::builder().strikethrough().build(),
+            ordered_list_marker: RenderStyle::builder().fg(RenderColor::LightBlue).build(),
+            unordered_list_marker: RenderStyle::default(),
+            link: RenderStyle::builder()
+                .fg(RenderColor::Cyan)
+                .underline()
+                .build(),
+            blockquote: RenderStyle::builder().fg(RenderColor::Green).build(),
         }
     }
 }
 
 #[derive(Clone, Debug)]
 struct IndentContext {
-    prefix: Vec<Span<'static>>,
-    marker: Option<Vec<Span<'static>>>,
+    prefix: Vec<Span>,
+    marker: Option<Vec<Span>>,
     is_list: bool,
 }
 
 impl IndentContext {
-    fn new(prefix: Vec<Span<'static>>, marker: Option<Vec<Span<'static>>>, is_list: bool) -> Self {
+    fn new(prefix: Vec<Span>, marker: Option<Vec<Span>>, is_list: bool) -> Self {
         Self {
             prefix,
             marker,
@@ -81,7 +84,7 @@ pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>)
     let parser = Parser::new_ext(input, options);
     let mut w = Writer::new(parser, width);
     w.run();
-    w.text
+    to_ratatui_text(&w.lines)
 }
 
 struct Writer<'a, I>
@@ -89,9 +92,9 @@ where
     I: Iterator<Item = Event<'a>>,
 {
     iter: I,
-    text: Text<'static>,
+    lines: Vec<Line>,
     styles: MarkdownStyles,
-    inline_styles: Vec<Style>,
+    inline_styles: Vec<RenderStyle>,
     indent_stack: Vec<IndentContext>,
     list_indices: Vec<Option<u64>>,
     link: Option<String>,
@@ -100,10 +103,10 @@ where
     in_paragraph: bool,
     in_code_block: bool,
     wrap_width: Option<usize>,
-    current_line_content: Option<Line<'static>>,
-    current_initial_indent: Vec<Span<'static>>,
-    current_subsequent_indent: Vec<Span<'static>>,
-    current_line_style: Style,
+    current_line_content: Option<Line>,
+    current_initial_indent: Vec<Span>,
+    current_subsequent_indent: Vec<Span>,
+    current_line_style: RenderStyle,
     current_line_in_code_block: bool,
 }
 
@@ -114,7 +117,7 @@ where
     fn new(iter: I, wrap_width: Option<usize>) -> Self {
         Self {
             iter,
-            text: Text::default(),
+            lines: Vec::new(),
             styles: MarkdownStyles::default(),
             inline_styles: Vec::new(),
             indent_stack: Vec::new(),
@@ -128,7 +131,7 @@ where
             current_line_content: None,
             current_initial_indent: Vec::new(),
             current_subsequent_indent: Vec::new(),
-            current_line_style: Style::default(),
+            current_line_style: RenderStyle::default(),
             current_line_in_code_block: false,
         }
     }
@@ -150,7 +153,7 @@ where
             Event::HardBreak => self.hard_break(),
             Event::Rule => {
                 self.flush_current_line();
-                if !self.text.lines.is_empty() {
+                if !self.lines.is_empty() {
                     self.push_blank_line();
                 }
                 self.push_line(Line::from("———"));
@@ -284,8 +287,7 @@ where
                 .as_ref()
                 .map(|line| !line.spans.is_empty())
                 .unwrap_or_else(|| {
-                    self.text
-                        .lines
+                    self.lines
                         .last()
                         .map(|line| !line.spans.is_empty())
                         .unwrap_or(false)
@@ -394,14 +396,14 @@ where
         self.needs_newline = false;
     }
 
-    fn start_codeblock(&mut self, _lang: Option<String>, indent: Option<Span<'static>>) {
+    fn start_codeblock(&mut self, _lang: Option<String>, indent: Option<Span>) {
         self.flush_current_line();
-        if !self.text.lines.is_empty() {
+        if !self.lines.is_empty() {
             self.push_blank_line();
         }
         self.in_code_block = true;
         self.indent_stack.push(IndentContext::new(
-            vec![indent.unwrap_or_default()],
+            vec![indent.unwrap_or_else(|| Span::from(""))],
             None,
             false,
         ));
@@ -414,7 +416,7 @@ where
         self.indent_stack.pop();
     }
 
-    fn push_inline_style(&mut self, style: Style) {
+    fn push_inline_style(&mut self, style: RenderStyle) {
         let current = self.inline_styles.last().copied().unwrap_or_default();
         let merged = current.patch(style);
         self.inline_styles.push(merged);
@@ -448,13 +450,13 @@ where
                     .subsequent_indent(self.current_subsequent_indent.clone().into());
                 for wrapped in word_wrap_line(&line, opts) {
                     let owned = line_to_static(&wrapped).style(style);
-                    self.text.lines.push(owned);
+                    self.lines.push(owned);
                 }
             } else {
                 let mut spans = self.current_initial_indent.clone();
                 let mut line = line;
                 spans.append(&mut line.spans);
-                self.text.lines.push(Line::from_iter(spans).style(style));
+                self.lines.push(Line::from_iter(spans).style(style));
             }
             self.current_initial_indent.clear();
             self.current_subsequent_indent.clear();
@@ -462,7 +464,7 @@ where
         }
     }
 
-    fn push_line(&mut self, line: Line<'static>) {
+    fn push_line(&mut self, line: Line) {
         self.flush_current_line();
         let blockquote_active = self
             .indent_stack
@@ -471,7 +473,7 @@ where
         let style = if blockquote_active {
             self.styles.blockquote
         } else {
-            line.style
+            RenderStyle::default()
         };
         let was_pending = self.pending_marker_line;
 
@@ -484,7 +486,7 @@ where
         self.pending_marker_line = false;
     }
 
-    fn push_span(&mut self, span: Span<'static>) {
+    fn push_span(&mut self, span: Span) {
         if let Some(line) = self.current_line_content.as_mut() {
             line.push_span(span);
         } else {
@@ -495,15 +497,15 @@ where
     fn push_blank_line(&mut self) {
         self.flush_current_line();
         if self.indent_stack.iter().all(|ctx| ctx.is_list) {
-            self.text.lines.push(Line::default());
+            self.lines.push(Line::default());
         } else {
             self.push_line(Line::default());
             self.flush_current_line();
         }
     }
 
-    fn prefix_spans(&self, pending_marker_line: bool) -> Vec<Span<'static>> {
-        let mut prefix: Vec<Span<'static>> = Vec::new();
+    fn prefix_spans(&self, pending_marker_line: bool) -> Vec<Span> {
+        let mut prefix: Vec<Span> = Vec::new();
         let last_marker_index = if pending_marker_line {
             self.indent_stack
                 .iter()

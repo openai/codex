@@ -2,11 +2,12 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 // Note: Table-based layout previously used Constraint; the manual renderer
 // below no longer requires it.
-use ratatui::style::Color;
-use ratatui::style::Style;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
+use crate::render::model::RenderCell as Span;
+use crate::render::model::RenderColor;
+use crate::render::model::RenderLine as Line;
+use crate::render::model::RenderStyle;
+use crate::render::model::RenderStylize;
+use crate::render::renderable::Renderable;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthChar;
@@ -62,7 +63,7 @@ pub(crate) fn render_menu_surface(area: Rect, buf: &mut Buffer) -> Rect {
     menu_surface_inset(area)
 }
 
-pub(crate) fn wrap_styled_line<'a>(line: &'a Line<'a>, width: u16) -> Vec<Line<'a>> {
+pub(crate) fn wrap_styled_line(line: &Line, width: u16) -> Vec<Line> {
     use crate::wrapping::RtOptions;
     use crate::wrapping::word_wrap_line;
 
@@ -73,22 +74,23 @@ pub(crate) fn wrap_styled_line<'a>(line: &'a Line<'a>, width: u16) -> Vec<Line<'
     word_wrap_line(line, opts)
 }
 
-fn line_width(line: &Line<'_>) -> usize {
-    line.iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+fn line_width(line: &Line) -> usize {
+    line.spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_str()))
         .sum()
 }
 
-fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
+fn truncate_line_to_width(line: Line, max_width: usize) -> Line {
     if max_width == 0 {
-        return Line::from(Vec::<Span<'static>>::new());
+        return Line::from(Vec::<Span>::new());
     }
 
     let mut used = 0usize;
-    let mut spans_out: Vec<Span<'static>> = Vec::new();
+    let mut spans_out: Vec<Span> = Vec::new();
 
     for span in line.spans {
-        let text = span.content.into_owned();
+        let text = span.content;
         let style = span.style;
         let span_width = UnicodeWidthStr::width(text.as_str());
 
@@ -127,9 +129,9 @@ fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static
     Line::from(spans_out)
 }
 
-fn truncate_line_with_ellipsis_if_overflow(line: Line<'static>, max_width: usize) -> Line<'static> {
+fn truncate_line_with_ellipsis_if_overflow(line: Line, max_width: usize) -> Line {
     if max_width == 0 {
-        return Line::from(Vec::<Span<'static>>::new());
+        return Line::from(Vec::<Span>::new());
     }
 
     let width = line_width(&line);
@@ -205,7 +207,7 @@ fn wrap_indent(
 /// Build the full display line for a row with the description padded to start
 /// at `desc_col`. Applies fuzzy-match bolding when indices are present and
 /// dims the description.
-fn build_full_line(row: &GenericDisplayRow, desc_col: usize, is_selected: bool) -> Line<'static> {
+fn build_full_line(row: &GenericDisplayRow, desc_col: usize, is_selected: bool) -> Line {
     let description = row_description(row, is_selected).map(str::to_string);
     let combined_description = match (description, &row.disabled_reason) {
         (Some(desc), Some(reason)) => Some(format!("{desc} (disabled: {reason})")),
@@ -339,12 +341,12 @@ pub(crate) fn render_rows(
             // Match previous behavior: cyan + bold for the selected row.
             // Reset the style first to avoid inheriting dim from keyboard shortcuts.
             full_line.spans.iter_mut().for_each(|span| {
-                span.style = Style::default().fg(Color::Cyan).bold();
+                span.style = RenderStyle::builder().fg(RenderColor::Cyan).bold().build();
             });
         }
         if row.is_disabled {
             full_line.spans.iter_mut().for_each(|span| {
-                span.style = span.style.dim();
+                span.style.dim = true;
             });
         }
 
@@ -425,12 +427,12 @@ pub(crate) fn render_rows_single_line(
         let mut full_line = build_full_line(row, desc_col, is_selected);
         if is_selected && !row.is_disabled {
             full_line.spans.iter_mut().for_each(|span| {
-                span.style = Style::default().fg(Color::Cyan).bold();
+                span.style = RenderStyle::builder().fg(RenderColor::Cyan).bold().build();
             });
         }
         if row.is_disabled {
             full_line.spans.iter_mut().for_each(|span| {
-                span.style = span.style.dim();
+                span.style.dim = true;
             });
         }
 

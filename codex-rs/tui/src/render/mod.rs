@@ -1,5 +1,7 @@
 use ratatui::layout::Rect;
 
+#[cfg(unix)]
+pub mod adapter_ncurses;
 pub mod adapter_ratatui;
 pub mod highlight;
 pub mod line_utils;

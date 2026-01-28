@@ -1,20 +1,17 @@
-use ratatui::text::Line;
-pub(crate) fn append_markdown(
-    markdown_source: &str,
-    width: Option<usize>,
-    lines: &mut Vec<Line<'static>>,
-) {
+use crate::render::adapter_ratatui::from_ratatui_lines;
+use crate::render::model::RenderLine as Line;
+pub(crate) fn append_markdown(markdown_source: &str, width: Option<usize>, lines: &mut Vec<Line>) {
     let rendered = crate::markdown_render::render_markdown_text_with_width(markdown_source, width);
-    crate::render::line_utils::push_owned_lines(&rendered.lines, lines);
+    let converted = from_ratatui_lines(&rendered.lines);
+    crate::render::line_utils::push_owned_lines(&converted, lines);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use ratatui::text::Line;
 
-    fn lines_to_strings(lines: &[Line<'static>]) -> Vec<String> {
+    fn lines_to_strings(lines: &[Line]) -> Vec<String> {
         lines
             .iter()
             .map(|l| {

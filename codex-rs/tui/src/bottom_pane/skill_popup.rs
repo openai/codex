@@ -1,10 +1,10 @@
+use crate::render::model::RenderLine as Line;
+use crate::render::renderable::Renderable;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
-use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
 use super::popup_consts::MAX_POPUP_ROWS;
@@ -171,7 +171,7 @@ impl WidgetRef for SkillPopup {
     }
 }
 
-fn skill_popup_hint_line() -> Line<'static> {
+fn skill_popup_hint_line() -> Line {
     Line::from(vec![
         "Press ".into(),
         key_hint::plain(KeyCode::Enter).into(),

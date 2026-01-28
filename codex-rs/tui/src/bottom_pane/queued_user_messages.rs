@@ -1,8 +1,9 @@
+use crate::render::adapter_ratatui::to_ratatui_text;
+use crate::render::model::RenderLine as Line;
+use crate::render::model::RenderStylize;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use crate::key_hint;
@@ -31,7 +32,7 @@ impl QueuedUserMessages {
 
         for message in &self.messages {
             let wrapped = word_wrap_lines(
-                message.lines().map(|line| line.dim().italic()),
+                message.lines().map(|line| Line::from(line.dim().italic())),
                 RtOptions::new(width as usize)
                     .initial_indent(Line::from("  ↳ ".dim()))
                     .subsequent_indent(Line::from("    ")),
@@ -54,7 +55,7 @@ impl QueuedUserMessages {
             .dim(),
         );
 
-        Paragraph::new(lines).into()
+        Paragraph::new(to_ratatui_text(&lines)).into()
     }
 }
 

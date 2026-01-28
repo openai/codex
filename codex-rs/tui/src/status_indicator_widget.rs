@@ -4,14 +4,14 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::render::adapter_ratatui::to_ratatui_text;
+use crate::render::model::RenderCell as Span;
+use crate::render::model::RenderLine as Line;
+use crate::render::model::RenderStylize;
 use codex_core::protocol::Op;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::text::Text;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use unicode_width::UnicodeWidthStr;
@@ -158,7 +158,7 @@ impl StatusIndicatorWidget {
     }
 
     /// Wrap the details text into a fixed width and return the lines, truncating if necessary.
-    fn wrapped_details_lines(&self, width: u16) -> Vec<Line<'static>> {
+    fn wrapped_details_lines(&self, width: u16) -> Vec<Line> {
         let Some(details) = self.details.as_deref() else {
             return Vec::new();
         };
@@ -172,7 +172,7 @@ impl StatusIndicatorWidget {
             .subsequent_indent(Line::from(Span::from(" ".repeat(prefix_width)).dim()))
             .break_words(true);
 
-        let mut out = word_wrap_lines(details.lines().map(|line| vec![line.dim()]), opts);
+        let mut out = word_wrap_lines(details.lines().map(|line| Line::from(line.dim())), opts);
 
         if out.len() > DETAILS_MAX_LINES {
             out.truncate(DETAILS_MAX_LINES);
@@ -181,7 +181,7 @@ impl StatusIndicatorWidget {
             if let Some(last) = out.last_mut()
                 && let Some(span) = last.spans.last_mut()
             {
-                let trimmed: String = span.content.as_ref().chars().take(max_base_len).collect();
+                let trimmed: String = span.content.as_str().chars().take(max_base_len).collect();
                 *span = format!("{trimmed}…").dim();
             }
         }
@@ -235,7 +235,7 @@ impl Renderable for StatusIndicatorWidget {
             lines.extend(details.into_iter().take(max_details));
         }
 
-        Paragraph::new(Text::from(lines)).render_ref(area, buf);
+        Paragraph::new(to_ratatui_text(&lines)).render_ref(area, buf);
     }
 }
 
@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(lines.len(), DETAILS_MAX_LINES);
         let last = lines.last().expect("expected last details line");
         assert!(
-            last.spans[1].content.as_ref().ends_with("…"),
+            last.spans[1].content.as_str().ends_with("…"),
             "expected ellipsis in last line: {last:?}"
         );
     }

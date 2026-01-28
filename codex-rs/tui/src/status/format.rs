@@ -1,5 +1,6 @@
-use ratatui::prelude::*;
-use ratatui::style::Stylize;
+use crate::render::model::RenderCell as Span;
+use crate::render::model::RenderLine as Line;
+use crate::render::model::RenderStylize;
 use std::collections::BTreeSet;
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
@@ -35,15 +36,11 @@ impl FieldFormatter {
         }
     }
 
-    pub(crate) fn line(
-        &self,
-        label: &'static str,
-        value_spans: Vec<Span<'static>>,
-    ) -> Line<'static> {
+    pub(crate) fn line(&self, label: &'static str, value_spans: Vec<Span>) -> Line {
         Line::from(self.full_spans(label, value_spans))
     }
 
-    pub(crate) fn continuation(&self, mut spans: Vec<Span<'static>>) -> Line<'static> {
+    pub(crate) fn continuation(&self, mut spans: Vec<Span>) -> Line {
         let mut all_spans = Vec::with_capacity(spans.len() + 1);
         all_spans.push(Span::from(self.value_indent.clone()).dim());
         all_spans.append(&mut spans);
@@ -54,18 +51,14 @@ impl FieldFormatter {
         available_inner_width.saturating_sub(self.value_offset)
     }
 
-    pub(crate) fn full_spans(
-        &self,
-        label: &str,
-        mut value_spans: Vec<Span<'static>>,
-    ) -> Vec<Span<'static>> {
+    pub(crate) fn full_spans(&self, label: &str, mut value_spans: Vec<Span>) -> Vec<Span> {
         let mut spans = Vec::with_capacity(value_spans.len() + 1);
         spans.push(self.label_span(label));
         spans.append(&mut value_spans);
         spans
     }
 
-    fn label_span(&self, label: &str) -> Span<'static> {
+    fn label_span(&self, label: &str) -> Span {
         let mut buf = String::with_capacity(self.value_offset);
         buf.push_str(self.indent);
 
@@ -92,22 +85,23 @@ pub(crate) fn push_label(labels: &mut Vec<String>, seen: &mut BTreeSet<String>, 
     labels.push(owned);
 }
 
-pub(crate) fn line_display_width(line: &Line<'static>) -> usize {
-    line.iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+pub(crate) fn line_display_width(line: &Line) -> usize {
+    line.spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_str()))
         .sum()
 }
 
-pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
+pub(crate) fn truncate_line_to_width(line: Line, max_width: usize) -> Line {
     if max_width == 0 {
-        return Line::from(Vec::<Span<'static>>::new());
+        return Line::from(Vec::<Span>::new());
     }
 
     let mut used = 0usize;
-    let mut spans_out: Vec<Span<'static>> = Vec::new();
+    let mut spans_out: Vec<Span> = Vec::new();
 
     for span in line.spans {
-        let text = span.content.into_owned();
+        let text = span.content;
         let style = span.style;
         let span_width = UnicodeWidthStr::width(text.as_str());
 

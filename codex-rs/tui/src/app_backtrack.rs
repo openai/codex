@@ -564,7 +564,7 @@ mod tests {
     use super::*;
     use crate::history_cell::AgentMessageCell;
     use crate::history_cell::HistoryCell;
-    use ratatui::prelude::Line;
+    use crate::render::model::RenderLine as Line;
     use std::sync::Arc;
 
     #[test]
@@ -608,7 +608,7 @@ mod tests {
         let intro_text: String = agent_lines[0]
             .spans
             .iter()
-            .map(|span| span.content.as_ref())
+            .map(|span| span.content.as_str())
             .collect();
         assert_eq!(intro_text, "• intro");
     }
@@ -644,7 +644,7 @@ mod tests {
         let intro_text: String = intro_lines[0]
             .spans
             .iter()
-            .map(|span| span.content.as_ref())
+            .map(|span| span.content.as_str())
             .collect();
         assert_eq!(intro_text, "• intro");
 
@@ -662,7 +662,7 @@ mod tests {
         let between_text: String = between_lines[0]
             .spans
             .iter()
-            .map(|span| span.content.as_ref())
+            .map(|span| span.content.as_str())
             .collect();
         assert_eq!(between_text, "  between");
     }

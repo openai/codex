@@ -1,6 +1,6 @@
 use crate::history_cell::HistoryCell;
 use crate::history_cell::{self};
-use ratatui::text::Line;
+use crate::render::model::RenderLine as Line;
 
 use super::StreamState;
 
@@ -68,7 +68,7 @@ impl StreamController {
         (self.emit(step), self.state.is_idle())
     }
 
-    fn emit(&mut self, lines: Vec<Line<'static>>) -> Option<Box<dyn HistoryCell>> {
+    fn emit(&mut self, lines: Vec<Line>) -> Option<Box<dyn HistoryCell>> {
         if lines.is_empty() {
             return None;
         }
@@ -84,7 +84,7 @@ impl StreamController {
 mod tests {
     use super::*;
 
-    fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
+    fn lines_to_plain_strings(lines: &[Line]) -> Vec<String> {
         lines
             .iter()
             .map(|l| {
@@ -196,7 +196,7 @@ mod tests {
 
         // Full render of the same source
         let source: String = deltas.iter().copied().collect();
-        let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
+        let mut rendered: Vec<Line> = Vec::new();
         crate::markdown::append_markdown(&source, None, &mut rendered);
         let rendered_strs = lines_to_plain_strings(&rendered);
 

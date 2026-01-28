@@ -1,10 +1,8 @@
+use crate::render::model::RenderLine as Line;
+use crate::render::model::RenderStylize;
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
-use ratatui::widgets::Widget;
 
 use crate::bottom_pane::selection_popup_common::menu_surface_inset;
 use crate::bottom_pane::selection_popup_common::menu_surface_padding_height;
@@ -72,7 +70,7 @@ impl RequestUserInputOverlay {
         } else {
             Line::from("No questions".dim())
         };
-        Paragraph::new(progress_line).render(sections.progress_area, buf);
+        progress_line.render(sections.progress_area, buf);
 
         // Question title and wrapped prompt text.
         let question_header = self.current_question().map(|q| q.header.clone());
@@ -81,7 +79,7 @@ impl RequestUserInputOverlay {
         } else {
             Line::from("No questions".dim())
         };
-        Paragraph::new(header_line).render(sections.header_area, buf);
+        header_line.render(sections.header_area, buf);
 
         let question_y = sections.question_area.y;
         for (offset, line) in sections.question_lines.iter().enumerate() {
@@ -90,7 +88,7 @@ impl RequestUserInputOverlay {
             {
                 break;
             }
-            Paragraph::new(Line::from(line.clone())).render(
+            line.clone().render(
                 Rect {
                     x: sections.question_area.x,
                     y: question_y.saturating_add(offset as u16),
@@ -108,7 +106,7 @@ impl RequestUserInputOverlay {
             } else {
                 answer_label.dim()
             };
-            Paragraph::new(Line::from(answer_title)).render(sections.answer_title_area, buf);
+            Line::from(answer_title).render(sections.answer_title_area, buf);
         }
 
         // Build rows with selection markers for the shared selection renderer.
@@ -153,7 +151,7 @@ impl RequestUserInputOverlay {
             } else {
                 notes_label.as_str().dim()
             };
-            Paragraph::new(Line::from(notes_title)).render(sections.notes_title_area, buf);
+            Line::from(notes_title).render(sections.notes_title_area, buf);
         }
 
         if sections.notes_area.height > 0 {
@@ -170,7 +168,7 @@ impl RequestUserInputOverlay {
                 "Unanswered: {} | Will submit as skipped",
                 self.unanswered_count()
             );
-            Paragraph::new(Line::from(warning.dim())).render(
+            Line::from(warning.dim()).render(
                 Rect {
                     x: content_area.x,
                     y: footer_y,
@@ -211,7 +209,7 @@ impl RequestUserInputOverlay {
             key_hint::plain(KeyCode::Esc).into(),
             " interrupt".into(),
         ]);
-        Paragraph::new(Line::from(hint_spans).dim()).render(
+        Line::from(hint_spans).dim().render(
             Rect {
                 x: content_area.x,
                 y: hint_y,

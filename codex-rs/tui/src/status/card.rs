@@ -2,6 +2,9 @@ use crate::history_cell::CompositeHistoryCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::with_border_with_inner_width;
+use crate::render::model::RenderCell as Span;
+use crate::render::model::RenderLine as Line;
+use crate::render::model::RenderStylize;
 use crate::version::CODEX_CLI_VERSION;
 use chrono::DateTime;
 use chrono::Local;
@@ -15,8 +18,6 @@ use codex_core::protocol::TokenUsageInfo;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::openai_models::ReasoningEffort;
-use ratatui::prelude::*;
-use ratatui::style::Stylize;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use url::Url;
@@ -204,7 +205,7 @@ impl StatusHistoryCell {
         }
     }
 
-    fn token_usage_spans(&self) -> Vec<Span<'static>> {
+    fn token_usage_spans(&self) -> Vec<Span> {
         let total_fmt = format_tokens_compact(self.token_usage.total);
         let input_fmt = format_tokens_compact(self.token_usage.input);
         let output_fmt = format_tokens_compact(self.token_usage.output);
@@ -222,7 +223,7 @@ impl StatusHistoryCell {
         ]
     }
 
-    fn context_window_spans(&self) -> Option<Vec<Span<'static>>> {
+    fn context_window_spans(&self) -> Option<Vec<Span>> {
         let context = self.token_usage.context_window.as_ref()?;
         let percent = context.percent_remaining;
         let used_fmt = format_tokens_compact(context.tokens_in_context);
@@ -242,7 +243,7 @@ impl StatusHistoryCell {
         &self,
         available_inner_width: usize,
         formatter: &FieldFormatter,
-    ) -> Vec<Line<'static>> {
+    ) -> Vec<Line> {
         match &self.rate_limits {
             StatusRateLimitData::Available(rows_data) => {
                 if rows_data.is_empty() {
@@ -273,7 +274,7 @@ impl StatusHistoryCell {
         rows: &[StatusRateLimitRow],
         available_inner_width: usize,
         formatter: &FieldFormatter,
-    ) -> Vec<Line<'static>> {
+    ) -> Vec<Line> {
         let mut lines = Vec::with_capacity(rows.len().saturating_mul(2));
 
         for row in rows {
@@ -344,15 +345,15 @@ impl StatusHistoryCell {
 }
 
 impl HistoryCell for StatusHistoryCell {
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
+    fn display_lines(&self, width: u16) -> Vec<Line> {
+        let mut lines: Vec<Line> = Vec::new();
         lines.push(Line::from(vec![
             Span::from(format!("{}>_ ", FieldFormatter::INDENT)).dim(),
             Span::from("OpenAI Codex").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{CODEX_CLI_VERSION})")).dim(),
         ]));
-        lines.push(Line::from(Vec::<Span<'static>>::new()));
+        lines.push(Line::from(Vec::<Span>::new()));
 
         let available_inner_width = usize::from(width.saturating_sub(4));
         if available_inner_width == 0 {
@@ -418,7 +419,7 @@ impl HistoryCell for StatusHistoryCell {
             RtOptions::new(available_inner_width),
         );
         lines.extend(note_lines);
-        lines.push(Line::from(Vec::<Span<'static>>::new()));
+        lines.push(Line::from(Vec::<Span>::new()));
 
         let mut model_spans = vec![Span::from(self.model_name.clone())];
         if !self.model_details.is_empty() {
@@ -455,7 +456,7 @@ impl HistoryCell for StatusHistoryCell {
             lines.push(formatter.line("Forked from", vec![Span::from(forked_from.clone())]));
         }
 
-        lines.push(Line::from(Vec::<Span<'static>>::new()));
+        lines.push(Line::from(Vec::<Span>::new()));
         // Hide token usage only for ChatGPT subscribers
         if !matches!(self.account, Some(StatusAccountDisplay::ChatGpt { .. })) {
             lines.push(formatter.line("Token usage", self.token_usage_spans()));
@@ -469,7 +470,7 @@ impl HistoryCell for StatusHistoryCell {
 
         let content_width = lines.iter().map(line_display_width).max().unwrap_or(0);
         let inner_width = content_width.min(available_inner_width);
-        let truncated_lines: Vec<Line<'static>> = lines
+        let truncated_lines: Vec<Line> = lines
             .into_iter()
             .map(|line| truncate_line_to_width(line, inner_width))
             .collect();

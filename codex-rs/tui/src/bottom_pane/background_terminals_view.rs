@@ -4,6 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use crate::render::adapter_ratatui::to_ratatui_text;
+use crate::render::model::RenderLine as Line;
+use crate::render::model::RenderStylize;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -11,8 +14,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
-use ratatui::style::Stylize;
-use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
@@ -443,7 +444,7 @@ impl BackgroundTerminalsView {
             .ensure_visible(items.len(), MAX_LIST_ROWS.min(items.len()));
     }
 
-    fn header_lines(&self, width: u16, running_count: usize) -> Vec<Line<'static>> {
+    fn header_lines(&self, width: u16, running_count: usize) -> Vec<Line> {
         let mut lines = Vec::new();
         lines.push(Line::from("Background terminals".bold()));
         let summary = if running_count == 0 {
@@ -460,7 +461,7 @@ impl BackgroundTerminalsView {
         lines
     }
 
-    fn footer_line() -> Line<'static> {
+    fn footer_line() -> Line {
         Line::from(vec![
             key_hint::plain(KeyCode::Up).into(),
             "/".into(),
@@ -524,7 +525,7 @@ impl BackgroundTerminalsView {
         }
 
         let Some(item) = item else {
-            Paragraph::new(vec![Line::from("No output yet".dim())]).render(area, buf);
+            Line::from("No output yet".dim()).render(area, buf);
             return;
         };
 
@@ -540,7 +541,7 @@ impl BackgroundTerminalsView {
         lines.push(Line::from(""));
 
         let width = area.width.max(1) as usize;
-        let mut output_lines: Vec<Line<'static>> = Vec::new();
+        let mut output_lines: Vec<Line> = Vec::new();
         for raw in item.output_lines {
             if raw.is_empty() {
                 output_lines.push(Line::from(""));
@@ -554,7 +555,7 @@ impl BackgroundTerminalsView {
             output_lines.push(Line::from("No output yet".dim()));
         }
 
-        let mut combined: Vec<Line<'static>> = Vec::new();
+        let mut combined: Vec<Line> = Vec::new();
         combined.extend(lines);
         combined.extend(output_lines);
 
@@ -564,7 +565,7 @@ impl BackgroundTerminalsView {
         } else {
             combined
         };
-        Paragraph::new(rendered).render(area, buf);
+        Paragraph::new(to_ratatui_text(&rendered)).render(area, buf);
     }
 }
 
@@ -667,7 +668,7 @@ impl Renderable for BackgroundTerminalsView {
         .areas(content_area);
 
         if header_area.height > 0 {
-            Paragraph::new(header_lines).render(header_area, buf);
+            Paragraph::new(to_ratatui_text(&header_lines)).render(header_area, buf);
         }
 
         if main_area.height > 0 {
