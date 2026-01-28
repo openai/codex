@@ -2919,8 +2919,13 @@ impl ChatWidget {
         }
 
         let mentions = collect_tool_mentions(&text, &mention_paths);
+        let mut skill_names_lower: HashSet<String> = HashSet::new();
 
         if let Some(skills) = self.bottom_pane.skills() {
+            skill_names_lower = skills
+                .iter()
+                .map(|skill| skill.name.to_ascii_lowercase())
+                .collect();
             let skill_mentions = find_skill_mentions_with_tool_mentions(&mentions, skills);
             for skill in skill_mentions {
                 items.push(UserInput::Skill {
@@ -2931,12 +2936,12 @@ impl ChatWidget {
         }
 
         if let Some(apps) = self.connectors_for_mentions() {
-            let app_mentions = find_app_mentions(&mentions, apps);
+            let app_mentions = find_app_mentions(&mentions, apps, &skill_names_lower);
             for app in app_mentions {
                 let app_id = app.id.as_str();
                 items.push(UserInput::Mention {
                     name: app.name.clone(),
-                    path: format!("apps://{app_id}"),
+                    path: format!("app://{app_id}"),
                 });
             }
         }

@@ -2735,7 +2735,7 @@ mod tests {
                 },
                 CoreUserInput::Mention {
                     name: "Demo App".to_string(),
-                    path: "apps://demo-app".to_string(),
+                    path: "app://demo-app".to_string(),
                 },
             ],
         });
@@ -2761,7 +2761,7 @@ mod tests {
                     },
                     UserInput::Mention {
                         name: "Demo App".to_string(),
-                        path: "apps://demo-app".to_string(),
+                        path: "app://demo-app".to_string(),
                     },
                 ],
             }

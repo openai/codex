@@ -251,7 +251,11 @@ pub(crate) fn find_skill_mentions_with_tool_mentions(
     matches
 }
 
-pub(crate) fn find_app_mentions(mentions: &ToolMentions, apps: &[AppInfo]) -> Vec<AppInfo> {
+pub(crate) fn find_app_mentions(
+    mentions: &ToolMentions,
+    apps: &[AppInfo],
+    skill_names_lower: &HashSet<String>,
+) -> Vec<AppInfo> {
     let mut explicit_names = HashSet::new();
     let mut selected_ids = HashSet::new();
     for (name, path) in &mentions.linked_paths {
@@ -261,9 +265,20 @@ pub(crate) fn find_app_mentions(mentions: &ToolMentions, apps: &[AppInfo]) -> Ve
         }
     }
 
+    let mut slug_counts: HashMap<String, usize> = HashMap::new();
     for app in apps {
         let slug = connector_mention_slug(app);
-        if mentions.names.contains(&slug) && !explicit_names.contains(&slug) {
+        *slug_counts.entry(slug).or_insert(0) += 1;
+    }
+
+    for app in apps {
+        let slug = connector_mention_slug(app);
+        let slug_count = slug_counts.get(&slug).copied().unwrap_or(0);
+        if mentions.names.contains(&slug)
+            && !explicit_names.contains(&slug)
+            && slug_count == 1
+            && !skill_names_lower.contains(&slug)
+        {
             selected_ids.insert(app.id.clone());
         }
     }
@@ -425,10 +440,10 @@ fn normalize_skill_path(path: &str) -> &str {
 }
 
 fn app_id_from_path(path: &str) -> Option<&str> {
-    path.strip_prefix("apps://")
+    path.strip_prefix("app://")
         .filter(|value| !value.is_empty())
 }
 
 fn is_app_or_mcp_path(path: &str) -> bool {
-    path.starts_with("apps://") || path.starts_with("mcp://")
+    path.starts_with("app://") || path.starts_with("mcp://")
 }

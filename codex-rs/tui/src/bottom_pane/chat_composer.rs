@@ -2694,7 +2694,7 @@ impl ChatComposer {
                     description,
                     insert_text: format!("${slug}"),
                     search_terms,
-                    path: Some(format!("apps://{connector_id}")),
+                    path: Some(format!("app://{connector_id}")),
                 });
             }
         }

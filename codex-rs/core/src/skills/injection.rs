@@ -131,12 +131,12 @@ pub(crate) enum ToolMentionKind {
     Other,
 }
 
-const APPS_PATH_PREFIX: &str = "apps://";
+const APP_PATH_PREFIX: &str = "app://";
 const MCP_PATH_PREFIX: &str = "mcp://";
 const SKILL_PATH_PREFIX: &str = "skill://";
 
 pub(crate) fn tool_kind_for_path(path: &str) -> ToolMentionKind {
-    if path.starts_with(APPS_PATH_PREFIX) {
+    if path.starts_with(APP_PATH_PREFIX) {
         ToolMentionKind::App
     } else if path.starts_with(MCP_PATH_PREFIX) {
         ToolMentionKind::Mcp
@@ -148,7 +148,7 @@ pub(crate) fn tool_kind_for_path(path: &str) -> ToolMentionKind {
 }
 
 pub(crate) fn app_id_from_path(path: &str) -> Option<&str> {
-    path.strip_prefix(APPS_PATH_PREFIX)
+    path.strip_prefix(APP_PATH_PREFIX)
         .filter(|value| !value.is_empty())
 }
 
