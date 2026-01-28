@@ -53,6 +53,10 @@ rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
     edition = "2024",
     extra_target_triples = RUST_TRIPLES,
+    extra_rustc_flags_triples = {
+        "aarch64-unknown-linux-gnu": ["-C", "link-arg=-lc_nonshared"],
+        "x86_64-unknown-linux-gnu": ["-C", "link-arg=-lc_nonshared"],
+    },
     versions = ["1.90.0"],
 )
 use_repo(rust, "rust_toolchains")
