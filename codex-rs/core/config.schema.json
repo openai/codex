@@ -711,7 +711,11 @@
         },
         "cwd": {
           "default": null,
-          "type": "string"
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ]
         },
         "disabled_tools": {
           "default": null,

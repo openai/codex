@@ -12,10 +12,10 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
-use std::path::PathBuf;
 use std::time::Duration;
 use wildmatch::WildMatchPattern;
 
+use dirs::home_dir;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -93,7 +93,7 @@ pub(crate) struct RawMcpServerConfig {
     #[serde(default)]
     pub env_vars: Option<Vec<String>>,
     #[serde(default)]
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<AbsolutePathBuf>,
     pub http_headers: Option<HashMap<String, String>>,
     #[serde(default)]
     pub env_http_headers: Option<HashMap<String, String>>,
@@ -165,7 +165,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             throw_if_set("stdio", "http_headers", raw.http_headers.as_ref())?;
             throw_if_set("stdio", "env_http_headers", raw.env_http_headers.as_ref())?;
             McpServerTransportConfig::Stdio {
-                command,
+                command: expand_tilde_string(command),
                 args: raw.args.clone().unwrap_or_default(),
                 env: raw.env.clone(),
                 env_vars: raw.env_vars.clone().unwrap_or_default(),
@@ -204,6 +204,26 @@ const fn default_enabled() -> bool {
     true
 }
 
+fn expand_tilde_string(value: String) -> String {
+    if cfg!(target_os = "windows") {
+        return value;
+    }
+
+    let Some(home) = home_dir() else {
+        return value;
+    };
+
+    if value == "~" {
+        return home.to_string_lossy().into_owned();
+    }
+
+    if let Some(rest) = value.strip_prefix("~/") {
+        return home.join(rest).to_string_lossy().into_owned();
+    }
+
+    value
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged, deny_unknown_fields, rename_all = "snake_case")]
 pub enum McpServerTransportConfig {
@@ -217,7 +237,7 @@ pub enum McpServerTransportConfig {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         env_vars: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        cwd: Option<PathBuf>,
+        cwd: Option<AbsolutePathBuf>,
     },
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
     StreamableHttp {
@@ -645,6 +665,7 @@ impl Default for ShellEnvironmentPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_utils_absolute_path::AbsolutePathBufGuard;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -757,7 +778,44 @@ mod tests {
                 args: vec![],
                 env: None,
                 env_vars: Vec::new(),
-                cwd: Some(PathBuf::from("/tmp")),
+                cwd: Some(
+                    AbsolutePathBuf::from_absolute_path("/tmp").expect("expected absolute mcp cwd"),
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn deserialize_stdio_command_server_config_expands_tilde_cwd() {
+        let base_dir = std::env::temp_dir();
+        let _guard = AbsolutePathBufGuard::new(&base_dir);
+        let cfg: McpServerConfig = toml::from_str(
+            r#"
+            command = "echo"
+            cwd = "~/tmp"
+        "#,
+        )
+        .expect("should deserialize command config with tilde cwd");
+
+        let expected_cwd = if cfg!(target_os = "windows") {
+            AbsolutePathBuf::resolve_path_against_base("~/tmp", &base_dir)
+                .expect("expected absolute mcp cwd")
+        } else {
+            let Some(home) = home_dir() else {
+                return;
+            };
+            AbsolutePathBuf::from_absolute_path(home.join("tmp"))
+                .expect("expected absolute mcp cwd")
+        };
+
+        assert_eq!(
+            cfg.transport,
+            McpServerTransportConfig::Stdio {
+                command: "echo".to_string(),
+                args: vec![],
+                env: None,
+                env_vars: Vec::new(),
+                cwd: Some(expected_cwd),
             }
         );
     }
