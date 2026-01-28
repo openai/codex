@@ -235,6 +235,17 @@ export_lines=$(export -p | awk '
   name=line
   sub(/^(export|declare -x|typeset -x) /, "", name)
   sub(/=.*/, "", name)
+  tmp=line
+  gsub(/\\"/, "", tmp)
+  quote_count=gsub(/"/, "", tmp)
+  if ((quote_count % 2) == 1 && line !~ /\\$/) {
+    next
+  }
+  if (line ~ /\\$/) {
+    while (line ~ /\\$/ && (getline continuation) > 0) {
+      line = line "\n" continuation
+    }
+  }
   if (name ~ /^(EXCLUDED_EXPORTS)$/) {
     next
   }
@@ -279,6 +290,17 @@ export_lines=$(export -p | awk '
   name=line
   sub(/^(export|declare -x|typeset -x) /, "", name)
   sub(/=.*/, "", name)
+  tmp=line
+  gsub(/\\"/, "", tmp)
+  quote_count=gsub(/"/, "", tmp)
+  if ((quote_count % 2) == 1 && line !~ /\\$/) {
+    next
+  }
+  if (line ~ /\\$/) {
+    while (line ~ /\\$/ && (getline continuation) > 0) {
+      line = line "\n" continuation
+    }
+  }
   if (name ~ /^(EXCLUDED_EXPORTS)$/) {
     next
   }
@@ -336,6 +358,17 @@ if export -p >/dev/null 2>&1; then
   name=line
   sub(/^(export|declare -x|typeset -x) /, "", name)
   sub(/=.*/, "", name)
+  tmp=line
+  gsub(/\\"/, "", tmp)
+  quote_count=gsub(/"/, "", tmp)
+  if ((quote_count % 2) == 1 && line !~ /\\$/) {
+    next
+  }
+  if (line ~ /\\$/) {
+    while (line ~ /\\$/ && (getline continuation) > 0) {
+      line = line "\n" continuation
+    }
+  }
   if (name ~ /^(EXCLUDED_EXPORTS)$/) {
     next
   }
@@ -524,6 +557,38 @@ mod tests {
         assert!(!stdout.contains("PWD=/tmp/stale"));
         assert!(!stdout.contains("NEXTEST_BIN_EXE_codex-write-config-schema"));
         assert!(!stdout.contains("BAD-NAME"));
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bash_snapshot_handles_multiline_exports() -> Result<()> {
+        let output = Command::new("/bin/bash")
+            .arg("-c")
+            .arg(bash_snapshot_script())
+            .env_clear()
+            .env("HOME", "/nonexistent")
+            .env("PATH", "/usr/bin:/bin")
+            .env("BASH_ENV", "/dev/null")
+            .env("CODEX_MULTILINE_EXPORT", "line-1\nline-2")
+            .output()?;
+
+        assert!(output.status.success());
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let snapshot = strip_snapshot_preamble(&stdout)?;
+
+        let dir = tempdir()?;
+        let path = dir.path().join("snapshot.sh");
+        std::fs::write(&path, snapshot)?;
+
+        let syntax_check = Command::new("/bin/bash").arg("-n").arg(&path).output()?;
+        assert!(
+            syntax_check.status.success(),
+            "snapshot should be valid bash: {}",
+            String::from_utf8_lossy(&syntax_check.stderr)
+        );
 
         Ok(())
     }
