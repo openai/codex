@@ -107,6 +107,7 @@ pub(crate) enum AppEvent {
         description: Option<String>,
         instructions: String,
         url: String,
+        is_installed: bool,
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),

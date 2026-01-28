@@ -828,8 +828,15 @@ impl ChatWidget {
         description: Option<String>,
         instructions: String,
         url: String,
+        is_installed: bool,
     ) {
-        let view = crate::bottom_pane::AppLinkView::new(title, description, instructions, url);
+        let view = crate::bottom_pane::AppLinkView::new(
+            title,
+            description,
+            instructions,
+            url,
+            is_installed,
+        );
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
     }
@@ -5193,6 +5200,7 @@ impl ChatWidget {
                 search_value: Some(search_value),
                 ..Default::default()
             };
+            let is_installed = connector.is_accessible;
             let (selected_label, missing_label, instructions) = if connector.is_accessible {
                 (
                     "Press Enter to view the app link.",
@@ -5216,6 +5224,7 @@ impl ChatWidget {
                         description: description.clone(),
                         instructions: instructions.clone(),
                         url: install_url.clone(),
+                        is_installed,
                     });
                 })];
                 item.dismiss_on_select = true;
@@ -5235,7 +5244,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Apps".to_string()),
             subtitle: Some(
-                "Use $ to insert a connected app into your prompt. Install or manage apps below."
+                "Use $ to insert a connected app into your prompt. Install or manage apps below.\nNew installs can take a few minutes to appear."
                     .to_string(),
             ),
             footer_hint: Some(Self::connectors_popup_hint_line()),

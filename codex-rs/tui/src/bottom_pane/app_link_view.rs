@@ -24,6 +24,7 @@ pub(crate) struct AppLinkView {
     description: Option<String>,
     instructions: String,
     url: String,
+    is_installed: bool,
     complete: bool,
 }
 
@@ -33,12 +34,14 @@ impl AppLinkView {
         description: Option<String>,
         instructions: String,
         url: String,
+        is_installed: bool,
     ) -> Self {
         Self {
             title,
             description,
             instructions,
             url,
+            is_installed,
             complete: false,
         }
     }
@@ -59,15 +62,31 @@ impl AppLinkView {
             }
         }
         lines.push(Line::from(""));
-        for line in wrap("Use $ to insert an app into the prompt.", usable_width) {
-            lines.push(Line::from(line.into_owned()));
+        if self.is_installed {
+            for line in wrap("Use $ to insert this app into the prompt.", usable_width) {
+                lines.push(Line::from(line.into_owned()));
+            }
+            lines.push(Line::from(""));
         }
-        lines.push(Line::from(""));
 
         let instructions = self.instructions.trim();
         if !instructions.is_empty() {
             for line in wrap(instructions, usable_width) {
                 lines.push(Line::from(line.into_owned()));
+            }
+            for line in wrap(
+                "Newly installed apps can take a few minutes to appear in /apps.",
+                usable_width,
+            ) {
+                lines.push(Line::from(line.into_owned()));
+            }
+            if !self.is_installed {
+                for line in wrap(
+                    "After installed, use $ to insert this app into the prompt.",
+                    usable_width,
+                ) {
+                    lines.push(Line::from(line.into_owned()));
+                }
             }
             lines.push(Line::from(""));
         }

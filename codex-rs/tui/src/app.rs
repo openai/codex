@@ -1513,9 +1513,15 @@ impl App {
                 description,
                 instructions,
                 url,
+                is_installed,
             } => {
-                self.chat_widget
-                    .open_app_link_view(title, description, instructions, url);
+                self.chat_widget.open_app_link_view(
+                    title,
+                    description,
+                    instructions,
+                    url,
+                    is_installed,
+                );
             }
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);
