@@ -71,7 +71,6 @@ pub(crate) async fn init_if_enabled(
             )
             .await;
         });
-        return None;
     }
     Some(runtime)
 }
