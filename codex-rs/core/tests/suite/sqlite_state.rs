@@ -1,15 +1,18 @@
 use anyhow::Result;
 use codex_core::features::Feature;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::UserMessageEvent;
 use codex_state::STATE_DB_FILENAME;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::test_codex;
-use codex_protocol::ThreadId;
-use codex_protocol::protocol::{
-    EventMsg, RolloutItem, RolloutLine, SessionMeta, SessionMetaLine, SessionSource,
-    UserMessageEvent,
-};
 use pretty_assertions::assert_eq;
 use std::fs;
 use tokio::time::Duration;
