@@ -54,8 +54,22 @@ rust.toolchain(
     edition = "2024",
     extra_target_triples = RUST_TRIPLES,
     extra_rustc_flags_triples = {
-        "aarch64-unknown-linux-gnu": ["-C", "link-arg=-lc_nonshared"],
-        "x86_64-unknown-linux-gnu": ["-C", "link-arg=-lc_nonshared"],
+        "aarch64-unknown-linux-gnu": [
+            "-C",
+            "link-arg=-Wl,-Bstatic",
+            "-C",
+            "link-arg=-lc_nonshared",
+            "-C",
+            "link-arg=-Wl,-Bdynamic",
+        ],
+        "x86_64-unknown-linux-gnu": [
+            "-C",
+            "link-arg=-Wl,-Bstatic",
+            "-C",
+            "link-arg=-lc_nonshared",
+            "-C",
+            "link-arg=-Wl,-Bdynamic",
+        ],
     },
     versions = ["1.90.0"],
 )
