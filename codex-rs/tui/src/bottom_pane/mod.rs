@@ -1257,6 +1257,14 @@ mod tests {
             handle_calls: Rc<Cell<usize>>,
         }
 
+        impl Renderable for EscRoutingView {
+            fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+            fn desired_height(&self, _width: u16) -> u16 {
+                0
+            }
+        }
+
         impl BottomPaneView for EscRoutingView {
             fn handle_key_event(&mut self, _key_event: KeyEvent) {
                 self.handle_calls

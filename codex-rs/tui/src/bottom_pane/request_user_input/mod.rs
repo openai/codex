@@ -607,7 +607,7 @@ impl RequestUserInputOverlay {
     }
 
     /// Synchronize selection state to the currently focused option.
-    fn select_current_option(&mut self) {
+    fn select_current_option(&mut self, committed: bool) {
         if !self.has_options() {
             return;
         }
@@ -615,7 +615,7 @@ impl RequestUserInputOverlay {
         let updated = if let Some(answer) = self.current_answer_mut() {
             answer.options_ui_state.clamp_selection(options_len);
             answer.committed_option_idx = answer.options_ui_state.selected_idx;
-            answer.answer_committed = false;
+            answer.answer_committed = committed;
             true
         } else {
             false
@@ -1022,7 +1022,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                         }
                     }
                     KeyCode::Char(' ') => {
-                        self.select_current_option();
+                        self.select_current_option(false);
                     }
                     KeyCode::Backspace | KeyCode::Delete => {
                         self.clear_selection();
@@ -1036,9 +1036,8 @@ impl BottomPaneView for RequestUserInputOverlay {
                     KeyCode::Enter => {
                         let has_selection = self.selected_option_index().is_some();
                         if has_selection {
-                            self.select_current_option();
-                        }
-                        if let Some(answer) = self.current_answer_mut() {
+                            self.select_current_option(true);
+                        } else if let Some(answer) = self.current_answer_mut() {
                             answer.answer_committed = true;
                         }
                         self.go_next_or_submit();
@@ -1047,9 +1046,8 @@ impl BottomPaneView for RequestUserInputOverlay {
                         if let Some(option_idx) = self.option_index_for_digit(ch) {
                             if let Some(answer) = self.current_answer_mut() {
                                 answer.options_ui_state.selected_idx = Some(option_idx);
-                                answer.answer_committed = true;
                             }
-                            self.select_current_option();
+                            self.select_current_option(true);
                             self.go_next_or_submit();
                         }
                     }
@@ -1983,7 +1981,7 @@ mod tests {
             let answer = overlay.current_answer_mut().expect("answer missing");
             answer.options_ui_state.selected_idx = Some(1);
         }
-        overlay.select_current_option();
+        overlay.select_current_option(false);
         overlay
             .composer
             .set_text_content("Notes for option 2".to_string(), Vec::new(), Vec::new());
@@ -2492,7 +2490,7 @@ mod tests {
             false,
             false,
         );
-        overlay.select_current_option();
+        overlay.select_current_option(false);
         overlay.focus = Focus::Notes;
         overlay
             .composer
