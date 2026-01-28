@@ -1,29 +1,47 @@
 ## Contributing
 
-This project is under active development and the code will likely change pretty significantly.
+**External contributions are by invitation only**
 
-**At the moment, we are generally accepting external contributions only for bugs fixes.**
+At this time, the Codex team does not accept unsolicited code contributions.
 
-If you want to add a new feature or change the behavior of an existing one, please open an issue proposing the feature or upvote an existing enhancement request. We will generally prioritize new features based on community feedback. New features must compose well with existing and upcoming features and fit into our roadmap. They must also be implemented consistently across all Codex surfaces (CLI, IDE extension, web, etc.).
+If you would like to propose a new feature or a change in behavior, please open an issue describing the proposal or upvote an existing enhancement request. We prioritize new features based on community feedback, alignment with our roadmap, and consistency across all Codex surfaces (CLI, IDE extensions, web, etc.).
 
-If you want to contribute a bug fix, please open a bug report first - or verify that there is an existing bug report that discusses the issue. All bug fix PRs should include a link to a bug report.
+If you encounter a bug, please open a bug report or verify that an existing report already covers the issue. If you would like to help, we encourage you to contribute by sharing analysis, reproduction details, root-cause hypotheses, or a high-level outline of a potential fix directly in the issue thread.
 
-**New contributions that don't go through this process may be closed** if they aren't aligned with our current roadmap or conflict with other priorities/upcoming features.
+The Codex team may invite an external contributor to submit a pull request when:
+
+- the problem is well understood,
+- the proposed approach aligns with the team’s intended solution, and
+- the issue is deemed high-impact and high-priority.
+
+Pull requests that have not been explicitly invited by a member of the Codex team will be closed without review.
+
+**Why we do not generally accept external code contributions**
+
+In the past, the Codex team accepted external pull requests for bug fixes. While we appreciated the effort and engagement from the community, this model did not scale well.
+
+Many contributions were made without full visibility into the architectural context, system-level constraints, or near-term roadmap considerations that guide Codex development. Others focused on issues that were low priority or affected a very small subset of users. Reviewing and iterating on these PRs often took more time than implementing the fix directly, and diverted attention from higher-priority work.
+
+The most valuable contributions consistently came from community members who demonstrated deep understanding of a problem domain. That expertise is most helpful when shared early -- through detailed bug reports, analysis, and design discussion in issues. Identifying the right solution is typically the hard part; implementing it is comparatively straightforward with the help of Codex itself.
+
+For these reasons, we focus external contributions on discussion, analysis, and feedback, and reserve code changes for cases where a targeted invitation makes sense.
 
 ### Development workflow
+
+If you are invited by a Codex team member to contribute a PR, here is the recommended development workflow.
 
 - Create a _topic branch_ from `main` - e.g. `feat/interactive-prompt`.
 - Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
 - Ensure your change is free of lint warnings and test failures.
 
-### Writing high-impact code changes
+### Guidance for invited code contributions
 
 1. **Start with an issue.** Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
 2. **Add or update tests.** A bug fix should generally come with test coverage that fails before your change and passes afterwards. 100% coverage is not required, but aim for meaningful assertions.
 3. **Document behavior.** If your change affects user-facing behavior, update the README, inline help (`codex --help`), or relevant example projects.
 4. **Keep commits atomic.** Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
 
-### Opening a pull request
+### Opening a pull request (by invitation only)
 
 - Fill in the PR template (or include similar information) - **What? Why? How?**
 - Include a link to a bug report or enhancement request in the issue tracker
@@ -34,7 +52,7 @@ If you want to contribute a bug fix, please open a bug report first - or verify 
 ### Review process
 
 1. One maintainer will be assigned as a primary reviewer.
-2. If your PR adds a new feature that was not previously discussed and approved, we may close your PR (see [Contributing](#contributing)).
+2. If your invited PR introduces scope or behavior that was not previously discussed and approved, we may close the PR.
 3. We may ask for changes. Please do not take this personally. We value the work, but we also value consistency and long-term maintainability.
 4. When there is consensus that the PR meets the bar, a maintainer will squash-and-merge.
 
@@ -42,7 +60,7 @@ If you want to contribute a bug fix, please open a bug report first - or verify 
 
 - **Be kind and inclusive.** Treat others with respect; we follow the [Contributor Covenant](https://www.contributor-covenant.org/).
 - **Assume good intent.** Written communication is hard - err on the side of generosity.
-- **Teach & learn.** If you spot something confusing, open an issue or PR with improvements.
+- **Teach & learn.** If you spot something confusing, open an issue or discussion with suggestions or clarifications.
 
 ### Getting help
 

@@ -1,8 +1,10 @@
 use crate::agent::AgentStatus;
+use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
+use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -26,6 +28,8 @@ use serde::Serialize;
 
 pub struct CollabHandler;
 
+/// Minimum wait timeout to prevent tight polling loops from burning CPU.
+pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 300_000;
 
@@ -78,7 +82,7 @@ impl ToolHandler for CollabHandler {
 mod spawn {
     use super::*;
     use crate::agent::AgentRole;
-    use crate::agent::MAX_THREAD_SPAWN_DEPTH;
+
     use crate::agent::exceeds_thread_spawn_depth_limit;
     use crate::agent::next_thread_spawn_depth;
     use codex_protocol::protocol::SessionSource;
@@ -113,9 +117,9 @@ mod spawn {
         let session_source = turn.client.get_session_source();
         let child_depth = next_thread_spawn_depth(&session_source);
         if exceeds_thread_spawn_depth_limit(child_depth) {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "agent depth limit reached: max depth is {MAX_THREAD_SPAWN_DEPTH}"
-            )));
+            return Err(FunctionCallError::RespondToModel(
+                "Agent depth limit reached. Solve the task yourself.".to_string(),
+            ));
         }
         session
             .send_event(
@@ -128,8 +132,11 @@ mod spawn {
                 .into(),
             )
             .await;
-        let mut config =
-            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+        let mut config = build_agent_spawn_config(
+            &session.get_base_instructions().await,
+            turn.as_ref(),
+            child_depth,
+        )?;
         agent_role
             .apply_to_config(&mut config)
             .map_err(FunctionCallError::RespondToModel)?;
@@ -318,6 +325,8 @@ mod wait {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Validate timeout.
+        // Very short timeouts encourage busy-polling loops in the orchestrator prompt and can
+        // cause high CPU usage even with a single active worker, so clamp to a minimum.
         let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_WAIT_TIMEOUT_MS);
         let timeout_ms = match timeout_ms {
             ms if ms <= 0 => {
@@ -325,7 +334,7 @@ mod wait {
                     "timeout_ms must be greater than zero".to_owned(),
                 ));
             }
-            ms => ms.min(MAX_WAIT_TIMEOUT_MS),
+            ms => ms.clamp(MIN_WAIT_TIMEOUT_MS, MAX_WAIT_TIMEOUT_MS),
         };
 
         session
@@ -582,6 +591,7 @@ fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {
 fn build_agent_spawn_config(
     base_instructions: &BaseInstructions,
     turn: &TurnContext,
+    child_depth: i32,
 ) -> Result<Config, FunctionCallError> {
     let base_config = turn.client.config();
     let mut config = (*base_config).clone();
@@ -607,6 +617,12 @@ fn build_agent_spawn_config(
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("sandbox_policy is invalid: {err}"))
         })?;
+
+    // If the new agent will be at max depth:
+    if exceeds_thread_spawn_depth_limit(child_depth + 1) {
+        config.features.disable(Feature::Collab);
+    }
+
     Ok(config)
 }
 
@@ -778,9 +794,9 @@ mod tests {
         };
         assert_eq!(
             err,
-            FunctionCallError::RespondToModel(format!(
-                "agent depth limit reached: max depth is {MAX_THREAD_SPAWN_DEPTH}"
-            ))
+            FunctionCallError::RespondToModel(
+                "Agent depth limit reached. Solve the task yourself.".to_string()
+            )
         );
     }
 
@@ -1000,7 +1016,7 @@ mod tests {
             "wait",
             function_payload(json!({
                 "ids": [agent_id.to_string()],
-                "timeout_ms": 10
+                "timeout_ms": MIN_WAIT_TIMEOUT_MS
             })),
         );
         let output = CollabHandler
@@ -1023,6 +1039,37 @@ mod tests {
             }
         );
         assert_eq!(success, None);
+
+        let _ = thread
+            .thread
+            .submit(Op::Shutdown {})
+            .await
+            .expect("shutdown should submit");
+    }
+
+    #[tokio::test]
+    async fn wait_clamps_short_timeouts_to_minimum() {
+        let (mut session, turn) = make_session_and_context().await;
+        let manager = thread_manager();
+        session.services.agent_control = manager.agent_control();
+        let config = turn.client.config().as_ref().clone();
+        let thread = manager.start_thread(config).await.expect("start thread");
+        let agent_id = thread.thread_id;
+        let invocation = invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait",
+            function_payload(json!({
+                "ids": [agent_id.to_string()],
+                "timeout_ms": 10
+            })),
+        );
+
+        let early = timeout(Duration::from_millis(50), CollabHandler.handle(invocation)).await;
+        assert!(
+            early.is_err(),
+            "wait should not return before the minimum timeout clamp"
+        );
 
         let _ = thread
             .thread
@@ -1144,7 +1191,7 @@ mod tests {
         turn.approval_policy = AskForApproval::Never;
         turn.sandbox_policy = SandboxPolicy::DangerFullAccess;
 
-        let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
+        let config = build_agent_spawn_config(&base_instructions, &turn, 0).expect("spawn config");
         let mut expected = (*turn.client.config()).clone();
         expected.base_instructions = Some(base_instructions.text);
         expected.model = Some(turn.client.get_model());
@@ -1189,7 +1236,7 @@ mod tests {
             text: "base".to_string(),
         };
 
-        let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
+        let config = build_agent_spawn_config(&base_instructions, &turn, 0).expect("spawn config");
 
         assert_eq!(config.user_instructions, base_config.user_instructions);
     }

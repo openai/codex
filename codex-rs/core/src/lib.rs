@@ -69,6 +69,7 @@ mod event_mapping;
 pub mod review_format;
 pub mod review_prompts;
 mod thread_manager;
+pub mod web_search;
 pub use codex_protocol::protocol::InitialHistory;
 pub use thread_manager::NewThread;
 pub use thread_manager::ThreadManager;
@@ -98,6 +99,7 @@ pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;
 pub use rollout::SESSIONS_SUBDIR;
 pub use rollout::SessionMeta;
+pub use rollout::find_archived_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use rollout::find_conversation_path_by_id_str;
 pub use rollout::find_thread_path_by_id_str;
@@ -108,6 +110,7 @@ pub use rollout::list::ThreadsPage;
 pub use rollout::list::parse_cursor;
 pub use rollout::list::read_head_for_summary;
 pub use rollout::list::read_session_meta_line;
+pub use rollout::rollout_date_parts;
 mod function_tool;
 mod state;
 mod tasks;
@@ -123,9 +126,6 @@ pub use exec_policy::ExecPolicyError;
 pub use exec_policy::check_execpolicy_for_warnings;
 pub use exec_policy::load_exec_policy;
 pub use safety::get_platform_sandbox;
-pub use safety::is_windows_elevated_sandbox_enabled;
-pub use safety::set_windows_elevated_sandbox_enabled;
-pub use safety::set_windows_sandbox_enabled;
 pub use tools::spec::parse_tool_input_schema;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
 // `codex_core::protocol::...` references continue to work across the workspace.

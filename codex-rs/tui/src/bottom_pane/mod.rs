@@ -59,6 +59,7 @@ mod list_selection_view;
 mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
+mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use list_selection_view::SelectionViewParams;
 mod feedback_view;
@@ -104,11 +105,12 @@ pub(crate) enum CancellationEvent {
 }
 
 pub(crate) use chat_composer::ChatComposer;
+pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
-pub(crate) use experimental_features_view::BetaFeatureItem;
+pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
@@ -130,6 +132,8 @@ pub(crate) struct BottomPane {
     frame_requester: FrameRequester,
 
     has_input_focus: bool,
+    enhanced_keys_supported: bool,
+    disable_paste_burst: bool,
     is_task_running: bool,
     esc_backtrack_hint: bool,
     animations_enabled: bool,
@@ -182,6 +186,8 @@ impl BottomPane {
             app_event_tx,
             frame_requester,
             has_input_focus,
+            enhanced_keys_supported,
+            disable_paste_burst,
             is_task_running: false,
             status: None,
             unified_exec_footer: UnifiedExecFooter::new(),
@@ -204,6 +210,12 @@ impl BottomPane {
 
     pub fn set_collaboration_modes_enabled(&mut self, enabled: bool) {
         self.composer.set_collaboration_modes_enabled(enabled);
+        self.request_redraw();
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn set_windows_degraded_sandbox_active(&mut self, enabled: bool) {
+        self.composer.set_windows_degraded_sandbox_active(enabled);
         self.request_redraw();
     }
 
@@ -250,19 +262,37 @@ impl BottomPane {
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         // If a modal/view is active, handle it here; otherwise forward to composer.
-        if let Some(view) = self.view_stack.last_mut() {
-            if key_event.code == KeyCode::Esc
-                && matches!(view.on_ctrl_c(), CancellationEvent::Handled)
-                && view.is_complete()
-            {
+        if !self.view_stack.is_empty() {
+            // We need three pieces of information after routing the key:
+            // whether Esc completed the view, whether the view finished for any
+            // reason, and whether a paste-burst timer should be scheduled.
+            let (ctrl_c_completed, view_complete, view_in_paste_burst) = {
+                let last_index = self.view_stack.len() - 1;
+                let view = &mut self.view_stack[last_index];
+                let ctrl_c_completed = key_event.code == KeyCode::Esc
+                    && matches!(view.on_ctrl_c(), CancellationEvent::Handled)
+                    && view.is_complete();
+                if ctrl_c_completed {
+                    (true, true, false)
+                } else {
+                    view.handle_key_event(key_event);
+                    (false, view.is_complete(), view.is_in_paste_burst())
+                }
+            };
+
+            if ctrl_c_completed {
                 self.view_stack.pop();
                 self.on_active_view_complete();
-            } else {
-                view.handle_key_event(key_event);
-                if view.is_complete() {
-                    self.view_stack.clear();
-                    self.on_active_view_complete();
+                if let Some(next_view) = self.view_stack.last()
+                    && next_view.is_in_paste_burst()
+                {
+                    self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
                 }
+            } else if view_complete {
+                self.view_stack.clear();
+                self.on_active_view_complete();
+            } else if view_in_paste_burst {
+                self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
             }
             self.request_redraw();
             InputResult::None
@@ -628,7 +658,13 @@ impl BottomPane {
             request
         };
 
-        let modal = RequestUserInputOverlay::new(request, self.app_event_tx.clone());
+        let modal = RequestUserInputOverlay::new(
+            request,
+            self.app_event_tx.clone(),
+            self.has_input_focus,
+            self.enhanced_keys_supported,
+            self.disable_paste_burst,
+        );
         self.pause_status_timer_for_modal();
         self.set_composer_input_enabled(
             false,
@@ -670,11 +706,23 @@ impl BottomPane {
     }
 
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
+        // Give the active view the first chance to flush paste-burst state so
+        // overlays that reuse the composer behave consistently.
+        if let Some(view) = self.view_stack.last_mut()
+            && view.flush_paste_burst_if_due()
+        {
+            return true;
+        }
         self.composer.flush_paste_burst_if_due()
     }
 
     pub(crate) fn is_in_paste_burst(&self) -> bool {
-        self.composer.is_in_paste_burst()
+        // A view can hold paste-burst state independently of the primary
+        // composer, so check it first.
+        self.view_stack
+            .last()
+            .is_some_and(|view| view.is_in_paste_burst())
+            || self.composer.is_in_paste_burst()
     }
 
     pub(crate) fn on_history_entry_response(
@@ -1106,6 +1154,7 @@ mod tests {
                 description: "test skill".to_string(),
                 short_description: None,
                 interface: None,
+                dependencies: None,
                 path: PathBuf::from("test-skill"),
                 scope: SkillScope::User,
             }]),

@@ -15,7 +15,7 @@ This project has been migrated from npm to pnpm to improve dependency management
 
 ```bash
 # Global installation of pnpm
-npm install -g pnpm@10.8.1
+npm install -g pnpm@10.28.2
 
 # Or with corepack (available with Node.js 22+)
 corepack enable
@@ -59,12 +59,12 @@ codex/
 
 ## CI/CD
 
-CI/CD workflows have been updated to use pnpm instead of npm. Make sure your CI environments use pnpm 10.8.1 or higher.
+CI/CD workflows have been updated to use pnpm instead of npm. Make sure your CI environments use pnpm 10.28.2 or higher.
 
 ## Known issues
 
 If you encounter issues with pnpm, try the following solutions:
 
 1. Remove the `node_modules` folder and `pnpm-lock.yaml` file, then run `pnpm install`
-2. Make sure you're using pnpm 10.8.1 or higher
+2. Make sure you're using pnpm 10.28.2 or higher
 3. Verify that Node.js 22 or higher is installed
