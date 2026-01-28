@@ -49,7 +49,7 @@ impl ShellHandler {
             env: create_env(&turn_context.shell_environment_policy),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
-            justification: params.justification,
+            justification: params.justification.clone(),
             arg0: None,
         }
     }
@@ -76,7 +76,7 @@ impl ShellCommandHandler {
             env: create_env(&turn_context.shell_environment_policy),
             sandbox_permissions: params.sandbox_permissions.unwrap_or_default(),
             windows_sandbox_level: turn_context.windows_sandbox_level,
-            justification: params.justification,
+            justification: params.justification.clone(),
             arg0: None,
         }
     }
