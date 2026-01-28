@@ -23,6 +23,7 @@ pub(crate) struct MentionItem {
     pub(crate) description: Option<String>,
     pub(crate) insert_text: String,
     pub(crate) search_terms: Vec<String>,
+    pub(crate) path: Option<String>,
 }
 
 pub(crate) struct SkillPopup {

@@ -14,6 +14,7 @@ use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::with_codex_apps_mcp;
+use crate::mcp_connection_manager::DEFAULT_STARTUP_TIMEOUT;
 use crate::mcp_connection_manager::McpConnectionManager;
 
 pub async fn list_accessible_connectors_from_mcp_tools(
@@ -55,6 +56,13 @@ pub async fn list_accessible_connectors_from_mcp_tools(
         )
         .await;
 
+    if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
+        let timeout = cfg.startup_timeout_sec.unwrap_or(DEFAULT_STARTUP_TIMEOUT);
+        mcp_connection_manager
+            .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, timeout)
+            .await;
+    }
+
     let tools = mcp_connection_manager.list_all_tools().await;
     cancel_token.cancel();
 
@@ -71,6 +79,10 @@ fn auth_manager_from_config(config: &Config) -> std::sync::Arc<AuthManager> {
 
 pub fn connector_display_label(connector: &AppInfo) -> String {
     format_connector_label(&connector.name, &connector.id)
+}
+
+pub fn connector_mention_slug(connector: &AppInfo) -> String {
+    connector_name_slug(&connector_display_label(connector))
 }
 
 pub(crate) fn accessible_connectors_from_mcp_tools(
@@ -190,7 +202,7 @@ pub fn connector_install_url(name: &str, connector_id: &str) -> String {
     format!("https://chatgpt.com/apps/{slug}/{connector_id}")
 }
 
-fn connector_name_slug(name: &str) -> String {
+pub fn connector_name_slug(name: &str) -> String {
     let mut normalized = String::with_capacity(name.len());
     for character in name.chars() {
         if character.is_ascii_alphanumeric() {

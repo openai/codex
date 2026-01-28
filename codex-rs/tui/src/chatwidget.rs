@@ -191,7 +191,9 @@ pub(crate) use self::agent::spawn_op_forwarder;
 mod session_header;
 use self::session_header::SessionHeader;
 mod skills;
-use self::skills::find_skill_mentions;
+use self::skills::collect_tool_mentions;
+use self::skills::find_app_mentions;
+use self::skills::find_skill_mentions_with_tool_mentions;
 use crate::streaming::controller::StreamController;
 use std::path::Path;
 
@@ -561,6 +563,7 @@ pub(crate) struct UserMessage {
     text: String,
     local_images: Vec<LocalImageAttachment>,
     text_elements: Vec<TextElement>,
+    mention_paths: HashMap<String, String>,
 }
 
 impl From<String> for UserMessage {
@@ -570,6 +573,7 @@ impl From<String> for UserMessage {
             local_images: Vec::new(),
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
+            mention_paths: HashMap::new(),
         }
     }
 }
@@ -581,6 +585,7 @@ impl From<&str> for UserMessage {
             local_images: Vec::new(),
             // Plain text conversion has no UI element ranges.
             text_elements: Vec::new(),
+            mention_paths: HashMap::new(),
         }
     }
 }
@@ -606,6 +611,7 @@ pub(crate) fn create_initial_user_message(
             text,
             local_images,
             text_elements,
+            mention_paths: HashMap::new(),
         })
     }
 }
@@ -619,12 +625,14 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         text,
         text_elements,
         local_images,
+        mention_paths,
     } = message;
     if local_images.is_empty() {
         return UserMessage {
             text,
             text_elements,
             local_images,
+            mention_paths,
         };
     }
 
@@ -679,6 +687,7 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         text: rebuilt,
         local_images: remapped_images,
         text_elements: rebuilt_elements,
+        mention_paths,
     }
 }
 
@@ -1262,6 +1271,7 @@ impl ChatWidget {
             text: self.bottom_pane.composer_text(),
             text_elements: self.bottom_pane.composer_text_elements(),
             local_images: self.bottom_pane.composer_local_images(),
+            mention_paths: HashMap::new(),
         };
 
         let mut to_merge: Vec<UserMessage> = self.queued_user_messages.drain(..).collect();
@@ -1273,6 +1283,7 @@ impl ChatWidget {
             text: String::new(),
             text_elements: Vec::new(),
             local_images: Vec::new(),
+            mention_paths: HashMap::new(),
         };
         let mut combined_offset = 0usize;
         let mut next_image_label = 1usize;
@@ -1294,6 +1305,7 @@ impl ChatWidget {
                     elem
                 }));
             combined.local_images.extend(message.local_images);
+            combined.mention_paths.extend(message.mention_paths);
         }
 
         Some(combined)
@@ -2465,6 +2477,7 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_images_with_placeholders(),
                         text_elements,
+                        mention_paths: self.bottom_pane.take_mention_paths(),
                     };
                     if self.is_session_configured() {
                         // Submitted is only emitted when steer is enabled (Enter sends immediately).
@@ -2487,6 +2500,7 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_images_with_placeholders(),
                         text_elements,
+                        mention_paths: self.bottom_pane.take_mention_paths(),
                     };
                     self.queue_user_message(user_message);
                 }
@@ -2865,6 +2879,7 @@ impl ChatWidget {
             text,
             local_images,
             text_elements,
+            mention_paths,
         } = user_message;
         if text.is_empty() && local_images.is_empty() {
             return;
@@ -2903,12 +2918,25 @@ impl ChatWidget {
             });
         }
 
+        let mentions = collect_tool_mentions(&text, &mention_paths);
+
         if let Some(skills) = self.bottom_pane.skills() {
-            let skill_mentions = find_skill_mentions(&text, skills);
+            let skill_mentions = find_skill_mentions_with_tool_mentions(&mentions, skills);
             for skill in skill_mentions {
                 items.push(UserInput::Skill {
                     name: skill.name.clone(),
                     path: skill.path.clone(),
+                });
+            }
+        }
+
+        if let Some(apps) = self.connectors_for_mentions() {
+            let app_mentions = find_app_mentions(&mentions, apps);
+            for app in app_mentions {
+                let app_id = app.id.as_str();
+                items.push(UserInput::Mention {
+                    name: app.name.clone(),
+                    path: format!("apps://{app_id}"),
                 });
             }
         }
@@ -5025,6 +5053,17 @@ impl ChatWidget {
 
     fn connectors_enabled(&self) -> bool {
         self.config.features.enabled(Feature::Connectors)
+    }
+
+    fn connectors_for_mentions(&self) -> Option<&[connectors::AppInfo]> {
+        if !self.connectors_enabled() {
+            return None;
+        }
+
+        match &self.connectors_cache {
+            ConnectorsCacheState::Ready(snapshot) => Some(snapshot.connectors.as_slice()),
+            _ => None,
+        }
     }
 
     /// Build a placeholder header cell while the session is configuring.

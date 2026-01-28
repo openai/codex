@@ -282,6 +282,7 @@ pub(crate) struct ChatComposer {
     skills: Option<Vec<SkillMetadata>>,
     connectors_snapshot: Option<ConnectorsSnapshot>,
     dismissed_mention_popup_token: Option<String>,
+    mention_paths: HashMap<String, String>,
     /// When enabled, `Enter` submits immediately and `Tab` requests queuing behavior.
     steer_enabled: bool,
     collaboration_modes_enabled: bool,
@@ -371,6 +372,7 @@ impl ChatComposer {
             skills: None,
             connectors_snapshot: None,
             dismissed_mention_popup_token: None,
+            mention_paths: HashMap::new(),
             steer_enabled: false,
             collaboration_modes_enabled: false,
             config,
@@ -390,6 +392,10 @@ impl ChatComposer {
 
     pub fn set_connector_mentions(&mut self, connectors_snapshot: Option<ConnectorsSnapshot>) {
         self.connectors_snapshot = connectors_snapshot;
+    }
+
+    pub(crate) fn take_mention_paths(&mut self) -> HashMap<String, String> {
+        std::mem::take(&mut self.mention_paths)
     }
 
     /// Enables or disables "Steer" behavior for submission keys.
@@ -701,6 +707,7 @@ impl ChatComposer {
         self.textarea.set_text_clearing_elements("");
         self.pending_pastes.clear();
         self.attached_images.clear();
+        self.mention_paths.clear();
 
         self.textarea.set_text_with_elements(&text, &text_elements);
 
@@ -1353,7 +1360,10 @@ impl ChatComposer {
             unreachable!();
         };
 
-        match key_event {
+        let mut selected_mention: Option<(String, Option<String>)> = None;
+        let mut close_popup = false;
+
+        let result = match key_event {
             KeyEvent {
                 code: KeyCode::Up, ..
             }
@@ -1394,17 +1404,26 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                let selected = popup
-                    .selected_mention()
-                    .map(|mention| mention.insert_text.clone());
-                if let Some(insert_text) = selected {
-                    self.insert_selected_mention(&insert_text);
+                if let Some(mention) = popup.selected_mention() {
+                    selected_mention = Some((mention.insert_text.clone(), mention.path.clone()));
                 }
-                self.active_popup = ActivePopup::None;
+                close_popup = true;
                 (InputResult::None, true)
             }
             input => self.handle_input_basic(input),
+        };
+
+        if close_popup {
+            if let Some((insert_text, path)) = selected_mention {
+                if let Some(path) = path.as_deref() {
+                    self.record_mention_path(&insert_text, path);
+                }
+                self.insert_selected_mention(&insert_text);
+            }
+            self.active_popup = ActivePopup::None;
         }
+
+        result
     }
 
     fn is_image_path(path: &str) -> bool {
@@ -1736,10 +1755,33 @@ impl ChatComposer {
         new_text.push(' ');
         new_text.push_str(&text[end_idx..]);
 
-        // Skill insertion rebuilds plain text, so drop existing elements.
+        // Mention insertion rebuilds plain text, so drop existing elements.
         self.textarea.set_text_clearing_elements(&new_text);
         let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
         self.textarea.set_cursor(new_cursor);
+    }
+
+    fn record_mention_path(&mut self, insert_text: &str, path: &str) {
+        let Some(name) = Self::mention_name_from_insert_text(insert_text) else {
+            return;
+        };
+        self.mention_paths.insert(name, path.to_string());
+    }
+
+    fn mention_name_from_insert_text(insert_text: &str) -> Option<String> {
+        let name = insert_text.strip_prefix('$')?;
+        if name.is_empty() {
+            return None;
+        }
+        if name
+            .as_bytes()
+            .iter()
+            .all(|byte| is_mention_name_char(*byte))
+        {
+            Some(name.to_string())
+        } else {
+            None
+        }
     }
 
     /// Prepare text for submission/queuing. Returns None if submission should be suppressed.
@@ -2630,6 +2672,7 @@ impl ChatComposer {
                     description,
                     insert_text: format!("${skill_name}"),
                     search_terms,
+                    path: Some(skill.path.to_string_lossy().into_owned()),
                 });
             }
         }
@@ -2643,12 +2686,15 @@ impl ChatComposer {
                 }
                 let display_name = connectors::connector_display_label(connector);
                 let description = Some(Self::connector_brief_description(connector));
-                let search_terms = vec![display_name.clone(), connector.id.clone()];
+                let slug = codex_core::connectors::connector_mention_slug(connector);
+                let search_terms = vec![display_name.clone(), connector.id.clone(), slug.clone()];
+                let connector_id = connector.id.as_str();
                 mentions.push(MentionItem {
                     display_name: display_name.clone(),
                     description,
-                    insert_text: display_name.clone(),
+                    insert_text: format!("${slug}"),
                     search_terms,
+                    path: Some(format!("apps://{connector_id}")),
                 });
             }
         }
@@ -2732,6 +2778,10 @@ fn skill_description(skill: &SkillMetadata) -> Option<String> {
         .unwrap_or(&skill.description);
     let trimmed = description.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn is_mention_name_char(byte: u8) -> bool {
+    matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-')
 }
 
 impl Renderable for ChatComposer {

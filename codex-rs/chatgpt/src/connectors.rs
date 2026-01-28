@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use codex_core::config::Config;
 use codex_core::features::Feature;
 use serde::Deserialize;
+use std::time::Duration;
 
-use crate::chatgpt_client::chatgpt_get_request;
+use crate::chatgpt_client::chatgpt_get_request_with_timeout;
 use crate::chatgpt_token::get_chatgpt_token_data;
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
 
@@ -32,7 +33,10 @@ struct DirectoryApp {
     logo_url_dark: Option<String>,
     #[serde(alias = "distributionChannel")]
     distribution_channel: Option<String>,
+    visibility: Option<String>,
 }
+
+const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     if !config.features.enabled(Feature::Connectors) {
@@ -45,7 +49,7 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     let connectors = connectors_result?;
     let accessible = accessible_result?;
     let merged = merge_connectors(connectors, accessible);
-    Ok(filter_apps_sdk_connectors(merged))
+    Ok(filter_disallowed_connectors(merged))
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
@@ -94,8 +98,15 @@ async fn list_directory_connectors(config: &Config) -> anyhow::Result<Vec<Direct
             }
             None => "/connectors/directory/list?tier=categorized".to_string(),
         };
-        let response: DirectoryListResponse = chatgpt_get_request(config, path).await?;
-        apps.extend(response.apps);
+        let response: DirectoryListResponse =
+            chatgpt_get_request_with_timeout(config, path, Some(DIRECTORY_CONNECTORS_TIMEOUT))
+                .await?;
+        apps.extend(
+            response
+                .apps
+                .into_iter()
+                .filter(|app| !is_hidden_directory_app(app)),
+        );
         next_token = response
             .next_token
             .map(|token| token.trim().to_string())
@@ -108,10 +119,18 @@ async fn list_directory_connectors(config: &Config) -> anyhow::Result<Vec<Direct
 }
 
 async fn list_workspace_connectors(config: &Config) -> anyhow::Result<Vec<DirectoryApp>> {
-    let response: anyhow::Result<DirectoryListResponse> =
-        chatgpt_get_request(config, "/connectors/directory/list_workspace".to_string()).await;
+    let response: anyhow::Result<DirectoryListResponse> = chatgpt_get_request_with_timeout(
+        config,
+        "/connectors/directory/list_workspace".to_string(),
+        Some(DIRECTORY_CONNECTORS_TIMEOUT),
+    )
+    .await;
     match response {
-        Ok(response) => Ok(response.apps),
+        Ok(response) => Ok(response
+            .apps
+            .into_iter()
+            .filter(|app| !is_hidden_directory_app(app))
+            .collect()),
         Err(_) => Ok(Vec::new()),
     }
 }
@@ -136,6 +155,7 @@ fn merge_directory_app(existing: &mut DirectoryApp, incoming: DirectoryApp) {
         logo_url,
         logo_url_dark,
         distribution_channel,
+        visibility: _,
     } = incoming;
 
     let incoming_name_is_empty = name.trim().is_empty();
@@ -165,6 +185,10 @@ fn merge_directory_app(existing: &mut DirectoryApp, incoming: DirectoryApp) {
     if existing.distribution_channel.is_none() && distribution_channel.is_some() {
         existing.distribution_channel = distribution_channel;
     }
+}
+
+fn is_hidden_directory_app(app: &DirectoryApp) -> bool {
+    matches!(app.visibility.as_deref(), Some("HIDDEN"))
 }
 
 fn directory_app_to_app_info(app: DirectoryApp) -> AppInfo {
@@ -197,20 +221,25 @@ fn normalize_connector_value(value: Option<&str>) -> Option<String> {
 }
 
 const ALLOWED_APPS_SDK_APPS: &[&str] = &["asdk_app_69781557cc1481919cf5e9824fa2e792"];
+const DISALLOWED_CONNECTOR_PREFIX: &str = "connector_openai_";
 
-fn filter_apps_sdk_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
+fn filter_disallowed_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
     // TODO: Support Apps SDK connectors.
     connectors
         .into_iter()
-        .filter(is_apps_sdk_connector_allowed)
+        .filter(is_connector_allowed)
         .collect()
 }
 
-fn is_apps_sdk_connector_allowed(connector: &AppInfo) -> bool {
-    if !connector.id.starts_with("asdk_app_") {
-        return true;
+fn is_connector_allowed(connector: &AppInfo) -> bool {
+    let connector_id = connector.id.as_str();
+    if connector_id.starts_with(DISALLOWED_CONNECTOR_PREFIX) {
+        return false;
     }
-    ALLOWED_APPS_SDK_APPS.contains(&connector.id.as_str())
+    if connector_id.starts_with("asdk_app_") {
+        return ALLOWED_APPS_SDK_APPS.contains(&connector_id);
+    }
+    true
 }
 
 #[cfg(test)]
@@ -233,13 +262,13 @@ mod tests {
 
     #[test]
     fn filters_internal_asdk_connectors() {
-        let filtered = filter_apps_sdk_connectors(vec![app("asdk_app_hidden"), app("alpha")]);
+        let filtered = filter_disallowed_connectors(vec![app("asdk_app_hidden"), app("alpha")]);
         assert_eq!(filtered, vec![app("alpha")]);
     }
 
     #[test]
     fn allows_whitelisted_asdk_connectors() {
-        let filtered = filter_apps_sdk_connectors(vec![
+        let filtered = filter_disallowed_connectors(vec![
             app("asdk_app_69781557cc1481919cf5e9824fa2e792"),
             app("beta"),
         ]);
@@ -250,5 +279,15 @@ mod tests {
                 app("beta")
             ]
         );
+    }
+
+    #[test]
+    fn filters_openai_connectors() {
+        let filtered = filter_disallowed_connectors(vec![
+            app("connector_openai_foo"),
+            app("connector_openai_bar"),
+            app("gamma"),
+        ]);
+        assert_eq!(filtered, vec![app("gamma")]);
     }
 }
