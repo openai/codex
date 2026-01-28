@@ -349,6 +349,9 @@ jobs:
       - name: Enable Corepack
         run: corepack enable
 
+      - name: Activate pnpm from package.json
+        run: corepack prepare --activate
+
       - name: Verify pnpm version
         run: pnpm --version
 
@@ -446,6 +449,9 @@ jobs:
 
       - name: Enable Corepack
         run: corepack enable
+
+      - name: Activate pnpm from package.json
+        run: corepack prepare --activate
 
       - name: Verify pnpm version
         run: pnpm --version
