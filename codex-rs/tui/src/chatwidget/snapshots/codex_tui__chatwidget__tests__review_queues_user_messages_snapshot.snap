@@ -1,17 +1,17 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 4931
+assertion_line: 5029
 expression: term.backend().vt100().screen().contents()
 ---
-
-
-
-
-
-
-
-
-
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
 
 • Working (0s • esc to interrupt)
 

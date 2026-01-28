@@ -1,6 +1,8 @@
 use std::io;
+use std::io::stdout;
 use std::sync::LazyLock;
 
+use crate::custom_terminal::Terminal as CustomTerminal;
 use crate::render::adapter_ratatui::to_ratatui_text;
 use crate::render::model::RenderAlignment;
 use crate::render::model::RenderCell as Span;
@@ -9,6 +11,7 @@ use crate::render::model::RenderLine as Line;
 use crate::render::model::RenderStyle;
 use crate::render::model::RenderStylize;
 use crate::render::renderable::Renderable;
+use crate::tui::tui_backend::TuiBackend;
 use codex_core::DEFAULT_LMSTUDIO_PORT;
 use codex_core::DEFAULT_OLLAMA_PORT;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
@@ -25,8 +28,6 @@ use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::disable_raw_mode;
 use crossterm::terminal::enable_raw_mode;
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Direction;
@@ -100,6 +101,14 @@ pub struct OssSelectionWidget<'a> {
 }
 
 impl OssSelectionWidget<'_> {
+    /// Creates a new OSS selection widget.
+    ///
+    /// # Arguments
+    /// - `lmstudio_status` (ProviderStatus): LM Studio status.
+    /// - `ollama_status` (ProviderStatus): Ollama status.
+    ///
+    /// # Returns
+    /// - `io::Result<OssSelectionWidget>`: Initialized widget or error.
     fn new(lmstudio_status: ProviderStatus, ollama_status: ProviderStatus) -> io::Result<Self> {
         let providers = vec![
             ProviderOption {
@@ -123,7 +132,6 @@ impl OssSelectionWidget<'_> {
             Line::from(""),
         ];
 
-        // Add status indicators for each provider
         for provider in &providers {
             let (status_symbol, status_color) = get_status_symbol_and_color(&provider.status);
             contents.push(Line::from(vec![
@@ -153,16 +161,24 @@ impl OssSelectionWidget<'_> {
         })
     }
 
+    /// Returns the height of the confirmation prompt for a given width.
+    ///
+    /// # Arguments
+    /// - `width` (u16): Available width.
+    ///
+    /// # Returns
+    /// - `u16`: Required height in rows.
     fn get_confirmation_prompt_height(&self, width: u16) -> u16 {
-        // Should cache this for last value of width.
         self.confirmation_prompt.line_count(width) as u16
     }
 
-    /// Process a `KeyEvent` coming from crossterm. Always consumes the event
-    /// while the modal is visible.
-    /// Process a key event originating from crossterm. As the modal fully
-    /// captures input while visible, we don't need to report whether the event
-    /// was consumed—callers can assume it always is.
+    /// Handles a key event coming from crossterm.
+    ///
+    /// # Arguments
+    /// - `key` (KeyEvent): Key event to process.
+    ///
+    /// # Returns
+    /// - `Option<String>`: Selected provider id if complete.
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<String> {
         if key.kind == KeyEventKind::Press {
             self.handle_select_key(key);
@@ -174,9 +190,13 @@ impl OssSelectionWidget<'_> {
         }
     }
 
-    /// Normalize a key for comparison.
-    /// - For `KeyCode::Char`, converts to lowercase for case-insensitive matching.
-    /// - Other key codes are returned unchanged.
+    /// Normalizes a key for comparison.
+    ///
+    /// # Arguments
+    /// - `code` (KeyCode): Key code to normalize.
+    ///
+    /// # Returns
+    /// - `KeyCode`: Normalized key code.
     fn normalize_keycode(code: KeyCode) -> KeyCode {
         match code {
             KeyCode::Char(c) => KeyCode::Char(c.to_ascii_lowercase()),
@@ -184,6 +204,13 @@ impl OssSelectionWidget<'_> {
         }
     }
 
+    /// Handles selection-specific key events.
+    ///
+    /// # Arguments
+    /// - `key_event` (KeyEvent): Key event to process.
+    ///
+    /// # Returns
+    /// - `()`: No return value.
     fn handle_select_key(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Char('c')
@@ -220,23 +247,47 @@ impl OssSelectionWidget<'_> {
         }
     }
 
+    /// Records a selection and marks the widget complete.
+    ///
+    /// # Arguments
+    /// - `selection` (String): Selected provider id.
+    ///
+    /// # Returns
+    /// - `()`: No return value.
     fn send_decision(&mut self, selection: String) {
         self.selection = Some(selection);
         self.done = true;
     }
 
-    /// Returns `true` once the user has made a decision and the widget no
-    /// longer needs to be displayed.
+    /// Returns whether the widget has completed selection.
+    ///
+    /// # Returns
+    /// - `bool`: True if selection is complete.
     pub fn is_complete(&self) -> bool {
         self.done
     }
 
+    /// Returns the desired height for the widget.
+    ///
+    /// # Arguments
+    /// - `width` (u16): Available width.
+    ///
+    /// # Returns
+    /// - `u16`: Desired height in rows.
     pub fn desired_height(&self, width: u16) -> u16 {
         self.get_confirmation_prompt_height(width) + self.select_options.len() as u16
     }
 }
 
 impl WidgetRef for &OssSelectionWidget<'_> {
+    /// Renders the widget into the provided buffer.
+    ///
+    /// # Arguments
+    /// - `area` (Rect): Target drawing area.
+    /// - `buf` (&mut Buffer): Buffer to draw into.
+    ///
+    /// # Returns
+    /// - `()`: No return value.
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let prompt_height = self.get_confirmation_prompt_height(area.width);
         let [prompt_chunk, response_chunk] = Layout::default()
@@ -297,6 +348,13 @@ impl WidgetRef for &OssSelectionWidget<'_> {
     }
 }
 
+/// Returns a status symbol and color for a provider status.
+///
+/// # Arguments
+/// - `status` (&ProviderStatus): Provider status to map.
+///
+/// # Returns
+/// - `(&'static str, RenderColor)`: Symbol and color pair.
 fn get_status_symbol_and_color(status: &ProviderStatus) -> (&'static str, RenderColor) {
     match status {
         ProviderStatus::Running => ("●", RenderColor::Green),
@@ -305,12 +363,17 @@ fn get_status_symbol_and_color(status: &ProviderStatus) -> (&'static str, Render
     }
 }
 
+/// Prompts the user to select an OSS provider and stores the choice.
+///
+/// # Arguments
+/// - `codex_home` (&std::path::Path): Codex home directory.
+///
+/// # Returns
+/// - `io::Result<String>`: Selected provider id.
 pub async fn select_oss_provider(codex_home: &std::path::Path) -> io::Result<String> {
-    // Check provider statuses first
     let lmstudio_status = check_lmstudio_status().await;
     let ollama_status = check_ollama_status().await;
 
-    // Autoselect if only one is running
     match (&lmstudio_status, &ollama_status) {
         (ProviderStatus::Running, ProviderStatus::NotRunning) => {
             let provider = LMSTUDIO_OSS_PROVIDER_ID.to_string();
@@ -320,19 +383,16 @@ pub async fn select_oss_provider(codex_home: &std::path::Path) -> io::Result<Str
             let provider = OLLAMA_OSS_PROVIDER_ID.to_string();
             return Ok(provider);
         }
-        _ => {
-            // Both running or both not running - show UI
-        }
+        _ => {}
     }
 
     let mut widget = OssSelectionWidget::new(lmstudio_status, ollama_status)?;
 
     enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let mut terminal = CustomTerminal::with_options(TuiBackend::new_default()?)?;
+    if terminal.backend().is_crossterm() {
+        execute!(stdout(), EnterAlternateScreen)?;
+    }
 
     let result = loop {
         terminal.draw(|f| {
@@ -347,10 +407,10 @@ pub async fn select_oss_provider(codex_home: &std::path::Path) -> io::Result<Str
     };
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    if terminal.backend().is_crossterm() {
+        execute!(stdout(), LeaveAlternateScreen)?;
+    }
 
-    // If the user manually selected an OSS provider, we save it as the
-    // default one to use later.
     if let Ok(ref provider) = result
         && let Err(e) = set_default_oss_provider(codex_home, provider)
     {
@@ -360,6 +420,10 @@ pub async fn select_oss_provider(codex_home: &std::path::Path) -> io::Result<Str
     result
 }
 
+/// Checks the status of the LM Studio provider.
+///
+/// # Returns
+/// - `ProviderStatus`: LM Studio status.
 async fn check_lmstudio_status() -> ProviderStatus {
     match check_port_status(DEFAULT_LMSTUDIO_PORT).await {
         Ok(true) => ProviderStatus::Running,
@@ -368,6 +432,10 @@ async fn check_lmstudio_status() -> ProviderStatus {
     }
 }
 
+/// Checks the status of the Ollama provider.
+///
+/// # Returns
+/// - `ProviderStatus`: Ollama status.
 async fn check_ollama_status() -> ProviderStatus {
     match check_port_status(DEFAULT_OLLAMA_PORT).await {
         Ok(true) => ProviderStatus::Running,
@@ -376,6 +444,13 @@ async fn check_ollama_status() -> ProviderStatus {
     }
 }
 
+/// Checks whether a local server is reachable on the given port.
+///
+/// # Arguments
+/// - `port` (u16): Port to probe.
+///
+/// # Returns
+/// - `io::Result<bool>`: True when the port responds successfully.
 async fn check_port_status(port: u16) -> io::Result<bool> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
@@ -386,6 +461,6 @@ async fn check_port_status(port: u16) -> io::Result<bool> {
 
     match client.get(&url).send().await {
         Ok(response) => Ok(response.status().is_success()),
-        Err(_) => Ok(false), // Connection failed = not running
+        Err(_) => Ok(false),
     }
 }

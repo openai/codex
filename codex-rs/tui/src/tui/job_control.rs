@@ -48,6 +48,10 @@ pub struct SuspendContext {
 }
 
 impl SuspendContext {
+    /// Creates a new suspend context.
+    ///
+    /// # Returns
+    /// - `SuspendContext`: Initialized suspend context.
     pub(crate) fn new() -> Self {
         Self {
             resume_pending: Arc::new(Mutex::new(None)),
@@ -55,15 +59,15 @@ impl SuspendContext {
         }
     }
 
-    /// Capture how to resume, stash cursor position, and temporarily yield during SIGTSTP.
+    /// Captures how to resume, stashes cursor position, and yields during SIGTSTP.
     ///
-    /// - If the alt screen is active, exit alt-scroll/alt-screen and record `RestoreAlt`;
-    ///   otherwise record `RealignInline`.
-    /// - Update the cached inline cursor row so suspend can place the cursor meaningfully.
-    /// - Trigger SIGTSTP so the process can be resumed and continue drawing with the saved state.
+    /// # Arguments
+    /// - `alt_screen_active` (&Arc<AtomicBool>): Tracks alt-screen state.
+    ///
+    /// # Returns
+    /// - `Result<()>`: Result of the suspend operation.
     pub(crate) fn suspend(&self, alt_screen_active: &Arc<AtomicBool>) -> Result<()> {
         if alt_screen_active.load(Ordering::Relaxed) {
-            // Leave alt-screen so the terminal returns to the normal buffer while suspended; also turn off alt-scroll.
             let _ = execute!(stdout(), DisableAlternateScroll);
             let _ = execute!(stdout(), LeaveAlternateScreen);
             self.set_resume_action(ResumeAction::RestoreAlt);
@@ -75,10 +79,14 @@ impl SuspendContext {
         suspend_process()
     }
 
-    /// Consume the pending resume intent and precompute any viewport changes needed post-resume.
+    /// Consumes the pending resume intent and computes any viewport changes.
     ///
-    /// Returns a `PreparedResumeAction` describing how to realign the viewport once drawing
-    /// resumes; returns `None` when there was no pending suspend intent.
+    /// # Arguments
+    /// - `terminal` (&mut Terminal): Terminal instance.
+    /// - `alt_saved_viewport` (&mut Option<Rect>): Saved alt-screen viewport.
+    ///
+    /// # Returns
+    /// - `Option<PreparedResumeAction>`: Resume action if pending.
     pub(crate) fn prepare_resume_action(
         &self,
         terminal: &mut Terminal,
@@ -104,15 +112,24 @@ impl SuspendContext {
         }
     }
 
-    /// Set the cached inline cursor row so suspend can place the cursor meaningfully.
+    /// Sets the cached inline cursor row for suspend handling.
     ///
-    /// Call during normal drawing when the inline viewport moves so suspend has a fresh cursor
-    /// position to restore before yielding.
+    /// # Arguments
+    /// - `value` (u16): Cursor row to store.
+    ///
+    /// # Returns
+    /// - `()`: No return value.
     pub(crate) fn set_cursor_y(&self, value: u16) {
         self.suspend_cursor_y.store(value, Ordering::Relaxed);
     }
 
-    /// Record a pending resume action to apply after SIGTSTP returns control.
+    /// Records a pending resume action to apply after SIGTSTP returns control.
+    ///
+    /// # Arguments
+    /// - `value` (ResumeAction): Pending resume action.
+    ///
+    /// # Returns
+    /// - `()`: No return value.
     fn set_resume_action(&self, value: ResumeAction) {
         *self
             .resume_pending
@@ -120,7 +137,10 @@ impl SuspendContext {
             .unwrap_or_else(PoisonError::into_inner) = Some(value);
     }
 
-    /// Take and clear any pending resume action captured at suspend time.
+    /// Takes and clears any pending resume action captured at suspend time.
+    ///
+    /// # Returns
+    /// - `Option<ResumeAction>`: Pending action, if present.
     fn take_resume_action(&self) -> Option<ResumeAction> {
         self.resume_pending
             .lock()
@@ -153,15 +173,23 @@ pub(crate) enum PreparedResumeAction {
 }
 
 impl PreparedResumeAction {
+    /// Applies the prepared resume action to the terminal.
+    ///
+    /// # Arguments
+    /// - `terminal` (&mut Terminal): Terminal instance.
+    ///
+    /// # Returns
+    /// - `Result<()>`: Result of the apply operation.
     pub(crate) fn apply(self, terminal: &mut Terminal) -> Result<()> {
         match self {
             PreparedResumeAction::RealignViewport(area) => {
                 terminal.set_viewport_area(area);
             }
             PreparedResumeAction::RestoreAltScreen => {
-                execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-                // Enable "alternate scroll" so terminals may translate wheel to arrows
-                execute!(terminal.backend_mut(), EnableAlternateScroll)?;
+                if terminal.backend().is_crossterm() {
+                    execute!(stdout(), EnterAlternateScreen)?;
+                    execute!(stdout(), EnableAlternateScroll)?;
+                }
                 if let Ok(size) = terminal.size() {
                     terminal.set_viewport_area(Rect::new(0, 0, size.width, size.height));
                     terminal.clear()?;
@@ -172,11 +200,13 @@ impl PreparedResumeAction {
     }
 }
 
-/// Deliver SIGTSTP after restoring terminal state, then re-applies terminal modes once resumed.
+/// Delivers SIGTSTP after restoring terminal state, then re-applies terminal modes.
+///
+/// # Returns
+/// - `Result<()>`: Result of the suspend operation.
 fn suspend_process() -> Result<()> {
     super::restore()?;
     unsafe { libc::kill(0, libc::SIGTSTP) };
-    // After the process resumes, reapply terminal modes so drawing can continue.
     super::set_modes()?;
     Ok(())
 }
