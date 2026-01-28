@@ -550,7 +550,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "personality",
         stage: Stage::Experimental {
             name: "Personality",
-            menu_description: "Choose a communication style for future responses.",
+            menu_description: "Choose a communication style for Codex.",
             announcement: "NEW! Update codex's communication style with /personality. Enable in /experimental!",
         },
         default_enabled: true,

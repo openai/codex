@@ -3509,7 +3509,7 @@ impl ChatWidget {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Select Personality".bold()));
         header.push(Line::from(
-            "Choose a communication style for future responses. Disable in /experimental.".dim(),
+            "Choose a communication style for Codex. Disable in /experimental.".dim(),
         ));
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
