@@ -449,8 +449,11 @@ impl RequestUserInputOverlay {
         };
         tips.push(enter_tip);
         if question_count > 1 {
-            tips.push(FooterTip::new("ctrl + p prev"));
-            tips.push(FooterTip::new("ctrl + n next"));
+            if is_last_question {
+                tips.push(FooterTip::new("ctrl + n first question"));
+            } else {
+                tips.push(FooterTip::new("ctrl + n next question"));
+            }
         }
         tips.push(FooterTip::new("esc to interrupt"));
         tips
