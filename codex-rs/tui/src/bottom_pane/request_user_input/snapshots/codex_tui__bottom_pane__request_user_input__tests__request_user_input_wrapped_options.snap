@@ -10,4 +10,4 @@ expression: "render_snapshot(&overlay, area)"
     2. Run targeted tests     Pick the most relevant crate and validate the current behavior first.           
     3. Review the diff        Summarize the changes and highlight the most important risks and gaps.          
                                                                                                               
-  Option 1 of 3 | tab to add notes | enter to submit answer | esc to interrupt
+  tab to add notes | enter to submit answer | esc to interrupt

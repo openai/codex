@@ -42,8 +42,7 @@ const ANSWER_PLACEHOLDER: &str = "Type your answer (optional)";
 const MIN_COMPOSER_HEIGHT: u16 = 3;
 const SELECT_OPTION_PLACEHOLDER: &str = "Select an option to add notes";
 pub(super) const TIP_SEPARATOR: &str = " | ";
-pub(super) const MAX_VISIBLE_OPTION_ROWS: usize = 4;
-pub(super) const DESIRED_SPACERS_WHEN_NOTES_HIDDEN: u16 = 2;
+pub(super) const DESIRED_SPACERS_BETWEEN_SECTIONS: u16 = 2;
 const OTHER_OPTION_LABEL: &str = "None of the above";
 const OTHER_OPTION_DESCRIPTION: &str = "Add details in notes (tab)";
 
@@ -58,6 +57,19 @@ struct ComposerDraft {
     text: String,
     text_elements: Vec<TextElement>,
     local_image_paths: Vec<PathBuf>,
+    pending_pastes: Vec<(String, String)>,
+}
+
+impl ComposerDraft {
+    fn text_with_pending(&self) -> String {
+        let mut text = self.text.clone();
+        for (placeholder, actual) in &self.pending_pastes {
+            if text.contains(placeholder) {
+                text = text.replace(placeholder, actual);
+            }
+        }
+        text
+    }
 }
 
 struct AnswerState {
@@ -205,19 +217,6 @@ impl RequestUserInputOverlay {
         })
     }
 
-    fn current_option_label(&self) -> Option<&str> {
-        let idx = self.selected_option_index()?;
-        let question = self.current_question()?;
-        let options = question.options.as_ref()?;
-        if idx < options.len() {
-            return options.get(idx).map(|option| option.label.as_str());
-        }
-        if idx == options.len() && Self::other_option_enabled_for_question(question) {
-            return Some(OTHER_OPTION_LABEL);
-        }
-        None
-    }
-
     fn notes_has_content(&self, idx: usize) -> bool {
         if idx == self.current_index() {
             !self.composer.current_text_with_pending().trim().is_empty()
@@ -329,13 +328,12 @@ impl RequestUserInputOverlay {
             state.selected_idx = Some(0);
         }
 
-        let visible_items = rows.len().min(MAX_VISIBLE_OPTION_ROWS);
-        measure_rows_height(&rows, &state, visible_items, width.max(1))
+        measure_rows_height(&rows, &state, rows.len(), width.max(1))
     }
 
     fn capture_composer_draft(&self) -> ComposerDraft {
         ComposerDraft {
-            text: self.composer.current_text_with_pending(),
+            text: self.composer.current_text(),
             text_elements: self.composer.text_elements(),
             local_image_paths: self
                 .composer
@@ -343,6 +341,7 @@ impl RequestUserInputOverlay {
                 .into_iter()
                 .map(|img| img.path)
                 .collect(),
+            pending_pastes: self.composer.pending_pastes(),
         }
     }
 
@@ -374,6 +373,7 @@ impl RequestUserInputOverlay {
         let draft = answer.draft.clone();
         self.composer
             .set_text_content(draft.text, draft.text_elements, draft.local_image_paths);
+        self.composer.set_pending_pastes(draft.pending_pastes);
         self.composer.move_cursor_to_end();
     }
 
@@ -396,15 +396,6 @@ impl RequestUserInputOverlay {
         let mut tips = Vec::new();
         let notes_visible = self.notes_ui_visible();
         if self.has_options() {
-            let options_len = self.options_len();
-            if let Some(selected_idx) = self.selected_option_index() {
-                let option_index = selected_idx + 1;
-                tips.push(FooterTip::new(format!(
-                    "Option {option_index} of {options_len}"
-                )));
-            } else {
-                tips.push(FooterTip::new("No option selected"));
-            }
             if self.selected_option_index().is_some() && !notes_visible {
                 tips.push(FooterTip::highlighted("tab to add notes"));
             }
@@ -639,7 +630,7 @@ impl RequestUserInputOverlay {
             let notes = if options.is_some_and(|opts| !opts.is_empty())
                 || answer_state.freeform_committed
             {
-                answer_state.draft.text.trim().to_string()
+                answer_state.draft.text_with_pending().trim().to_string()
             } else {
                 String::new()
             };
@@ -689,11 +680,6 @@ impl RequestUserInputOverlay {
         }
     }
 
-    fn current_question_answered(&self) -> bool {
-        let current_text = self.composer.current_text();
-        self.is_question_answered(self.current_index(), &current_text)
-    }
-
     /// Count questions that would submit an empty answer list.
     fn unanswered_count(&self) -> usize {
         let current_text = self.composer.current_text();
@@ -725,6 +711,7 @@ impl RequestUserInputOverlay {
                 text: text.clone(),
                 text_elements: text_elements.clone(),
                 local_image_paths: local_image_paths.clone(),
+                pending_pastes: Vec::new(),
             };
         }
         self.composer
@@ -1878,7 +1865,11 @@ mod tests {
         overlay.composer.handle_paste(large.clone());
         overlay.move_question(true);
 
-        assert_eq!(overlay.answers[0].draft.text, large);
+        let draft = &overlay.answers[0].draft;
+        assert_eq!(draft.pending_pastes.len(), 1);
+        assert_eq!(draft.pending_pastes[0].1, large);
+        assert!(draft.text.contains(&draft.pending_pastes[0].0));
+        assert_eq!(draft.text_with_pending(), large);
     }
 
     #[test]
@@ -1956,9 +1947,8 @@ mod tests {
         let width = 48u16;
         let question_height = overlay.wrapped_question_lines(width).len() as u16;
         let options_height = overlay.options_required_height(width);
-        let extras = 1u16 // header
-            .saturating_add(1) // progress
-            .saturating_add(DESIRED_SPACERS_WHEN_NOTES_HIDDEN)
+        let extras = 1u16 // progress
+            .saturating_add(DESIRED_SPACERS_BETWEEN_SECTIONS)
             .saturating_add(overlay.footer_required_height(width));
         let height = question_height
             .saturating_add(options_height)
@@ -1992,7 +1982,7 @@ mod tests {
         let question_bottom = sections.question_area.y + sections.question_area.height;
         let options_bottom = sections.options_area.y + sections.options_area.height;
         let spacer_after_question = sections.options_area.y.saturating_sub(question_bottom);
-        let spacer_after_options = sections.notes_title_area.y.saturating_sub(options_bottom);
+        let spacer_after_options = sections.notes_area.y.saturating_sub(options_bottom);
         assert_eq!(spacer_after_question, 1);
         assert_eq!(spacer_after_options, 1);
     }

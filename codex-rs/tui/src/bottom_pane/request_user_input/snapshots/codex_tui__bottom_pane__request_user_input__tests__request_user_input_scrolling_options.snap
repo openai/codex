@@ -11,4 +11,4 @@ expression: "render_snapshot(&overlay, area)"
     3. Review a diff                        Summarize or review current changes.                                        
   › 4. Refactor                             Tighten structure and remove dead code.                                     
                                                                                                                         
-  Option 4 of 5 | tab to add notes | enter to submit answer | esc to interrupt
+  tab to add notes | enter to submit answer | esc to interrupt

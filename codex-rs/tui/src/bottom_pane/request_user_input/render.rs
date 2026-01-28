@@ -14,7 +14,7 @@ use crate::bottom_pane::selection_popup_common::render_menu_surface;
 use crate::bottom_pane::selection_popup_common::render_rows;
 use crate::render::renderable::Renderable;
 
-use super::DESIRED_SPACERS_WHEN_NOTES_HIDDEN;
+use super::DESIRED_SPACERS_BETWEEN_SECTIONS;
 use super::RequestUserInputOverlay;
 use super::TIP_SEPARATOR;
 
@@ -36,24 +36,21 @@ impl Renderable for RequestUserInputOverlay {
         } else {
             0
         };
-        let spacer_rows = if has_options && !notes_visible {
-            DESIRED_SPACERS_WHEN_NOTES_HIDDEN as usize
+        let spacer_rows = if has_options {
+            DESIRED_SPACERS_BETWEEN_SECTIONS as usize
         } else {
             0
         };
         let footer_height = self.footer_required_height(inner_width) as usize;
 
-        // Tight minimum height: progress + header + question + (optional) titles/options
+        // Tight minimum height: progress + question + (optional) titles/options
         // + notes composer + footer + menu padding.
         let mut height = question_height
             .saturating_add(options_height)
             .saturating_add(spacer_rows)
             .saturating_add(notes_height)
             .saturating_add(footer_height)
-            .saturating_add(2); // progress + header
-        if has_options && notes_visible {
-            height = height.saturating_add(1); // notes title
-        }
+            .saturating_add(1); // progress
         height = height.saturating_add(menu_surface_padding_height() as usize);
         height.max(8) as u16
     }
@@ -138,29 +135,6 @@ impl RequestUserInputOverlay {
                     "No options",
                 );
             }
-        }
-
-        if notes_visible && sections.notes_title_area.height > 0 {
-            let notes_label = if self.has_options()
-                && self
-                    .current_answer()
-                    .is_some_and(|answer| answer.committed_option_idx.is_some())
-            {
-                if let Some(label) = self.current_option_label() {
-                    format!("Notes for {label}")
-                } else {
-                    "Notes".to_string()
-                }
-            } else {
-                "Notes".to_string()
-            };
-            let notes_active = self.focus_is_notes();
-            let notes_title = if notes_active {
-                notes_label.as_str().cyan().bold()
-            } else {
-                notes_label.as_str().dim()
-            };
-            Paragraph::new(Line::from(notes_title)).render(sections.notes_title_area, buf);
         }
 
         if notes_visible && sections.notes_area.height > 0 {
