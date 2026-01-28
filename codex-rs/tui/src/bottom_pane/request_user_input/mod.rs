@@ -441,6 +441,7 @@ impl RequestUserInputOverlay {
         };
         tips.push(enter_tip);
         if question_count > 1 {
+            tips.push(FooterTip::new("ctrl + p prev"));
             tips.push(FooterTip::new("ctrl + n next"));
         }
         tips.push(FooterTip::new("esc to interrupt"));
@@ -448,9 +449,25 @@ impl RequestUserInputOverlay {
     }
 
     pub(super) fn footer_tip_lines(&self, width: u16) -> Vec<Vec<FooterTip>> {
+        self.wrap_footer_tips(width, self.footer_tips())
+    }
+
+    pub(super) fn footer_tip_lines_with_prefix(
+        &self,
+        width: u16,
+        prefix: Option<FooterTip>,
+    ) -> Vec<Vec<FooterTip>> {
+        let mut tips = Vec::new();
+        if let Some(prefix) = prefix {
+            tips.push(prefix);
+        }
+        tips.extend(self.footer_tips());
+        self.wrap_footer_tips(width, tips)
+    }
+
+    fn wrap_footer_tips(&self, width: u16, tips: Vec<FooterTip>) -> Vec<Vec<FooterTip>> {
         let max_width = width.max(1) as usize;
         let separator_width = UnicodeWidthStr::width(TIP_SEPARATOR);
-        let tips = self.footer_tips();
         if tips.is_empty() {
             return vec![Vec::new()];
         }
@@ -2411,6 +2428,58 @@ mod tests {
         let area = Rect::new(0, 0, 120, 12);
         insta::assert_snapshot!(
             "request_user_input_scrolling_options",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn request_user_input_hidden_options_footer_snapshot() {
+        let (tx, _rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![RequestUserInputQuestion {
+                    id: "q1".to_string(),
+                    header: "Next Step".to_string(),
+                    question: "What would you like to do next?".to_string(),
+                    is_other: false,
+                    options: Some(vec![
+                        RequestUserInputQuestionOption {
+                            label: "Discuss a code change (Recommended)".to_string(),
+                            description: "Walk through a plan and edit code together.".to_string(),
+                        },
+                        RequestUserInputQuestionOption {
+                            label: "Run tests".to_string(),
+                            description: "Pick a crate and run its tests.".to_string(),
+                        },
+                        RequestUserInputQuestionOption {
+                            label: "Review a diff".to_string(),
+                            description: "Summarize or review current changes.".to_string(),
+                        },
+                        RequestUserInputQuestionOption {
+                            label: "Refactor".to_string(),
+                            description: "Tighten structure and remove dead code.".to_string(),
+                        },
+                        RequestUserInputQuestionOption {
+                            label: "Ship it".to_string(),
+                            description: "Finalize and open a PR.".to_string(),
+                        },
+                    ]),
+                }],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+        {
+            let answer = overlay.current_answer_mut().expect("answer missing");
+            answer.options_ui_state.selected_idx = Some(3);
+            answer.committed_option_idx = Some(3);
+        }
+        let area = Rect::new(0, 0, 80, 10);
+        insta::assert_snapshot!(
+            "request_user_input_hidden_options_footer",
             render_snapshot(&overlay, area)
         );
     }
