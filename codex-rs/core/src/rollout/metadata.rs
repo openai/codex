@@ -18,6 +18,7 @@ use codex_state::DB_ERROR_METRIC;
 use codex_state::ExtractionOutcome;
 use codex_state::ThreadMetadataBuilder;
 use codex_state::apply_rollout_item;
+use std::cmp::Reverse;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::warn;
@@ -144,6 +145,14 @@ pub(crate) async fn backfill_sessions(
             }
         }
     }
+    rollout_paths.sort_by_key(|(path, _archived)| {
+        let parsed = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(parse_timestamp_uuid_from_filename)
+            .unwrap_or((time::OffsetDateTime::UNIX_EPOCH, uuid::Uuid::nil()));
+        (Reverse(parsed.0), Reverse(parsed.1))
+    });
     let mut stats = BackfillStats {
         scanned: 0,
         upserted: 0,
