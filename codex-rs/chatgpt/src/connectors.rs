@@ -196,12 +196,21 @@ fn normalize_connector_value(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+const ALLOWED_APPS_SDK_APPS: &[&str] = &["asdk_app_69781557cc1481919cf5e9824fa2e792"];
+
 fn filter_apps_sdk_connectors(connectors: Vec<AppInfo>) -> Vec<AppInfo> {
     // TODO: Support Apps SDK connectors.
     connectors
         .into_iter()
-        .filter(|connector| !connector.id.starts_with("asdk_app_"))
+        .filter(is_apps_sdk_connector_allowed)
         .collect()
+}
+
+fn is_apps_sdk_connector_allowed(connector: &AppInfo) -> bool {
+    if !connector.id.starts_with("asdk_app_") {
+        return true;
+    }
+    ALLOWED_APPS_SDK_APPS.contains(&connector.id.as_str())
 }
 
 #[cfg(test)]
@@ -226,5 +235,20 @@ mod tests {
     fn filters_internal_asdk_connectors() {
         let filtered = filter_apps_sdk_connectors(vec![app("asdk_app_hidden"), app("alpha")]);
         assert_eq!(filtered, vec![app("alpha")]);
+    }
+
+    #[test]
+    fn allows_whitelisted_asdk_connectors() {
+        let filtered = filter_apps_sdk_connectors(vec![
+            app("asdk_app_69781557cc1481919cf5e9824fa2e792"),
+            app("beta"),
+        ]);
+        assert_eq!(
+            filtered,
+            vec![
+                app("asdk_app_69781557cc1481919cf5e9824fa2e792"),
+                app("beta")
+            ]
+        );
     }
 }
