@@ -1,16 +1,11 @@
 use pretty_assertions::assert_eq;
-use crate::render::adapter_ratatui::to_ratatui_text;
-use crate::render::model::RenderStylize;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderCell as Span;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::text::Text;
 
 use crate::markdown_render::render_markdown_text;
 use insta::assert_snapshot;
-
-fn rt_text(lines: Vec<Line>) -> Text<'static> {
-    to_ratatui_text(&lines)
-}
 
 #[test]
 fn empty() {
@@ -64,7 +59,7 @@ fn headings() {
 #[test]
 fn blockquote_single() {
     let text = render_markdown_text("> Blockquote");
-    let expected = rt_text(vec![Line::from_iter(["> ", "Blockquote"]).green()]);
+    let expected = Text::from(Line::from_iter(["> ", "Blockquote"]).green());
     assert_eq!(text, expected);
 }
 
@@ -368,17 +363,19 @@ fn blockquote_with_heading_and_paragraph() {
 #[test]
 fn blockquote_heading_inherits_heading_style() {
     let text = render_markdown_text("> # test header\n> in blockquote\n");
-    let expected = rt_text(vec![
-        Line::from_iter([
-            "> ".into(),
-            "# ".bold().underlined(),
-            "test header".bold().underlined(),
-        ])
-        .green(),
-        Line::from_iter(["> "]).green(),
-        Line::from_iter(["> ", "in blockquote"]).green(),
-    ]);
-    assert_eq!(text, expected);
+    assert_eq!(
+        text.lines,
+        [
+            Line::from_iter([
+                "> ".into(),
+                "# ".bold().underlined(),
+                "test header".bold().underlined(),
+            ])
+            .green(),
+            Line::from_iter(["> "]).green(),
+            Line::from_iter(["> ", "in blockquote"]).green(),
+        ]
+    );
 }
 
 #[test]
@@ -604,10 +601,7 @@ fn ordered_item_with_indented_continuation_is_tight() {
 #[test]
 fn inline_code() {
     let text = render_markdown_text("Example of `Inline code`");
-    let expected = rt_text(vec![Line::from_iter([
-        "Example of ".into(),
-        "Inline code".cyan(),
-    ])]);
+    let expected = Line::from_iter(["Example of ".into(), "Inline code".cyan()]).into();
     assert_eq!(text, expected);
 }
 
@@ -615,7 +609,7 @@ fn inline_code() {
 fn strong() {
     assert_eq!(
         render_markdown_text("**Strong**"),
-        rt_text(vec![Line::from("Strong".bold())])
+        Text::from(Line::from("Strong".bold()))
     );
 }
 
@@ -623,7 +617,7 @@ fn strong() {
 fn emphasis() {
     assert_eq!(
         render_markdown_text("*Emphasis*"),
-        rt_text(vec![Line::from("Emphasis".italic())])
+        Text::from(Line::from("Emphasis".italic()))
     );
 }
 
@@ -631,29 +625,29 @@ fn emphasis() {
 fn strikethrough() {
     assert_eq!(
         render_markdown_text("~~Strikethrough~~"),
-        rt_text(vec![Line::from("Strikethrough".crossed_out())])
+        Text::from(Line::from("Strikethrough".crossed_out()))
     );
 }
 
 #[test]
 fn strong_emphasis() {
     let text = render_markdown_text("**Strong *emphasis***");
-    let expected = rt_text(vec![Line::from_iter([
+    let expected = Text::from(Line::from_iter([
         "Strong ".bold(),
         "emphasis".bold().italic(),
-    ])]);
+    ]));
     assert_eq!(text, expected);
 }
 
 #[test]
 fn link() {
     let text = render_markdown_text("[Link](https://example.com)");
-    let expected = rt_text(vec![Line::from_iter([
+    let expected = Text::from(Line::from_iter([
         "Link".into(),
         " (".into(),
         "https://example.com".cyan().underlined(),
         ")".into(),
-    ])]);
+    ]));
     assert_eq!(text, expected);
 }
 
@@ -910,8 +904,7 @@ fn nested_five_levels_mixed_lists() {
 fn html_inline_is_verbatim() {
     let md = "Hello <span>world</span>!";
     let text = render_markdown_text(md);
-    let expected: Text =
-        rt_text(vec![Line::from_iter(["Hello ", "<span>", "world", "</span>", "!"])]);
+    let expected: Text = Line::from_iter(["Hello ", "<span>", "world", "</span>", "!"]).into();
     assert_eq!(text, expected);
 }
 

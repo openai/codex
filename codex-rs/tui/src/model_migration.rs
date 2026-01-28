@@ -1,11 +1,6 @@
 use crate::key_hint;
 use crate::markdown_render::render_markdown_text_with_width;
 use crate::render::Insets;
-use crate::render::adapter_ratatui::from_ratatui_lines;
-use crate::render::adapter_ratatui::to_ratatui_text;
-use crate::render::model::RenderCell as Span;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStylize;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt as _;
@@ -17,7 +12,10 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
+use ratatui::prelude::Stylize as _;
 use ratatui::prelude::Widget;
+use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
@@ -34,8 +32,8 @@ pub(crate) enum ModelMigrationOutcome {
 
 #[derive(Clone)]
 pub(crate) struct ModelMigrationCopy {
-    pub heading: Vec<Span>,
-    pub content: Vec<Line>,
+    pub heading: Vec<Span<'static>>,
+    pub content: Vec<Line<'static>>,
     pub can_opt_out: bool,
     pub markdown: Option<String>,
 }
@@ -87,7 +85,7 @@ pub(crate) fn migration_copy_for_models(
         "Codex just got an upgrade. Introducing {target_display_name}."
     ))
     .bold();
-    let description_line: Line;
+    let description_line: Line<'static>;
     if let Some(migration_copy) = &migration_copy {
         description_line = Line::from(migration_copy.clone());
     } else {
@@ -110,11 +108,10 @@ pub(crate) fn migration_copy_for_models(
     }
 
     if let Some(model_link) = model_link {
-        let mut line = description_line;
-        line.spans
-            .push(format!(" Learn more about {target_display_name} at ").into());
-        line.spans.push(model_link.cyan().underlined());
-        content.push(line);
+        content.push(Line::from(vec![
+            format!("{description_line} Learn more about {target_display_name} at ").into(),
+            model_link.cyan().underlined(),
+        ]));
         content.push(Line::from(""));
     } else {
         content.push(description_line);
@@ -295,7 +292,7 @@ impl ModelMigrationScreen {
         }
     }
 
-    fn heading_line(&self) -> Line {
+    fn heading_line(&self) -> Line<'static> {
         let mut heading = vec![Span::raw("> ")];
         heading.extend(self.copy.heading.iter().cloned());
         Line::from(heading)
@@ -305,10 +302,10 @@ impl ModelMigrationScreen {
         self.render_lines(&self.copy.content, column);
     }
 
-    fn render_lines(&self, lines: &[Line], column: &mut ColumnRenderable) {
+    fn render_lines(&self, lines: &[Line<'static>], column: &mut ColumnRenderable) {
         for line in lines {
             column.push(
-                Paragraph::new(to_ratatui_text(&[line.clone()]))
+                Paragraph::new(line.clone())
                     .wrap(Wrap { trim: false })
                     .inset(Insets::tlbr(0, 2, 0, 0)),
             );
@@ -325,8 +322,7 @@ impl ModelMigrationScreen {
         let content_width = area_width.saturating_sub(horizontal_inset);
         let wrap_width = (content_width > 0).then_some(content_width as usize);
         let rendered = render_markdown_text_with_width(markdown, wrap_width);
-        let lines = from_ratatui_lines(&rendered.lines);
-        for line in lines {
+        for line in rendered.lines {
             column.push(line.inset(Insets::tlbr(0, horizontal_inset, 0, 0)));
         }
     }

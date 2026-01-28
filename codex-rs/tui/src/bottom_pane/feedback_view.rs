@@ -1,15 +1,16 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 
-use crate::render::model::RenderCell as Span;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStylize;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
 
@@ -218,8 +219,8 @@ impl Renderable for FeedbackNoteView {
             width: area.width,
             height: 1,
         };
-        let title_spans: Vec<Span> = vec![gutter(), title.bold()];
-        Line::from(title_spans).render(title_area, buf);
+        let title_spans: Vec<Span<'static>> = vec![gutter(), title.bold()];
+        Paragraph::new(Line::from(title_spans)).render(title_area, buf);
 
         // Input line
         let input_area = Rect {
@@ -230,7 +231,7 @@ impl Renderable for FeedbackNoteView {
         };
         if input_area.width >= 2 {
             for row in 0..input_area.height {
-                Line::from(vec![gutter()]).render(
+                Paragraph::new(Line::from(vec![gutter()])).render(
                     Rect {
                         x: input_area.x,
                         y: input_area.y.saturating_add(row),
@@ -261,7 +262,7 @@ impl Renderable for FeedbackNoteView {
                 let mut state = self.textarea_state.borrow_mut();
                 StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
                 if self.textarea.text().is_empty() {
-                    Line::from(placeholder.dim()).render(textarea_rect, buf);
+                    Paragraph::new(Line::from(placeholder.dim())).render(textarea_rect, buf);
                 }
             }
         }
@@ -279,7 +280,7 @@ impl Renderable for FeedbackNoteView {
 
         let hint_y = hint_blank_y.saturating_add(1);
         if hint_y < area.y.saturating_add(area.height) {
-            standard_popup_hint_line().render(
+            Paragraph::new(standard_popup_hint_line()).render(
                 Rect {
                     x: area.x,
                     y: hint_y,
@@ -300,7 +301,7 @@ impl FeedbackNoteView {
     }
 }
 
-fn gutter() -> Span {
+fn gutter() -> Span<'static> {
     "▌ ".cyan()
 }
 

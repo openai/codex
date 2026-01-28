@@ -1,13 +1,24 @@
-use crate::render::model::RenderCell;
-use crate::render::model::RenderLine;
+use ratatui::text::Line;
+use ratatui::text::Span;
 
-/// Clone a borrowed render line into an owned line.
-pub fn line_to_static(line: &RenderLine) -> RenderLine {
-    line.clone()
+/// Clone a borrowed ratatui `Line` into an owned `'static` line.
+pub fn line_to_static(line: &Line<'_>) -> Line<'static> {
+    Line {
+        style: line.style,
+        alignment: line.alignment,
+        spans: line
+            .spans
+            .iter()
+            .map(|s| Span {
+                style: s.style,
+                content: std::borrow::Cow::Owned(s.content.to_string()),
+            })
+            .collect(),
+    }
 }
 
 /// Append owned copies of borrowed lines to `out`.
-pub fn push_owned_lines(src: &[RenderLine], out: &mut Vec<RenderLine>) {
+pub fn push_owned_lines<'a>(src: &[Line<'a>], out: &mut Vec<Line<'static>>) {
     for l in src {
         out.push(line_to_static(l));
     }
@@ -15,47 +26,34 @@ pub fn push_owned_lines(src: &[RenderLine], out: &mut Vec<RenderLine>) {
 
 /// Consider a line blank if it has no spans or only spans whose contents are
 /// empty or consist solely of spaces (no tabs/newlines).
-pub fn is_blank_line_spaces_only(line: &RenderLine) -> bool {
+pub fn is_blank_line_spaces_only(line: &Line<'_>) -> bool {
     if line.spans.is_empty() {
         return true;
     }
     line.spans
         .iter()
-        .all(|cell| cell.content.is_empty() || cell.content.chars().all(|c| c == ' '))
+        .all(|s| s.content.is_empty() || s.content.chars().all(|c| c == ' '))
 }
 
 /// Prefix each line with `initial_prefix` for the first line and
 /// `subsequent_prefix` for following lines. Returns a new Vec of owned lines.
 pub fn prefix_lines(
-    lines: Vec<RenderLine>,
-    initial_prefix: RenderLine,
-    subsequent_prefix: RenderLine,
-) -> Vec<RenderLine> {
+    lines: Vec<Line<'static>>,
+    initial_prefix: Span<'static>,
+    subsequent_prefix: Span<'static>,
+) -> Vec<Line<'static>> {
     lines
         .into_iter()
         .enumerate()
         .map(|(i, l)| {
-            let prefix = if i == 0 {
+            let mut spans = Vec::with_capacity(l.spans.len() + 1);
+            spans.push(if i == 0 {
                 initial_prefix.clone()
             } else {
                 subsequent_prefix.clone()
-            };
-            let mut cells = Vec::with_capacity(prefix.spans.len() + l.spans.len());
-            cells.extend(prefix.spans);
-            cells.extend(l.spans);
-            RenderLine::new(cells)
+            });
+            spans.extend(l.spans);
+            Line::from(spans).style(l.style)
         })
         .collect()
-}
-
-pub fn prefix_lines_with_str(
-    lines: Vec<RenderLine>,
-    initial_prefix: &str,
-    subsequent_prefix: &str,
-) -> Vec<RenderLine> {
-    prefix_lines(
-        lines,
-        RenderLine::from(vec![RenderCell::dim(initial_prefix)]),
-        RenderLine::from(vec![RenderCell::dim(subsequent_prefix)]),
-    )
 }

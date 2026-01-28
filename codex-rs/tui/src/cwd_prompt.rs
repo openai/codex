@@ -2,8 +2,6 @@ use std::path::Path;
 
 use crate::key_hint;
 use crate::render::Insets;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStylize as _;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt as _;
@@ -19,6 +17,8 @@ use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
+use ratatui::style::Stylize as _;
+use ratatui::text::Line;
 use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 use tokio_stream::StreamExt;

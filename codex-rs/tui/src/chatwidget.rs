@@ -29,10 +29,6 @@ use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::render::adapter_ratatui::to_ratatui_text;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStyle;
-use crate::render::model::RenderStylize;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::AuthMode;
 use codex_backend_client::Client as BackendClient;
@@ -120,6 +116,11 @@ use crossterm::event::KeyModifiers;
 use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
@@ -3261,7 +3262,7 @@ impl ChatWidget {
                     ));
                 } else {
                     // Show explanation when there are no structured findings.
-                    let mut rendered: Vec<Line> = vec!["".into()];
+                    let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
                     append_markdown(&explanation, None, &mut rendered);
                     let body_cell = AgentMessageCell::new(rendered, false);
                     self.app_event_tx
@@ -3726,7 +3727,7 @@ impl ChatWidget {
         Box::new(header)
     }
 
-    fn model_menu_warning_line(&self) -> Option<Line> {
+    fn model_menu_warning_line(&self) -> Option<Line<'static>> {
         let base_url = self.custom_openai_base_url()?;
         let warning = format!(
             "Warning: OPENAI_BASE_URL is set to {base_url}. Selecting models may not be supported or work properly."
@@ -4711,11 +4712,11 @@ impl ChatWidget {
             "When Codex runs with full access, it can edit any file on your computer and run commands with network, without your approval. "
                 .into(),
             "Exercise caution when enabling full access. This significantly increases the risk of data loss, leaks, or unexpected behavior."
-                .red(),
+                .fg(Color::Red),
         ]);
         header_children.push(Box::new(title_line));
         header_children.push(Box::new(
-            Paragraph::new(to_ratatui_text(&[info_line])).wrap(Wrap { trim: false }),
+            Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
         ));
         let header = ColumnRenderable::with(header_children);
 
@@ -4796,7 +4797,8 @@ impl ChatWidget {
             Line::from(vec![
                 "We couldn't complete the world-writable scan, so protections cannot be verified. "
                     .into(),
-                format!("The Windows sandbox cannot guarantee protection in {mode_label}.").red(),
+                format!("The Windows sandbox cannot guarantee protection in {mode_label}.")
+                    .fg(Color::Red),
             ])
         } else {
             Line::from(vec![
@@ -4805,7 +4807,7 @@ impl ChatWidget {
             ])
         };
         header_children.push(Box::new(
-            Paragraph::new(to_ratatui_text(&[info_line])).wrap(Wrap { trim: false }),
+            Paragraph::new(vec![info_line]).wrap(Wrap { trim: false }),
         ));
 
         if !sample_paths.is_empty() {
@@ -4818,9 +4820,7 @@ impl ChatWidget {
             if extra_count > 0 {
                 lines.push(Line::from(format!("and {extra_count} more")));
             }
-            header_children.push(Box::new(
-                Paragraph::new(to_ratatui_text(&lines)).wrap(Wrap { trim: false }),
-            ));
+            header_children.push(Box::new(Paragraph::new(lines).wrap(Wrap { trim: false })));
         }
         let header = ColumnRenderable::with(header_children);
 
@@ -5047,9 +5047,7 @@ impl ChatWidget {
         ]);
 
         let mut header = ColumnRenderable::new();
-        header.push(*Box::new(
-            Paragraph::new(to_ratatui_text(&lines)).wrap(Wrap { trim: false }),
-        ));
+        header.push(*Box::new(Paragraph::new(lines).wrap(Wrap { trim: false })));
 
         let elevated_preset = preset.clone();
         let legacy_preset = preset;
@@ -5547,7 +5545,7 @@ impl ChatWidget {
 
     /// Build a placeholder header cell while the session is configuring.
     fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
-        let placeholder_style = RenderStyle::builder().dim().italic().build();
+        let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
         Box::new(history_cell::SessionHeaderHistoryCell::new_with_style(
             DEFAULT_MODEL_DISPLAY_NAME.to_string(),
             placeholder_style,
@@ -5590,7 +5588,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line>) {
+    pub(crate) fn add_plain_history_lines(&mut self, lines: Vec<Line<'static>>) {
         self.add_boxed_history(Box::new(PlainHistoryCell::new(lines)));
         self.request_redraw();
     }
@@ -6045,7 +6043,7 @@ impl ChatWidget {
     /// filters out empty results so the overlay can treat "nothing to render" as "no tail". Callers
     /// should pass the same width the overlay uses; using a different width will cause wrapping
     /// mismatches between the main viewport and the transcript overlay.
-    pub(crate) fn active_cell_transcript_lines(&self, width: u16) -> Option<Vec<Line>> {
+    pub(crate) fn active_cell_transcript_lines(&self, width: u16) -> Option<Vec<Line<'static>>> {
         let cell = self.active_cell.as_ref()?;
         let lines = cell.transcript_lines(width);
         (!lines.is_empty()).then_some(lines)

@@ -1,8 +1,7 @@
-use crate::render::adapter_ratatui::to_ratatui_text;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStylize;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
 use crate::live_wrap::take_prefix_by_width;
@@ -31,7 +30,7 @@ impl UnifiedExecFooter {
         self.processes.is_empty()
     }
 
-    fn render_lines(&self, width: u16) -> Vec<Line> {
+    fn render_lines(&self, width: u16) -> Vec<Line<'static>> {
         if self.processes.is_empty() || width < 4 {
             return Vec::new();
         }
@@ -50,8 +49,7 @@ impl Renderable for UnifiedExecFooter {
             return;
         }
 
-        let lines = self.render_lines(area.width);
-        Paragraph::new(to_ratatui_text(&lines)).render(area, buf);
+        Paragraph::new(self.render_lines(area.width)).render(area, buf);
     }
 
     fn desired_height(&self, width: u16) -> u16 {

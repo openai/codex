@@ -1,6 +1,3 @@
-use crate::render::adapter_ratatui::to_ratatui_text;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStylize;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -8,6 +5,8 @@ use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
@@ -91,7 +90,7 @@ impl WidgetRef for &WelcomeWidget {
             ", OpenAI's command-line coding agent".into(),
         ]));
 
-        Paragraph::new(to_ratatui_text(&lines))
+        Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(area, buf);
     }

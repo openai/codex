@@ -1,6 +1,3 @@
-use crate::render::model::RenderCell as Span;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStylize;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -9,6 +6,11 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 
 use super::selection_popup_common::render_menu_surface;
 use super::selection_popup_common::wrap_styled_line;
@@ -47,8 +49,8 @@ pub(crate) struct SelectionItem {
 pub(crate) struct SelectionViewParams {
     pub title: Option<String>,
     pub subtitle: Option<String>,
-    pub footer_note: Option<Line>,
-    pub footer_hint: Option<Line>,
+    pub footer_note: Option<Line<'static>>,
+    pub footer_hint: Option<Line<'static>>,
     pub items: Vec<SelectionItem>,
     pub is_searchable: bool,
     pub search_placeholder: Option<String>,
@@ -73,8 +75,8 @@ impl Default for SelectionViewParams {
 }
 
 pub(crate) struct ListSelectionView {
-    footer_note: Option<Line>,
-    footer_hint: Option<Line>,
+    footer_note: Option<Line<'static>>,
+    footer_hint: Option<Line<'static>>,
     items: Vec<SelectionItem>,
     state: ScrollState,
     complete: bool,
@@ -500,16 +502,17 @@ impl Renderable for ListSelectionView {
             let [header_area, elision_area] =
                 Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(header_area);
             self.header.render(header_area, buf);
-            Line::from(format!("[… {header_height} lines] ctrl + a view all"))
-                .dim()
-                .render(elision_area, buf);
+            Paragraph::new(vec![
+                Line::from(format!("[… {header_height} lines] ctrl + a view all")).dim(),
+            ])
+            .render(elision_area, buf);
         } else {
             self.header.render(header_area, buf);
         }
 
         if self.is_searchable {
             Line::from(self.search_query.clone()).render(search_area, buf);
-            let query_span: Span = if self.search_query.is_empty() {
+            let query_span: Span<'static> = if self.search_query.is_empty() {
                 self.search_placeholder
                     .as_ref()
                     .map(|placeholder| placeholder.clone().dim())

@@ -53,16 +53,6 @@ rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
     edition = "2024",
     extra_target_triples = RUST_TRIPLES,
-    extra_rustc_flags_triples = {
-        "aarch64-unknown-linux-gnu": [
-            "-C",
-            "link-arg=${pwd}/external/toolchains_llvm_bootstrapped+/runtimes/glibc/glibc_library_search_directory/libc_nonshared.a",
-        ],
-        "x86_64-unknown-linux-gnu": [
-            "-C",
-            "link-arg=${pwd}/external/toolchains_llvm_bootstrapped+/runtimes/glibc/glibc_library_search_directory/libc_nonshared.a",
-        ],
-    },
     versions = ["1.90.0"],
 )
 use_repo(rust, "rust_toolchains")
@@ -102,13 +92,6 @@ crate.annotation(
     patches = [
         "//patches:windows-link.patch",
     ],
-)
-
-crate.annotation(
-    crate = "ncurses",
-    build_script_env = {
-        "NCURSES_RS_CFLAGS": "-I/usr/include -I/usr/include/ncursesw -I/usr/include/x86_64-linux-gnu -I/usr/include/aarch64-linux-gnu -I/usr/local/include -I/opt/homebrew/include -I/opt/local/include",
-    },
 )
 
 WINDOWS_IMPORT_LIB = """

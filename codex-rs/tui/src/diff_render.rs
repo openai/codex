@@ -1,5 +1,3 @@
-use crate::render::adapter_ratatui::from_ratatui_lines;
-use crate::render::model::RenderLine as Line;
 use diffy::Hunk;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -7,6 +5,8 @@ use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
+use ratatui::text::Line as RtLine;
+use ratatui::text::Span as RtSpan;
 use ratatui::widgets::Paragraph;
 use std::collections::HashMap;
 use std::path::Path;
@@ -20,9 +20,6 @@ use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::FileChange;
-
-type RtLine = ratatui::text::Line<'static>;
-type RtSpan = ratatui::text::Span<'static>;
 
 // Internal representation for diff line rendering
 enum DiffLineType {
@@ -83,10 +80,9 @@ pub(crate) fn create_diff_summary(
     changes: &HashMap<PathBuf, FileChange>,
     cwd: &Path,
     wrap_cols: usize,
-) -> Vec<Line> {
+) -> Vec<RtLine<'static>> {
     let rows = collect_rows(changes);
-    let lines = render_changes_block(rows, wrap_cols, cwd);
-    from_ratatui_lines(&lines)
+    render_changes_block(rows, wrap_cols, cwd)
 }
 
 // Shared row for per-file presentation
@@ -127,7 +123,7 @@ fn collect_rows(changes: &HashMap<PathBuf, FileChange>) -> Vec<Row> {
     rows
 }
 
-fn render_line_count_summary(added: usize, removed: usize) -> Vec<RtSpan> {
+fn render_line_count_summary(added: usize, removed: usize) -> Vec<RtSpan<'static>> {
     let mut spans = Vec::new();
     spans.push("(".into());
     spans.push(format!("+{added}").green());
@@ -137,10 +133,10 @@ fn render_line_count_summary(added: usize, removed: usize) -> Vec<RtSpan> {
     spans
 }
 
-fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtLine> {
-    let mut out: Vec<RtLine> = Vec::new();
+fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtLine<'static>> {
+    let mut out: Vec<RtLine<'static>> = Vec::new();
 
-    let render_path = |row: &Row| -> Vec<RtSpan> {
+    let render_path = |row: &Row| -> Vec<RtSpan<'static>> {
         let mut spans = Vec::new();
         spans.push(display_path_for(&row.path, cwd).into());
         if let Some(move_path) = &row.move_path {
@@ -154,7 +150,7 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
     let total_removed: usize = rows.iter().map(|r| r.removed).sum();
     let file_count = rows.len();
     let noun = if file_count == 1 { "file" } else { "files" };
-    let mut header_spans: Vec<RtSpan> = vec!["• ".dim()];
+    let mut header_spans: Vec<RtSpan<'static>> = vec!["• ".dim()];
     if let [row] = &rows[..] {
         let verb = match &row.change {
             FileChange::Add { .. } => "Added",
@@ -181,7 +177,7 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
         // File header line (skip when single-file header already shows the name)
         let skip_file_header = file_count == 1;
         if !skip_file_header {
-            let mut header: Vec<RtSpan> = Vec::new();
+            let mut header: Vec<RtSpan<'static>> = Vec::new();
             header.push("  └ ".dim());
             header.extend(render_path(&r));
             header.push(" ".into());
@@ -191,14 +187,13 @@ fn render_changes_block(rows: Vec<Row>, wrap_cols: usize, cwd: &Path) -> Vec<RtL
 
         let mut lines = vec![];
         render_change(&r.change, &mut lines, wrap_cols - 4);
-        let prefixed = prefix_lines(from_ratatui_lines(&lines), "    ".into(), "    ".into());
-        out.extend(prefixed.into_iter().map(RtLine::from));
+        out.extend(prefix_lines(lines, "    ".into(), "    ".into()));
     }
 
     out
 }
 
-fn render_change(change: &FileChange, out: &mut Vec<RtLine>, width: usize) {
+fn render_change(change: &FileChange, out: &mut Vec<RtLine<'static>>, width: usize) {
     match change {
         FileChange::Add { content } => {
             let line_number_width = line_number_width(content.lines().count());
@@ -353,7 +348,7 @@ fn push_wrapped_diff_line(
     text: &str,
     width: usize,
     line_number_width: usize,
-) -> Vec<RtLine> {
+) -> Vec<RtLine<'static>> {
     let ln_str = line_number.to_string();
     let mut remaining_text: &str = text;
 
@@ -368,7 +363,7 @@ fn push_wrapped_diff_line(
         DiffLineType::Delete => ('-', style_del()),
         DiffLineType::Context => (' ', style_context()),
     };
-    let mut lines: Vec<RtLine> = Vec::new();
+    let mut lines: Vec<RtLine<'static>> = Vec::new();
 
     loop {
         // Fit the content for the current terminal row:
@@ -443,15 +438,11 @@ mod tests {
     use ratatui::widgets::Paragraph;
     use ratatui::widgets::WidgetRef;
     use ratatui::widgets::Wrap;
-    fn diff_summary_for_tests(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine> {
-        crate::render::adapter_ratatui::to_ratatui_lines(&create_diff_summary(
-            changes,
-            &PathBuf::from("/"),
-            80,
-        ))
+    fn diff_summary_for_tests(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
+        create_diff_summary(changes, &PathBuf::from("/"), 80)
     }
 
-    fn snapshot_lines(name: &str, lines: Vec<RtLine>, width: u16, height: u16) {
+    fn snapshot_lines(name: &str, lines: Vec<RtLine<'static>>, width: u16, height: u16) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
         terminal
             .draw(|f| {
@@ -463,7 +454,7 @@ mod tests {
         assert_snapshot!(name, terminal.backend());
     }
 
-    fn snapshot_lines_text(name: &str, lines: &[RtLine]) {
+    fn snapshot_lines_text(name: &str, lines: &[RtLine<'static>]) {
         // Convert Lines to plain text rows and trim trailing spaces so it's
         // easier to validate indentation visually in snapshots.
         let text = lines
@@ -626,11 +617,7 @@ mod tests {
             },
         );
 
-        let lines = crate::render::adapter_ratatui::to_ratatui_lines(&create_diff_summary(
-            &changes,
-            &PathBuf::from("/"),
-            72,
-        ));
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 72);
 
         // Render with backend width wider than wrap width to avoid Paragraph auto-wrap.
         snapshot_lines("apply_update_block_wraps_long_lines", lines, 80, 12);
@@ -653,11 +640,7 @@ mod tests {
             },
         );
 
-        let lines = crate::render::adapter_ratatui::to_ratatui_lines(&create_diff_summary(
-            &changes,
-            &PathBuf::from("/"),
-            28,
-        ));
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 28);
         snapshot_lines_text("apply_update_block_wraps_long_lines_text", &lines);
     }
 
@@ -684,11 +667,7 @@ mod tests {
             },
         );
 
-        let lines = crate::render::adapter_ratatui::to_ratatui_lines(&create_diff_summary(
-            &changes,
-            &PathBuf::from("/"),
-            80,
-        ));
+        let lines = create_diff_summary(&changes, &PathBuf::from("/"), 80);
         snapshot_lines_text("apply_update_block_line_numbers_three_digits_text", &lines);
     }
 
@@ -711,9 +690,7 @@ mod tests {
             },
         );
 
-        let lines = crate::render::adapter_ratatui::to_ratatui_lines(&create_diff_summary(
-            &changes, &cwd, 80,
-        ));
+        let lines = create_diff_summary(&changes, &cwd, 80);
 
         snapshot_lines("apply_update_block_relativizes_path", lines, 80, 10);
     }

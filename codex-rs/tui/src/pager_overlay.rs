@@ -25,10 +25,6 @@ use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::Insets;
-use crate::render::adapter_ratatui::to_ratatui_text;
-use crate::render::model::RenderCell as Span;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStylize;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
@@ -39,11 +35,15 @@ use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
-use ratatui::prelude::Stylize;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::text::Text;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
 pub(crate) enum Overlay {
@@ -56,7 +56,7 @@ impl Overlay {
         Self::Transcript(TranscriptOverlay::new(cells))
     }
 
-    pub(crate) fn new_static_with_lines(lines: Vec<Line>, title: String) -> Self {
+    pub(crate) fn new_static_with_lines(lines: Vec<Line<'static>>, title: String) -> Self {
         Self::Static(StaticOverlay::with_title(lines, title))
     }
 
@@ -113,7 +113,7 @@ const PAGER_KEY_HINTS: &[(&[KeyBinding], &str)] = &[
 
 // Render a single line of key hints from (key(s), description) pairs.
 fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&[KeyBinding], &str)]) {
-    let mut spans: Vec<Span> = vec![" ".into()];
+    let mut spans: Vec<Span<'static>> = vec![" ".into()];
     let mut first = true;
     for (keys, desc) in pairs {
         if !first {
@@ -129,7 +129,7 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&[KeyBinding], &str)
         spans.push(Span::from(desc.to_string()));
         first = false;
     }
-    Line::from(spans).dim().render(area, buf);
+    Paragraph::new(vec![Line::from(spans).dim()]).render_ref(area, buf);
 }
 
 /// Generic widget for rendering a pager view.
@@ -184,9 +184,11 @@ impl PagerView {
     }
 
     fn render_header(&self, area: Rect, buf: &mut Buffer) {
-        Line::from(vec![Span::from("/ ".repeat(area.width as usize / 2)).dim()]).render(area, buf);
+        Span::from("/ ".repeat(area.width as usize / 2))
+            .dim()
+            .render_ref(area, buf);
         let header = format!("/ {}", self.title);
-        Line::from(RenderStylize::dim(header)).render(area, buf);
+        header.dim().render_ref(area, buf);
     }
 
     fn render_content(&self, area: Rect, buf: &mut Buffer) {
@@ -235,8 +237,9 @@ impl PagerView {
         let sep_y = content_area.bottom();
         let sep_rect = Rect::new(full_area.x, sep_y, full_area.width, 1);
 
-        Line::from(vec![Span::from("─".repeat(sep_rect.width as usize)).dim()])
-            .render(sep_rect, buf);
+        Span::from("─".repeat(sep_rect.width as usize))
+            .dim()
+            .render_ref(sep_rect, buf);
         let percent = if total_len == 0 {
             100
         } else {
@@ -251,8 +254,9 @@ impl PagerView {
         let pct_text = format!(" {percent}% ");
         let pct_w = pct_text.chars().count() as u16;
         let pct_x = sep_rect.x + sep_rect.width - pct_w - 1;
-        Line::from(vec![Span::from(pct_text).dim()])
-            .render(Rect::new(pct_x, sep_rect.y, pct_w, 1), buf);
+        Span::from(pct_text)
+            .dim()
+            .render_ref(Rect::new(pct_x, sep_rect.y, pct_w, 1), buf);
     }
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
@@ -406,8 +410,8 @@ struct CellRenderable {
 
 impl Renderable for CellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let p = Paragraph::new(to_ratatui_text(&self.cell.transcript_lines(area.width)))
-            .style(self.style);
+        let p =
+            Paragraph::new(Text::from(self.cell.transcript_lines(area.width))).style(self.style);
         p.render(area, buf);
     }
 
@@ -552,7 +556,7 @@ impl TranscriptOverlay {
         &mut self,
         width: u16,
         active_key: Option<ActiveCellTranscriptKey>,
-        compute_lines: impl FnOnce(u16) -> Option<Vec<Line>>,
+        compute_lines: impl FnOnce(u16) -> Option<Vec<Line<'static>>>,
     ) {
         let next_key = active_key.map(|key| LiveTailKey {
             width,
@@ -618,11 +622,11 @@ impl TranscriptOverlay {
     }
 
     fn live_tail_renderable(
-        lines: Vec<Line>,
+        lines: Vec<Line<'static>>,
         has_prior_cells: bool,
         is_stream_continuation: bool,
     ) -> Box<dyn Renderable> {
-        let paragraph = Paragraph::new(to_ratatui_text(&lines));
+        let paragraph = Paragraph::new(Text::from(lines));
         let mut renderable: Box<dyn Renderable> = Box::new(CachedRenderable::new(paragraph));
         if has_prior_cells && !is_stream_continuation {
             renderable = Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));
@@ -685,8 +689,8 @@ pub(crate) struct StaticOverlay {
 }
 
 impl StaticOverlay {
-    pub(crate) fn with_title(lines: Vec<Line>, title: String) -> Self {
-        let paragraph = Paragraph::new(to_ratatui_text(&lines)).wrap(Wrap { trim: false });
+    pub(crate) fn with_title(lines: Vec<Line<'static>>, title: String) -> Self {
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
         Self::with_renderables(vec![Box::new(CachedRenderable::new(paragraph))], title)
     }
 
@@ -785,27 +789,29 @@ mod tests {
     use codex_protocol::parse_command::ParsedCommand;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::text::Text;
 
     #[derive(Debug)]
     struct TestCell {
-        lines: Vec<Line>,
+        lines: Vec<Line<'static>>,
     }
 
     impl crate::history_cell::HistoryCell for TestCell {
-        fn display_lines(&self, _width: u16) -> Vec<Line> {
+        fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
             self.lines.clone()
         }
 
-        fn transcript_lines(&self, _width: u16) -> Vec<Line> {
+        fn transcript_lines(&self, _width: u16) -> Vec<Line<'static>> {
             self.lines.clone()
         }
     }
 
     fn paragraph_block(label: &str, lines: usize) -> Box<dyn Renderable> {
-        let lines = (0..lines)
-            .map(|i| Line::from(format!("{label}{i}")))
-            .collect::<Vec<_>>();
-        let text = to_ratatui_text(&lines);
+        let text = Text::from(
+            (0..lines)
+                .map(|i| Line::from(format!("{label}{i}")))
+                .collect::<Vec<_>>(),
+        );
         Box::new(Paragraph::new(text)) as Box<dyn Renderable>
     }
 

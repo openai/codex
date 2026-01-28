@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStylize;
 use codex_core::config::set_project_trust_level;
 use codex_core::git_info::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::TrustLevel;
@@ -10,8 +8,8 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::style::Style;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
@@ -99,7 +97,7 @@ impl WidgetRef for &TrustDirectoryWidget {
         if let Some(error) = &self.error {
             column.push(
                 Paragraph::new(error.to_string())
-                    .style(Style::default().fg(Color::Red))
+                    .red()
                     .wrap(Wrap { trim: true })
                     .inset(Insets::tlbr(0, 2, 0, 0)),
             );

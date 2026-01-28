@@ -1,6 +1,3 @@
-use crate::render::adapter_ratatui::to_ratatui_text;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStylize;
 use codex_core::AuthManager;
 use codex_login::ServerOptions;
 use codex_login::complete_device_code_login;
@@ -9,6 +6,8 @@ use codex_login::run_login_server;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::sync::Arc;
@@ -183,7 +182,7 @@ pub(super) fn render_device_code_login(
     }
 
     lines.push("  Press Esc to cancel".dim().into());
-    Paragraph::new(to_ratatui_text(&lines))
+    Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .render(area, buf);
 }

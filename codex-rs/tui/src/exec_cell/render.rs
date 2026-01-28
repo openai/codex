@@ -5,13 +5,9 @@ use super::model::ExecCall;
 use super::model::ExecCell;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell::HistoryCell;
-use crate::render::adapter_ratatui::from_ratatui_line;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
-use crate::render::model::RenderCell as Span;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStylize;
 use crate::shimmer::shimmer_spans;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
@@ -22,6 +18,9 @@ use codex_core::bash::extract_bash_command;
 use codex_core::protocol::ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
 use itertools::Itertools;
+use ratatui::prelude::*;
+use ratatui::style::Modifier;
+use ratatui::style::Stylize;
 use textwrap::WordSplitter;
 use unicode_width::UnicodeWidthStr;
 
@@ -91,7 +90,7 @@ fn summarize_interaction_input(input: &str) -> String {
 
 #[derive(Clone)]
 pub(crate) struct OutputLines {
-    pub(crate) lines: Vec<Line>,
+    pub(crate) lines: Vec<Line<'static>>,
     pub(crate) omitted: Option<usize>,
 }
 
@@ -126,11 +125,11 @@ pub(crate) fn output_lines(
     let src = aggregated_output;
     let lines: Vec<&str> = src.lines().collect();
     let total = lines.len();
-    let mut out: Vec<Line> = Vec::new();
+    let mut out: Vec<Line<'static>> = Vec::new();
 
     let head_end = total.min(line_limit);
     for (i, raw) in lines[..head_end].iter().enumerate() {
-        let mut line = from_ratatui_line(&ansi_escape_line(raw));
+        let mut line = ansi_escape_line(raw);
         let prefix = if !include_prefix {
             ""
         } else if i == 0 && include_angle_pipe {
@@ -140,9 +139,7 @@ pub(crate) fn output_lines(
         };
         line.spans.insert(0, prefix.into());
         line.spans.iter_mut().for_each(|span| {
-            span.style = span
-                .style
-                .patch(crate::render::model::RenderStyle::builder().dim().build());
+            span.style = span.style.add_modifier(Modifier::DIM);
         });
         out.push(line);
     }
@@ -164,14 +161,12 @@ pub(crate) fn output_lines(
         head_end
     };
     for raw in lines[tail_start..].iter() {
-        let mut line = from_ratatui_line(&ansi_escape_line(raw));
+        let mut line = ansi_escape_line(raw);
         if include_prefix {
             line.spans.insert(0, "    ".into());
         }
         line.spans.iter_mut().for_each(|span| {
-            span.style = span
-                .style
-                .patch(crate::render::model::RenderStyle::builder().dim().build());
+            span.style = span.style.add_modifier(Modifier::DIM);
         });
         out.push(line);
     }
@@ -182,7 +177,7 @@ pub(crate) fn output_lines(
     }
 }
 
-pub(crate) fn spinner(start_time: Option<Instant>, animations_enabled: bool) -> Span {
+pub(crate) fn spinner(start_time: Option<Instant>, animations_enabled: bool) -> Span<'static> {
     if !animations_enabled {
         return "•".dim();
     }
@@ -199,7 +194,7 @@ pub(crate) fn spinner(start_time: Option<Instant>, animations_enabled: bool) -> 
 }
 
 impl HistoryCell for ExecCell {
-    fn display_lines(&self, width: u16) -> Vec<Line> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         if self.is_exploring_cell() {
             self.exploring_display_lines(width)
         } else {
@@ -211,8 +206,8 @@ impl HistoryCell for ExecCell {
         self.transcript_lines(width).len() as u16
     }
 
-    fn transcript_lines(&self, width: u16) -> Vec<Line> {
-        let mut lines: Vec<Line> = vec![];
+    fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = vec![];
         for (i, call) in self.iter_calls().enumerate() {
             if i > 0 {
                 lines.push("".into());
@@ -231,12 +226,7 @@ impl HistoryCell for ExecCell {
                 if !call.is_unified_exec_interaction() {
                     let wrap_width = width.max(1) as usize;
                     let wrap_opts = RtOptions::new(wrap_width);
-                    for unwrapped in output
-                        .formatted_output
-                        .lines()
-                        .map(ansi_escape_line)
-                        .map(|line| from_ratatui_line(&line))
-                    {
+                    for unwrapped in output.formatted_output.lines().map(ansi_escape_line) {
                         let wrapped = word_wrap_line(&unwrapped, wrap_opts.clone());
                         push_owned_lines(&wrapped, &mut lines);
                     }
@@ -262,8 +252,8 @@ impl HistoryCell for ExecCell {
 }
 
 impl ExecCell {
-    fn exploring_display_lines(&self, width: u16) -> Vec<Line> {
-        let mut out: Vec<Line> = Vec::new();
+    fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut out: Vec<Line<'static>> = Vec::new();
         out.push(Line::from(vec![
             if self.is_active() {
                 spinner(self.active_start_time(), self.animations_enabled())
@@ -306,7 +296,7 @@ impl ExecCell {
                 .iter()
                 .all(|parsed| matches!(parsed, ParsedCommand::Read { .. }));
 
-            let call_lines: Vec<(&str, Vec<Span>)> = if reads_only {
+            let call_lines: Vec<(&str, Vec<Span<'static>>)> = if reads_only {
                 let names = call
                     .parsed
                     .iter()
@@ -361,15 +351,11 @@ impl ExecCell {
             }
         }
 
-        out.extend(prefix_lines(
-            out_indented,
-            Line::from(vec!["  └ ".dim()]),
-            Line::from(vec!["    ".into()]),
-        ));
+        out.extend(prefix_lines(out_indented, "  └ ".dim(), "    ".into()));
         out
     }
 
-    fn command_display_lines(&self, width: u16) -> Vec<Line> {
+    fn command_display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let [call] = &self.calls.as_slice() else {
             panic!("Expected exactly one call in a command display cell");
         };
@@ -392,9 +378,9 @@ impl ExecCell {
         };
 
         let mut header_line = if is_interaction {
-            Line::from(vec![bullet, " ".into()])
+            Line::from(vec![bullet.clone(), " ".into()])
         } else {
-            Line::from(vec![bullet, " ".into(), title.bold(), " ".into()])
+            Line::from(vec![bullet.clone(), " ".into(), title.bold(), " ".into()])
         };
         let header_prefix_width = header_line.width();
 
@@ -409,17 +395,17 @@ impl ExecCell {
         let continuation_opts =
             RtOptions::new(continuation_wrap_width).word_splitter(WordSplitter::NoHyphenation);
 
-        let mut continuation_lines: Vec<Line> = Vec::new();
+        let mut continuation_lines: Vec<Line<'static>> = Vec::new();
 
         if let Some((first, rest)) = highlighted_lines.split_first() {
             let available_first_width = (width as usize).saturating_sub(header_prefix_width).max(1);
             let first_opts =
                 RtOptions::new(available_first_width).word_splitter(WordSplitter::NoHyphenation);
-            let mut first_wrapped: Vec<Line> = Vec::new();
+            let mut first_wrapped: Vec<Line<'static>> = Vec::new();
             push_owned_lines(&word_wrap_line(first, first_opts), &mut first_wrapped);
             let mut first_wrapped_iter = first_wrapped.into_iter();
             if let Some(first_segment) = first_wrapped_iter.next() {
-                header_line.spans.extend(first_segment.spans);
+                header_line.extend(first_segment);
             }
             continuation_lines.extend(first_wrapped_iter);
 
@@ -431,7 +417,7 @@ impl ExecCell {
             }
         }
 
-        let mut lines: Vec<Line> = vec![header_line];
+        let mut lines: Vec<Line<'static>> = vec![header_line];
 
         let continuation_lines = Self::limit_lines_from_start(
             &continuation_lines,
@@ -440,12 +426,8 @@ impl ExecCell {
         if !continuation_lines.is_empty() {
             lines.extend(prefix_lines(
                 continuation_lines,
-                Line::from(vec![
-                    Span::from(layout.command_continuation.initial_prefix).dim(),
-                ]),
-                Line::from(vec![
-                    Span::from(layout.command_continuation.subsequent_prefix).dim(),
-                ]),
+                Span::from(layout.command_continuation.initial_prefix).dim(),
+                Span::from(layout.command_continuation.subsequent_prefix).dim(),
             ));
         }
 
@@ -474,15 +456,15 @@ impl ExecCell {
                 if !call.is_unified_exec_interaction() {
                     lines.extend(prefix_lines(
                         vec![Line::from("(no output)".dim())],
-                        Line::from(vec![Span::from(layout.output_block.initial_prefix).dim()]),
-                        Line::from(vec![Span::from(layout.output_block.subsequent_prefix)]),
+                        Span::from(layout.output_block.initial_prefix).dim(),
+                        Span::from(layout.output_block.subsequent_prefix),
                     ));
                 }
             } else {
                 // Wrap first so that truncation is applied to on-screen lines
                 // rather than logical lines. This ensures that a small number
                 // of very long lines cannot flood the viewport.
-                let mut wrapped_output: Vec<Line> = Vec::new();
+                let mut wrapped_output: Vec<Line<'static>> = Vec::new();
                 let output_wrap_width = layout.output_block.wrap_width(width);
                 let output_opts =
                     RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
@@ -499,8 +481,8 @@ impl ExecCell {
                 if !trimmed_output.is_empty() {
                     lines.extend(prefix_lines(
                         trimmed_output,
-                        Line::from(vec![Span::from(layout.output_block.initial_prefix).dim()]),
-                        Line::from(vec![Span::from(layout.output_block.subsequent_prefix)]),
+                        Span::from(layout.output_block.initial_prefix).dim(),
+                        Span::from(layout.output_block.subsequent_prefix),
                     ));
                 }
             }
@@ -509,7 +491,7 @@ impl ExecCell {
         lines
     }
 
-    fn limit_lines_from_start(lines: &[Line], keep: usize) -> Vec<Line> {
+    fn limit_lines_from_start(lines: &[Line<'static>], keep: usize) -> Vec<Line<'static>> {
         if lines.len() <= keep {
             return lines.to_vec();
         }
@@ -517,12 +499,16 @@ impl ExecCell {
             return vec![Self::ellipsis_line(lines.len())];
         }
 
-        let mut out: Vec<Line> = lines[..keep].to_vec();
+        let mut out: Vec<Line<'static>> = lines[..keep].to_vec();
         out.push(Self::ellipsis_line(lines.len() - keep));
         out
     }
 
-    fn truncate_lines_middle(lines: &[Line], max: usize, omitted_hint: Option<usize>) -> Vec<Line> {
+    fn truncate_lines_middle(
+        lines: &[Line<'static>],
+        max: usize,
+        omitted_hint: Option<usize>,
+    ) -> Vec<Line<'static>> {
         if max == 0 {
             return Vec::new();
         }
@@ -545,7 +531,7 @@ impl ExecCell {
 
         let head = (max - 1) / 2;
         let tail = max - head - 1;
-        let mut out: Vec<Line> = Vec::new();
+        let mut out: Vec<Line<'static>> = Vec::new();
 
         if head > 0 {
             out.extend(lines[..head].iter().cloned());
@@ -565,7 +551,7 @@ impl ExecCell {
         out
     }
 
-    fn ellipsis_line(omitted: usize) -> Line {
+    fn ellipsis_line(omitted: usize) -> Line<'static> {
         Line::from(vec![format!("… +{omitted} lines").dim()])
     }
 }
@@ -664,7 +650,7 @@ mod tests {
         let output_wrap_width = layout.output_block.wrap_width(width);
         let output_opts =
             RtOptions::new(output_wrap_width).word_splitter(WordSplitter::NoHyphenation);
-        let mut full_wrapped_output: Vec<Line> = Vec::new();
+        let mut full_wrapped_output: Vec<Line<'static>> = Vec::new();
         for line in &raw_output.lines {
             push_owned_lines(
                 &word_wrap_line(line, output_opts.clone()),

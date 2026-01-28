@@ -1,13 +1,13 @@
 use std::collections::VecDeque;
 
-use crate::render::model::RenderLine as Line;
+use ratatui::text::Line;
 
 use crate::markdown_stream::MarkdownStreamCollector;
 pub(crate) mod controller;
 
 pub(crate) struct StreamState {
     pub(crate) collector: MarkdownStreamCollector,
-    queued_lines: VecDeque<Line>,
+    queued_lines: VecDeque<Line<'static>>,
     pub(crate) has_seen_delta: bool,
 }
 
@@ -24,16 +24,16 @@ impl StreamState {
         self.queued_lines.clear();
         self.has_seen_delta = false;
     }
-    pub(crate) fn step(&mut self) -> Vec<Line> {
+    pub(crate) fn step(&mut self) -> Vec<Line<'static>> {
         self.queued_lines.pop_front().into_iter().collect()
     }
-    pub(crate) fn drain_all(&mut self) -> Vec<Line> {
+    pub(crate) fn drain_all(&mut self) -> Vec<Line<'static>> {
         self.queued_lines.drain(..).collect()
     }
     pub(crate) fn is_idle(&self) -> bool {
         self.queued_lines.is_empty()
     }
-    pub(crate) fn enqueue(&mut self, lines: Vec<Line>) {
+    pub(crate) fn enqueue(&mut self, lines: Vec<Line<'static>>) {
         self.queued_lines.extend(lines);
     }
 }

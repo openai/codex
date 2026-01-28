@@ -1,8 +1,6 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStylize;
 use codex_core::protocol::Op;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
@@ -14,7 +12,10 @@ use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
 use textwrap::wrap;
@@ -51,7 +52,7 @@ struct LayoutSections {
     answer_title_area: Rect,
     answer_area: Rect,
     footer_area: Rect,
-    question_lines: Vec<Line>,
+    question_lines: Vec<Line<'static>>,
 }
 
 impl QaDialogView {
@@ -114,7 +115,7 @@ impl QaDialogView {
         self.textarea.set_cursor(answer.len());
     }
 
-    fn question_lines(&self, width: u16) -> Vec<Line> {
+    fn question_lines(&self, width: u16) -> Vec<Line<'static>> {
         let Some(question) = self.question() else {
             return vec![Line::from("No question".dim())];
         };
@@ -291,10 +292,10 @@ impl QaDialogView {
         if area.height < 3 {
             let prefix_width = ANSWER_PREFIX.len() as u16;
             if area.width <= prefix_width {
-                Line::from(ANSWER_PREFIX.dim()).render(area, buf);
+                Paragraph::new(Line::from(ANSWER_PREFIX.dim())).render(area, buf);
                 return;
             }
-            Line::from(ANSWER_PREFIX.dim()).render(
+            Paragraph::new(Line::from(ANSWER_PREFIX.dim())).render(
                 Rect {
                     x: area.x,
                     y: area.y,
@@ -313,13 +314,13 @@ impl QaDialogView {
             Clear.render(textarea_rect, buf);
             StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
             if self.textarea.text().is_empty() {
-                Line::from(ANSWER_PLACEHOLDER.dim()).render(textarea_rect, buf);
+                Paragraph::new(Line::from(ANSWER_PLACEHOLDER.dim())).render(textarea_rect, buf);
             }
             return;
         }
         let top_border = format!("+{}+", "-".repeat(area.width.saturating_sub(2) as usize));
         let bottom_border = top_border.clone();
-        Line::from(top_border).render(
+        Paragraph::new(Line::from(top_border)).render(
             Rect {
                 x: area.x,
                 y: area.y,
@@ -328,7 +329,7 @@ impl QaDialogView {
             },
             buf,
         );
-        Line::from(bottom_border).render(
+        Paragraph::new(Line::from(bottom_border)).render(
             Rect {
                 x: area.x,
                 y: area.y.saturating_add(area.height.saturating_sub(1)),
@@ -364,7 +365,7 @@ impl QaDialogView {
         Clear.render(textarea_rect, buf);
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
-            Line::from(ANSWER_PLACEHOLDER.dim()).render(textarea_rect, buf);
+            Paragraph::new(Line::from(ANSWER_PLACEHOLDER.dim())).render(textarea_rect, buf);
         }
     }
 
@@ -501,7 +502,7 @@ impl Renderable for QaDialogView {
             } else {
                 Line::from("No questions".dim())
             };
-            progress_line.render(sections.progress_area, buf);
+            Paragraph::new(progress_line).render(sections.progress_area, buf);
         }
 
         if sections.header_area.height > 0 {
@@ -514,7 +515,7 @@ impl Renderable for QaDialogView {
             } else {
                 Line::from("Question".dim())
             };
-            header_line.render(sections.header_area, buf);
+            Paragraph::new(header_line).render(sections.header_area, buf);
         }
 
         let question_y = sections.question_area.y;
@@ -524,7 +525,7 @@ impl Renderable for QaDialogView {
             {
                 break;
             }
-            line.clone().render(
+            Paragraph::new(line.clone()).render(
                 Rect {
                     x: sections.question_area.x,
                     y: question_y.saturating_add(offset as u16),
@@ -536,7 +537,8 @@ impl Renderable for QaDialogView {
         }
 
         if sections.answer_title_area.height > 0 {
-            Line::from("Answer".cyan().bold()).render(sections.answer_title_area, buf);
+            Paragraph::new(Line::from("Answer".cyan().bold()))
+                .render(sections.answer_title_area, buf);
         }
 
         if sections.answer_area.height > 0 {
@@ -567,7 +569,7 @@ impl Renderable for QaDialogView {
                 " interrupt".into(),
             ]);
             let hint = Line::from(hint_spans);
-            hint.dim().render(sections.footer_area, buf);
+            Paragraph::new(hint.dim()).render(sections.footer_area, buf);
         }
     }
 

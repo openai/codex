@@ -1,12 +1,12 @@
+use ratatui::style::Style;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
+use ratatui::text::Span;
 use std::sync::OnceLock;
 use tree_sitter_highlight::Highlight;
 use tree_sitter_highlight::HighlightConfiguration;
 use tree_sitter_highlight::HighlightEvent;
 use tree_sitter_highlight::Highlighter;
-
-use crate::render::model::RenderCell;
-use crate::render::model::RenderLine;
-use crate::render::model::RenderStyle;
 
 // Ref: https://github.com/tree-sitter/tree-sitter-bash/blob/master/queries/highlights.scm
 #[derive(Copy, Clone)]
@@ -49,10 +49,10 @@ impl BashHighlight {
         }
     }
 
-    fn style(self) -> RenderStyle {
+    fn style(self) -> Style {
         match self {
-            Self::Comment | Self::Operator | Self::String => RenderStyle::builder().dim().build(),
-            _ => RenderStyle::default(),
+            Self::Comment | Self::Operator | Self::String => Style::default().dim(),
+            _ => Style::default(),
         }
     }
 }
@@ -87,28 +87,28 @@ fn highlight_for(highlight: Highlight) -> BashHighlight {
     BashHighlight::ALL[highlight.0]
 }
 
-fn push_segment(lines: &mut Vec<RenderLine>, segment: &str, style: Option<RenderStyle>) {
+fn push_segment(lines: &mut Vec<Line<'static>>, segment: &str, style: Option<Style>) {
     for (i, part) in segment.split('\n').enumerate() {
         if i > 0 {
-            lines.push(RenderLine::from(""));
+            lines.push(Line::from(""));
         }
         if part.is_empty() {
             continue;
         }
-        let cell = match style {
-            Some(style) => RenderCell::new(part.to_string(), style),
-            None => RenderCell::plain(part),
+        let span = match style {
+            Some(style) => Span::styled(part.to_string(), style),
+            None => part.to_string().into(),
         };
         if let Some(last) = lines.last_mut() {
-            last.spans.push(cell);
+            last.spans.push(span);
         }
     }
 }
 
 /// Convert a bash script into per-line styled content using tree-sitter's
 /// bash highlight query. The highlighter is streamed so multi-line content is
-/// split into `RenderLine`s while preserving style boundaries.
-pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<RenderLine> {
+/// split into `Line`s while preserving style boundaries.
+pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
     let mut highlighter = Highlighter::new();
     let iterator =
         match highlighter.highlight(highlight_config(), script.as_bytes(), None, |_| None) {
@@ -116,7 +116,7 @@ pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<RenderLine> {
             Err(_) => return vec![script.to_string().into()],
         };
 
-    let mut lines: Vec<RenderLine> = vec![RenderLine::from("")];
+    let mut lines: Vec<Line<'static>> = vec![Line::from("")];
     let mut highlight_stack: Vec<Highlight> = Vec::new();
 
     for event in iterator {
@@ -137,7 +137,7 @@ pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<RenderLine> {
     }
 
     if lines.is_empty() {
-        vec![RenderLine::from("")]
+        vec![Line::from("")]
     } else {
         lines
     }
@@ -147,26 +147,28 @@ pub(crate) fn highlight_bash_to_lines(script: &str) -> Vec<RenderLine> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::style::Modifier;
 
-    fn reconstructed(lines: &[RenderLine]) -> String {
+    fn reconstructed(lines: &[Line<'static>]) -> String {
         lines
             .iter()
-            .map(|line| {
-                line.spans
+            .map(|l| {
+                l.spans
                     .iter()
-                    .map(|cell| cell.content.clone())
+                    .map(|sp| sp.content.clone())
                     .collect::<String>()
             })
             .collect::<Vec<_>>()
             .join("\n")
     }
 
-    fn dimmed_tokens(lines: &[RenderLine]) -> Vec<String> {
+    fn dimmed_tokens(lines: &[Line<'static>]) -> Vec<String> {
         lines
             .iter()
-            .flat_map(|line| line.spans.iter())
-            .filter(|cell| cell.style.dim)
-            .map(|cell| cell.content.trim().to_string())
+            .flat_map(|l| l.spans.iter())
+            .filter(|sp| sp.style.add_modifier.contains(Modifier::DIM))
+            .map(|sp| sp.content.clone().into_owned())
+            .map(|token| token.trim().to_string())
             .filter(|token| !token.is_empty())
             .collect()
     }
@@ -196,9 +198,39 @@ mod tests {
     }
 
     #[test]
-    fn highlight_is_deterministic() {
-        let s = "echo hello";
+    fn highlights_command_and_strings() {
+        let s = "echo \"hi\"";
         let lines = highlight_bash_to_lines(s);
-        assert_eq!(reconstructed(&lines), s);
+        let mut echo_style = None;
+        let mut string_style = None;
+        for span in &lines[0].spans {
+            let text = span.content.as_ref();
+            if text == "echo" {
+                echo_style = Some(span.style);
+            }
+            if text == "\"hi\"" {
+                string_style = Some(span.style);
+            }
+        }
+        let echo_style = echo_style.expect("echo span missing");
+        let string_style = string_style.expect("string span missing");
+        assert!(echo_style.fg.is_none());
+        assert!(!echo_style.add_modifier.contains(Modifier::DIM));
+        assert!(string_style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn highlights_heredoc_body_as_string() {
+        let s = "cat <<EOF\nheredoc body\nEOF";
+        let lines = highlight_bash_to_lines(s);
+        let body_line = &lines[1];
+        let mut body_style = None;
+        for span in &body_line.spans {
+            if span.content.as_ref() == "heredoc body" {
+                body_style = Some(span.style);
+            }
+        }
+        let body_style = body_style.expect("missing heredoc span");
+        assert!(body_style.add_modifier.contains(Modifier::DIM));
     }
 }

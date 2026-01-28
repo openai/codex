@@ -10,7 +10,6 @@ use crate::app_event::ExitMode;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::history_cell::UserHistoryCell;
-use crate::render::model::RenderLine as Line;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
@@ -897,7 +896,9 @@ pub(crate) async fn make_chatwidget_manual_with_sender() -> (
     (widget, app_event_tx, rx, op_rx)
 }
 
-fn drain_insert_history(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> Vec<Vec<Line>> {
+fn drain_insert_history(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> Vec<Vec<ratatui::text::Line<'static>>> {
     let mut out = Vec::new();
     while let Ok(ev) = rx.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = ev {
@@ -911,7 +912,7 @@ fn drain_insert_history(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>)
     out
 }
 
-fn lines_to_single_string(lines: &[Line]) -> String {
+fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
     let mut s = String::new();
     for line in lines {
         for span in &line.spans {

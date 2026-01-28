@@ -1,19 +1,19 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 4880
+assertion_line: 4782
 expression: term.backend().vt100().screen().contents()
 ---
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
-                                                                                
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -31,7 +31,7 @@ expression: term.backend().vt100().screen().contents()
 
 
 • I’m going to search the repo for where “Change Approved” is rendered to update
-  that view.                                                                    
+  that view.
 
 • Explored
   └ Search Change Approved

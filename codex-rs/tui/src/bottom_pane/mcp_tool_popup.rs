@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use crate::render::model::RenderLine as Line;
-use crate::render::renderable::Renderable;
 use codex_common::fuzzy_match::fuzzy_match;
 use codex_core::mcp::split_qualified_tool_name;
 use mcp_types::Tool as McpTool;
@@ -9,6 +7,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::text::Line;
+use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 
 use crate::key_hint;
@@ -270,7 +270,7 @@ impl WidgetRef for &McpToolPopup {
     }
 }
 
-fn mcp_tool_popup_hint_line() -> Line {
+fn mcp_tool_popup_hint_line() -> Line<'static> {
     Line::from(vec![
         "Press ".into(),
         key_hint::plain(crossterm::event::KeyCode::Enter).into(),

@@ -1,6 +1,3 @@
-use crate::render::adapter_ratatui::to_ratatui_text;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStylize;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -8,6 +5,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
@@ -60,7 +59,7 @@ impl PromptSuggestionsView {
         });
     }
 
-    fn wrapped_lines(text: &str, width: u16, indent: &'static str) -> Vec<Line> {
+    fn wrapped_lines(text: &str, width: u16, indent: &'static str) -> Vec<Line<'static>> {
         let wrap_width = width.max(1) as usize;
         wrap(text, wrap_width)
             .into_iter()
@@ -71,7 +70,7 @@ impl PromptSuggestionsView {
             .collect()
     }
 
-    fn header_lines(&self) -> Vec<Line> {
+    fn header_lines(&self) -> Vec<Line<'static>> {
         let status = if self.enabled {
             "On".green()
         } else {
@@ -83,7 +82,7 @@ impl PromptSuggestionsView {
         ]
     }
 
-    fn content_lines(&self, width: u16) -> Vec<Line> {
+    fn content_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines = self.header_lines();
         lines.push(Line::from(""));
 
@@ -189,7 +188,7 @@ impl Renderable for PromptSuggestionsView {
         let inner = content_area.inset(Insets::vh(1, 2));
         let lines = self.content_lines(inner.width);
 
-        Paragraph::new(to_ratatui_text(&lines)).render(inner, buf);
+        Paragraph::new(lines).render(inner, buf);
 
         let hint_area = Rect {
             x: footer_area.x + 2,
@@ -214,7 +213,7 @@ impl Renderable for PromptSuggestionsView {
     }
 }
 
-fn prompt_suggestions_hint_line(enabled: bool, has_suggestion: bool) -> Line {
+fn prompt_suggestions_hint_line(enabled: bool, has_suggestion: bool) -> Line<'static> {
     let mut spans = Vec::new();
     if enabled && has_suggestion {
         spans.push(key_hint::plain(KeyCode::Enter).into());

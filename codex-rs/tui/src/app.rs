@@ -25,10 +25,7 @@ use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
 use crate::model_migration::run_model_migration_prompt;
 use crate::pager_overlay::Overlay;
-use crate::render::adapter_ratatui::to_ratatui_text;
 use crate::render::highlight::highlight_bash_to_lines;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStylize;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::tui;
@@ -78,6 +75,8 @@ use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
@@ -529,7 +528,7 @@ pub(crate) struct App {
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
-    pub(crate) deferred_history_lines: Vec<Line>,
+    pub(crate) deferred_history_lines: Vec<Line<'static>>,
     has_emitted_history_lines: bool,
 
     pub(crate) enhanced_keys_supported: bool,
@@ -1277,7 +1276,7 @@ impl App {
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 self.reset_thread_event_state();
                 if let Some(summary) = summary {
-                    let mut lines: Vec<Line> = vec![summary.usage_line.clone().into()];
+                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
                         let spans = vec!["To continue this session, run ".into(), command.cyan()];
                         lines.push(spans.into());
@@ -1355,7 +1354,7 @@ impl App {
                                 );
                                 self.reset_thread_event_state();
                                 if let Some(summary) = summary {
-                                    let mut lines: Vec<Line> =
+                                    let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
                                     if let Some(command) = summary.resume_command {
                                         let spans = vec![
@@ -1405,7 +1404,8 @@ impl App {
                             );
                             self.reset_thread_event_state();
                             if let Some(summary) = summary {
-                                let mut lines: Vec<Line> = vec![summary.usage_line.clone().into()];
+                                let mut lines: Vec<Line<'static>> =
+                                    vec![summary.usage_line.clone().into()];
                                 if let Some(command) = summary.resume_command {
                                     let spans = vec![
                                         "To continue this session, run ".into(),
@@ -1498,13 +1498,10 @@ impl App {
                 self.chat_widget.on_diff_complete();
                 // Enter alternate screen using TUI helper and build pager lines
                 let _ = tui.enter_alt_screen();
-                let pager_lines: Vec<Line> = if text.trim().is_empty() {
+                let pager_lines: Vec<ratatui::text::Line<'static>> = if text.trim().is_empty() {
                     vec!["No changes detected.".italic().into()]
                 } else {
-                    text.lines()
-                        .map(ansi_escape_line)
-                        .map(|line| crate::render::adapter_ratatui::from_ratatui_line(&line))
-                        .collect()
+                    text.lines().map(ansi_escape_line).collect()
                 };
                 self.overlay = Some(Overlay::new_static_with_lines(
                     pager_lines,
@@ -2301,13 +2298,12 @@ impl App {
                     ..
                 } => {
                     let _ = tui.enter_alt_screen();
-                    let lines = vec![
+                    let paragraph = Paragraph::new(vec![
                         Line::from(vec!["Server: ".into(), server_name.bold()]),
                         Line::from(""),
                         Line::from(message),
-                    ];
-                    let paragraph =
-                        Paragraph::new(to_ratatui_text(&lines)).wrap(Wrap { trim: false });
+                    ])
+                    .wrap(Wrap { trim: false });
                     self.overlay = Some(Overlay::new_static_with_renderables(
                         vec![Box::new(paragraph)],
                         "E L I C I T A T I O N".to_string(),
@@ -2638,6 +2634,7 @@ mod tests {
     use codex_protocol::user_input::TextElement;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
+    use ratatui::prelude::Line;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;

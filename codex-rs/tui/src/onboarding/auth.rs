@@ -1,10 +1,5 @@
 #![allow(clippy::unwrap_used)]
 
-use crate::render::adapter_ratatui::to_ratatui_text;
-use crate::render::model::RenderColor;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStyle;
-use crate::render::model::RenderStylize;
 use codex_core::AuthManager;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
@@ -24,7 +19,10 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
 use ratatui::style::Color;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use ratatui::widgets::Block;
 use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
@@ -270,30 +268,34 @@ impl AuthModeWidget {
             "".into(),
         ];
 
-        let create_mode_item =
-            |idx: usize, selected_mode: SignInOption, text: &str, description: &str| -> Vec<Line> {
-                let is_selected = self.highlighted_mode == selected_mode;
-                let caret = if is_selected { ">" } else { " " };
+        let create_mode_item = |idx: usize,
+                                selected_mode: SignInOption,
+                                text: &str,
+                                description: &str|
+         -> Vec<Line<'static>> {
+            let is_selected = self.highlighted_mode == selected_mode;
+            let caret = if is_selected { ">" } else { " " };
 
-                let line1 = if is_selected {
-                    Line::from(vec![
-                        format!("{caret} {index}. ", index = idx + 1).cyan().dim(),
-                        text.to_string().cyan(),
-                    ])
-                } else {
-                    format!("  {index}. {text}", index = idx + 1).into()
-                };
-
-                let line2 = if is_selected {
-                    Line::from(format!("     {description}"))
-                        .style(RenderStyle::builder().fg(RenderColor::Cyan).dim().build())
-                } else {
-                    Line::from(format!("     {description}"))
-                        .style(RenderStyle::builder().dim().build())
-                };
-
-                vec![line1, line2]
+            let line1 = if is_selected {
+                Line::from(vec![
+                    format!("{caret} {index}. ", index = idx + 1).cyan().dim(),
+                    text.to_string().cyan(),
+                ])
+            } else {
+                format!("  {index}. {text}", index = idx + 1).into()
             };
+
+            let line2 = if is_selected {
+                Line::from(format!("     {description}"))
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::DIM)
+            } else {
+                Line::from(format!("     {description}"))
+                    .style(Style::default().add_modifier(Modifier::DIM))
+            };
+
+            vec![line1, line2]
+        };
 
         let chatgpt_description = if !self.is_chatgpt_login_allowed() {
             "ChatGPT login is disabled"
@@ -350,7 +352,7 @@ impl AuthModeWidget {
             lines.push(err.as_str().red().into());
         }
 
-        Paragraph::new(to_ratatui_text(&lines))
+        Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(area, buf);
     }
@@ -387,14 +389,14 @@ impl AuthModeWidget {
         }
 
         lines.push("  Press Esc to cancel".dim().into());
-        Paragraph::new(to_ratatui_text(&lines))
+        Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(area, buf);
     }
 
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
-            "✓ Signed in with your ChatGPT account".green().into(),
+            "✓ Signed in with your ChatGPT account".fg(Color::Green).into(),
             "".into(),
             "  Before you start:".into(),
             "".into(),
@@ -415,30 +417,34 @@ impl AuthModeWidget {
             ])
             .dim(),
             "".into(),
-            "  Press Enter to continue".cyan().into(),
+            "  Press Enter to continue".fg(Color::Cyan).into(),
         ];
 
-        Paragraph::new(to_ratatui_text(&lines))
+        Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(area, buf);
     }
 
     fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
-        let lines = vec!["✓ Signed in with your ChatGPT account".green().into()];
+        let lines = vec![
+            "✓ Signed in with your ChatGPT account"
+                .fg(Color::Green)
+                .into(),
+        ];
 
-        Paragraph::new(to_ratatui_text(&lines))
+        Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(area, buf);
     }
 
     fn render_api_key_configured(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
-            "✓ API key configured".green().into(),
+            "✓ API key configured".fg(Color::Green).into(),
             "".into(),
             "  Codex will use usage-based billing with your API key.".into(),
         ];
 
-        Paragraph::new(to_ratatui_text(&lines))
+        Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(area, buf);
     }
@@ -469,7 +475,7 @@ impl AuthModeWidget {
             );
             intro_lines.push("".into());
         }
-        Paragraph::new(to_ratatui_text(&intro_lines))
+        Paragraph::new(intro_lines)
             .wrap(Wrap { trim: false })
             .render(intro_area, buf);
 
@@ -478,7 +484,7 @@ impl AuthModeWidget {
         } else {
             Line::from(state.value.clone())
         };
-        Paragraph::new(to_ratatui_text(&[content_line]))
+        Paragraph::new(content_line)
             .wrap(Wrap { trim: false })
             .block(
                 Block::default()
@@ -497,7 +503,7 @@ impl AuthModeWidget {
             footer_lines.push("".into());
             footer_lines.push(error.as_str().red().into());
         }
-        Paragraph::new(to_ratatui_text(&footer_lines))
+        Paragraph::new(footer_lines)
             .wrap(Wrap { trim: false })
             .render(footer_area, buf);
     }

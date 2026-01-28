@@ -3,10 +3,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::render::model::RenderCell as Span;
-use crate::render::model::RenderLine as Line;
-use crate::render::model::RenderStylize as _;
-use crate::render::renderable::Renderable;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_core::Cursor;
@@ -24,6 +20,9 @@ use crossterm::event::KeyEventKind;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize as _;
+use ratatui::text::Line;
+use ratatui::text::Span;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -788,15 +787,15 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         .areas(area);
 
         // Header
-        Line::from(vec![state.action.title().bold().cyan()]).render(header, frame.buffer_mut());
+        frame.render_widget_ref(Line::from(vec![state.action.title().bold().cyan()]), header);
 
         // Search line
-        let q_line = if state.query.is_empty() {
-            Line::from("Type to search".dim())
+        let q = if state.query.is_empty() {
+            "Type to search".dim().to_string()
         } else {
-            Line::from(format!("Search: {}", state.query))
+            format!("Search: {}", state.query)
         };
-        q_line.render(search, frame.buffer_mut());
+        frame.render_widget_ref(Line::from(q), search);
 
         let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
 
@@ -822,7 +821,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             " to browse".dim(),
         ]
         .into();
-        hint_line.render(hint, frame.buffer_mut());
+        frame.render_widget_ref(hint_line, hint);
     })
 }
 
@@ -839,7 +838,7 @@ fn render_list(
     let rows = &state.filtered_rows;
     if rows.is_empty() {
         let message = render_empty_state_line(state);
-        message.render(area, frame.buffer_mut());
+        frame.render_widget_ref(message, area);
         return;
     }
 
@@ -931,18 +930,18 @@ fn render_list(
 
         let line: Line = spans.into();
         let rect = Rect::new(area.x, y, area.width, 1);
-        line.render(rect, frame.buffer_mut());
+        frame.render_widget_ref(line, rect);
         y = y.saturating_add(1);
     }
 
     if state.pagination.loading.is_pending() && y < area.y.saturating_add(area.height) {
         let loading_line: Line = vec!["  ".into(), "Loading older sessions…".italic().dim()].into();
         let rect = Rect::new(area.x, y, area.width, 1);
-        loading_line.render(rect, frame.buffer_mut());
+        frame.render_widget_ref(loading_line, rect);
     }
 }
 
-fn render_empty_state_line(state: &PickerState) -> Line {
+fn render_empty_state_line(state: &PickerState) -> Line<'static> {
     if !state.query.is_empty() {
         if state.search_state.is_active()
             || (state.pagination.loading.is_pending() && state.pagination.next_cursor.is_some())
@@ -1051,7 +1050,7 @@ fn render_column_headers(
         spans.push("  ".into());
     }
     spans.push("Conversation".bold());
-    Line::from(spans).render(area, frame.buffer_mut());
+    frame.render_widget_ref(Line::from(spans), area);
 }
 
 struct ColumnMetrics {
@@ -1460,10 +1459,12 @@ mod tests {
             ])
             .areas(area);
 
-            Line::from(vec!["Resume a previous session".bold().cyan()])
-                .render(header, frame.buffer_mut());
+            frame.render_widget_ref(
+                Line::from(vec!["Resume a previous session".bold().cyan()]),
+                header,
+            );
 
-            Line::from("Type to search".dim()).render(search, frame.buffer_mut());
+            frame.render_widget_ref(Line::from("Type to search".dim()), search);
 
             render_column_headers(&mut frame, columns, &metrics);
             render_list(&mut frame, list, &state, &metrics);
@@ -1479,7 +1480,7 @@ mod tests {
                 " to quit ".dim(),
             ]
             .into();
-            hint_line.render(hint, frame.buffer_mut());
+            frame.render_widget_ref(hint_line, hint);
         }
         terminal.flush().expect("flush");
 
