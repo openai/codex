@@ -3,8 +3,6 @@ use ratatui::layout::Rect;
 use super::DESIRED_SPACERS_BETWEEN_SECTIONS;
 use super::RequestUserInputOverlay;
 
-const SPACERS_WITH_VISIBLE_NOTES: u16 = 1;
-
 pub(super) struct LayoutSections {
     pub(super) progress_area: Rect,
     pub(super) question_area: Rect,
@@ -122,7 +120,9 @@ impl RequestUserInputOverlay {
         // When notes are hidden, prefer to reserve room for progress, footer,
         // and spacers by shrinking the options window if needed.
         let desired_spacers = if notes_visible {
-            SPACERS_WITH_VISIBLE_NOTES
+            // Notes already separate options from the footer, so only keep a
+            // single spacer between the question and options.
+            1
         } else {
             DESIRED_SPACERS_BETWEEN_SECTIONS
         };
