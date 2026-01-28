@@ -915,10 +915,8 @@ impl RequestUserInputOverlay {
                 self.close_unanswered_confirmation();
                 if selected == 0 {
                     self.submit_answers();
-                } else {
-                    if let Some(idx) = self.first_unanswered_index() {
-                        self.jump_to_question(idx);
-                    }
+                } else if let Some(idx) = self.first_unanswered_index() {
+                    self.jump_to_question(idx);
                 }
             }
             KeyCode::Char('1') | KeyCode::Char('2') => {
@@ -1085,10 +1083,10 @@ impl BottomPaneView for RequestUserInputOverlay {
                     let (result, _) = self.composer.handle_key_event(key_event);
                     if !self.handle_composer_input_result(result) {
                         self.pending_submission_draft = None;
-                        if self.has_options() {
-                            if let Some(answer) = self.current_answer_mut() {
-                                answer.answer_committed = true;
-                            }
+                        if self.has_options()
+                            && let Some(answer) = self.current_answer_mut()
+                        {
+                            answer.answer_committed = true;
                         }
                         self.go_next_or_submit();
                     }
@@ -1129,20 +1127,19 @@ impl BottomPaneView for RequestUserInputOverlay {
                 if matches!(
                     key_event.code,
                     KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete
-                ) {
-                    if let Some(answer) = self.current_answer_mut() {
-                        answer.answer_committed = false;
-                    }
+                ) && let Some(answer) = self.current_answer_mut()
+                {
+                    answer.answer_committed = false;
                 }
                 let before = self.capture_composer_draft();
                 let (result, _) = self.composer.handle_key_event(key_event);
                 let submitted = self.handle_composer_input_result(result);
                 if !submitted {
                     let after = self.capture_composer_draft();
-                    if before != after {
-                        if let Some(answer) = self.current_answer_mut() {
-                            answer.answer_committed = false;
-                        }
+                    if before != after
+                        && let Some(answer) = self.current_answer_mut()
+                    {
+                        answer.answer_committed = false;
                     }
                 }
             }
