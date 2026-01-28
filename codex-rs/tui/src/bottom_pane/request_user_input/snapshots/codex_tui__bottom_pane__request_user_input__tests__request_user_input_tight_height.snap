@@ -4,10 +4,9 @@ expression: "render_snapshot(&overlay, area)"
 ---
                                                                                                                         
   Question 1/1 (1 unanswered)                                                                                           
-  Area                                                                                                                  
   Choose an option.                                                                                                     
                                                                                                                         
-  ( ) Option 1  First choice.                                                                                           
-  ( ) Option 2  Second choice.                                                                                          
+  › 1. Option 1  First choice.                                                                                          
+    2. Option 2  Second choice.                                                                                         
                                                                                                                         
   Option 1 of 3 | tab to add notes | enter to submit answer | esc to interrupt

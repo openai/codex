@@ -45,7 +45,7 @@ pub(super) const TIP_SEPARATOR: &str = " | ";
 pub(super) const MAX_VISIBLE_OPTION_ROWS: usize = 4;
 pub(super) const DESIRED_SPACERS_WHEN_NOTES_HIDDEN: u16 = 2;
 const OTHER_OPTION_LABEL: &str = "None of the above";
-const OTHER_OPTION_DESCRIPTION: &str = "Add details in notes (Tab)";
+const OTHER_OPTION_DESCRIPTION: &str = "Add details in notes (tab)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
@@ -182,6 +182,18 @@ impl RequestUserInputOverlay {
             .unwrap_or(0)
     }
 
+    fn option_index_for_digit(&self, ch: char) -> Option<usize> {
+        if !self.has_options() {
+            return None;
+        }
+        let digit = ch.to_digit(10)?;
+        if digit == 0 {
+            return None;
+        }
+        let idx = (digit - 1) as usize;
+        (idx < self.options_len()).then_some(idx)
+    }
+
     fn selected_option_index(&self) -> Option<usize> {
         if !self.has_options() {
             return None;
@@ -242,18 +254,19 @@ impl RequestUserInputOverlay {
         self.current_question()
             .and_then(|question| question.options.as_ref().map(|options| (question, options)))
             .map(|(question, options)| {
+                let selected_idx = self
+                    .current_answer()
+                    .and_then(|answer| answer.options_ui_state.selected_idx);
                 let mut rows = options
                     .iter()
                     .enumerate()
                     .map(|(idx, opt)| {
-                        let selected = self
-                            .current_answer()
-                            .and_then(|answer| answer.committed_option_idx)
-                            .is_some_and(|sel| sel == idx);
-                        let prefix = if selected { "(x)" } else { "( )" };
+                        let selected = selected_idx.is_some_and(|sel| sel == idx);
+                        let prefix = if selected { '›' } else { ' ' };
                         let label = opt.label.as_str();
+                        let number = idx + 1;
                         GenericDisplayRow {
-                            name: format!("{prefix} {label}"),
+                            name: format!("{prefix} {number}. {label}"),
                             description: Some(opt.description.clone()),
                             ..Default::default()
                         }
@@ -262,13 +275,11 @@ impl RequestUserInputOverlay {
 
                 if Self::other_option_enabled_for_question(question) {
                     let idx = options.len();
-                    let selected = self
-                        .current_answer()
-                        .and_then(|answer| answer.committed_option_idx)
-                        .is_some_and(|sel| sel == idx);
-                    let prefix = if selected { "(x)" } else { "( )" };
+                    let selected = selected_idx.is_some_and(|sel| sel == idx);
+                    let prefix = if selected { '›' } else { ' ' };
+                    let number = idx + 1;
                     rows.push(GenericDisplayRow {
-                        name: format!("{prefix} {OTHER_OPTION_LABEL}"),
+                        name: format!("{prefix} {number}. {OTHER_OPTION_LABEL}"),
                         description: Some(OTHER_OPTION_DESCRIPTION.to_string()),
                         ..Default::default()
                     });
@@ -851,6 +862,15 @@ impl BottomPaneView for RequestUserInputOverlay {
                         }
                         self.go_next_or_submit();
                     }
+                    KeyCode::Char(ch) => {
+                        if let Some(option_idx) = self.option_index_for_digit(ch) {
+                            if let Some(answer) = self.current_answer_mut() {
+                                answer.options_ui_state.selected_idx = Some(option_idx);
+                            }
+                            self.select_current_option();
+                            self.go_next_or_submit();
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1197,6 +1217,27 @@ mod tests {
         };
         let answer = response.answers.get("q1").expect("answer missing");
         assert_eq!(answer.answers, vec!["Option 1".to_string()]);
+    }
+
+    #[test]
+    fn number_keys_select_and_submit_options() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event("turn-1", vec![question_with_options("q1", "Pick one")]),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Char('2')));
+
+        let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let answer = response.answers.get("q1").expect("answer missing");
+        assert_eq!(answer.answers, vec!["Option 2".to_string()]);
     }
 
     #[test]
@@ -1783,7 +1824,7 @@ mod tests {
 
         let rows = overlay.option_rows();
         let other_row = rows.last().expect("expected none-of-the-above row");
-        assert_eq!(other_row.name, "( ) None of the above");
+        assert_eq!(other_row.name, "  4. None of the above");
         assert_eq!(
             other_row.description.as_deref(),
             Some(OTHER_OPTION_DESCRIPTION)

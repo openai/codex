@@ -98,20 +98,7 @@ impl RequestUserInputOverlay {
         };
         Paragraph::new(progress_line).render(sections.progress_area, buf);
 
-        // Question title and wrapped prompt text.
-        let question_header = self.current_question().map(|q| q.header.clone());
-        let answered = self.current_question_answered();
-        let header_line = if let Some(header) = question_header {
-            if answered {
-                Line::from(header.bold())
-            } else {
-                Line::from(header.cyan().bold())
-            }
-        } else {
-            Line::from("No questions".dim())
-        };
-        Paragraph::new(header_line).render(sections.header_area, buf);
-
+        // Question prompt text.
         let question_y = sections.question_area.y;
         for (offset, line) in sections.question_lines.iter().enumerate() {
             if question_y.saturating_add(offset as u16)
@@ -119,7 +106,7 @@ impl RequestUserInputOverlay {
             {
                 break;
             }
-            Paragraph::new(Line::from(line.clone())).render(
+            Paragraph::new(Line::from(line.clone()).cyan()).render(
                 Rect {
                     x: sections.question_area.x,
                     y: question_y.saturating_add(offset as u16),
