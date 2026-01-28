@@ -9,8 +9,6 @@ anyhow = { workspace = true }
 chrono = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
-clap = { workspace = true, features = ["derive", "env"] }
-dirs = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
