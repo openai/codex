@@ -52,6 +52,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::format_allow_prefixes;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
@@ -185,6 +186,7 @@ use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
 use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
+use crate::state::PendingUserInput;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
@@ -1660,14 +1662,20 @@ impl Session {
         args: RequestUserInputArgs,
     ) -> Option<RequestUserInputResponse> {
         let sub_id = turn_context.sub_id.clone();
+        let RequestUserInputArgs { questions } = args;
+        let question_ids = questions
+            .iter()
+            .map(|question| question.id.clone())
+            .collect::<HashSet<_>>();
         let (tx_response, rx_response) = oneshot::channel();
+        let pending = PendingUserInput::new(call_id.clone(), question_ids, tx_response);
         let event_id = sub_id.clone();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_user_input(sub_id, tx_response)
+                    ts.insert_pending_user_input(sub_id, pending)
                 }
                 None => None,
             }
@@ -1679,7 +1687,7 @@ impl Session {
         let event = EventMsg::RequestUserInput(RequestUserInputEvent {
             call_id,
             turn_id: turn_context.sub_id.clone(),
-            questions: args.questions,
+            questions,
         });
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
@@ -1690,23 +1698,77 @@ impl Session {
         sub_id: &str,
         response: RequestUserInputResponse,
     ) {
-        let entry = {
+        let update = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.remove_pending_user_input(sub_id)
+                    ts.update_pending_user_input(sub_id, response)
                 }
                 None => None,
             }
         };
-        match entry {
-            Some(tx_response) => {
-                tx_response.send(response).ok();
+
+        let Some(update) = update else {
+            warn!("No pending user input found for sub_id: {sub_id}");
+            return;
+        };
+
+        let call_id = update.call_id;
+        let merged = update.merged;
+        let is_complete = update.is_complete;
+
+        if !is_complete {
+            let content = match serde_json::to_string(&merged) {
+                Ok(content) => content,
+                Err(err) => {
+                    warn!(
+                        "failed to serialize request_user_input response for call_id: {call_id}: {err}"
+                    );
+                    return;
+                }
+            };
+            let pending_item = ResponseInputItem::FunctionCallOutput {
+                call_id: call_id.clone(),
+                output: FunctionCallOutputPayload {
+                    content,
+                    success: Some(true),
+                    ..Default::default()
+                },
+            };
+            let mut state = self.state.lock().await;
+            state.remove_pending_user_input_item(&call_id);
+            state.upsert_pending_user_input_item(call_id, pending_item);
+            return;
+        }
+
+        {
+            let mut state = self.state.lock().await;
+            state.remove_pending_user_input_item(&call_id);
+        }
+
+        if let Some(tx_response) = update.tx {
+            tx_response.send(merged).ok();
+        } else {
+            warn!("request_user_input completed without a sender for sub_id: {sub_id}");
+        }
+    }
+
+    pub async fn cancel_pending_user_input(&self, sub_id: &str) {
+        let call_id = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.cancel_pending_user_input(sub_id)
+                }
+                None => None,
             }
-            None => {
-                warn!("No pending user input found for sub_id: {sub_id}");
-            }
+        };
+
+        if let Some(call_id) = call_id {
+            let mut state = self.state.lock().await;
+            state.remove_pending_user_input_item(&call_id);
         }
     }
 
@@ -2200,17 +2262,35 @@ impl Session {
     }
 
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
-        let mut active = self.active_turn.lock().await;
-        match active.as_mut() {
-            Some(at) => {
-                let mut ts = at.turn_state.lock().await;
-                ts.take_pending_input()
+        let pending_turn_input = {
+            let mut active = self.active_turn.lock().await;
+            match active.as_mut() {
+                Some(at) => {
+                    let mut ts = at.turn_state.lock().await;
+                    ts.take_pending_input()
+                }
+                None => Vec::with_capacity(0),
             }
-            None => Vec::with_capacity(0),
-        }
+        };
+
+        let pending_user_input_items = {
+            let mut state = self.state.lock().await;
+            state.take_pending_user_input_items()
+        };
+
+        let mut pending = pending_user_input_items;
+        pending.extend(pending_turn_input);
+        pending
     }
 
     pub async fn has_pending_input(&self) -> bool {
+        {
+            let state = self.state.lock().await;
+            if state.has_pending_user_input_items() {
+                return true;
+            }
+        }
+
         let active = self.active_turn.lock().await;
         match active.as_ref() {
             Some(at) => {
@@ -2959,6 +3039,11 @@ mod handlers {
             })
             .await;
             return;
+        }
+
+        {
+            let mut state = sess.state.lock().await;
+            state.clear_pending_user_input_items();
         }
 
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;

@@ -51,6 +51,8 @@ const UNANSWERED_CONFIRM_GO_BACK_DESC: &str = "Return to the first unanswered qu
 const UNANSWERED_CONFIRM_SUBMIT: &str = "Proceed";
 const UNANSWERED_CONFIRM_SUBMIT_DESC_SINGULAR: &str = "question";
 const UNANSWERED_CONFIRM_SUBMIT_DESC_PLURAL: &str = "questions";
+const INTERRUPTED_ANSWER_ID: &str = "__codex_request_user_input_interrupted__";
+const INTERRUPTED_ANSWER_TEXT: &str = "interrupted_with_unanswered_questions";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
@@ -132,6 +134,7 @@ pub(crate) struct RequestUserInputOverlay {
     done: bool,
     pending_submission_draft: Option<ComposerDraft>,
     confirm_unanswered: Option<ScrollState>,
+    submitted_answers: HashMap<String, RequestUserInputAnswer>,
 }
 
 impl RequestUserInputOverlay {
@@ -165,6 +168,7 @@ impl RequestUserInputOverlay {
             done: false,
             pending_submission_draft: None,
             confirm_unanswered: None,
+            submitted_answers: HashMap::new(),
         };
         overlay.reset_for_request();
         overlay.ensure_focus_available();
@@ -562,6 +566,7 @@ impl RequestUserInputOverlay {
             .set_text_content(String::new(), Vec::new(), Vec::new());
         self.confirm_unanswered = None;
         self.pending_submission_draft = None;
+        self.submitted_answers.clear();
     }
 
     fn options_len_for_question(
@@ -670,16 +675,131 @@ impl RequestUserInputOverlay {
         self.sync_composer_placeholder();
     }
 
+    fn answer_for_question(
+        &self,
+        idx: usize,
+        include_empty: bool,
+    ) -> Option<RequestUserInputAnswer> {
+        let question = self.request.questions.get(idx)?;
+        let answer_state = self.answers.get(idx)?;
+        if !answer_state.answer_committed {
+            return include_empty.then_some(RequestUserInputAnswer {
+                answers: Vec::new(),
+            });
+        }
+        let has_options = question
+            .options
+            .as_ref()
+            .is_some_and(|opts| !opts.is_empty());
+        let selected_idx = if has_options {
+            answer_state.options_state.selected_idx
+        } else {
+            None
+        };
+        let draft = if idx == self.current_index() {
+            self.capture_composer_draft()
+        } else {
+            answer_state.draft.clone()
+        };
+        let notes = draft.text_with_pending().trim().to_string();
+        let selected_label =
+            selected_idx.and_then(|selected_idx| Self::option_label_for_index(question, selected_idx));
+        let mut answers = selected_label.into_iter().collect::<Vec<_>>();
+        if !notes.is_empty() {
+            answers.push(format!("user_note: {notes}"));
+        }
+        if !include_empty && answers.is_empty() {
+            return None;
+        }
+        Some(RequestUserInputAnswer { answers })
+    }
+
+    fn interrupted_marker_key(&self) -> String {
+        let base = INTERRUPTED_ANSWER_ID;
+        if self
+            .request
+            .questions
+            .iter()
+            .all(|question| question.id != base)
+        {
+            return base.to_string();
+        }
+        let mut idx = 1;
+        loop {
+            let candidate = format!("{base}_{idx}");
+            if self
+                .request
+                .questions
+                .iter()
+                .all(|question| question.id != candidate)
+            {
+                return candidate;
+            }
+            idx += 1;
+        }
+    }
+
+    fn send_submitted_answers(&self) {
+        if self.submitted_answers.is_empty() {
+            return;
+        }
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::UserInputAnswer {
+                id: self.request.turn_id.clone(),
+                response: RequestUserInputResponse {
+                    answers: self.submitted_answers.clone(),
+                },
+            }));
+    }
+
+    fn submit_current_answer_update(&mut self) {
+        let idx = self.current_index();
+        let Some(question) = self.request.questions.get(idx) else {
+            return;
+        };
+        if let Some(answer) = self.answer_for_question(idx, false) {
+            self.submitted_answers.insert(question.id.clone(), answer);
+        } else {
+            self.submitted_answers.remove(&question.id);
+        }
+        self.send_submitted_answers();
+    }
+
+    fn submit_committed_answers_for_interrupt(&mut self) {
+        let mut answers = HashMap::new();
+        for (idx, question) in self.request.questions.iter().enumerate() {
+            if let Some(answer) = self.answer_for_question(idx, false) {
+                answers.insert(question.id.clone(), answer);
+            }
+        }
+        if self.unanswered_count() > 0 {
+            let key = self.interrupted_marker_key();
+            answers.insert(
+                key,
+                RequestUserInputAnswer {
+                    answers: vec![INTERRUPTED_ANSWER_TEXT.to_string()],
+                },
+            );
+        }
+        if answers.is_empty() {
+            return;
+        }
+        self.submitted_answers = answers;
+        self.send_submitted_answers();
+    }
+
     /// Advance to next question, or submit when on the last one.
     fn go_next_or_submit(&mut self) {
         if self.current_index() + 1 >= self.question_count() {
             self.save_current_draft();
             if self.unanswered_count() > 0 {
+                self.submit_current_answer_update();
                 self.open_unanswered_confirmation();
             } else {
                 self.submit_answers();
             }
         } else {
+            self.submit_current_answer_update();
             self.move_question(true);
         }
     }
@@ -719,6 +839,7 @@ impl RequestUserInputOverlay {
                 },
             );
         }
+        self.submitted_answers = answers.clone();
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::UserInputAnswer {
                 id: self.request.turn_id.clone(),
@@ -966,6 +1087,7 @@ impl BottomPaneView for RequestUserInputOverlay {
         }
 
         if matches!(key_event.code, KeyCode::Esc) {
+            self.submit_committed_answers_for_interrupt();
             self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
             self.done = true;
             return;
@@ -1173,6 +1295,7 @@ impl BottomPaneView for RequestUserInputOverlay {
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         if self.confirm_unanswered_active() {
             self.close_unanswered_confirmation();
+            self.submit_committed_answers_for_interrupt();
             self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
             self.done = true;
             return CancellationEvent::Handled;
@@ -1182,6 +1305,7 @@ impl BottomPaneView for RequestUserInputOverlay {
             return CancellationEvent::Handled;
         }
 
+        self.submit_committed_answers_for_interrupt();
         self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
         self.done = true;
         CancellationEvent::Handled
@@ -1234,6 +1358,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use std::collections::HashMap;
     use tokio::sync::mpsc::unbounded_channel;
     use unicode_width::UnicodeWidthStr;
 
@@ -1454,15 +1579,39 @@ mod tests {
         let first_answer = &overlay.answers[0];
         assert!(first_answer.answer_committed);
         assert_eq!(first_answer.options_state.selected_idx, Some(0));
-        assert!(rx.try_recv().is_err());
+        let event = rx.try_recv().expect("expected incremental AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let mut expected = HashMap::new();
+        expected.insert(
+            "q1".to_string(),
+            RequestUserInputAnswer {
+                answers: vec!["Option 1".to_string()],
+            },
+        );
+        assert_eq!(response.answers, expected);
+        assert!(rx.try_recv().is_err(), "unexpected extra AppEvent");
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
         let event = rx.try_recv().expect("expected AppEvent");
         let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
             panic!("expected UserInputAnswer");
         };
-        let answer = response.answers.get("q1").expect("answer missing");
-        assert_eq!(answer.answers, vec!["Option 1".to_string()]);
+        let mut expected = HashMap::new();
+        expected.insert(
+            "q1".to_string(),
+            RequestUserInputAnswer {
+                answers: vec!["Option 1".to_string()],
+            },
+        );
+        expected.insert(
+            "q2".to_string(),
+            RequestUserInputAnswer {
+                answers: vec!["Option 1".to_string()],
+            },
+        );
+        assert_eq!(response.answers, expected);
     }
 
     #[test]
@@ -1630,6 +1779,16 @@ mod tests {
 
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
         assert!(overlay.confirm_unanswered_active());
+        let event = rx.try_recv().expect("expected incremental AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let answer = response.answers.get("q2").expect("answer missing");
+        assert_eq!(answer.answers, vec!["Option 1".to_string()]);
+        assert!(
+            !response.answers.contains_key("q1"),
+            "did not expect q1 answer yet"
+        );
         overlay.handle_key_event(KeyEvent::from(KeyCode::Char('1')));
         overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
@@ -1658,6 +1817,16 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let marker = response
+            .answers
+            .get(INTERRUPTED_ANSWER_ID)
+            .expect("interrupt marker missing");
+        assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
+
+        let event = rx.try_recv().expect("expected interrupt AppEvent");
         let AppEvent::CodexOp(op) = event else {
             panic!("expected CodexOp");
         };
@@ -1679,6 +1848,16 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let marker = response
+            .answers
+            .get(INTERRUPTED_ANSWER_ID)
+            .expect("interrupt marker missing");
+        assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
+
+        let event = rx.try_recv().expect("expected interrupt AppEvent");
         let AppEvent::CodexOp(op) = event else {
             panic!("expected CodexOp");
         };
@@ -1703,6 +1882,16 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let marker = response
+            .answers
+            .get(INTERRUPTED_ANSWER_ID)
+            .expect("interrupt marker missing");
+        assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
+
+        let event = rx.try_recv().expect("expected interrupt AppEvent");
         let AppEvent::CodexOp(op) = event else {
             panic!("expected CodexOp");
         };
@@ -1728,6 +1917,57 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let marker = response
+            .answers
+            .get(INTERRUPTED_ANSWER_ID)
+            .expect("interrupt marker missing");
+        assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
+
+        let event = rx.try_recv().expect("expected interrupt AppEvent");
+        let AppEvent::CodexOp(op) = event else {
+            panic!("expected CodexOp");
+        };
+        assert_eq!(op, Op::Interrupt);
+    }
+
+    #[test]
+    fn esc_includes_committed_answers_and_interrupt_marker() {
+        let (tx, mut rx) = test_sender();
+        let mut overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![
+                    question_with_options("q1", "First"),
+                    question_without_options("q2", "Second"),
+                ],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        let _ = rx.try_recv();
+
+        overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
+
+        let event = rx.try_recv().expect("expected partial answers");
+        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
+            panic!("expected UserInputAnswer");
+        };
+        let answer = response.answers.get("q1").expect("answer missing");
+        assert_eq!(answer.answers, vec!["Option 1".to_string()]);
+        let marker = response
+            .answers
+            .get(INTERRUPTED_ANSWER_ID)
+            .expect("interrupt marker missing");
+        assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
+
+        let event = rx.try_recv().expect("expected interrupt AppEvent");
         let AppEvent::CodexOp(op) = event else {
             panic!("expected CodexOp");
         };

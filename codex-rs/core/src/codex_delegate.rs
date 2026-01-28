@@ -398,9 +398,7 @@ where
             let empty = RequestUserInputResponse {
                 answers: HashMap::new(),
             };
-            parent_session
-                .notify_user_input_response(sub_id, empty.clone())
-                .await;
+            parent_session.cancel_pending_user_input(sub_id).await;
             empty
         }
         response = fut => response.unwrap_or_else(|| RequestUserInputResponse {
@@ -442,8 +440,16 @@ mod tests {
     use codex_protocol::protocol::RawResponseItemEvent;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
+    use codex_protocol::request_user_input::RequestUserInputAnswer;
+    use codex_protocol::request_user_input::RequestUserInputResponse;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+    use std::collections::HashSet;
+    use tokio::sync::oneshot;
     use tokio::sync::watch;
+
+    use crate::state::ActiveTurn;
+    use crate::state::PendingUserInput;
 
     #[tokio::test]
     async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
@@ -516,5 +522,46 @@ mod tests {
             ops.iter().any(|op| matches!(op, Op::Shutdown)),
             "expected Shutdown op after cancellation"
         );
+    }
+
+    #[tokio::test]
+    async fn cancel_pending_user_input_clears_session_buffer() {
+        let (session, ctx, _rx_evt) = crate::codex::make_session_and_context_with_rx().await;
+
+        let call_id = "call-user-input-cancel".to_string();
+        let question_ids = ["q1".to_string(), "q2".to_string()]
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let (tx, rx) = oneshot::channel();
+        let pending = PendingUserInput::new(call_id.clone(), question_ids, tx);
+
+        {
+            let mut active = session.active_turn.lock().await;
+            let turn = ActiveTurn::default();
+            {
+                let mut ts = turn.turn_state.lock().await;
+                ts.insert_pending_user_input(ctx.sub_id.clone(), pending);
+            }
+            *active = Some(turn);
+        }
+
+        let mut answers = HashMap::new();
+        answers.insert(
+            "q1".to_string(),
+            RequestUserInputAnswer {
+                answers: vec!["yes".to_string()],
+            },
+        );
+        session
+            .notify_user_input_response(&ctx.sub_id, RequestUserInputResponse { answers })
+            .await;
+
+        assert!(session.has_pending_input().await);
+
+        session.cancel_pending_user_input(&ctx.sub_id).await;
+
+        assert!(!session.has_pending_input().await);
+
+        assert!(rx.await.is_err(), "sender should be dropped on cancel");
     }
 }
