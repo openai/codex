@@ -1,0 +1,29 @@
+diff --git a/build.rs b/build.rs
+index 8256e1f..8b5e0fe 100644
+--- a/build.rs
++++ b/build.rs
+@@ -45,6 +45,7 @@ fn main() {
+ 
+     match std::env::var("NCURSES_RS_RUSTC_LINK_LIB") {
+         Ok(x) => println!("cargo:rustc-link-lib={}", x),
+         _ => if ncurses_lib.is_none() {
+             println!("cargo:rustc-link-lib={}", ncurses_lib_names.last().unwrap())
+         }
+     }
+ 
+     if let Ok(x) = std::env::var("NCURSES_RS_RUSTC_FLAGS") {
+         println!("cargo:rustc-flags={}", x);
+     }
++
++    if std::env::var("NCURSES_RS_SKIP_PROBE").is_ok() {
++        if std::env::var("CARGO_CFG_TARGET_POINTER_WIDTH").as_deref() == Ok("64") {
++            println!("cargo:rustc-cfg=feature=\"wide_chtype\"");
++        }
++        if std::env::var("NCURSES_RS_MOUSE_V1").as_deref() == Ok("1") {
++            println!("cargo:rustc-cfg=feature=\"mouse_v1\"");
++        }
++        return;
++    }
+ 
+     check_chtype_size(&ncurses_lib);
+ }

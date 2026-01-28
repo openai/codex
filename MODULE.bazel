@@ -98,7 +98,12 @@ crate.annotation(
     crate = "ncurses",
     build_script_env = {
         "NCURSES_RS_CFLAGS": "-I/usr/include -I/usr/include/ncursesw -I/usr/include/x86_64-linux-gnu -I/usr/include/aarch64-linux-gnu",
+        "NCURSES_RS_SKIP_PROBE": "1",
     },
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:ncurses-skip-probe.patch",
+    ],
 )
 
 WINDOWS_IMPORT_LIB = """
