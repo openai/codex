@@ -984,11 +984,21 @@ impl BottomPaneView for RequestUserInputOverlay {
                 code: KeyCode::Char('p'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
+            }
+            | KeyEvent {
+                code: KeyCode::PageUp,
+                modifiers: KeyModifiers::NONE,
+                ..
             } => {
                 self.move_question(false);
                 return;
             }
             KeyEvent {
+                code: KeyCode::PageDown,
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
                 code: KeyCode::Char('n'),
                 modifiers: KeyModifiers::CONTROL,
                 ..
