@@ -936,8 +936,8 @@ impl ChatWidget {
     }
 
     fn open_plan_implementation_prompt(&mut self) {
-        let code_mask = collaboration_modes::code_mask(self.models_manager.as_ref());
-        let (implement_actions, implement_disabled_reason) = match code_mask {
+        let agent_mask = collaboration_modes::agent_mask(self.models_manager.as_ref());
+        let (implement_actions, implement_disabled_reason) = match agent_mask {
             Some(mask) => {
                 let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -948,13 +948,13 @@ impl ChatWidget {
                 })];
                 (actions, None)
             }
-            None => (Vec::new(), Some("Code mode unavailable".to_string())),
+            None => (Vec::new(), Some("Agent mode unavailable".to_string())),
         };
 
         let items = vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
-                description: Some("Switch to Code and start coding.".to_string()),
+                description: Some("Switch to Agent and start coding.".to_string()),
                 selected_description: None,
                 is_current: false,
                 actions: implement_actions,
@@ -4902,9 +4902,8 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some("Plan"),
-            ModeKind::Code => Some("Code"),
+            ModeKind::Agent => Some("Agent"),
             ModeKind::PairProgramming => Some("Pair Programming"),
-            ModeKind::Execute => Some("Execute"),
             ModeKind::Custom => None,
         }
     }
@@ -4915,9 +4914,8 @@ impl ChatWidget {
         }
         match self.active_mode_kind() {
             ModeKind::Plan => Some(CollaborationModeIndicator::Plan),
-            ModeKind::Code => Some(CollaborationModeIndicator::Code),
+            ModeKind::Agent => Some(CollaborationModeIndicator::Agent),
             ModeKind::PairProgramming => Some(CollaborationModeIndicator::PairProgramming),
-            ModeKind::Execute => Some(CollaborationModeIndicator::Execute),
             ModeKind::Custom => None,
         }
     }
@@ -4941,7 +4939,7 @@ impl ChatWidget {
         }
     }
 
-    /// Cycle to the next collaboration mode variant (Plan -> Code -> Plan).
+    /// Cycle to the next collaboration mode variant (Plan -> Agent -> Plan).
     fn cycle_collaboration_mode(&mut self) {
         if !self.collaboration_modes_enabled() {
             return;

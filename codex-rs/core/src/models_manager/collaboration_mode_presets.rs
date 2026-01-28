@@ -3,19 +3,12 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ReasoningEffort;
 
 const COLLABORATION_MODE_PLAN: &str = include_str!("../../templates/collaboration_mode/plan.md");
-const COLLABORATION_MODE_CODE: &str = include_str!("../../templates/collaboration_mode/code.md");
+const COLLABORATION_MODE_AGENT: &str = include_str!("../../templates/collaboration_mode/agent.md");
 const COLLABORATION_MODE_PAIR_PROGRAMMING: &str =
     include_str!("../../templates/collaboration_mode/pair_programming.md");
-const COLLABORATION_MODE_EXECUTE: &str =
-    include_str!("../../templates/collaboration_mode/execute.md");
 
 pub(super) fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
-    vec![
-        plan_preset(),
-        code_preset(),
-        pair_programming_preset(),
-        execute_preset(),
-    ]
+    vec![plan_preset(), agent_preset(), pair_programming_preset()]
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -33,13 +26,13 @@ fn plan_preset() -> CollaborationModeMask {
     }
 }
 
-fn code_preset() -> CollaborationModeMask {
+fn agent_preset() -> CollaborationModeMask {
     CollaborationModeMask {
-        name: "Code".to_string(),
-        mode: Some(ModeKind::Code),
+        name: "Agent".to_string(),
+        mode: Some(ModeKind::Agent),
         model: None,
         reasoning_effort: None,
-        developer_instructions: Some(Some(COLLABORATION_MODE_CODE.to_string())),
+        developer_instructions: Some(Some(COLLABORATION_MODE_AGENT.to_string())),
     }
 }
 
@@ -50,15 +43,5 @@ fn pair_programming_preset() -> CollaborationModeMask {
         model: None,
         reasoning_effort: Some(Some(ReasoningEffort::Medium)),
         developer_instructions: Some(Some(COLLABORATION_MODE_PAIR_PROGRAMMING.to_string())),
-    }
-}
-
-fn execute_preset() -> CollaborationModeMask {
-    CollaborationModeMask {
-        name: "Execute".to_string(),
-        mode: Some(ModeKind::Execute),
-        model: None,
-        reasoning_effort: Some(Some(ReasoningEffort::High)),
-        developer_instructions: Some(Some(COLLABORATION_MODE_EXECUTE.to_string())),
     }
 }

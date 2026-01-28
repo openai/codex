@@ -1195,31 +1195,31 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
         panic!("expected SubmitUserMessageWithMode, got {event:?}");
     };
     assert_eq!(text, PLAN_IMPLEMENTATION_CODING_MESSAGE);
-    assert_eq!(collaboration_mode.mode, Some(ModeKind::Code));
+    assert_eq!(collaboration_mode.mode, Some(ModeKind::Agent));
 }
 
 #[tokio::test]
-async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
+async fn submit_user_message_with_mode_sets_agent_collaboration_mode() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
 
-    let code_mode = collaboration_modes::code_mask(chat.models_manager.as_ref())
-        .expect("expected code collaboration mode");
-    chat.submit_user_message_with_mode("Implement the plan.".to_string(), code_mode);
+    let agent_mode = collaboration_modes::agent_mask(chat.models_manager.as_ref())
+        .expect("expected agent collaboration mode");
+    chat.submit_user_message_with_mode("Implement the plan.".to_string(), agent_mode);
 
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Code,
+                    mode: ModeKind::Agent,
                     ..
                 }),
             personality: None,
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn with code collab mode, got {other:?}")
+            panic!("expected Op::UserTurn with agent collab mode, got {other:?}")
         }
     }
 }
@@ -2199,7 +2199,7 @@ async fn collab_mode_shift_tab_cycles_only_when_enabled_and_idle() {
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
     chat.handle_key_event(KeyEvent::from(KeyCode::BackTab));
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Code);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Agent);
     assert_eq!(chat.current_collaboration_mode(), &initial);
 
     chat.on_task_started();
@@ -2235,14 +2235,14 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Code,
+                    mode: ModeKind::Agent,
                     ..
                 }),
             personality: None,
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn with code collab mode, got {other:?}")
+            panic!("expected Op::UserTurn with agent collab mode, got {other:?}")
         }
     }
 
@@ -2253,20 +2253,20 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
         Op::UserTurn {
             collaboration_mode:
                 Some(CollaborationMode {
-                    mode: ModeKind::Code,
+                    mode: ModeKind::Agent,
                     ..
                 }),
             personality: None,
             ..
         } => {}
         other => {
-            panic!("expected Op::UserTurn with code collab mode, got {other:?}")
+            panic!("expected Op::UserTurn with agent collab mode, got {other:?}")
         }
     }
 }
 
 #[tokio::test]
-async fn collaboration_modes_defaults_to_code_on_startup() {
+async fn collaboration_modes_defaults_to_agent_on_startup() {
     let codex_home = tempdir().expect("tempdir");
     let cfg = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
@@ -2299,7 +2299,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
     };
 
     let chat = ChatWidget::new(init, thread_manager);
-    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Code);
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Agent);
     assert_eq!(chat.current_model(), resolved_model);
 }
 

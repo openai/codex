@@ -1,7 +1,7 @@
 //! Validates that the collaboration mode list endpoint returns the expected default presets.
 //!
 //! The test drives the app server through the MCP harness and asserts that the list response
-//! includes the plan, coding, pair programming, and execute modes with their default model and reasoning
+//! includes the plan, agent, and pair programming modes with their default model and reasoning
 //! effort settings, which keeps the API contract visible in one place.
 
 #![allow(clippy::unwrap_used)]
@@ -45,12 +45,7 @@ async fn list_collaboration_modes_returns_presets() -> Result<()> {
     let CollaborationModeListResponse { data: items } =
         to_response::<CollaborationModeListResponse>(response)?;
 
-    let expected = [
-        plan_preset(),
-        code_preset(),
-        pair_programming_preset(),
-        execute_preset(),
-    ];
+    let expected = [plan_preset(), agent_preset(), pair_programming_preset()];
     assert_eq!(expected.len(), items.len());
     for (expected_mask, actual_mask) in expected.iter().zip(items.iter()) {
         assert_eq!(expected_mask.name, actual_mask.name);
@@ -89,23 +84,11 @@ fn pair_programming_preset() -> CollaborationModeMask {
         .unwrap()
 }
 
-/// Builds the code preset that the list response is expected to return.
-fn code_preset() -> CollaborationModeMask {
+/// Builds the agent preset that the list response is expected to return.
+fn agent_preset() -> CollaborationModeMask {
     let presets = test_builtin_collaboration_mode_presets();
     presets
         .into_iter()
-        .find(|p| p.mode == Some(ModeKind::Code))
-        .unwrap()
-}
-
-/// Builds the execute preset that the list response is expected to return.
-///
-/// The execute preset uses a different reasoning effort to capture the higher-effort
-/// execution contract the server currently exposes.
-fn execute_preset() -> CollaborationModeMask {
-    let presets = test_builtin_collaboration_mode_presets();
-    presets
-        .into_iter()
-        .find(|p| p.mode == Some(ModeKind::Execute))
+        .find(|p| p.mode == Some(ModeKind::Agent))
         .unwrap()
 }

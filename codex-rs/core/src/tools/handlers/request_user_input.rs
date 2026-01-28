@@ -39,8 +39,7 @@ impl ToolHandler for RequestUserInputHandler {
         let mode = session.collaboration_mode().await.mode;
         if !matches!(mode, ModeKind::Plan | ModeKind::PairProgramming) {
             let mode_name = match mode {
-                ModeKind::Code => "Code",
-                ModeKind::Execute => "Execute",
+                ModeKind::Agent => "Agent",
                 ModeKind::Custom => "Custom",
                 ModeKind::Plan | ModeKind::PairProgramming => unreachable!(),
             };

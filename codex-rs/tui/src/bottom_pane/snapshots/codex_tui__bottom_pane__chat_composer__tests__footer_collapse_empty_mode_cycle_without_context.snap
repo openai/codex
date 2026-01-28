@@ -10,4 +10,4 @@ expression: terminal.backend()
 "                                            "
 "                                            "
 "                                            "
-"  Code mode (shift+tab to cycle)            "
+"  Agent mode (shift+tab to cycle)           "
