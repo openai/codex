@@ -1048,7 +1048,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                         }
                     }
                     KeyCode::Char(' ') => {
-                        self.select_current_option(false);
+                        self.select_current_option(true);
                     }
                     KeyCode::Backspace | KeyCode::Delete => {
                         self.clear_selection();
