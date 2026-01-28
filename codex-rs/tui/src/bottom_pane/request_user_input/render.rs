@@ -37,7 +37,11 @@ impl Renderable for RequestUserInputOverlay {
             0
         };
         let spacer_rows = if has_options {
-            DESIRED_SPACERS_BETWEEN_SECTIONS as usize
+            if notes_visible {
+                1
+            } else {
+                DESIRED_SPACERS_BETWEEN_SECTIONS as usize
+            }
         } else {
             0
         };

@@ -151,7 +151,11 @@ impl RequestUserInputOverlay {
 
         // When notes are hidden, prefer to reserve room for progress, footer,
         // and spacers by shrinking the options window if needed.
-        let desired_spacers = DESIRED_SPACERS_BETWEEN_SECTIONS;
+        let desired_spacers = if notes_visible {
+            1
+        } else {
+            DESIRED_SPACERS_BETWEEN_SECTIONS
+        };
         let required_extra = footer_pref
             .saturating_add(1) // progress line
             .saturating_add(desired_spacers);
@@ -204,11 +208,7 @@ impl RequestUserInputOverlay {
             spacer_after_question = 1;
             remaining = remaining.saturating_sub(1);
         }
-        let mut spacer_after_options = 0;
-        if remaining > 0 {
-            spacer_after_options = 1;
-            remaining = remaining.saturating_sub(1);
-        }
+        let spacer_after_options = 0;
         let mut notes_height = notes_pref_height.min(remaining);
         remaining = remaining.saturating_sub(notes_height);
 
