@@ -115,7 +115,6 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
     deny_syscall(libc::SYS_getpeername);
     deny_syscall(libc::SYS_getsockname);
     deny_syscall(libc::SYS_shutdown);
-    deny_syscall(libc::SYS_sendto);
     deny_syscall(libc::SYS_sendmmsg);
     // NOTE: allowing recvfrom allows some tools like: `cargo clippy` to run
     // with their socketpair + child processes for sub-proc management
@@ -132,6 +131,25 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
         SeccompCmpOp::Ne,
         libc::AF_UNIX as u64,
     )?])?;
+
+    // Allow sendto only for send()/self-pipe wakeups where dest_addr == NULL
+    // and addrlen == 0. Deny any other use.
+    let sendto_dest_addr_rule = SeccompRule::new(vec![SeccompCondition::new(
+        4, // fifth argument (dest_addr)
+        SeccompCmpArgLen::Qword,
+        SeccompCmpOp::Ne,
+        0,
+    )?])?;
+    let sendto_addrlen_rule = SeccompRule::new(vec![SeccompCondition::new(
+        5, // sixth argument (addrlen)
+        SeccompCmpArgLen::Dword,
+        SeccompCmpOp::Ne,
+        0,
+    )?])?;
+    rules.insert(
+        libc::SYS_sendto,
+        vec![sendto_dest_addr_rule, sendto_addrlen_rule],
+    );
 
     rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
     rules.insert(libc::SYS_socketpair, vec![unix_only_rule]); // always deny (Unix can use socketpair but fine, keep open?)
