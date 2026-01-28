@@ -765,19 +765,13 @@ impl Session {
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
-        for (alias, feature) in config.features.legacy_feature_usages() {
-            let canonical = feature.key();
-            let summary = format!("`{alias}` is deprecated. Use `[features].{canonical}` instead.");
-            let details = if alias == canonical {
-                None
-            } else {
-                Some(format!(
-                    "Enable it with `--enable {canonical}` or `[features].{canonical}` in config.toml. See https://github.com/openai/codex/blob/main/docs/config.md#feature-flags for details."
-                ))
-            };
+        for usage in config.features.legacy_feature_usages() {
             post_session_configured_events.push(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
-                msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent { summary, details }),
+                msg: EventMsg::DeprecationNotice(DeprecationNoticeEvent {
+                    summary: usage.summary.clone(),
+                    details: usage.details.clone(),
+                }),
             });
         }
         if crate::config::uses_deprecated_instructions_file(&config.config_layer_stack) {
