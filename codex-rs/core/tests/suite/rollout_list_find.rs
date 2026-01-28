@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use codex_core::RolloutRecorder;
 use codex_core::RolloutRecorderParams;
 use codex_core::config::ConfigBuilder;
+use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 use codex_core::protocol::SessionSource;
@@ -15,10 +16,10 @@ use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-/// Create sessions/YYYY/MM/DD and write a minimal rollout file containing the
+/// Create <subdir>/YYYY/MM/DD and write a minimal rollout file containing the
 /// provided conversation id in the SessionMeta line. Returns the absolute path.
-fn write_minimal_rollout_with_id(codex_home: &Path, id: Uuid) -> PathBuf {
-    let sessions = codex_home.join("sessions/2024/01/01");
+fn write_minimal_rollout_with_id_in_subdir(codex_home: &Path, subdir: &str, id: Uuid) -> PathBuf {
+    let sessions = codex_home.join(subdir).join("2024/01/01");
     std::fs::create_dir_all(&sessions).unwrap();
 
     let file = sessions.join(format!("rollout-2024-01-01T00-00-00-{id}.jsonl"));
@@ -43,6 +44,12 @@ fn write_minimal_rollout_with_id(codex_home: &Path, id: Uuid) -> PathBuf {
     .unwrap();
 
     file
+}
+
+/// Create sessions/YYYY/MM/DD and write a minimal rollout file containing the
+/// provided conversation id in the SessionMeta line. Returns the absolute path.
+fn write_minimal_rollout_with_id(codex_home: &Path, id: Uuid) -> PathBuf {
+    write_minimal_rollout_with_id_in_subdir(codex_home, "sessions", id)
 }
 
 #[tokio::test]
@@ -131,4 +138,17 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
     assert!(contents.contains(&thread_id.to_string()));
     recorder.shutdown().await?;
     Ok(())
+}
+
+#[tokio::test]
+async fn find_archived_locates_rollout_file_by_id() {
+    let home = TempDir::new().unwrap();
+    let id = Uuid::new_v4();
+    let expected = write_minimal_rollout_with_id_in_subdir(home.path(), "archived_sessions", id);
+
+    let found = find_archived_thread_path_by_id_str(home.path(), &id.to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(found, Some(expected));
 }

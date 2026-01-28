@@ -56,6 +56,7 @@ axum = { workspace = true, default-features = false, features = [
     "tokio",
 ] }
 base64 = { workspace = true }
+codex-execpolicy = { workspace = true }
 core_test_support = { workspace = true }
 mcp-types = { workspace = true }
 os_info = { workspace = true }

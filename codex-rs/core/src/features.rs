@@ -5,14 +5,20 @@
 //! booleans through multiple types, call sites consult a single `Features`
 //! container attached to `Config`.
 
+use crate::config::CONFIG_TOML_FILE;
+use crate::config::Config;
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
+use crate::protocol::Event;
+use crate::protocol::EventMsg;
+use crate::protocol::WarningEvent;
 use codex_otel::OtelManager;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use toml::Value as TomlValue;
 
 mod legacy;
 pub(crate) use legacy::LegacyFeatureToggles;
@@ -21,8 +27,8 @@ pub(crate) use legacy::legacy_feature_keys;
 /// High-level lifecycle stage for a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
-    /// Closed beta features to be used while developing or within the company.
-    Beta,
+    /// Features that are still under development, not ready for external use
+    UnderDevelopment,
     /// Experimental features made available to users through the `/experimental` menu
     Experimental {
         name: &'static str,
@@ -38,14 +44,14 @@ pub enum Stage {
 }
 
 impl Stage {
-    pub fn beta_menu_name(self) -> Option<&'static str> {
+    pub fn experimental_menu_name(self) -> Option<&'static str> {
         match self {
             Stage::Experimental { name, .. } => Some(name),
             _ => None,
         }
     }
 
-    pub fn beta_menu_description(self) -> Option<&'static str> {
+    pub fn experimental_menu_description(self) -> Option<&'static str> {
         match self {
             Stage::Experimental {
                 menu_description, ..
@@ -54,7 +60,7 @@ impl Stage {
         }
     }
 
-    pub fn beta_announcement(self) -> Option<&'static str> {
+    pub fn experimental_announcement(self) -> Option<&'static str> {
         match self {
             Stage::Experimental { announcement, .. } => Some(announcement),
             _ => None,
@@ -83,6 +89,8 @@ pub enum Feature {
     WebSearchCached,
     /// Gate the execpolicy enforcement for shell/unified exec.
     ExecPolicy,
+    /// Allow the model to request approval and propose exec rules.
+    RequestRule,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
     /// Use the elevated Windows sandbox pipeline (setup + runner).
@@ -103,6 +111,8 @@ pub enum Feature {
     Collab,
     /// Enable connectors (apps).
     Connectors,
+    /// Allow prompting and installing missing MCP dependencies.
+    SkillMcpDependencyInstall,
     /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
     Steer,
     /// Enable collaboration modes (Plan, Code, Pair Programming, Execute).
@@ -343,10 +353,10 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WebSearchCached,
         key: "web_search_cached",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
-    // Beta program. Rendered in the `/experimental` menu for users.
+    // Experimental program. Rendered in the `/experimental` menu for users.
     FeatureSpec {
         id: Feature::UnifiedExec,
         key: "unified_exec",
@@ -370,43 +380,49 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ChildAgentsMd,
         key: "child_agents_md",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ExecPolicy,
         key: "exec_policy",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::RequestRule,
+        key: "request_rule",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandbox,
         key: "experimental_windows_sandbox",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WindowsSandboxElevated,
         key: "elevated_windows_sandbox",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::RemoteCompaction,
         key: "remote_compaction",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: true,
     },
     FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: true,
     },
     FeatureSpec {
@@ -421,27 +437,33 @@ pub const FEATURES: &[FeatureSpec] = &[
         #[cfg(windows)]
         default_enabled: true,
         #[cfg(not(windows))]
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         #[cfg(not(windows))]
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::EnableRequestCompression,
         key: "enable_request_compression",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Collab,
         key: "collab",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Connectors,
         key: "connectors",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SkillMcpDependencyInstall,
+        key: "skill_mcp_dependency_install",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Steer,
@@ -456,13 +478,64 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CollaborationModes,
         key: "collaboration_modes",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ResponsesWebsockets,
         key: "responses_websockets",
-        stage: Stage::Beta,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
 ];
+
+/// Push a warning event if any under-development features are enabled.
+pub fn maybe_push_unstable_features_warning(
+    config: &Config,
+    post_session_configured_events: &mut Vec<Event>,
+) {
+    if config.suppress_unstable_features_warning {
+        return;
+    }
+
+    let mut under_development_feature_keys = Vec::new();
+    if let Some(table) = config
+        .config_layer_stack
+        .effective_config()
+        .get("features")
+        .and_then(TomlValue::as_table)
+    {
+        for (key, value) in table {
+            if value.as_bool() != Some(true) {
+                continue;
+            }
+            let Some(spec) = FEATURES.iter().find(|spec| spec.key == key.as_str()) else {
+                continue;
+            };
+            if !config.features.enabled(spec.id) {
+                continue;
+            }
+            if matches!(spec.stage, Stage::UnderDevelopment) {
+                under_development_feature_keys.push(spec.key.to_string());
+            }
+        }
+    }
+
+    if under_development_feature_keys.is_empty() {
+        return;
+    }
+
+    let under_development_feature_keys = under_development_feature_keys.join(", ");
+    let config_path = config
+        .codex_home
+        .join(CONFIG_TOML_FILE)
+        .display()
+        .to_string();
+    let message = format!(
+        "Under-development features enabled: {under_development_feature_keys}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {config_path}."
+    );
+    post_session_configured_events.push(Event {
+        id: "".to_owned(),
+        msg: EventMsg::Warning(WarningEvent { message }),
+    });
+}

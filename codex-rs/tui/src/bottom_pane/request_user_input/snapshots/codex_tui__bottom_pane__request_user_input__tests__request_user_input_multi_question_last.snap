@@ -1,0 +1,15 @@
+---
+source: tui/src/bottom_pane/request_user_input/mod.rs
+expression: "render_snapshot(&overlay, area)"
+---
+                                                                                                                        
+  Question 2/2 (2 unanswered)                                                                                           
+  Goal                                                                                                                  
+  Share details.                                                                                                        
+                                                                                                                        
+  › Type your answer (optional)                                                                                         
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+  Enter: submit all answers | Ctrl+n next | Esc: interrupt

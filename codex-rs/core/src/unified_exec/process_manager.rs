@@ -11,9 +11,9 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::exec_env::create_env;
+use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecEnv;
-use crate::sandboxing::SandboxPermissions;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
@@ -123,14 +123,7 @@ impl UnifiedExecProcessManager {
             .unwrap_or_else(|| context.turn.cwd.clone());
 
         let process = self
-            .open_session_with_sandbox(
-                &request.command,
-                cwd.clone(),
-                request.sandbox_permissions,
-                request.justification,
-                request.tty,
-                context,
-            )
+            .open_session_with_sandbox(&request, cwd.clone(), context)
             .await;
 
         let process = match process {
@@ -486,11 +479,8 @@ impl UnifiedExecProcessManager {
 
     pub(super) async fn open_session_with_sandbox(
         &self,
-        command: &[String],
+        request: &ExecCommandRequest,
         cwd: PathBuf,
-        sandbox_permissions: SandboxPermissions,
-        justification: Option<String>,
-        tty: bool,
         context: &UnifiedExecContext,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let env = apply_unified_exec_env(create_env(&context.turn.shell_environment_policy));
@@ -501,21 +491,22 @@ impl UnifiedExecProcessManager {
             .session
             .services
             .exec_policy
-            .create_exec_approval_requirement_for_command(
-                &features,
-                command,
-                context.turn.approval_policy,
-                &context.turn.sandbox_policy,
-                sandbox_permissions,
-            )
+            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+                features: &features,
+                command: &request.command,
+                approval_policy: context.turn.approval_policy,
+                sandbox_policy: &context.turn.sandbox_policy,
+                sandbox_permissions: request.sandbox_permissions,
+                prefix_rule: request.prefix_rule.clone(),
+            })
             .await;
         let req = UnifiedExecToolRequest::new(
-            command.to_vec(),
+            request.command.clone(),
             cwd,
             env,
-            tty,
-            sandbox_permissions,
-            justification,
+            request.tty,
+            request.sandbox_permissions,
+            request.justification.clone(),
             exec_approval_requirement,
         );
         let tool_ctx = ToolCtx {

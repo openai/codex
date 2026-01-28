@@ -9,18 +9,15 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
+use super::selection_popup_common::render_menu_surface;
 use super::selection_popup_common::wrap_styled_line;
 use crate::app_event_sender::AppEventSender;
 use crate::key_hint::KeyBinding;
-use crate::render::Insets;
-use crate::render::RectExt as _;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use crate::style::user_message_style;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -476,16 +473,16 @@ impl Renderable for ListSelectionView {
         let [content_area, footer_area] =
             Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_rows)]).areas(area);
 
-        Block::default()
-            .style(user_message_style())
-            .render(content_area, buf);
+        let outer_content_area = content_area;
+        // Paint the shared menu surface and then layout inside the returned inset.
+        let content_area = render_menu_surface(outer_content_area, buf);
 
         let header_height = self
             .header
             // Subtract 4 for the padding on the left and right of the header.
-            .desired_height(content_area.width.saturating_sub(4));
+            .desired_height(outer_content_area.width.saturating_sub(4));
         let rows = self.build_rows();
-        let rows_width = Self::rows_width(content_area.width);
+        let rows_width = Self::rows_width(outer_content_area.width);
         let rows_height = measure_rows_height(
             &rows,
             &self.state,
@@ -498,7 +495,7 @@ impl Renderable for ListSelectionView {
             Constraint::Length(if self.is_searchable { 1 } else { 0 }),
             Constraint::Length(rows_height),
         ])
-        .areas(content_area.inset(Insets::vh(1, 2)));
+        .areas(content_area);
 
         if header_area.height < header_height {
             let [header_area, elision_area] =

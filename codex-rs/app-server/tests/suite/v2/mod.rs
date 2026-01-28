@@ -18,5 +18,6 @@ mod thread_read;
 mod thread_resume;
 mod thread_rollback;
 mod thread_start;
+mod thread_unarchive;
 mod turn_interrupt;
 mod turn_start;

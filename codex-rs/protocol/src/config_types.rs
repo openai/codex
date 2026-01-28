@@ -67,6 +67,18 @@ pub enum SandboxMode {
 }
 
 #[derive(
+    Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, JsonSchema, TS,
+)]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum WindowsSandboxLevel {
+    #[default]
+    Disabled,
+    RestrictedToken,
+    Elevated,
+}
+
+#[derive(
     Debug,
     Serialize,
     Deserialize,
@@ -94,8 +106,8 @@ pub enum Personality {
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum WebSearchMode {
-    #[default]
     Disabled,
+    #[default]
     Cached,
     Live,
 }

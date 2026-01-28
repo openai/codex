@@ -512,10 +512,10 @@ impl ProjectTrustContext {
         let user_config_file = self.user_config_file.as_path().display();
         match decision.trust_level {
             Some(TrustLevel::Untrusted) => Some(format!(
-                "{trust_key} is marked as untrusted in {user_config_file}. Mark it trusted to enable project config folders."
+                "{trust_key} is marked as untrusted in {user_config_file}. To load config.toml, mark it trusted."
             )),
             _ => Some(format!(
-                "Add {trust_key} as a trusted project in {user_config_file}."
+                "To load config.toml, add {trust_key} as a trusted project in {user_config_file}."
             )),
         }
     }
@@ -526,21 +526,16 @@ fn project_layer_entry(
     dot_codex_folder: &AbsolutePathBuf,
     layer_dir: &AbsolutePathBuf,
     config: TomlValue,
+    config_toml_exists: bool,
 ) -> ConfigLayerEntry {
-    match trust_context.disabled_reason_for_dir(layer_dir) {
-        Some(reason) => ConfigLayerEntry::new_disabled(
-            ConfigLayerSource::Project {
-                dot_codex_folder: dot_codex_folder.clone(),
-            },
-            config,
-            reason,
-        ),
-        None => ConfigLayerEntry::new(
-            ConfigLayerSource::Project {
-                dot_codex_folder: dot_codex_folder.clone(),
-            },
-            config,
-        ),
+    let source = ConfigLayerSource::Project {
+        dot_codex_folder: dot_codex_folder.clone(),
+    };
+
+    if config_toml_exists && let Some(reason) = trust_context.disabled_reason_for_dir(layer_dir) {
+        ConfigLayerEntry::new_disabled(source, config, reason)
+    } else {
+        ConfigLayerEntry::new(source, config)
     }
 }
 
@@ -715,13 +710,15 @@ async fn load_project_layers(
                             &dot_codex_abs,
                             &layer_dir,
                             TomlValue::Table(toml::map::Map::new()),
+                            true,
                         ));
                         continue;
                     }
                 };
                 let config =
                     resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
-                let entry = project_layer_entry(trust_context, &dot_codex_abs, &layer_dir, config);
+                let entry =
+                    project_layer_entry(trust_context, &dot_codex_abs, &layer_dir, config, true);
                 layers.push(entry);
             }
             Err(err) => {
@@ -734,6 +731,7 @@ async fn load_project_layers(
                         &dot_codex_abs,
                         &layer_dir,
                         TomlValue::Table(toml::map::Map::new()),
+                        false,
                     ));
                 } else {
                     let config_file_display = config_file.as_path().display();
