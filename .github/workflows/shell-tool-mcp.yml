@@ -103,7 +103,7 @@ jobs:
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libubsan1
           fi
 
-      - uses: dtolnay/rust-toolchain@1.92
+      - uses: dtolnay/rust-toolchain@1.93
         with:
           targets: ${{ matrix.target }}
 

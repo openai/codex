@@ -269,7 +269,10 @@ impl BottomPane {
             let (ctrl_c_completed, view_complete, view_in_paste_burst) = {
                 let last_index = self.view_stack.len() - 1;
                 let view = &mut self.view_stack[last_index];
+                let prefer_esc =
+                    key_event.code == KeyCode::Esc && view.prefer_esc_to_handle_key_event();
                 let ctrl_c_completed = key_event.code == KeyCode::Esc
+                    && !prefer_esc
                     && matches!(view.on_ctrl_c(), CancellationEvent::Handled)
                     && view.is_complete();
                 if ctrl_c_completed {
@@ -338,6 +341,7 @@ impl BottomPane {
                     self.on_active_view_complete();
                 }
                 self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
+                self.request_redraw();
             }
             event
         } else if self.composer_is_empty() {
@@ -346,6 +350,7 @@ impl BottomPane {
             self.view_stack.pop();
             self.clear_composer_for_ctrl_c();
             self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
+            self.request_redraw();
             CancellationEvent::Handled
         }
     }
@@ -815,7 +820,9 @@ mod tests {
     use insta::assert_snapshot;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
+    use std::cell::Cell;
     use std::path::PathBuf;
+    use std::rc::Rc;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn snapshot_buffer(buf: &Buffer) -> String {
@@ -1241,5 +1248,64 @@ mod tests {
             matches!(rx.try_recv(), Ok(AppEvent::CodexOp(Op::Interrupt))),
             "expected Esc to send Op::Interrupt while a task is running"
         );
+    }
+
+    #[test]
+    fn esc_routes_to_handle_key_event_when_requested() {
+        #[derive(Default)]
+        struct EscRoutingView {
+            on_ctrl_c_calls: Rc<Cell<usize>>,
+            handle_calls: Rc<Cell<usize>>,
+        }
+
+        impl Renderable for EscRoutingView {
+            fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+            fn desired_height(&self, _width: u16) -> u16 {
+                0
+            }
+        }
+
+        impl BottomPaneView for EscRoutingView {
+            fn handle_key_event(&mut self, _key_event: KeyEvent) {
+                self.handle_calls
+                    .set(self.handle_calls.get().saturating_add(1));
+            }
+
+            fn on_ctrl_c(&mut self) -> CancellationEvent {
+                self.on_ctrl_c_calls
+                    .set(self.on_ctrl_c_calls.get().saturating_add(1));
+                CancellationEvent::Handled
+            }
+
+            fn prefer_esc_to_handle_key_event(&self) -> bool {
+                true
+            }
+        }
+
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        let on_ctrl_c_calls = Rc::new(Cell::new(0));
+        let handle_calls = Rc::new(Cell::new(0));
+        pane.push_view(Box::new(EscRoutingView {
+            on_ctrl_c_calls: Rc::clone(&on_ctrl_c_calls),
+            handle_calls: Rc::clone(&handle_calls),
+        }));
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert_eq!(on_ctrl_c_calls.get(), 0);
+        assert_eq!(handle_calls.get(), 1);
     }
 }

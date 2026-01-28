@@ -653,6 +653,18 @@ impl ChatComposer {
         text
     }
 
+    pub(crate) fn pending_pastes(&self) -> Vec<(String, String)> {
+        self.pending_pastes.clone()
+    }
+
+    pub(crate) fn set_pending_pastes(&mut self, pending_pastes: Vec<(String, String)>) {
+        let text = self.textarea.text().to_string();
+        self.pending_pastes = pending_pastes
+            .into_iter()
+            .filter(|(placeholder, _)| text.contains(placeholder))
+            .collect();
+    }
+
     /// Override the footer hint items displayed beneath the composer. Passing
     /// `None` restores the default shortcut footer.
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
@@ -1431,7 +1443,7 @@ impl ChatComposer {
     }
 
     /// Expand large-paste placeholders using element ranges and rebuild other element spans.
-    fn expand_pending_pastes(
+    pub(crate) fn expand_pending_pastes(
         text: &str,
         mut elements: Vec<TextElement>,
         pending_pastes: &[(String, String)],

@@ -53,7 +53,7 @@ rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
     edition = "2024",
     extra_target_triples = RUST_TRIPLES,
-    versions = ["1.90.0"],
+    versions = ["1.93.0"],
 )
 use_repo(rust, "rust_toolchains")
 
