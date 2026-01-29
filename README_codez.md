@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./.github/codez-icon.png" alt="Codez icon" width="160" />
+</p>
+
 # codez
 
 このリポジトリをローカルでビルドした Rust 版 Codex を、npm で入れている `codex` と衝突させずに並行運用するためのメモ。
