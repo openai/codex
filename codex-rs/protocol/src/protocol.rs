@@ -812,6 +812,7 @@ pub enum EventMsg {
 
     /// Todo list update from the todo_write tool. Payload uses `todo` (preferred)
     /// and also emits `plan` as a legacy alias.
+    #[serde(alias = "todo_update")]
     PlanUpdate(UpdateTodoArgs),
 
     TurnAborted(TurnAbortedEvent),

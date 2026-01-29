@@ -429,7 +429,7 @@ macro_rules! server_notification_definitions {
     (
         $(
             $(#[$variant_meta:meta])*
-            $variant:ident $(=> $wire:literal)? ( $payload:ty )
+            $variant:ident $(=> $wire:literal $(, aliases([$($alias:literal),* $(,)?]))? )? ( $payload:ty )
         ),* $(,)?
     ) => {
         /// Notification sent from the server to the client.
@@ -439,7 +439,14 @@ macro_rules! server_notification_definitions {
         pub enum ServerNotification {
             $(
                 $(#[$variant_meta])*
-                $(#[serde(rename = $wire)] #[ts(rename = $wire)] #[strum(serialize = $wire)])?
+                $(
+                    #[serde(rename = $wire)]
+                    #[ts(rename = $wire)]
+                    #[strum(serialize = $wire)]
+                    $(
+                        $(#[serde(alias = $alias)])*
+                    )?
+                )?
                 $variant($payload),
             )*
         }
@@ -582,7 +589,7 @@ server_notification_definitions! {
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
     TurnCompleted => "turn/completed" (v2::TurnCompletedNotification),
     TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
-    TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
+    TurnPlanUpdated => "turn/plan/updated", aliases(["turn/todo/updated"]) (v2::TurnPlanUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
     /// This event is internal-only. Used by Codex Cloud.
