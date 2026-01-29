@@ -5191,6 +5191,19 @@ impl ChatWidget {
     }
 
     fn open_connectors_popup(&mut self, connectors: &[connectors::AppInfo]) {
+        let total = connectors.len();
+        let installed = connectors
+            .iter()
+            .filter(|connector| connector.is_accessible)
+            .count();
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from("Apps".bold()));
+        header.push(Line::from(
+            "Use $ to insert an installed app into your prompt.".dim(),
+        ));
+        header.push(Line::from(
+            format!("Installed {installed} of {total} available apps.").dim(),
+        ));
         let mut items: Vec<SelectionItem> = Vec::with_capacity(connectors.len());
         for connector in connectors {
             let connector_label = connectors::connector_display_label(connector);
@@ -5246,11 +5259,7 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Apps".to_string()),
-            subtitle: Some(
-                "Use $ to insert a connected app into your prompt. Install or manage apps below.\nNew installs can take a few minutes to appear."
-                    .to_string(),
-            ),
+            header: Box::new(header),
             footer_hint: Some(Self::connectors_popup_hint_line()),
             items,
             is_searchable: true,
