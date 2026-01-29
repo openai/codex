@@ -455,6 +455,29 @@
       ],
       "type": "object"
     },
+    "NetworkConfigToml": {
+      "additionalProperties": false,
+      "description": "Network proxy configuration layer from `[[network]]` entries in `config.toml`.\n\nMultiple `[[network]]` entries are merged in order (later entries win).",
+      "properties": {
+        "enabled": {
+          "description": "Enable proxy configuration for sandboxed tool execution.",
+          "type": "boolean"
+        },
+        "no_proxy": {
+          "default": null,
+          "description": "Optional NO_PROXY entries.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "socks_proxy": {
+          "description": "SOCKS proxy URL (for example: `socks5h://127.0.0.1:1080`).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "Notice": {
       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
       "properties": {
@@ -1396,6 +1419,14 @@
         }
       ],
       "description": "Optional verbosity control for GPT-5 models (Responses API `text.verbosity`)."
+    },
+    "network": {
+      "default": [],
+      "description": "Ordered proxy config layers. Later entries win.",
+      "items": {
+        "$ref": "#/definitions/NetworkConfigToml"
+      },
+      "type": "array"
     },
     "notice": {
       "allOf": [

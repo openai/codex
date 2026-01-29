@@ -556,6 +556,33 @@ impl From<SandboxWorkspaceWrite> for codex_app_server_protocol::SandboxSettings 
     }
 }
 
+/// Network proxy configuration layer from `[[network]]` entries in `config.toml`.
+///
+/// Multiple `[[network]]` entries are merged in order (later entries win).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NetworkConfigToml {
+    /// Enable proxy configuration for sandboxed tool execution.
+    pub enabled: Option<bool>,
+
+    /// SOCKS proxy URL (for example: `socks5h://127.0.0.1:1080`).
+    pub socks_proxy: Option<String>,
+
+    /// Optional NO_PROXY entries.
+    #[serde(default)]
+    pub no_proxy: Option<Vec<String>>,
+}
+
+/// Resolved network proxy configuration.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct NetworkConfig {
+    pub enabled: bool,
+    pub socks_proxy: Option<String>,
+    #[serde(default)]
+    pub no_proxy: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellEnvironmentPolicyInherit {

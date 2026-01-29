@@ -6,6 +6,8 @@ use crate::config::types::History;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerDisabledReason;
 use crate::config::types::McpServerTransportConfig;
+use crate::config::types::NetworkConfig;
+use crate::config::types::NetworkConfigToml;
 use crate::config::types::Notice;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
@@ -149,6 +151,9 @@ pub struct Config {
     pub forced_auto_mode_downgraded_on_windows: bool,
 
     pub shell_environment_policy: ShellEnvironmentPolicy,
+
+    /// Resolved network proxy configuration from `[[network]]` entries.
+    pub network: NetworkConfig,
 
     /// When `true`, `AgentReasoning` events emitted by the backend will be
     /// suppressed from the frontend output. This can reduce visual noise when
@@ -782,6 +787,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
+    /// Ordered proxy config layers. Later entries win.
+    #[serde(default)]
+    pub network: Vec<NetworkConfigToml>,
+
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
 
@@ -1239,6 +1248,44 @@ pub(crate) fn resolve_web_search_mode_for_turn(
     }
 }
 
+fn resolve_network_config(entries: &[NetworkConfigToml]) -> std::io::Result<NetworkConfig> {
+    let mut resolved = NetworkConfig::default();
+
+    for entry in entries {
+        if let Some(enabled) = entry.enabled {
+            resolved.enabled = enabled;
+        }
+        if let Some(socks_proxy) = entry.socks_proxy.as_ref() {
+            validate_socks_proxy_url(socks_proxy)?;
+            resolved.socks_proxy = Some(socks_proxy.clone());
+        }
+        if let Some(no_proxy) = entry.no_proxy.as_ref() {
+            resolved.no_proxy = no_proxy.clone();
+        }
+    }
+
+    Ok(resolved)
+}
+
+fn validate_socks_proxy_url(value: &str) -> std::io::Result<()> {
+    let url = url::Url::parse(value).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid network.socks_proxy URL `{value}`: {err}"),
+        )
+    })?;
+
+    let scheme = url.scheme();
+    if !matches!(scheme, "socks5" | "socks5h") {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid network.socks_proxy URL `{value}`: scheme must be socks5 or socks5h"),
+        ));
+    }
+
+    Ok(())
+}
+
 impl Config {
     #[cfg(test)]
     fn load_from_base_config_with_overrides(
@@ -1398,6 +1445,7 @@ impl Config {
             .clone();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
+        let network = resolve_network_config(&cfg.network)?;
 
         let history = cfg.history.unwrap_or_default();
 
@@ -1524,6 +1572,7 @@ impl Config {
             did_user_set_custom_approval_policy_or_sandbox_mode,
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
+            network,
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -1855,6 +1904,58 @@ persistence = "none"
             }),
             history_no_persistence_cfg.history
         );
+    }
+
+    #[test]
+    fn network_config_last_entry_wins() {
+        let cfg = r#"
+[[network]]
+enabled = false
+socks_proxy = "socks5h://127.0.0.1:1080"
+no_proxy = ["localhost"]
+
+[[network]]
+enabled = true
+socks_proxy = "socks5://127.0.0.1:2080"
+"#;
+
+        let parsed = toml::from_str::<ConfigToml>(cfg).expect("network config should parse");
+        let resolved =
+            resolve_network_config(&parsed.network).expect("network config should resolve");
+
+        assert_eq!(
+            resolved,
+            NetworkConfig {
+                enabled: true,
+                socks_proxy: Some("socks5://127.0.0.1:2080".to_string()),
+                no_proxy: vec!["localhost".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn network_config_rejects_invalid_url() {
+        let cfg = r#"
+[[network]]
+socks_proxy = "not-a-url"
+"#;
+
+        let parsed = toml::from_str::<ConfigToml>(cfg).expect("network config should parse");
+        let err = resolve_network_config(&parsed.network).expect_err("invalid URL should fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn network_config_rejects_non_socks_scheme() {
+        let cfg = r#"
+[[network]]
+socks_proxy = "http://127.0.0.1:8080"
+"#;
+
+        let parsed = toml::from_str::<ConfigToml>(cfg).expect("network config should parse");
+        let err =
+            resolve_network_config(&parsed.network).expect_err("non-socks scheme should fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]
@@ -3756,6 +3857,7 @@ model_verbosity = "high"
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 forced_auto_mode_downgraded_on_windows: false,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
+                network: NetworkConfig::default(),
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -3840,6 +3942,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            network: NetworkConfig::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -3939,6 +4042,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            network: NetworkConfig::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -4024,6 +4128,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             forced_auto_mode_downgraded_on_windows: false,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
+            network: NetworkConfig::default(),
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
