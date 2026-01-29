@@ -76,16 +76,11 @@ pub struct SecretListEntry {
     pub name: SecretName,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SecretsBackendKind {
+    #[default]
     Local,
-}
-
-impl Default for SecretsBackendKind {
-    fn default() -> Self {
-        Self::Local
-    }
 }
 
 pub trait SecretsBackend: Send + Sync {
