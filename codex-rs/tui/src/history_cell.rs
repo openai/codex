@@ -46,9 +46,9 @@ use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::web_search::web_search_detail;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::plan_tool::PlanItemArg;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::todo_tool::TodoItemArg;
+use codex_protocol::todo_tool::TodoStatus;
+use codex_protocol::todo_tool::UpdateTodoArgs;
 use codex_protocol::user_input::TextElement;
 use image::DynamicImage;
 use image::ImageReader;
@@ -1728,11 +1728,8 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
 }
 
 /// Render a user-friendly todo list update styled like a checkbox list.
-pub(crate) fn new_todo_update(update: UpdatePlanArgs) -> TodoUpdateCell {
-    let UpdatePlanArgs {
-        explanation,
-        plan: todo_items,
-    } = update;
+pub(crate) fn new_todo_update(update: UpdateTodoArgs) -> TodoUpdateCell {
+    let (explanation, todo_items) = update.into_parts();
     TodoUpdateCell {
         explanation,
         todo_items,
@@ -1742,7 +1739,7 @@ pub(crate) fn new_todo_update(update: UpdatePlanArgs) -> TodoUpdateCell {
 #[derive(Debug)]
 pub(crate) struct TodoUpdateCell {
     explanation: Option<String>,
-    todo_items: Vec<PlanItemArg>,
+    todo_items: Vec<TodoItemArg>,
 }
 
 impl HistoryCell for TodoUpdateCell {
@@ -1755,11 +1752,11 @@ impl HistoryCell for TodoUpdateCell {
                 .collect()
         };
 
-        let render_step = |status: &StepStatus, text: &str| -> Vec<Line<'static>> {
+        let render_step = |status: &TodoStatus, text: &str| -> Vec<Line<'static>> {
             let (box_str, step_style) = match status {
-                StepStatus::Completed => ("✔ ", Style::default().crossed_out().dim()),
-                StepStatus::InProgress => ("□ ", Style::default().cyan().bold()),
-                StepStatus::Pending => ("□ ", Style::default().dim()),
+                TodoStatus::Completed => ("✔ ", Style::default().crossed_out().dim()),
+                TodoStatus::InProgress => ("□ ", Style::default().cyan().bold()),
+                TodoStatus::Pending => ("□ ", Style::default().dim()),
             };
             let wrap_width = (width as usize)
                 .saturating_sub(4)
@@ -1789,7 +1786,7 @@ impl HistoryCell for TodoUpdateCell {
         if self.todo_items.is_empty() {
             indented_lines.push(Line::from("(no steps provided)".dim().italic()));
         } else {
-            for PlanItemArg { step, status } in self.todo_items.iter() {
+            for TodoItemArg { step, status } in self.todo_items.iter() {
                 indented_lines.extend(render_step(status, step));
             }
         }
@@ -2895,26 +2892,26 @@ mod tests {
     #[test]
     fn plan_update_with_note_and_wrapping_snapshot() {
         // Long explanation forces wrapping; include long step text to verify step wrapping and alignment.
-        let update = UpdatePlanArgs {
-            explanation: Some(
+        let update = UpdateTodoArgs::new(
+            Some(
                 "I’ll update Grafana call error handling by adding retries and clearer messages when the backend is unreachable."
                     .to_string(),
             ),
-            plan: vec![
-                PlanItemArg {
+            vec![
+                TodoItemArg {
                     step: "Investigate existing error paths and logging around HTTP timeouts".into(),
-                    status: StepStatus::Completed,
+                    status: TodoStatus::Completed,
                 },
-                PlanItemArg {
+                TodoItemArg {
                     step: "Harden Grafana client error handling with retry/backoff and user‑friendly messages".into(),
-                    status: StepStatus::InProgress,
+                    status: TodoStatus::InProgress,
                 },
-                PlanItemArg {
+                TodoItemArg {
                     step: "Add tests for transient failure scenarios and surfacing to the UI".into(),
-                    status: StepStatus::Pending,
+                    status: TodoStatus::Pending,
                 },
             ],
-        };
+        );
 
         let cell = new_todo_update(update);
         // Narrow width to force wrapping for both the note and steps
@@ -2925,19 +2922,19 @@ mod tests {
 
     #[test]
     fn plan_update_without_note_snapshot() {
-        let update = UpdatePlanArgs {
-            explanation: None,
-            plan: vec![
-                PlanItemArg {
+        let update = UpdateTodoArgs::new(
+            None,
+            vec![
+                TodoItemArg {
                     step: "Define error taxonomy".into(),
-                    status: StepStatus::InProgress,
+                    status: TodoStatus::InProgress,
                 },
-                PlanItemArg {
+                TodoItemArg {
                     step: "Implement mapping to user messages".into(),
-                    status: StepStatus::Pending,
+                    status: TodoStatus::Pending,
                 },
             ],
-        };
+        );
 
         let cell = new_todo_update(update);
         let lines = cell.display_lines(40);

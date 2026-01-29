@@ -9,7 +9,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
-use codex_protocol::plan_tool::StepStatus;
+use codex_protocol::todo_tool::TodoStatus;
 use codex_protocol::user_input::UserInput;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
@@ -124,7 +124,7 @@ async fn todo_write_tool_emits_todo_update_event() -> anyhow::Result<()> {
     let call_id = "todo-tool-call";
     let todo_args = json!({
         "explanation": "Tool harness check",
-        "plan": [
+        "todo": [
             {"step": "Inspect workspace", "status": "in_progress"},
             {"step": "Report results", "status": "pending"},
         ],
@@ -169,11 +169,12 @@ async fn todo_write_tool_emits_todo_update_event() -> anyhow::Result<()> {
         EventMsg::PlanUpdate(update) => {
             saw_todo_update = true;
             assert_eq!(update.explanation.as_deref(), Some("Tool harness check"));
-            assert_eq!(update.plan.len(), 2);
-            assert_eq!(update.plan[0].step, "Inspect workspace");
-            assert_matches!(update.plan[0].status, StepStatus::InProgress);
-            assert_eq!(update.plan[1].step, "Report results");
-            assert_matches!(update.plan[1].status, StepStatus::Pending);
+            let todo_items = update.todo_items();
+            assert_eq!(todo_items.len(), 2);
+            assert_eq!(todo_items[0].step, "Inspect workspace");
+            assert_matches!(todo_items[0].status, TodoStatus::InProgress);
+            assert_eq!(todo_items[1].step, "Report results");
+            assert_matches!(todo_items[1].status, TodoStatus::Pending);
             false
         }
         EventMsg::TurnComplete(_) => true,

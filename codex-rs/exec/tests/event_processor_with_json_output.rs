@@ -56,12 +56,12 @@ use codex_exec::exec_events::Usage;
 use codex_exec::exec_events::WebSearchItem;
 use codex_protocol::ThreadId;
 use codex_protocol::models::WebSearchAction;
-use codex_protocol::plan_tool::PlanItemArg;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecOutputStream;
+use codex_protocol::todo_tool::TodoItemArg;
+use codex_protocol::todo_tool::TodoStatus;
+use codex_protocol::todo_tool::UpdateTodoArgs;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::TextContent;
@@ -226,19 +226,19 @@ fn todo_update_emits_todo_list_started_updated_and_completed() {
     // First todo_write update (PlanUpdate event) => item.started (todo_list)
     let first = event(
         "p1",
-        EventMsg::PlanUpdate(UpdatePlanArgs {
-            explanation: None,
-            plan: vec![
-                PlanItemArg {
+        EventMsg::PlanUpdate(UpdateTodoArgs::new(
+            None,
+            vec![
+                TodoItemArg {
                     step: "step one".to_string(),
-                    status: StepStatus::Pending,
+                    status: TodoStatus::Pending,
                 },
-                PlanItemArg {
+                TodoItemArg {
                     step: "step two".to_string(),
-                    status: StepStatus::InProgress,
+                    status: TodoStatus::InProgress,
                 },
             ],
-        }),
+        )),
     );
     let out_first = ep.collect_thread_events(&first);
     assert_eq!(
@@ -265,19 +265,19 @@ fn todo_update_emits_todo_list_started_updated_and_completed() {
     // Second todo_write update (PlanUpdate event) => item.updated (same id)
     let second = event(
         "p2",
-        EventMsg::PlanUpdate(UpdatePlanArgs {
-            explanation: None,
-            plan: vec![
-                PlanItemArg {
+        EventMsg::PlanUpdate(UpdateTodoArgs::new(
+            None,
+            vec![
+                TodoItemArg {
                     step: "step one".to_string(),
-                    status: StepStatus::Completed,
+                    status: TodoStatus::Completed,
                 },
-                PlanItemArg {
+                TodoItemArg {
                     step: "step two".to_string(),
-                    status: StepStatus::InProgress,
+                    status: TodoStatus::InProgress,
                 },
             ],
-        }),
+        )),
     );
     let out_second = ep.collect_thread_events(&second);
     assert_eq!(
@@ -666,13 +666,13 @@ fn todo_update_after_complete_starts_new_todo_list_with_new_id() {
     // First turn: start + complete
     let start = event(
         "t1",
-        EventMsg::PlanUpdate(UpdatePlanArgs {
-            explanation: None,
-            plan: vec![PlanItemArg {
+        EventMsg::PlanUpdate(UpdateTodoArgs::new(
+            None,
+            vec![TodoItemArg {
                 step: "only".to_string(),
-                status: StepStatus::Pending,
+                status: TodoStatus::Pending,
             }],
-        }),
+        )),
     );
     let _ = ep.collect_thread_events(&start);
     let complete = event(
@@ -686,13 +686,13 @@ fn todo_update_after_complete_starts_new_todo_list_with_new_id() {
     // Second turn: a new todo list should have a new id
     let start_again = event(
         "t3",
-        EventMsg::PlanUpdate(UpdatePlanArgs {
-            explanation: None,
-            plan: vec![PlanItemArg {
+        EventMsg::PlanUpdate(UpdateTodoArgs::new(
+            None,
+            vec![TodoItemArg {
                 step: "again".to_string(),
-                status: StepStatus::Pending,
+                status: TodoStatus::Pending,
             }],
-        }),
+        )),
     );
     let out = ep.collect_thread_events(&start_again);
 

@@ -10,8 +10,8 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
-use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::todo_tool::UpdateTodoArgs;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
@@ -41,20 +41,22 @@ pub static TODO_WRITE_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         "explanation".to_string(),
         JsonSchema::String { description: None },
     );
-    // NOTE: The "plan" field name is legacy tool payload shape, unrelated to Plan mode.
+    properties.insert("todo".to_string(), todo_items_schema.clone());
+    // NOTE: The "plan" field name is a deprecated legacy alias, unrelated to Plan mode.
     properties.insert("plan".to_string(), todo_items_schema);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "todo_write".to_string(),
         description: r#"Updates the task list.
-Provide an optional explanation and a list of todo items, each with a step and status.
+Provide an optional explanation and a list of todo items in `todo`, each with a step and status.
+The legacy `plan` field is still accepted.
 At most one step can be in_progress at a time.
 "#
         .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["plan".to_string()]),
+            required: Some(vec!["todo".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -112,8 +114,8 @@ pub(crate) async fn handle_todo_write(
     Ok("Todo list updated".to_string())
 }
 
-fn parse_todo_write_arguments(arguments: &str) -> Result<UpdatePlanArgs, FunctionCallError> {
-    serde_json::from_str::<UpdatePlanArgs>(arguments).map_err(|e| {
+fn parse_todo_write_arguments(arguments: &str) -> Result<UpdateTodoArgs, FunctionCallError> {
+    serde_json::from_str::<UpdateTodoArgs>(arguments).map_err(|e| {
         FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}"))
     })
 }

@@ -87,10 +87,10 @@ use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
-use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
+use codex_protocol::todo_tool::UpdateTodoArgs;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::path::PathBuf;
@@ -1143,21 +1143,20 @@ async fn handle_turn_diff(
 async fn handle_turn_todo_update(
     conversation_id: ThreadId,
     event_turn_id: &str,
-    todo_update_event: UpdatePlanArgs,
+    todo_update_event: UpdateTodoArgs,
     api_version: ApiVersion,
     outgoing: &OutgoingMessageSender,
 ) {
     if let ApiVersion::V2 = api_version {
         // NOTE: The protocol keeps plan-named fields/events for compatibility; this is the todo list update.
+        let (explanation, todo_items) = todo_update_event.into_parts();
+        let steps: Vec<TurnPlanStep> = todo_items.into_iter().map(TurnPlanStep::from).collect();
         let notification = TurnPlanUpdatedNotification {
             thread_id: conversation_id.to_string(),
             turn_id: event_turn_id.to_string(),
-            explanation: todo_update_event.explanation,
-            plan: todo_update_event
-                .plan
-                .into_iter()
-                .map(TurnPlanStep::from)
-                .collect(),
+            explanation,
+            todo: steps.clone(),
+            plan: steps,
         };
         outgoing
             .send_server_notification(ServerNotification::TurnPlanUpdated(notification))
@@ -1813,8 +1812,8 @@ mod tests {
     use codex_core::protocol::RateLimitWindow;
     use codex_core::protocol::TokenUsage;
     use codex_core::protocol::TokenUsageInfo;
-    use codex_protocol::plan_tool::PlanItemArg;
-    use codex_protocol::plan_tool::StepStatus;
+    use codex_protocol::todo_tool::TodoItemArg;
+    use codex_protocol::todo_tool::TodoStatus;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
@@ -1992,19 +1991,19 @@ mod tests {
     async fn test_handle_turn_todo_update_emits_notification_for_v2() -> Result<()> {
         let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
         let outgoing = OutgoingMessageSender::new(tx);
-        let update = UpdatePlanArgs {
-            explanation: Some("need todo list".to_string()),
-            plan: vec![
-                PlanItemArg {
+        let update = UpdateTodoArgs::new(
+            Some("need todo list".to_string()),
+            vec![
+                TodoItemArg {
                     step: "first".to_string(),
-                    status: StepStatus::Pending,
+                    status: TodoStatus::Pending,
                 },
-                PlanItemArg {
+                TodoItemArg {
                     step: "second".to_string(),
-                    status: StepStatus::Completed,
+                    status: TodoStatus::Completed,
                 },
             ],
-        };
+        );
 
         let conversation_id = ThreadId::new();
 
@@ -2026,6 +2025,7 @@ mod tests {
                 assert_eq!(n.thread_id, conversation_id.to_string());
                 assert_eq!(n.turn_id, "turn-123");
                 assert_eq!(n.explanation.as_deref(), Some("need todo list"));
+                assert_eq!(n.todo, n.plan);
                 assert_eq!(n.plan.len(), 2);
                 assert_eq!(n.plan[0].step, "first");
                 assert_eq!(n.plan[0].status, TurnPlanStepStatus::Pending);

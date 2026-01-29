@@ -208,7 +208,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
-use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::todo_tool::UpdateTodoArgs;
 use strum::IntoEnumIterator;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
@@ -1324,7 +1324,7 @@ impl ChatWidget {
         Some(combined)
     }
 
-    fn on_todo_update(&mut self, update: UpdatePlanArgs) {
+    fn on_todo_update(&mut self, update: UpdateTodoArgs) {
         self.saw_todo_update_this_turn = true;
         self.add_to_history(history_cell::new_todo_update(update));
     }

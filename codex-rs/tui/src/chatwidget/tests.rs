@@ -70,10 +70,10 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::parse_command::ParsedCommand;
-use codex_protocol::plan_tool::PlanItemArg;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::todo_tool::TodoItemArg;
+use codex_protocol::todo_tool::TodoStatus;
+use codex_protocol::todo_tool::UpdateTodoArgs;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -1279,13 +1279,13 @@ async fn plan_implementation_popup_shows_on_todo_update_without_message() {
     chat.set_collaboration_mask(plan_mask);
 
     chat.on_task_started();
-    chat.on_todo_update(UpdatePlanArgs {
-        explanation: None,
-        plan: vec![PlanItemArg {
+    chat.on_todo_update(UpdateTodoArgs::new(
+        None,
+        vec![TodoItemArg {
             step: "First".to_string(),
-            status: StepStatus::Pending,
+            status: TodoStatus::Pending,
         }],
-    });
+    ));
     chat.on_task_complete(None, false);
 
     let popup = render_bottom_popup(&chat, 80);
@@ -1307,13 +1307,13 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
     chat.set_collaboration_mask(plan_mask);
 
     chat.on_task_started();
-    chat.on_todo_update(UpdatePlanArgs {
-        explanation: None,
-        plan: vec![PlanItemArg {
+    chat.on_todo_update(UpdateTodoArgs::new(
+        None,
+        vec![TodoItemArg {
             step: "First".to_string(),
-            status: StepStatus::Pending,
+            status: TodoStatus::Pending,
         }],
-    });
+    ));
     chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
     chat.on_task_complete(None, false);
 
@@ -4406,23 +4406,23 @@ async fn apply_patch_request_shows_diff_summary() -> anyhow::Result<()> {
 #[tokio::test]
 async fn todo_update_renders_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let update = UpdatePlanArgs {
-        explanation: Some("Adapting plan".to_string()),
-        plan: vec![
-            PlanItemArg {
+    let update = UpdateTodoArgs::new(
+        Some("Adapting plan".to_string()),
+        vec![
+            TodoItemArg {
                 step: "Explore codebase".into(),
-                status: StepStatus::Completed,
+                status: TodoStatus::Completed,
             },
-            PlanItemArg {
+            TodoItemArg {
                 step: "Implement feature".into(),
-                status: StepStatus::InProgress,
+                status: TodoStatus::InProgress,
             },
-            PlanItemArg {
+            TodoItemArg {
                 step: "Write tests".into(),
-                status: StepStatus::Pending,
+                status: TodoStatus::Pending,
             },
         ],
-    };
+    );
     chat.handle_codex_event(Event {
         id: "sub-1".into(),
         msg: EventMsg::PlanUpdate(update),

@@ -17,8 +17,6 @@ use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand as CoreParsedCommand;
-use codex_protocol::plan_tool::PlanItemArg as CorePlanItemArg;
-use codex_protocol::plan_tool::StepStatus as CorePlanStepStatus;
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
 use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
@@ -36,6 +34,8 @@ use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
+use codex_protocol::todo_tool::TodoItemArg as CoreTodoItemArg;
+use codex_protocol::todo_tool::TodoStatus as CoreTodoStatus;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
 use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_protocol::user_input::UserInput as CoreUserInput;
@@ -2256,11 +2256,14 @@ pub struct TurnDiffUpdatedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// Todo list update from the todo_write tool. The plan name is legacy.
+/// Todo list update from the todo_write tool. `todo` is preferred; `plan` is a legacy alias.
 pub struct TurnPlanUpdatedNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub explanation: Option<String>,
+    #[serde(default)]
+    pub todo: Vec<TurnPlanStep>,
+    #[serde(default)]
     pub plan: Vec<TurnPlanStep>,
 }
 
@@ -2281,8 +2284,8 @@ pub enum TurnPlanStepStatus {
     Completed,
 }
 
-impl From<CorePlanItemArg> for TurnPlanStep {
-    fn from(value: CorePlanItemArg) -> Self {
+impl From<CoreTodoItemArg> for TurnPlanStep {
+    fn from(value: CoreTodoItemArg) -> Self {
         Self {
             step: value.step,
             status: value.status.into(),
@@ -2290,12 +2293,12 @@ impl From<CorePlanItemArg> for TurnPlanStep {
     }
 }
 
-impl From<CorePlanStepStatus> for TurnPlanStepStatus {
-    fn from(value: CorePlanStepStatus) -> Self {
+impl From<CoreTodoStatus> for TurnPlanStepStatus {
+    fn from(value: CoreTodoStatus) -> Self {
         match value {
-            CorePlanStepStatus::Pending => Self::Pending,
-            CorePlanStepStatus::InProgress => Self::InProgress,
-            CorePlanStepStatus::Completed => Self::Completed,
+            CoreTodoStatus::Pending => Self::Pending,
+            CoreTodoStatus::InProgress => Self::InProgress,
+            CoreTodoStatus::Completed => Self::Completed,
         }
     }
 }

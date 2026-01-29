@@ -45,8 +45,7 @@ use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
 use codex_common::create_config_summary_entries;
-use codex_protocol::plan_tool::StepStatus;
-use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::todo_tool::TodoStatus;
 
 /// This should be configurable. When used in CI, users may not want to impose
 /// a limit so they can see the full transcript.
@@ -539,10 +538,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 eprintln!();
             }
             EventMsg::PlanUpdate(todo_update_event) => {
-                let UpdatePlanArgs {
-                    explanation,
-                    plan: todo_items,
-                } = todo_update_event;
+                let (explanation, todo_items) = todo_update_event.into_parts();
 
                 // Header
                 ts_msg!(self, "{}", "Todo list update".style(self.magenta));
@@ -557,13 +553,13 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 // Pretty-print the todo items with simple status markers.
                 for todo_item in todo_items {
                     match todo_item.status {
-                        StepStatus::Completed => {
+                        TodoStatus::Completed => {
                             ts_msg!(self, "  {} {}", "✓".style(self.green), todo_item.step);
                         }
-                        StepStatus::InProgress => {
+                        TodoStatus::InProgress => {
                             ts_msg!(self, "  {} {}", "→".style(self.cyan), todo_item.step);
                         }
-                        StepStatus::Pending => {
+                        TodoStatus::Pending => {
                             ts_msg!(
                                 self,
                                 "  {} {}",
