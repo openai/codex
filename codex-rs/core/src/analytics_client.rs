@@ -1,3 +1,4 @@
+use crate::CodexAuth;
 use crate::config::Config;
 use crate::default_client::create_client;
 use crate::git_info::collect_git_info;
@@ -13,9 +14,7 @@ use std::path::PathBuf;
 
 #[derive(Clone)]
 pub(crate) struct TrackEventsContext {
-    pub(crate) auth_mode: Option<AuthMode>,
-    pub(crate) access_token: Option<String>,
-    pub(crate) account_id: Option<String>,
+    pub(crate) auth: Option<CodexAuth>,
     pub(crate) model_slug: String,
     pub(crate) conversation_id: String,
     pub(crate) session_source: SessionSource,
@@ -66,12 +65,17 @@ pub(crate) async fn track_skill_invocations(
     if invocations.is_empty() {
         return;
     }
-    if tracking.auth_mode != Some(AuthMode::ChatGPT) {
+    let Some(auth) = tracking.auth.as_ref() else {
+        return;
+    };
+    if auth.mode != AuthMode::ChatGPT {
         return;
     }
-    let (Some(access_token), Some(account_id)) =
-        (tracking.access_token.as_ref(), tracking.account_id.as_ref())
-    else {
+    let access_token = match auth.get_token() {
+        Ok(token) => token,
+        Err(_) => return,
+    };
+    let Some(account_id) = auth.get_account_id() else {
         return;
     };
 
@@ -99,7 +103,7 @@ pub(crate) async fn track_skill_invocations(
         );
         events.push(TrackEvent {
             event_type: "skill_invocation",
-            //TODO: add skill_name_encrypted
+            //TODO: add skill_name, repo_url, skill_path
             event_params: TrackEventParams {
                 skill_id,
                 skill_scope: skill_scope.to_string(),
@@ -115,19 +119,13 @@ pub(crate) async fn track_skill_invocations(
     }
 
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
-    let url = if base_url.ends_with("/backend-api/codex") {
-        format!("{base_url}/analytics-events/track-events")
-    } else if base_url.ends_with("/backend-api") {
-        format!("{base_url}/codex/analytics-events/track-events")
-    } else {
-        format!("{base_url}/api/codex/analytics-events/track-events")
-    };
+    let url = format!("{base_url}/codex/analytics-events/track-events");
     let payload = TrackEventsRequest { events };
 
     let response = create_client()
         .post(&url)
-        .bearer_auth(access_token)
-        .header("chatgpt-account-id", account_id)
+        .bearer_auth(&access_token)
+        .header("chatgpt-account-id", &account_id)
         .header("Content-Type", "application/json")
         .json(&payload)
         .send()
@@ -152,7 +150,7 @@ fn skill_id_for_local_skill(
     skill_path: &Path,
     skill_name: &str,
 ) -> String {
-    let path = skill_id_path_for_local_skill(repo_url, repo_root, skill_path);
+    let path = normalize_path_for_skill_id(repo_url, repo_root, skill_path);
     let prefix = if let Some(url) = repo_url {
         format!("repo_{url}")
     } else {
@@ -164,7 +162,11 @@ fn skill_id_for_local_skill(
     format!("{:x}", hasher.finalize())
 }
 
-fn skill_id_path_for_local_skill(
+/// Returns a normalized path for skill ID construction.
+///
+/// - Repo-scoped skills use a path relative to the repo root.
+/// - User/admin/system skills use an absolute path.
+fn normalize_path_for_skill_id(
     repo_url: Option<&str>,
     repo_root: Option<&Path>,
     skill_path: &Path,
@@ -178,5 +180,53 @@ fn skill_id_path_for_local_skill(
             .to_string_lossy()
             .replace('\\', "/"),
         _ => resolved_path.to_string_lossy().replace('\\', "/"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_path_for_skill_id;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    fn expected_absolute_path(path: &PathBuf) -> String {
+        std::fs::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .replace('\\', "/")
+    }
+
+    #[test]
+    fn normalize_path_for_skill_id_repo_scoped_uses_relative_path() {
+        let repo_root = PathBuf::from("/repo/root");
+        let skill_path = PathBuf::from("/repo/root/.codex/skills/doc/SKILL.md");
+
+        let path = normalize_path_for_skill_id(
+            Some("https://example.com/repo.git"),
+            Some(repo_root.as_path()),
+            skill_path.as_path(),
+        );
+
+        assert_eq!(path, ".codex/skills/doc/SKILL.md");
+    }
+
+    #[test]
+    fn normalize_path_for_skill_id_user_scoped_uses_absolute_path() {
+        let skill_path = PathBuf::from("/Users/abc/.codex/skills/doc/SKILL.md");
+
+        let path = normalize_path_for_skill_id(None, None, skill_path.as_path());
+        let expected = expected_absolute_path(&skill_path);
+
+        assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn normalize_path_for_skill_id_admin_scoped_uses_absolute_path() {
+        let skill_path = PathBuf::from("/etc/codex/skills/doc/SKILL.md");
+
+        let path = normalize_path_for_skill_id(None, None, skill_path.as_path());
+        let expected = expected_absolute_path(&skill_path);
+
+        assert_eq!(path, expected);
     }
 }

@@ -3184,14 +3184,9 @@ pub(crate) async fn run_turn(
         Some(auth_manager) => auth_manager.auth().await,
         None => None,
     };
-    let auth_mode = auth.as_ref().map(|auth| auth.mode);
-    let access_token = auth.as_ref().and_then(|auth| auth.get_token().ok());
-    let account_id = auth.as_ref().and_then(CodexAuth::get_account_id);
     let config = sess.get_config().await;
     let tracking = TrackEventsContext {
-        auth_mode,
-        access_token,
-        account_id,
+        auth,
         model_slug: turn_context.client.get_model(),
         conversation_id: sess.conversation_id.to_string(),
         session_source: turn_context.client.get_session_source(),
