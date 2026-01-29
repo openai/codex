@@ -13,7 +13,6 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
-    Personality,
     Approvals,
     Permissions,
     #[strum(serialize = "setup-elevated-sandbox")]
@@ -39,6 +38,7 @@ pub enum SlashCommand {
     Feedback,
     Rollout,
     Ps,
+    Personality,
     TestApproval,
 }
 
