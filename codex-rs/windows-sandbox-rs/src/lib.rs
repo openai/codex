@@ -5,8 +5,20 @@ macro_rules! windows_modules {
 }
 
 windows_modules!(
-    acl, allow, audit, cap, dpapi, env, hide_users, identity, logging, policy, process, token,
-    winutil, workspace_acl
+    acl,
+    allow,
+    audit,
+    cap,
+    dpapi,
+    env,
+    hide_users,
+    identity,
+    logging,
+    policy,
+    process,
+    token,
+    winutil,
+    workspace_acl
 );
 
 #[cfg(target_os = "windows")]
@@ -20,9 +32,9 @@ mod elevated_impl;
 mod setup_error;
 
 #[cfg(target_os = "windows")]
-pub use acl::allow_null_device;
-#[cfg(target_os = "windows")]
 pub use acl::add_deny_write_ace;
+#[cfg(target_os = "windows")]
+pub use acl::allow_null_device;
 #[cfg(target_os = "windows")]
 pub use acl::ensure_allow_mask_aces;
 #[cfg(target_os = "windows")]
@@ -39,12 +51,6 @@ pub use audit::apply_world_writable_scan_and_denies;
 pub use cap::load_or_create_cap_sids;
 #[cfg(target_os = "windows")]
 pub use cap::workspace_cap_sid_for_cwd;
-#[cfg(target_os = "windows")]
-pub use workspace_acl::canonicalize_path;
-#[cfg(target_os = "windows")]
-pub use workspace_acl::is_command_cwd_root;
-#[cfg(target_os = "windows")]
-pub use workspace_acl::protect_workspace_codex_dir;
 #[cfg(target_os = "windows")]
 pub use dpapi::protect as dpapi_protect;
 #[cfg(target_os = "windows")]
@@ -111,6 +117,12 @@ pub use windows_impl::CaptureResult;
 pub use winutil::string_from_sid_bytes;
 #[cfg(target_os = "windows")]
 pub use winutil::to_wide;
+#[cfg(target_os = "windows")]
+pub use workspace_acl::canonicalize_path;
+#[cfg(target_os = "windows")]
+pub use workspace_acl::is_command_cwd_root;
+#[cfg(target_os = "windows")]
+pub use workspace_acl::protect_workspace_codex_dir;
 
 #[cfg(not(target_os = "windows"))]
 pub use stub::apply_world_writable_scan_and_denies;
@@ -246,32 +258,31 @@ mod windows_impl {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
         let caps = load_or_create_cap_sids(codex_home)?;
-        let (h_token, psid_generic, psid_workspace): (HANDLE, *mut c_void, Option<*mut c_void>) =
-            unsafe {
-                match &policy {
-                    SandboxPolicy::ReadOnly => {
-                        let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
-                        let (h, _) = super::token::create_readonly_token_with_cap(psid)?;
-                        (h, psid, None)
-                    }
-                    SandboxPolicy::WorkspaceWrite { .. } => {
-                        let psid_generic = convert_string_sid_to_sid(&caps.workspace).unwrap();
-                        let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
-                        let psid_workspace = convert_string_sid_to_sid(&ws_sid).unwrap();
-                        let base = super::token::get_current_token_for_restriction()?;
-                        let h_res = create_workspace_write_token_with_caps_from(
-                            base,
-                            &[psid_generic, psid_workspace],
-                        );
-                        windows_sys::Win32::Foundation::CloseHandle(base);
-                        let h = h_res?;
-                        (h, psid_generic, Some(psid_workspace))
-                    }
-                    SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-                        unreachable!("DangerFullAccess handled above")
-                    }
+        let (h_token, psid_generic, psid_workspace): (HANDLE, *mut c_void, Option<*mut c_void>) = unsafe {
+            match &policy {
+                SandboxPolicy::ReadOnly => {
+                    let psid = convert_string_sid_to_sid(&caps.readonly).unwrap();
+                    let (h, _) = super::token::create_readonly_token_with_cap(psid)?;
+                    (h, psid, None)
                 }
-            };
+                SandboxPolicy::WorkspaceWrite { .. } => {
+                    let psid_generic = convert_string_sid_to_sid(&caps.workspace).unwrap();
+                    let ws_sid = workspace_cap_sid_for_cwd(codex_home, cwd)?;
+                    let psid_workspace = convert_string_sid_to_sid(&ws_sid).unwrap();
+                    let base = super::token::get_current_token_for_restriction()?;
+                    let h_res = create_workspace_write_token_with_caps_from(
+                        base,
+                        &[psid_generic, psid_workspace],
+                    );
+                    windows_sys::Win32::Foundation::CloseHandle(base);
+                    let h = h_res?;
+                    (h, psid_generic, Some(psid_workspace))
+                }
+                SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                    unreachable!("DangerFullAccess handled above")
+                }
+            }
+        };
 
         unsafe {
             if is_workspace_write {
