@@ -366,7 +366,6 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::UndoCompleted(_)
                     | EventMsg::ExitedReviewMode(_)
                     | EventMsg::RequestUserInput(_)
-                    | EventMsg::RequestUserInputResult(_)
                     | EventMsg::DynamicToolCallRequest(_)
                     | EventMsg::ContextCompacted(_)
                     | EventMsg::ThreadRolledBack(_)

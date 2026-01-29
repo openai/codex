@@ -32,8 +32,6 @@ use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
-use crate::request_user_input::RequestUserInputAnswer;
-use crate::request_user_input::RequestUserInputQuestion;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -778,9 +776,6 @@ pub enum EventMsg {
 
     RequestUserInput(RequestUserInputEvent),
 
-    /// Structured record of request_user_input answers for history rendering.
-    RequestUserInputResult(RequestUserInputResultEvent),
-
     DynamicToolCallRequest(DynamicToolCallRequest),
 
     ElicitationRequest(ElicitationRequestEvent),
@@ -971,15 +966,6 @@ pub enum CodexErrorInfo {
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct RawResponseItemEvent {
     pub item: ResponseItem,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
-pub struct RequestUserInputResultEvent {
-    pub call_id: String,
-    pub turn_id: String,
-    pub questions: Vec<RequestUserInputQuestion>,
-    pub answers: HashMap<String, RequestUserInputAnswer>,
-    pub interrupted: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]

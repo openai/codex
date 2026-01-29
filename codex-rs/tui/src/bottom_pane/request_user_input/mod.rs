@@ -27,6 +27,7 @@ use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::scroll_state::ScrollState;
 use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
 use crate::bottom_pane::selection_popup_common::measure_rows_height;
+use crate::history_cell;
 use crate::render::renderable::Renderable;
 
 use codex_core::protocol::Op;
@@ -755,11 +756,19 @@ impl RequestUserInputOverlay {
         if answers.is_empty() {
             return;
         }
+        let history_answers = answers.clone();
         self.app_event_tx
-            .send(AppEvent::CodexOp(Op::UserInputAnswer {
-                id: self.request.turn_id.clone(),
-                response: RequestUserInputResponse { answers },
-            }));
+            .send(AppEvent::QueueRequestUserInputAnswers {
+                call_id: self.request.call_id.clone(),
+                answers,
+            });
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::new_request_user_input_result(
+                self.request.questions.clone(),
+                history_answers,
+                true,
+            ),
+        )));
     }
 
     /// Advance to next question, or submit when on the last one.
@@ -811,11 +820,19 @@ impl RequestUserInputOverlay {
                 },
             );
         }
+        let history_answers = answers.clone();
         self.app_event_tx
             .send(AppEvent::CodexOp(Op::UserInputAnswer {
                 id: self.request.turn_id.clone(),
                 response: RequestUserInputResponse { answers },
             }));
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::new_request_user_input_result(
+                self.request.questions.clone(),
+                history_answers,
+                false,
+            ),
+        )));
         if let Some(next) = self.queue.pop_front() {
             self.request = next;
             self.reset_for_request();
@@ -1773,14 +1790,16 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
-            panic!("expected UserInputAnswer");
+        let AppEvent::QueueRequestUserInputAnswers { answers, .. } = event else {
+            panic!("expected queued answers");
         };
-        let marker = response
-            .answers
+        let marker = answers
             .get(INTERRUPTED_ANSWER_ID_BASE)
             .expect("interrupt marker missing");
         assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
+
+        let event = rx.try_recv().expect("expected history cell");
+        assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
 
         let event = rx.try_recv().expect("expected interrupt AppEvent");
         let AppEvent::CodexOp(op) = event else {
@@ -1804,14 +1823,16 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
-            panic!("expected UserInputAnswer");
+        let AppEvent::QueueRequestUserInputAnswers { answers, .. } = event else {
+            panic!("expected queued answers");
         };
-        let marker = response
-            .answers
+        let marker = answers
             .get(INTERRUPTED_ANSWER_ID_BASE)
             .expect("interrupt marker missing");
         assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
+
+        let event = rx.try_recv().expect("expected history cell");
+        assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
 
         let event = rx.try_recv().expect("expected interrupt AppEvent");
         let AppEvent::CodexOp(op) = event else {
@@ -1838,14 +1859,16 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
-            panic!("expected UserInputAnswer");
+        let AppEvent::QueueRequestUserInputAnswers { answers, .. } = event else {
+            panic!("expected queued answers");
         };
-        let marker = response
-            .answers
+        let marker = answers
             .get(INTERRUPTED_ANSWER_ID_BASE)
             .expect("interrupt marker missing");
         assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
+
+        let event = rx.try_recv().expect("expected history cell");
+        assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
 
         let event = rx.try_recv().expect("expected interrupt AppEvent");
         let AppEvent::CodexOp(op) = event else {
@@ -1873,14 +1896,16 @@ mod tests {
 
         assert_eq!(overlay.done, true);
         let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
-            panic!("expected UserInputAnswer");
+        let AppEvent::QueueRequestUserInputAnswers { answers, .. } = event else {
+            panic!("expected queued answers");
         };
-        let marker = response
-            .answers
+        let marker = answers
             .get(INTERRUPTED_ANSWER_ID_BASE)
             .expect("interrupt marker missing");
         assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
+
+        let event = rx.try_recv().expect("expected history cell");
+        assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
 
         let event = rx.try_recv().expect("expected interrupt AppEvent");
         let AppEvent::CodexOp(op) = event else {
@@ -1915,16 +1940,18 @@ mod tests {
         overlay.handle_key_event(KeyEvent::from(KeyCode::Esc));
 
         let event = rx.try_recv().expect("expected partial answers");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
-            panic!("expected UserInputAnswer");
+        let AppEvent::QueueRequestUserInputAnswers { answers, .. } = event else {
+            panic!("expected queued answers");
         };
-        let answer = response.answers.get("q1").expect("answer missing");
+        let answer = answers.get("q1").expect("answer missing");
         assert_eq!(answer.answers, vec!["Option 1".to_string()]);
-        let marker = response
-            .answers
+        let marker = answers
             .get(INTERRUPTED_ANSWER_ID_BASE)
             .expect("interrupt marker missing");
         assert_eq!(marker.answers, vec![INTERRUPTED_ANSWER_TEXT.to_string()]);
+
+        let event = rx.try_recv().expect("expected history cell");
+        assert!(matches!(event, AppEvent::InsertHistoryCell(_)));
 
         let event = rx.try_recv().expect("expected interrupt AppEvent");
         let AppEvent::CodexOp(op) = event else {

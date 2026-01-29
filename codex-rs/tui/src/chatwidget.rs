@@ -72,7 +72,6 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::RateLimitSnapshot;
-use codex_core::protocol::RequestUserInputResultEvent;
 use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::ReviewTarget;
 use codex_core::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -106,7 +105,9 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use crossterm::event::KeyCode;
@@ -388,6 +389,11 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) otel_manager: OtelManager,
 }
 
+struct PendingRequestUserInputAnswers {
+    call_id: String,
+    answers: HashMap<String, RequestUserInputAnswer>,
+}
+
 #[derive(Default)]
 enum RateLimitSwitchPromptState {
     #[default]
@@ -530,6 +536,8 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    // Partial request_user_input answers to send before the next user turn.
+    pending_request_user_input_answers: VecDeque<PendingRequestUserInputAnswers>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     /// When `Some`, the user has pressed a quit shortcut and the second press
@@ -797,6 +805,7 @@ impl ChatWidget {
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.set_skills(None);
         self.bottom_pane.set_connectors_snapshot(None);
+        self.clear_pending_request_user_input_answers();
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
@@ -1508,11 +1517,6 @@ impl ChatWidget {
             |q| q.push_user_input(ev),
             |s| s.handle_request_user_input_now(ev2),
         );
-    }
-
-    fn on_request_user_input_result(&mut self, ev: RequestUserInputResultEvent) {
-        self.add_to_history(history_cell::new_request_user_input_result(ev));
-        self.request_redraw();
     }
 
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
@@ -2287,6 +2291,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            pending_request_user_input_answers: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2436,6 +2441,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
+            pending_request_user_input_answers: VecDeque::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2566,6 +2572,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            pending_request_user_input_answers: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -3209,6 +3216,42 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn queue_request_user_input_answers(
+        &mut self,
+        call_id: String,
+        answers: HashMap<String, RequestUserInputAnswer>,
+    ) {
+        if answers.is_empty() {
+            return;
+        }
+        if let Some(existing) = self
+            .pending_request_user_input_answers
+            .iter_mut()
+            .find(|pending| pending.call_id == call_id)
+        {
+            existing.answers = answers;
+            return;
+        }
+        self.pending_request_user_input_answers
+            .push_back(PendingRequestUserInputAnswers { call_id, answers });
+    }
+
+    fn flush_pending_request_user_input_answers(&mut self) {
+        let pending = std::mem::take(&mut self.pending_request_user_input_answers);
+        for pending in pending {
+            self.submit_op(Op::UserInputAnswer {
+                id: pending.call_id,
+                response: RequestUserInputResponse {
+                    answers: pending.answers,
+                },
+            });
+        }
+    }
+
+    fn clear_pending_request_user_input_answers(&mut self) {
+        self.pending_request_user_input_answers.clear();
+    }
+
     fn submit_user_message(&mut self, user_message: UserMessage) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
@@ -3287,6 +3330,7 @@ impl ChatWidget {
                 });
             }
         }
+        self.flush_pending_request_user_input_answers();
 
         let effective_mode = self.effective_collaboration_mode();
         let collaboration_mode = if self.collaboration_modes_enabled() {
@@ -3467,7 +3511,6 @@ impl ChatWidget {
             EventMsg::RequestUserInput(ev) => {
                 self.on_request_user_input(ev);
             }
-            EventMsg::RequestUserInputResult(ev) => self.on_request_user_input_result(ev),
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
@@ -3522,7 +3565,9 @@ impl ChatWidget {
             EventMsg::CollabWaitingEnd(ev) => self.on_collab_event(collab::waiting_end(ev)),
             EventMsg::CollabCloseBegin(_) => {}
             EventMsg::CollabCloseEnd(ev) => self.on_collab_event(collab::close_end(ev)),
-            EventMsg::ThreadRolledBack(_) => {}
+            EventMsg::ThreadRolledBack(_) => {
+                self.clear_pending_request_user_input_answers();
+            }
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)

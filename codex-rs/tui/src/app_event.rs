@@ -8,6 +8,7 @@
 //! Exit is modelled explicitly via `AppEvent::Exit(ExitMode)` so callers can request shutdown-first
 //! quits without reaching into the app loop or coupling to shutdown/exit sequencing.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use codex_chatgpt::connectors::AppInfo;
@@ -17,6 +18,7 @@ use codex_core::protocol::RateLimitSnapshot;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
 
 use crate::bottom_pane::ApprovalRequest;
 use crate::history_cell::HistoryCell;
@@ -111,6 +113,12 @@ pub(crate) enum AppEvent {
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),
+
+    /// Buffer request_user_input answers to be sent with the next user turn.
+    QueueRequestUserInputAnswers {
+        call_id: String,
+        answers: HashMap<String, RequestUserInputAnswer>,
+    },
 
     StartCommitAnimation,
     StopCommitAnimation,

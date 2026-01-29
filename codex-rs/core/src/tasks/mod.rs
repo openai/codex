@@ -255,17 +255,6 @@ impl Session {
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
 
-        let pending_request_user_input_answers =
-            self.take_pending_request_user_input_answers().await;
-        if !pending_request_user_input_answers.is_empty() {
-            let pending_response_items = pending_request_user_input_answers
-                .into_iter()
-                .map(ResponseItem::from)
-                .collect::<Vec<ResponseItem>>();
-            self.record_conversation_items(task.turn_context.as_ref(), &pending_response_items)
-                .await;
-        }
-
         if reason == TurnAbortReason::Interrupted {
             let marker = ResponseItem::Message {
                 id: None,
