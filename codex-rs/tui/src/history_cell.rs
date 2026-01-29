@@ -1795,7 +1795,7 @@ impl HistoryCell for RequestUserInputResultCell {
         let mut header = vec!["? ".dim(), "User input".bold()];
         header.push(format!(" {answered}/{total} answered").dim());
         if self.event.interrupted {
-            header.push(" (interrupted)".yellow());
+            header.push(" (interrupted)".cyan());
         }
 
         let mut lines: Vec<Line<'static>> = vec![header.into()];
@@ -1848,11 +1848,9 @@ impl HistoryCell for RequestUserInputResultCell {
             lines.extend(wrap_with_prefix(
                 &summary,
                 width,
-                "  ↳ ".yellow().dim(),
+                "  ↳ ".cyan().dim(),
                 "    ".dim(),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::DIM),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
             ));
         }
 
