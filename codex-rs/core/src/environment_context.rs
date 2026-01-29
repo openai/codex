@@ -6,6 +6,7 @@ use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -13,11 +14,22 @@ use std::path::PathBuf;
 pub(crate) struct EnvironmentContext {
     pub cwd: Option<PathBuf>,
     pub shell: Shell,
+    /// Workspace metadata, structured to support future multi-root workspaces.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_configuration: Option<WorkspaceConfiguration>,
 }
 
 impl EnvironmentContext {
-    pub fn new(cwd: Option<PathBuf>, shell: Shell) -> Self {
-        Self { cwd, shell }
+    pub fn new(
+        cwd: Option<PathBuf>,
+        shell: Shell,
+        workspace_configuration: Option<WorkspaceConfiguration>,
+    ) -> Self {
+        Self {
+            cwd,
+            shell,
+            workspace_configuration,
+        }
     }
 
     /// Compares two environment contexts, ignoring the shell. Useful when
@@ -28,6 +40,7 @@ impl EnvironmentContext {
             cwd,
             // should compare all fields except shell
             shell: _,
+            ..
         } = other;
 
         self.cwd == *cwd
@@ -39,12 +52,29 @@ impl EnvironmentContext {
         } else {
             None
         };
-        EnvironmentContext::new(cwd, shell.clone())
+        // Only include workspace configuration on the initial prefix message.
+        EnvironmentContext::new(cwd, shell.clone(), None)
     }
 
     pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
-        Self::new(Some(turn_context.cwd.clone()), shell.clone())
+        // Only include workspace configuration on the initial prefix message.
+        Self::new(Some(turn_context.cwd.clone()), shell.clone(), None)
     }
+}
+
+/// Multi-root-friendly workspace metadata modeled after Cline's structure.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct WorkspaceConfiguration {
+    pub workspaces: BTreeMap<String, WorkspaceEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct WorkspaceEntry {
+    pub hint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub associated_remote_urls: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_git_commit_hash: Option<String>,
 }
 
 impl EnvironmentContext {
@@ -66,6 +96,17 @@ impl EnvironmentContext {
 
         let shell_name = self.shell.name();
         lines.push(format!("  <shell>{shell_name}</shell>"));
+
+        if let Some(workspace_configuration) = self.workspace_configuration
+            && let Ok(json) = serde_json::to_string_pretty(&workspace_configuration)
+        {
+            lines.push("  <workspace_configuration>".to_string());
+            for line in json.lines() {
+                lines.push(format!("    {line}"));
+            }
+            lines.push("  </workspace_configuration>".to_string());
+        }
+
         lines.push(ENVIRONMENT_CONTEXT_CLOSE_TAG.to_string());
         lines.join("\n")
     }
@@ -91,6 +132,7 @@ mod tests {
     use super::*;
     use core_test_support::test_path_buf;
     use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
 
     fn fake_shell() -> Shell {
         Shell {
@@ -103,7 +145,7 @@ mod tests {
     #[test]
     fn serialize_workspace_write_environment_context() {
         let cwd = test_path_buf("/repo");
-        let context = EnvironmentContext::new(Some(cwd.clone()), fake_shell());
+        let context = EnvironmentContext::new(Some(cwd.clone()), fake_shell(), None);
 
         let expected = format!(
             r#"<environment_context>
@@ -118,7 +160,7 @@ mod tests {
 
     #[test]
     fn serialize_read_only_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell());
+        let context = EnvironmentContext::new(None, fake_shell(), None);
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
@@ -129,7 +171,7 @@ mod tests {
 
     #[test]
     fn serialize_external_sandbox_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell());
+        let context = EnvironmentContext::new(None, fake_shell(), None);
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
@@ -140,7 +182,7 @@ mod tests {
 
     #[test]
     fn serialize_external_sandbox_with_restricted_network_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell());
+        let context = EnvironmentContext::new(None, fake_shell(), None);
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
@@ -151,7 +193,7 @@ mod tests {
 
     #[test]
     fn serialize_full_access_environment_context() {
-        let context = EnvironmentContext::new(None, fake_shell());
+        let context = EnvironmentContext::new(None, fake_shell(), None);
 
         let expected = r#"<environment_context>
   <shell>bash</shell>
@@ -162,23 +204,23 @@ mod tests {
 
     #[test]
     fn equals_except_shell_compares_cwd() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell());
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell());
+        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
+        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
         assert!(context1.equals_except_shell(&context2));
     }
 
     #[test]
     fn equals_except_shell_ignores_sandbox_policy() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell());
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell());
+        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
+        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None);
 
         assert!(context1.equals_except_shell(&context2));
     }
 
     #[test]
     fn equals_except_shell_compares_cwd_differences() {
-        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo1")), fake_shell());
-        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo2")), fake_shell());
+        let context1 = EnvironmentContext::new(Some(PathBuf::from("/repo1")), fake_shell(), None);
+        let context2 = EnvironmentContext::new(Some(PathBuf::from("/repo2")), fake_shell(), None);
 
         assert!(!context1.equals_except_shell(&context2));
     }
@@ -192,6 +234,7 @@ mod tests {
                 shell_path: "/bin/bash".into(),
                 shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
             },
+            None,
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
@@ -200,8 +243,51 @@ mod tests {
                 shell_path: "/bin/zsh".into(),
                 shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
             },
+            None,
         );
 
         assert!(context1.equals_except_shell(&context2));
+    }
+
+    #[test]
+    fn serialize_environment_context_with_workspace_configuration() {
+        let cwd = test_path_buf("/repo");
+        let mut workspaces = BTreeMap::new();
+        workspaces.insert(
+            cwd.to_string_lossy().to_string(),
+            WorkspaceEntry {
+                hint: "repo".to_string(),
+                associated_remote_urls: Some(vec![
+                    "origin: https://example.com/repo.git".to_string(),
+                ]),
+                latest_git_commit_hash: Some("abc123".to_string()),
+            },
+        );
+        let workspace_configuration = WorkspaceConfiguration { workspaces };
+        let context = EnvironmentContext::new(
+            Some(cwd.clone()),
+            fake_shell(),
+            Some(workspace_configuration),
+        );
+
+        let expected = r#"<environment_context>
+  <cwd>/repo</cwd>
+  <shell>bash</shell>
+  <workspace_configuration>
+    {
+      "workspaces": {
+        "/repo": {
+          "hint": "repo",
+          "associated_remote_urls": [
+            "origin: https://example.com/repo.git"
+          ],
+          "latest_git_commit_hash": "abc123"
+        }
+      }
+    }
+  </workspace_configuration>
+</environment_context>"#;
+
+        assert_eq!(context.serialize_to_xml(), expected);
     }
 }

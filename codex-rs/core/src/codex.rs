@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -105,6 +107,8 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
 use crate::environment_context::EnvironmentContext;
+use crate::environment_context::WorkspaceConfiguration;
+use crate::environment_context::WorkspaceEntry;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 #[cfg(test)]
@@ -1809,6 +1813,34 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
+        fn build_workspace_configuration(
+            cwd: &Path,
+            git_info: Option<&codex_protocol::protocol::GitInfo>,
+            remote_urls: Option<&Vec<String>>,
+        ) -> Option<WorkspaceConfiguration> {
+            let latest_git_commit_hash = git_info.and_then(|info| info.commit_hash.clone());
+            let associated_remote_urls = remote_urls.cloned();
+            if latest_git_commit_hash.is_none() && associated_remote_urls.is_none() {
+                return None;
+            }
+
+            let hint = cwd.file_name().and_then(|name| name.to_str()).map_or_else(
+                || cwd.to_string_lossy().into_owned(),
+                |name| name.to_string(),
+            );
+
+            let mut workspaces = BTreeMap::new();
+            workspaces.insert(
+                cwd.to_string_lossy().into_owned(),
+                WorkspaceEntry {
+                    hint,
+                    associated_remote_urls,
+                    latest_git_commit_hash,
+                },
+            );
+            Some(WorkspaceConfiguration { workspaces })
+        }
+
         let mut items = Vec::<ResponseItem>::with_capacity(4);
         let shell = self.user_shell();
         items.push(
@@ -1843,9 +1875,17 @@ impl Session {
                 .into(),
             );
         }
+        let git_info = crate::git_info::collect_git_info(turn_context.cwd.as_path()).await;
+        let remote_urls = crate::git_info::get_git_remote_urls(turn_context.cwd.as_path()).await;
+        let workspace_configuration = build_workspace_configuration(
+            turn_context.cwd.as_path(),
+            git_info.as_ref(),
+            remote_urls.as_ref(),
+        );
         items.push(ResponseItem::from(EnvironmentContext::new(
             Some(turn_context.cwd.clone()),
             shell.as_ref().clone(),
+            workspace_configuration,
         )));
         items
     }
