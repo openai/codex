@@ -892,6 +892,22 @@ impl ChatWidget {
         last_agent_message: Option<String>,
         from_replay: bool,
     ) {
+        self.on_turn_finished(turn_id);
+
+        if !from_replay && self.queued_user_messages.is_empty() {
+            self.maybe_prompt_plan_implementation(last_agent_message.as_deref());
+        }
+        // If there is a queued user message, send exactly one now to begin the next turn.
+        self.maybe_send_next_queued_input();
+        // Emit a notification when the turn completes (suppressed if focused).
+        self.notify(Notification::AgentTurnComplete {
+            response: last_agent_message.unwrap_or_default(),
+        });
+
+        self.maybe_show_pending_rate_limit_prompt();
+    }
+
+    fn on_turn_finished(&mut self, turn_id: Option<&str>) {
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         self.flush_unified_exec_wait_streak();
@@ -910,18 +926,6 @@ impl ChatWidget {
             self.clear_unified_exec_processes();
         }
         self.request_redraw();
-
-        if !from_replay && self.queued_user_messages.is_empty() {
-            self.maybe_prompt_plan_implementation(last_agent_message.as_deref());
-        }
-        // If there is a queued user message, send exactly one now to begin the next turn.
-        self.maybe_send_next_queued_input();
-        // Emit a notification when the turn completes (suppressed if focused).
-        self.notify(Notification::AgentTurnComplete {
-            response: last_agent_message.unwrap_or_default(),
-        });
-
-        self.maybe_show_pending_rate_limit_prompt();
     }
 
     fn maybe_prompt_plan_implementation(&mut self, last_agent_message: Option<&str>) {
@@ -3031,7 +3035,9 @@ impl ChatWidget {
                     self.on_interrupted_turn(ev.reason);
                 }
                 TurnAbortReason::Replaced => {
-                    self.on_error("Turn aborted: replaced by a new task".to_owned())
+                    // Replaced turns do not emit TurnComplete, so remove this turn from running
+                    // state here (important when turns can overlap).
+                    self.on_turn_finished(id.as_deref());
                 }
                 TurnAbortReason::ReviewEnded => {
                     self.on_interrupted_turn(ev.reason);

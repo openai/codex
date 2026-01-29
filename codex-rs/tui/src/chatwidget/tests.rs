@@ -3700,6 +3700,49 @@ async fn interrupt_restores_queued_messages_into_composer() {
 }
 
 #[tokio::test]
+async fn replaced_turn_aborted_clears_only_that_turn_id() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-2".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            model_context_window: None,
+        }),
+    });
+
+    assert!(chat.running_turn_ids.contains("turn-1"));
+    assert!(chat.running_turn_ids.contains("turn-2"));
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Replaced,
+        }),
+    });
+
+    assert!(!chat.running_turn_ids.contains("turn-1"));
+    assert!(chat.running_turn_ids.contains("turn-2"));
+    assert!(chat.bottom_pane.is_task_running());
+
+    chat.handle_codex_event(Event {
+        id: "turn-2".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+
+    assert!(chat.running_turn_ids.is_empty());
+    assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
 async fn interrupt_prepends_queued_messages_before_existing_composer_text() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
