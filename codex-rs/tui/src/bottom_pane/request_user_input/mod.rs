@@ -375,7 +375,6 @@ impl RequestUserInputOverlay {
     }
 
     fn restore_current_draft(&mut self) {
-        self.composer.set_mask_input(false);
         self.composer
             .set_placeholder_text(self.notes_placeholder().to_string());
         self.composer.set_footer_hint_override(Some(Vec::new()));
@@ -709,14 +708,9 @@ impl RequestUserInputOverlay {
             };
             let selected_label = selected_idx
                 .and_then(|selected_idx| Self::option_label_for_index(question, selected_idx));
-            let has_options = options.is_some_and(|opts| !opts.is_empty());
             let mut answer_list = selected_label.into_iter().collect::<Vec<_>>();
             if !notes.is_empty() {
-                if has_options {
-                    answer_list.push(format!("user_note: {notes}"));
-                } else {
-                    answer_list.push(notes);
-                }
+                answer_list.push(format!("user_note: {notes}"));
             }
             answers.insert(
                 question.id.clone(),
@@ -1980,37 +1974,6 @@ mod tests {
         };
         let answer = response.answers.get("q1").expect("answer missing");
         assert_eq!(answer.answers, Vec::<String>::new());
-    }
-
-    #[test]
-    fn freeform_submission_does_not_prefix_user_note() {
-        let (tx, mut rx) = test_sender();
-        let mut overlay = RequestUserInputOverlay::new(
-            request_event("turn-1", vec![question_without_options("q1", "Secret")]),
-            tx,
-            true,
-            false,
-            false,
-        );
-
-        overlay
-            .composer
-            .set_text_content("super-secret".to_string(), Vec::new(), Vec::new());
-        overlay.composer.move_cursor_to_end();
-        let draft = overlay.capture_composer_draft();
-        if let Some(answer) = overlay.current_answer_mut() {
-            answer.draft = draft;
-            answer.answer_committed = true;
-        }
-
-        overlay.submit_answers();
-
-        let event = rx.try_recv().expect("expected AppEvent");
-        let AppEvent::CodexOp(Op::UserInputAnswer { response, .. }) = event else {
-            panic!("expected UserInputAnswer");
-        };
-        let answer = response.answers.get("q1").expect("answer missing");
-        assert_eq!(answer.answers, vec!["super-secret".to_string()]);
     }
 
     #[test]
