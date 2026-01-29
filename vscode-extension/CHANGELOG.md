@@ -6,6 +6,11 @@
 
 （なし）
 
+## 0.2.5
+
+- **Docs**
+  - 拡張の説明（README）を刷新し、`codex` / `codez` / `opencode` の対応範囲と制約を明確化
+
 ## 0.2.4
 
 - **OpenCode / WSL 安定性**

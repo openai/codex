@@ -1,33 +1,52 @@
 # Codex UI (VS Code Extension)
 
-Use **Codex CLI** (via `codex app-server`) inside VS Code.
+Use Codex-style CLIs inside VS Code: sessions, chat, tools, diffs.
 
 This extension:
 
-- Starts / connects to the Codex CLI app-server per workspace folder
+- Starts / connects to a backend per workspace folder
 - Manages sessions (create, switch, rename, hide)
-- Shows chat output including tool events (commands, file changes, diffs, approvals)
+- Renders chat output and tool activity (commands, file changes, diffs, approvals)
 
-## Prerequisites (Codex CLI)
+## Supported backends
 
-This extension **does not bundle Codex CLI**.
+You can choose a backend per session:
 
-- Install the CLI(s) you want to use and make sure they are available in your `PATH`:
-  - `codex` (for the `codex` backend)
-  - `codez` (for the `codez` backend)
-  - `opencode` (optional, for the `opencode` backend)
-- Or set the full path via settings (`codez.cli.commands.codex`, `codez.cli.commands.codez`, `codez.opencode.command`).
+- **`codex`**: upstream Codex CLI (via `codex app-server`)
+- **`codez`**: your Codez CLI (via `codez app-server`)
+- **`opencode`**: OpenCode (via `opencode serve`)
+
+Important notes:
+
+- `codex` / `codez` sessions share the same protocol and can be reopened between each other.
+- `opencode` uses a different history format/protocol. History is not shared with `codex`/`codez`, and sessions are kept separate.
+
+## Prerequisites
+
+This extension **does not bundle any CLI**. Install the backends you want to use and make sure they are available in your `PATH`:
+
+- `codex` (for the `codex` backend)
+- `codez` (for the `codez` backend)
+- `opencode` (for the `opencode` backend)
+
+Or set absolute paths via settings (see below).
 
 ## Usage
 
 ![screenshot](assets/image.png)
 
 1. Open the Activity Bar view: **Codex UI**
-2. Click **New** to create a session
+2. Click **New** to create a session (you can pick `codex` / `codez` / `opencode`)
 3. Type in the input box (Enter = send, Shift+Enter = newline)
 4. Switch sessions from **Sessions** or the chat tab bar
 
-### Settings
+## Feature notes
+
+- **Rewind/Edit**: supported for `codez` and `opencode` sessions (not `codex`).
+- **Accounts / login UI**: supported for `codez` sessions only (`opencode` does not use the same account flow).
+- **OpenCode tool output**: rendered as Step/Tool cards optimized to avoid tool-spam.
+
+## Settings
 
 - `codez.cli.commands.codex`
   - Default: `codex`
