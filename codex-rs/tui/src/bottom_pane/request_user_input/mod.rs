@@ -32,7 +32,6 @@ use crate::render::renderable::Renderable;
 use codex_core::protocol::Op;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputEvent;
-use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::TextElement;
 use unicode_width::UnicodeWidthStr;
@@ -376,10 +375,7 @@ impl RequestUserInputOverlay {
     }
 
     fn restore_current_draft(&mut self) {
-        let mask_input = self
-            .current_question()
-            .is_some_and(Self::is_secret_question);
-        self.composer.set_mask_input(mask_input);
+        self.composer.set_mask_input(false);
         self.composer
             .set_placeholder_text(self.notes_placeholder().to_string());
         self.composer.set_footer_hint_override(Some(Vec::new()));
@@ -404,18 +400,6 @@ impl RequestUserInputOverlay {
         } else {
             ANSWER_PLACEHOLDER
         }
-    }
-
-    fn is_secret_question(question: &RequestUserInputQuestion) -> bool {
-        let has_options = question
-            .options
-            .as_ref()
-            .is_some_and(|options| !options.is_empty());
-        if has_options {
-            return false;
-        }
-        let id = question.id.as_str();
-        id.starts_with("global/") || id.starts_with("env/")
     }
 
     fn sync_composer_placeholder(&mut self) {
@@ -2027,30 +2011,6 @@ mod tests {
         };
         let answer = response.answers.get("q1").expect("answer missing");
         assert_eq!(answer.answers, vec!["super-secret".to_string()]);
-    }
-
-    #[test]
-    fn secret_questions_mask_rendered_input() {
-        let (tx, _rx) = test_sender();
-        let mut overlay = RequestUserInputOverlay::new(
-            request_event(
-                "turn-1",
-                vec![question_without_options("global/TEST_SECRET", "Secret")],
-            ),
-            tx,
-            true,
-            false,
-            false,
-        );
-
-        overlay
-            .composer
-            .set_text_content("super-secret".to_string(), Vec::new(), Vec::new());
-        overlay.composer.move_cursor_to_end();
-
-        let snapshot = render_snapshot(&overlay, Rect::new(0, 0, 80, 12));
-        assert!(!snapshot.contains("super-secret"));
-        assert!(snapshot.contains("************"));
     }
 
     #[test]
